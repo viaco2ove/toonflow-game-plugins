@@ -16,7 +16,7 @@ export default defineConfig({
   base: "./",
   build: {
     outDir: "../ui",
-    emptyOutDir: false,
+    emptyOutDir: true,   // 每次构建覆盖旧的 ui/game.html
     assetsInlineLimit: 100 * 1024 * 1024,
     target: "es2020",
   },

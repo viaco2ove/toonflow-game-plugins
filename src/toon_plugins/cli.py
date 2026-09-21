@@ -78,6 +78,46 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
                 click.echo("[SKIP] " + tname + ": no id in manifest")
                 continue
 
+            # ── Build vue/ subdirectory if present ──────────────────
+            vue_dir = os.path.join(pdir, "vue")
+            if os.path.isdir(vue_dir):
+                import shutil, subprocess
+                pkg_json = os.path.join(vue_dir, "package.json")
+                if os.path.isfile(pkg_json):
+                    click.echo("  [BUILD] " + tname + ": building vue/ ...")
+                    try:
+                        # Resolve yarn path — on Windows, "yarn" is actually "yarn.cmd"
+                        # which subprocess must resolve via PATHEXT / which()
+                        _yarn = shutil.which("yarn") or "yarn"
+                        # Auto-install deps if node_modules missing
+                        if not os.path.isdir(os.path.join(vue_dir, "node_modules")):
+                            click.echo("  [BUILD] " + tname + ": installing deps ...")
+                            r = subprocess.run([_yarn], cwd=vue_dir,
+                                              capture_output=True, text=True,
+                                              encoding="utf-8", errors="replace",
+                                              timeout=180)
+                            if r.returncode != 0:
+                                click.secho("  [WARN] " + tname + ": yarn install failed: " +
+                                            (r.stderr or "")[:200], fg="yellow")
+                        # Build
+                        result = subprocess.run(
+                            [_yarn, "vite", "build"],
+                            cwd=vue_dir,
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=120,
+                        )
+                        if result.returncode == 0:
+                            click.echo("  [BUILD] " + tname + ": done")
+                        else:
+                            click.secho("  [WARN] " + tname + ": vite build failed: " +
+                                        result.stderr[:200], fg="yellow")
+                    except Exception as ex:
+                        click.secho("  [WARN] " + tname + ": build error: " + str(ex),
+                                    fg="yellow")
+
             # Build zip in memory
             buf = io.BytesIO()
             skip = {".git", "__pycache__", "node_modules"}
@@ -156,6 +196,40 @@ def install_cmd(ctx, plugin_dir, enable):
     if not plugin_id:
         click.secho("[ERR] manifest.json missing id", fg="red")
         return
+
+    # ── Build vue/ subdirectory if present ──────────────────
+    vue_dir = os.path.join(plugin_dir, "vue")
+    if os.path.isdir(vue_dir):
+        import shutil, subprocess
+        pkg_json = os.path.join(vue_dir, "package.json")
+        if os.path.isfile(pkg_json):
+            click.echo("[BUILD] building vue/ ...")
+            try:
+                _yarn = shutil.which("yarn") or "yarn"
+                if not os.path.isdir(os.path.join(vue_dir, "node_modules")):
+                    r = subprocess.run([_yarn], cwd=vue_dir,
+                                      capture_output=True, text=True,
+                                      encoding="utf-8", errors="replace",
+                                      timeout=180)
+                    if r.returncode != 0:
+                        click.secho("[WARN] yarn install failed: " +
+                                    (r.stderr or "")[:200], fg="yellow")
+                result = subprocess.run(
+                    [_yarn, "vite", "build"],
+                    cwd=vue_dir,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=120,
+                )
+                if result.returncode == 0:
+                    click.echo("[BUILD] done")
+                else:
+                    click.secho("[WARN] vite build failed: " +
+                                result.stderr[:200], fg="yellow")
+            except Exception as ex:
+                click.secho("[WARN] build error: " + str(ex), fg="yellow")
 
     buf = io.BytesIO()
     skip = {".git", "__pycache__", "node_modules"}

@@ -48,3 +48,7 @@ t_plugin_session_data
 ## 读取和设置
 后端通过toonflowTsApi  读取和设置这些变量
 前端通过toonflowJsApi 调用接口读取和设置这些变量
+
+# 参考
+https://github.com/ecojust/pixi_game.git
+Vue + Canvas/Pixi/Phaser/Three 混排
