@@ -377,11 +377,18 @@ let stopHost: (() => void) | null = null;
 
 onMounted(() => {
   stopHost = onHostState((d) => {
+    const prevPhase = state.value?.phase;
     state.value = d.state as GameState;
     ready.value = true;
     if (state.value?.phase === "select") {
       const p = state.value.roles.find((r) => r.roleType === "player");
       if (p && !participants.value.length) participants.value = [p.id];
+      // 选人阶段：确保不是全屏（用户切回来好操作）
+      toonflowJsApi.minigame.setFullscreen(false);
+    }
+    if (state.value?.phase === "playing" && prevPhase !== "playing") {
+      // 进入战斗：自动切全屏（runtime 时机）
+      toonflowJsApi.minigame.setFullscreen(true);
     }
     // ★ 开局后：优先 state.map；缺失时用 toonflowJsApi 从插件数据表拉 map_data 兜底
     const m = (state.value as any)?.map as MapData | null | undefined;

@@ -59,6 +59,28 @@ export const toonflowJsApi = {
       return request("remove", dataKey).then(() => undefined);
     },
   },
+  /**
+   * 小游戏运行时 API（仅 minigame iframe 环境可用）
+   *
+   *  - done(result)：通知游戏结束，由宿主写入状态并触发后续
+   *  - abort()    ：通知放弃当前游戏，不写结果
+   *  - setFullscreen(enabled)：请求宿主把 play-plugin-minigame-panel 切换全屏
+   *      底层：window.parent.postMessage({type:"tf_plugin_fullscreen", fullscreen: <bool>}, "*")
+   *      宿主接收后给面板挂 .play-plugin-minigame-panel--fullscreen，
+   *      CSS 把面板升级为 position:fixed; inset:0; z-index:9999 覆盖全屏。
+   *      退出：再次调用 setFullscreen(false)，或用户点面板右上角 ✕。
+   */
+  minigame: {
+    done(result?: unknown): void {
+      window.parent.postMessage({ type: "tf_plugin_action", kind: "done", result }, "*");
+    },
+    abort(): void {
+      window.parent.postMessage({ type: "tf_plugin_action", kind: "abort" }, "*");
+    },
+    setFullscreen(enabled: boolean): void {
+      window.parent.postMessage({ type: "tf_plugin_fullscreen", fullscreen: !!enabled }, "*");
+    },
+  },
 };
 
 export default toonflowJsApi;

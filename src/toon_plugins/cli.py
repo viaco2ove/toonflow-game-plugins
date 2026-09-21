@@ -111,6 +111,31 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
                         )
                         if result.returncode == 0:
                             click.echo("  [BUILD] " + tname + ": done")
+                            # ── Rename vite output to manifest-specified entry ──
+                            # vite-plugin-singlefile always emits "index.html",
+                            # but the iframe (and manifest.contributes.minigame.entry)
+                            # expect the path declared in manifest.json.
+                            try:
+                                mg_entry = (manifest.get("contributes", {})
+                                                       .get("minigame", {})
+                                                       .get("entry", ""))
+                                if mg_entry:
+                                    ui_dir_abs = os.path.join(pdir,
+                                        os.path.dirname(mg_entry))  # e.g. "ui"
+                                    want_name = os.path.basename(mg_entry)  # e.g. "game.html"
+                                    src_html = os.path.join(ui_dir_abs, "index.html")
+                                    dst_html = os.path.join(ui_dir_abs, want_name)
+                                    if os.path.isfile(src_html):
+                                        if os.path.abspath(src_html) != os.path.abspath(dst_html):
+                                            if os.path.isfile(dst_html):
+                                                os.remove(dst_html)
+                                            os.replace(src_html, dst_html)
+                                            click.echo("  [BUILD] " + tname +
+                                                       ": ui/index.html -> ui/" + want_name)
+                            except Exception as ex:
+                                click.secho("  [WARN] " + tname +
+                                            ": rename ui/index.html failed: " + str(ex),
+                                            fg="yellow")
                         else:
                             click.secho("  [WARN] " + tname + ": vite build failed: " +
                                         result.stderr[:200], fg="yellow")
@@ -225,6 +250,24 @@ def install_cmd(ctx, plugin_dir, enable):
                 )
                 if result.returncode == 0:
                     click.echo("[BUILD] done")
+                    # Rename vite output to manifest-specified entry filename
+                    try:
+                        mg_entry = (manifest.get("contributes", {})
+                                               .get("minigame", {})
+                                               .get("entry", ""))
+                        if mg_entry:
+                            ui_dir_abs = os.path.join(plugin_dir, os.path.dirname(mg_entry))
+                            want_name = os.path.basename(mg_entry)
+                            src_html = os.path.join(ui_dir_abs, "index.html")
+                            dst_html = os.path.join(ui_dir_abs, want_name)
+                            if os.path.isfile(src_html):
+                                if os.path.abspath(src_html) != os.path.abspath(dst_html):
+                                    if os.path.isfile(dst_html):
+                                        os.remove(dst_html)
+                                    os.replace(src_html, dst_html)
+                                    click.echo("[BUILD] ui/index.html -> " + want_name)
+                    except Exception as ex:
+                        click.secho("[WARN] rename ui/index.html failed: " + str(ex), fg="yellow")
                 else:
                     click.secho("[WARN] vite build failed: " +
                                 result.stderr[:200], fg="yellow")
