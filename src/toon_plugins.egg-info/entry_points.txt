@@ -1,0 +1,2 @@
+[console_scripts]
+toon_plugins = toon_plugins.cli:main
