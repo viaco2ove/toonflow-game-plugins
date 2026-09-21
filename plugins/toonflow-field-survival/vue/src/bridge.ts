@@ -29,6 +29,19 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
   }
 }
 
+/**
+ * 实时推进：iframe 与后端不同源（iframe 在 :60002，宿主页面在 :5173），
+ * 且拿不到宿主 JWT，所以不能直接 fetch /plugin/tick，
+ * 必须让宿主代发：iframe → postMessage → 宿主 → HTTP → 回推新状态。
+ */
+export function sendTick(action: string, params: Record<string, unknown> = {}): void {
+  try {
+    window.parent.postMessage({ type: "tf_plugin_tick", action, params }, "*");
+  } catch {
+    /* ignore */
+  }
+}
+
 export function notifyLoaded(): void {
   try {
     window.parent.postMessage({ type: "tf_plugin_loaded" }, "*");

@@ -21,3 +21,30 @@
 
 # 结束机制
 主动退出/用户死亡
+
+# agents 设计
+## field-survival-map-gener agent
+利用故事的信息（动态角色卡，故事动态数据）去生成合适的地图数据和设定。和持续的地图动态数据维护。
+系统提示词：
+[plugins.prompts.ts](src/agents/plugins.prompts.ts)
+user_prompts 参考：
+[user_prompts.md](../../md/user_prompts.md)
+
+
+# 数据变量
+## 故事的动态数据
+就是故事的动态角色卡，故事动态等数据
+## 系统的配置数据
+例如模型接口配置等数据
+## 插件数据
+就是不太适合保存到故事的动态数据的数据。就独立保存到插件数据里。
+插件的运行时数据。
+那个插件，那个故事会话，那个用户的数据。
+t_plugin_session_data
+(id,sessionId,pluginName,pluginId,dataKey,dataValue)
+
+例如生成的地图数据。  
+
+## 读取和设置
+后端通过toonflowTsApi  读取和设置这些变量
+前端通过toonflowJsApi 调用接口读取和设置这些变量

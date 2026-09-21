@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+// @ts-ignore
 import vue from "@vitejs/plugin-vue";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
@@ -8,6 +9,10 @@ import { viteSingleFile } from "vite-plugin-singlefile";
  */
 export default defineConfig({
   plugins: [vue(), viteSingleFile()],
+  server: {
+    port: 3000,      // 你想要的端口
+    // strictPort: true,   // 加上这行：端口被占用时直接报错，而不是自动顺延到 3001
+  },
   base: "./",
   build: {
     outDir: "../ui",
