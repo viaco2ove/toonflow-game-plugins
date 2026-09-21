@@ -636,6 +636,11 @@ export async function handle_action(
     }
 
     default:
+      // ★ 防御：用户聊天消息触发 handle_action 时，若仍处于选人阶段则提示用户先选人开始
+      if (s.phase === "select") {
+        return { code: 0, message: "select_phase", state: s,
+                 response: "请先在左侧面板选择角色并点击「开始」来启动野外生存。" };
+      }
       return okResp("");
   }
 }

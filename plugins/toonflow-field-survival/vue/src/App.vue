@@ -121,102 +121,202 @@ function onCanvasClick(e: MouseEvent) {
   input.value.dy = 0;
 }
 
-const avatarCache = new Map<string, HTMLImageElement>();
-function loadAvatar(path: string): HTMLImageElement | null {
-  if (!path) return null;
-  if (avatarCache.has(path)) return avatarCache.get(path)!;
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = path;
-  avatarCache.set(path, img);
-  return img;
-}
+// loadAvatar 已移除（角色身体改用 sprite sheet）
 
 /** 2.5D：屏幕 y = 世界 y * 0.62，营造俯视斜角 */
 const DEPTH = 0.62;
+
+// ============================================================
+// 精灵资源管理（参考 pixi_game 的 PNG sprite sheet 方案）
+// ============================================================
+
+interface SpriteSheet {
+  img: HTMLImageElement;
+  fw: number;   // 单帧宽
+  fh: number;   // 单帧高
+  cols: number; // 列数
+  ready: boolean;
+}
+
+/** 通用 PNG 精灵（单图或多帧横排，frameH=单帧高度） */
+function loadSheet(src: string, fw: number, fh: number, cols = 1): SpriteSheet {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = src;
+  return { img, fw, fh, cols, ready: false };
+}
+
+function onReady(s: SpriteSheet, cb: () => void) {
+  if (s.ready) { cb(); return; }
+  if (s.img.complete && s.img.naturalWidth > 0) {
+    s.ready = true; cb();
+  } else {
+    s.img.onload = () => { s.ready = true; cb(); };
+  }
+}
+
+/** 绘制单帧：(sx,sy)为源图帧坐标 */
+function drawFrame(
+  ctx: CanvasRenderingContext2D,
+  s: SpriteSheet,
+  sx: number, sy: number,
+  dx: number, dy: number, dw: number, dh: number,
+) {
+  if (!s.ready) return;
+  ctx.drawImage(s.img, sx * s.fw, sy * s.fh, s.fw, s.fh, dx, dy, dw, dh);
+}
+
+// ----------------------------------------------------------
+// 内置精灵表（基于 public/images/）
+// ground.png  128×128  地面tile
+// tree.png    128×128  树（整体图）
+// bear.png    192/3×256/4  小动物（横3帧×竖4方向）
+// person.png  300/4×450/4  角色（横4帧×竖4方向）
+// water.png   128×128  水面tile
+// land.png    128×128  陆地tile
+// -------------------------------------------------------
+const SHEET_PERSON  = loadSheet("/images/person.png",  75, 112, 4); // 300/4, 450/4
+const SHEET_BEAR    = loadSheet("/images/bear.png",    64,  64, 3); // 192/3, 256/4
+const SHEET_GROUND  = loadSheet("/images/ground.png",  128, 128);
+const SHEET_TREE    = loadSheet("/images/tree.png",    128, 128);
+const SHEET_WATER   = loadSheet("/images/water.png",   128, 128);
+
+// 预加载
+[SHEET_PERSON, SHEET_BEAR, SHEET_GROUND, SHEET_TREE, SHEET_WATER].forEach((s) => {
+  s.img.onload = () => { s.ready = true; };
+  if (s.img.complete && s.img.naturalWidth > 0) s.ready = true;
+});
+
+// 方向索引（pixi_game 约定）：0=下 1=左 2=右 3=上
+function dirIndex(facing: number): number {
+  const d = ((facing % 360) + 360) % 360;
+  if (d >= 315 || d < 45)  return 2;  // 右
+  if (d >= 45  && d < 135) return 1;  // 左
+  if (d >= 135 && d < 225) return 0;  // 下
+  return 3;                             // 上
+}
+
+// 动画帧索引（用时间戳循环）
+let _animTick = 0;
+function animFrame(phase: "walk" | "idle"): number {
+  if (phase === "idle") return 0;
+  // 4帧循环
+  return Math.floor(_animTick / 8) % 4;
+}
+
+// ----------------------------------------------------------
+// 绘制角色（复用 pixi_game 的 sprite sheet 切帧逻辑）
+// ----------------------------------------------------------
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
   const sy = e.y * DEPTH;
-  const bodyH = 52;
-  const bw = e.side === "enemy" ? 26 : 28;
+  const s = SHEET_PERSON;
 
-  // 影子
+  // 缩放：人物约 48×72 像素（比原来稍大，更接近 2.5D）
+  const dw = 48, dh = 72;
+  const dx = e.x - dw / 2;
+  const dy = sy - dh;
+
+  // 动作帧
+  const moving = e.vx !== 0 || e.vy !== 0;
+  const frame = animFrame(moving ? "walk" : "idle");
+  const dir = dirIndex(e.facing);
+
+  // 阴影
   ctx.save();
-  ctx.globalAlpha = 0.35;
+  ctx.globalAlpha = 0.3;
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  ctx.ellipse(e.x, sy + 10, bw * 0.55, bw * 0.28, 0, 0, Math.PI * 2);
+  ctx.ellipse(e.x, sy + 4, dw * 0.38, dw * 0.18, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  const color = e.side === "player" ? "#4ea1ff"
-    : e.side === "ally" ? "#5fd28a"
-    : e.side === "enemy" ? "#ff6b6b"
-    : "#9aa4b2";
-
-  // 身体（胶囊）
-  ctx.save();
-  ctx.fillStyle = color;
-  ctx.strokeStyle = "rgba(0,0,0,.45)";
-  ctx.lineWidth = 2;
-  const top = sy - bodyH + 18;
-  ctx.beginPath();
-  ctx.moveTo(e.x - bw / 2, sy + 6);
-  ctx.lineTo(e.x - bw / 2, top + bw / 2);
-  ctx.arc(e.x, top + bw / 2, bw / 2, Math.PI, 0);
-  ctx.lineTo(e.x + bw / 2, sy + 6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-
-  // 头（头像或圆）
-  const headR = 15;
-  const headY = top - headR - 2;
-  const img = e.avatarPath ? loadAvatar(e.avatarPath) : null;
-  if (img && img.complete && img.naturalWidth > 0) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(e.x, headY, headR, 0, Math.PI * 2);
-    ctx.closePath();
-    ctx.clip();
-    ctx.drawImage(img, e.x - headR, headY - headR, headR * 2, headR * 2);
-    ctx.restore();
-    ctx.save();
-    ctx.strokeStyle = "rgba(255,255,255,.75)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(e.x, headY, headR, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
+  // 精灵本体
+  if (s.ready) {
+    ctx.drawImage(s.img,
+      frame * s.fw, dir * s.fh, s.fw, s.fh,
+      dx, dy, dw, dh,
+    );
   } else {
+    // 兜底彩色胶囊
+    const color = e.side === "player" ? "#4ea1ff"
+      : e.side === "ally" ? "#5fd28a"
+      : e.side === "enemy" ? "#ff6b6b"
+      : "#9aa4b2";
     ctx.save();
-    ctx.fillStyle = "#f2f5fa";
-    ctx.strokeStyle = "rgba(0,0,0,.4)";
-    ctx.lineWidth = 2;
+    ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(e.x, headY, headR, 0, Math.PI * 2);
+    ctx.ellipse(e.x, sy - 36, 20, 30, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#2b3240";
-    ctx.font = "bold 13px sans-serif";
-    ctx.textAlign = "center";
-    ctx.fillText(e.name.slice(0, 1), e.x, headY + 5);
     ctx.restore();
   }
 
-  // 名字 + 血条
+  // 头顶名字（角色名优先用 avatar，无则用首字）
+  const headY = dy - 6;
   ctx.save();
   ctx.textAlign = "center";
-  ctx.font = "12px sans-serif";
-  ctx.fillStyle = "rgba(255,255,255,.92)";
-  ctx.fillText(e.name, e.x, headY - headR - 6);
-  const barW = 42;
-  const barH = 5;
-  const barY = headY - headR - 2;
+  ctx.font = "bold 11px sans-serif";
   ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.fillRect(e.x - barW / 2, barY, barW, barH);
-  ctx.fillStyle = e.side === "enemy" ? "#ff5c5c" : "#57d977";
-  ctx.fillRect(e.x - barW / 2, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
+  ctx.fillText(e.name.slice(0, 3), e.x + 1, headY + 1);
+  ctx.fillStyle = "#fff";
+  ctx.fillText(e.name.slice(0, 3), e.x, headY);
+  ctx.restore();
+
+  // 血条
+  const barW = 44, barH = 4;
+  const barX = e.x - barW / 2;
+  const barY = dy - 10;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.5)";
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = e.side === "enemy" ? "#ff4c4c" : "#57d977";
+  ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
+  ctx.restore();
+}
+
+// ----------------------------------------------------------
+// 绘制野怪（用 bear.png sprite sheet）
+// ----------------------------------------------------------
+function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
+  const sy = e.y * DEPTH;
+  const s = SHEET_BEAR;
+  const dw = 42, dh = 56;
+  const dx = e.x - dw / 2;
+  const dy = sy - dh;
+
+  const moving = e.vx !== 0 || e.vy !== 0;
+  const frame = animFrame(moving ? "walk" : "idle");
+  const dir = dirIndex(e.facing);
+
+  ctx.save();
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(e.x, sy + 4, dw * 0.36, dw * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  if (s.ready) {
+    ctx.drawImage(s.img,
+      frame * s.fw, dir * s.fh, s.fw, s.fh,
+      dx, dy, dw, dh,
+    );
+  } else {
+    // 兜底：棕色圆
+    ctx.save();
+    ctx.fillStyle = "#8b5a2b";
+    ctx.beginPath();
+    ctx.ellipse(e.x, sy - 28, 18, 26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 血条
+  const barW = 36, barH = 4;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.5)";
+  ctx.fillRect(e.x - barW / 2, dy - 8, barW, barH);
+  ctx.fillStyle = "#ff4c4c";
+  ctx.fillRect(e.x - barW / 2, dy - 8, barW * Math.max(0, e.hp / e.maxHp), barH);
   ctx.restore();
 }
 
@@ -232,12 +332,23 @@ function render() {
   const sy = H / (world.value.h * DEPTH);
 
   ctx.clearRect(0, 0, W, H);
-  // 地面
-  const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, "#123024");
-  g.addColorStop(1, "#08160f");
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
+  // 地面：用 ground.png tile 铺满（参考 pixi_game 方案）
+  if (SHEET_GROUND.ready) {
+    const tw = SHEET_GROUND.fw * sx;
+    const th = SHEET_GROUND.fh * DEPTH * sy;
+    for (let tx = 0; tx < W; tx += tw) {
+      for (let ty = 0; ty < H; ty += th) {
+        ctx.drawImage(SHEET_GROUND.img, 0, 0, SHEET_GROUND.fw, SHEET_GROUND.fh, tx, ty, tw, th);
+      }
+    }
+  } else {
+    // 兜底渐变
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#1a3a1f");
+    g.addColorStop(1, "#0a1a0d");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
 
   // ★ 地图 zones（map-gener agent 产出）：不同 kind 不同色调椭圆区域
   const kindColors: Record<string, string> = {
@@ -311,10 +422,19 @@ function render() {
   });
 
   // 单位（按 y 排序做前后遮挡）
+  //  - enemy 阵营（且不在 roles 列表中）→ 野怪，用 bear.png
+  //  - 其余（player/ally/有 role id 的 enemy）→ 角色，用 person.png
+  const roleIds = new Set(s.roles.map((r) => r.id));
   [...s.entities]
     .filter((e) => e.alive !== false)
     .sort((a, b) => a.y - b.y)
-    .forEach((e) => drawEntity(ctx, e));
+    .forEach((e) => {
+      if (e.side === "enemy" && !roleIds.has(e.id)) {
+        drawMonster(ctx, e);
+      } else {
+        drawEntity(ctx, e);
+      }
+    });
 
   // 飘字
   s.floaters.forEach((f) => {
@@ -340,6 +460,7 @@ const TICK_MS = 100;
 
 function loop(ts: number) {
   raf = requestAnimationFrame(loop);
+  _animTick++;
   const s = state.value;
   if (!s || s.phase !== "playing") return;
   render();
@@ -366,7 +487,7 @@ function useItem(i: number) { sendTick("item", { index: i }); }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() { sendTick("exit", {}); }
-function closeOver() { sendToHost("退出", {}); }
+function closeOver() { toonflowJsApi.minigame.abort(); }
 
 const me = computed(() => state.value?.entities.find((e) => e.side === "player"));
 const hpPct = computed(() => (me.value ? Math.max(0, (me.value.hp / me.value.maxHp) * 100) : 0));
