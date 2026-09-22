@@ -51,7 +51,7 @@ t_plugin_session_data
 
 # 参考
 Vue + Canvas/Pixi/Phaser/Three 混排
-https://github.com/ecojust/pixi_game.git
+~~https://github.com/ecojust/pixi_game.git~~
 https://github.com/Larkenx/Rotten-Soup
 
 # 可以切换横竖屏进行游玩。
