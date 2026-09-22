@@ -9,6 +9,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
+import { IMG_GROUND, IMG_PERSON, IMG_BEAR, IMG_TREE, IMG_WATER, IMG_LAND } from "./assets";
 
 const state = ref<GameState | null>(null);
 const ready = ref(false);
@@ -26,6 +27,28 @@ const participants = ref<string[]>([]);
 const spectators = ref<string[]>([]);
 const enemies = ref<string[]>([]);
 
+// 头像缓存（entityId -> HTMLImageElement）
+const avatarCache = new Map<string, HTMLImageElement>();
+
+function loadAvatar(avatarPath: string): HTMLImageElement {
+  const cached = avatarCache.get(avatarPath);
+  if (cached) return cached;
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = avatarPath.startsWith("http") ? avatarPath : location.origin + avatarPath;
+  avatarCache.set(avatarPath, img);
+  return img;
+}
+
+function getEntityAvatar(e: Entity): HTMLImageElement | undefined {
+  // 优先用 entity 上的 avatarPath
+  if (e.avatarPath) return loadAvatar(e.avatarPath);
+  // 否则从 roles 里找
+  const role = roles.value.find((r) => r.id === e.id);
+  if (role?.avatarPath) return loadAvatar(role.avatarPath);
+  return undefined;
+}
+
 const roles = computed<RoleOption[]>(() => state.value?.roles || []);
 const playerRole = computed(() => roles.value.find((r) => r.roleType === "player") || roles.value[0]);
 
@@ -41,7 +64,11 @@ function roleAvatar(r: RoleOption): string {
   return p.startsWith("http") ? p : location.origin + p;
 }
 
+const starting = ref(false);
+
 function startGame() {
+  if (starting.value) return;
+  starting.value = true;
   sendTick("start", {
     selections: {
       participants: [...participants.value],
@@ -49,6 +76,8 @@ function startGame() {
       enemies: [...enemies.value],
     },
   });
+  // 兜底：宿主未连接时，2 秒后自动重置按钮状态
+  setTimeout(() => { starting.value = false; }, 2000);
 }
 
 /* ---------------- 操作输入 ---------------- */
@@ -141,9 +170,15 @@ interface SpriteSheet {
 /** 通用 PNG 精灵（单图或多帧横排，frameH=单帧高度） */
 function loadSheet(src: string, fw: number, fh: number, cols = 1): SpriteSheet {
   const img = new Image();
-  img.crossOrigin = "anonymous";
+  // ★ 不设置 crossOrigin（base64 data URL 在 iframe 中不需要 CORS）
+  img.onload = () => { (sheet as any).ready = true; };
+  img.onerror = () => {
+    console.warn('[field-survival] sprite load failed', src.substring(0, 30));
+  };
   img.src = src;
-  return { img, fw, fh, cols, ready: false };
+  // ★ 同步检查：如果图片已经缓存（complete=true），立即标记 ready
+  const sheet: SpriteSheet = { img, fw, fh, cols, ready: !!(img.complete && img.naturalWidth > 0) };
+  return sheet;
 }
 
 function onReady(s: SpriteSheet, cb: () => void) {
@@ -167,7 +202,7 @@ function drawFrame(
 }
 
 // ----------------------------------------------------------
-// 内置精灵表（基于 public/images/）
+// 内置精灵表（Base64 内联，不依赖外部文件，iframe 内可正常加载）
 // ground.png  128×128  地面tile
 // tree.png    128×128  树（整体图）
 // bear.png    192/3×256/4  小动物（横3帧×竖4方向）
@@ -175,17 +210,35 @@ function drawFrame(
 // water.png   128×128  水面tile
 // land.png    128×128  陆地tile
 // -------------------------------------------------------
-const SHEET_PERSON  = loadSheet("/images/person.png",  75, 112, 4); // 300/4, 450/4
-const SHEET_BEAR    = loadSheet("/images/bear.png",    64,  64, 3); // 192/3, 256/4
-const SHEET_GROUND  = loadSheet("/images/ground.png",  128, 128);
-const SHEET_TREE    = loadSheet("/images/tree.png",    128, 128);
-const SHEET_WATER   = loadSheet("/images/water.png",   128, 128);
+const SHEET_PERSON  = loadSheet(IMG_PERSON,  75, 112, 4); // 300/4, 450/4
+const SHEET_BEAR    = loadSheet(IMG_BEAR,    64,  64, 3); // 192/3, 256/4
+const SHEET_GROUND  = loadSheet(IMG_GROUND,  128, 128);
+const SHEET_TREE    = loadSheet(IMG_TREE,    128, 128);
+const SHEET_WATER   = loadSheet(IMG_WATER,  128, 128);
+const SHEET_LAND    = loadSheet(IMG_LAND,    128, 128);
 
-// 预加载
-[SHEET_PERSON, SHEET_BEAR, SHEET_GROUND, SHEET_TREE, SHEET_WATER].forEach((s) => {
-  s.img.onload = () => { s.ready = true; };
-  if (s.img.complete && s.img.naturalWidth > 0) s.ready = true;
-});
+// 地图装饰物（树木、水体）位置
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "land"; id: string }
+const mapDecorations = ref<Decoration[]>([]);
+
+// 初始化地图装饰物
+function initDecorations() {
+  const decs: Decoration[] = [];
+  const rng = (a: number, b: number) => Math.random() * (b - a) + a;
+  // 树木（8-12棵）
+  for (let i = 0; i < 10; i++) {
+    decs.push({ x: rng(80, 880), y: rng(80, 520), kind: "tree", id: `tree_${i}` });
+  }
+  // 水体（2-4处）
+  for (let i = 0; i < 3; i++) {
+    decs.push({ x: rng(100, 860), y: rng(100, 500), kind: "water", id: `water_${i}` });
+  }
+  // 陆地斑块（4-6处）
+  for (let i = 0; i < 5; i++) {
+    decs.push({ x: rng(60, 900), y: rng(60, 540), kind: "land", id: `land_${i}` });
+  }
+  mapDecorations.value = decs;
+}
 
 // 方向索引（pixi_game 约定）：0=下 1=左 2=右 3=上
 function dirIndex(facing: number): number {
@@ -207,7 +260,7 @@ function animFrame(phase: "walk" | "idle"): number {
 // ----------------------------------------------------------
 // 绘制角色（复用 pixi_game 的 sprite sheet 切帧逻辑）
 // ----------------------------------------------------------
-function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
+function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement) {
   const sy = e.y * DEPTH;
   const s = SHEET_PERSON;
 
@@ -247,6 +300,28 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.beginPath();
     ctx.ellipse(e.x, sy - 36, 20, 30, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  // ★ 角色头像（req.md 要求：2.5D 小人模型上方显示适合比例的头像）
+  const avatarSize = 28;
+  const avatarX = e.x - avatarSize / 2;
+  const avatarY = dy - avatarSize - 4;
+  if (avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0) {
+    // 有头像图片时绘制圆形裁剪的头像
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(avatarImg, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.restore();
+    // 头像边框
+    ctx.save();
+    ctx.strokeStyle = e.side === "player" ? "#4ea1ff" : e.side === "ally" ? "#5fd28a" : "#fff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -331,6 +406,13 @@ function render() {
   const sx = W / world.value.w;
   const sy = H / (world.value.h * DEPTH);
 
+  // ★ 动态同步 ready 状态（data URL 图片解码完成时）
+  for (const sheet of [SHEET_GROUND, SHEET_PERSON, SHEET_BEAR, SHEET_TREE, SHEET_WATER, SHEET_LAND]) {
+    if (!sheet.ready && sheet.img.complete && sheet.img.naturalWidth > 0) {
+      sheet.ready = true;
+    }
+  }
+
   ctx.clearRect(0, 0, W, H);
   // 地面：用 ground.png tile 铺满（参考 pixi_game 方案）
   if (SHEET_GROUND.ready) {
@@ -389,6 +471,49 @@ function render() {
   ctx.save();
   ctx.scale(sx, sy);
 
+  // ★ 地图装饰物（树木、水体、陆地斑块）
+  mapDecorations.value.forEach((dec) => {
+    const sy2 = dec.y * DEPTH;
+    const dSize = dec.kind === "tree" ? 40 : 32;
+    const dx = dec.x - dSize / 2;
+    const dy = sy2 - dSize;
+
+    if (dec.kind === "tree" && SHEET_TREE.ready) {
+      ctx.drawImage(SHEET_TREE.img, dx, dy, dSize, dSize);
+    } else if (dec.kind === "water" && SHEET_WATER.ready) {
+      ctx.save();
+      ctx.globalAlpha = 0.6;
+      ctx.drawImage(SHEET_WATER.img, dx, dy, dSize, dSize);
+      ctx.restore();
+    } else if (dec.kind === "land" && SHEET_LAND.ready) {
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.drawImage(SHEET_LAND.img, dx, dy, dSize, dSize);
+      ctx.restore();
+    } else {
+      // 兜底形状
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      if (dec.kind === "tree") {
+        ctx.fillStyle = "#2d5a27";
+        ctx.beginPath();
+        ctx.arc(dec.x, sy2, 16, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (dec.kind === "water") {
+        ctx.fillStyle = "#4a90d9";
+        ctx.beginPath();
+        ctx.arc(dec.x, sy2, 14, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillStyle = "#8b7355";
+        ctx.beginPath();
+        ctx.arc(dec.x, sy2, 12, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  });
+
   // 宝箱
   s.chests.forEach((ch) => {
     ctx.save();
@@ -432,7 +557,8 @@ function render() {
       if (e.side === "enemy" && !roleIds.has(e.id)) {
         drawMonster(ctx, e);
       } else {
-        drawEntity(ctx, e);
+        // ★ 传入头像图片用于显示
+        drawEntity(ctx, e, getEntityAvatar(e));
       }
     });
 
@@ -496,20 +622,39 @@ const lastEvents = computed(() => (state.value?.events || []).slice(-4));
 /* ---------------- 生命周期 ---------------- */
 let stopHost: (() => void) | null = null;
 
+
 onMounted(() => {
+  // ★ 初始化地图装饰物（树木、水体等）
+  initDecorations();
+
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
+    const newPhase = (d.state as GameState)?.phase;
     state.value = d.state as GameState;
     ready.value = true;
-    if (state.value?.phase === "select") {
+
+    // ★ 收到 init/init_start 时，强制重置所有选择状态
+    // 这样第二次进入游戏时能正确显示选人面板
+    if (newPhase === "select") {
+      participants.value = [];
+      spectators.value = [];
+      enemies.value = [];
       const p = state.value.roles.find((r) => r.roleType === "player");
-      if (p && !participants.value.length) participants.value = [p.id];
+      if (p) participants.value = [p.id];
       // 选人阶段：确保不是全屏（用户切回来好操作）
       toonflowJsApi.minigame.setFullscreen(false);
+      // 重新初始化地图装饰物（每次进入都重新生成）
+      initDecorations();
+      // 重置开始按钮 loading 状态
+      starting.value = false;
     }
-    if (state.value?.phase === "playing" && prevPhase !== "playing") {
+    if (newPhase === "playing" && prevPhase !== "playing") {
       // 进入战斗：自动切全屏（runtime 时机）
       toonflowJsApi.minigame.setFullscreen(true);
+      // 确保地图装饰物已初始化
+      if (mapDecorations.value.length === 0) initDecorations();
+      // 成功进入战斗，清除 loading
+      starting.value = false;
     }
     // ★ 开局后：优先 state.map；缺失时用 toonflowJsApi 从插件数据表拉 map_data 兜底
     const m = (state.value as any)?.map as MapData | null | undefined;
@@ -597,7 +742,12 @@ watch(() => state.value?.phase, (p) => {
         <p class="hint">不选敌对角色时，系统会按波次自动生成野兽。</p>
       </div>
 
-      <button class="start" @click="startGame">开始游戏</button>
+      <button class="start" @click="startGame" :disabled="starting">
+        <span v-if="starting" class="start__loading">
+          <span class="start__spinner"></span>加载中…
+        </span>
+        <span v-else>开始游戏</span>
+      </button>
     </section>
 
     <!-- ===== 战斗阶段 ===== -->
@@ -775,6 +925,32 @@ body {
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.2s;
+}
+
+.start:disabled {
+  background: #1e4a8a;
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.start__loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.start__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 战斗 */

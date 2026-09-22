@@ -524,6 +524,8 @@ export async function handle_action(
   switch (action) {
     case "init":
     case "start_init": {
+      // ★ 强制重置为初始选人状态，不依赖旧 state
+      // 无论之前是 playing/over，第二次进入都必须回到 select 阶段
       const fresh = emptyState(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "请选择参展 / 观战 / 敌对角色后开始" };

@@ -36,6 +36,7 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
  */
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
   try {
+
     window.parent.postMessage({ type: "tf_plugin_tick", action, params }, "*");
   } catch {
     /* ignore */
