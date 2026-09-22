@@ -50,5 +50,8 @@ t_plugin_session_data
 前端通过toonflowJsApi 调用接口读取和设置这些变量
 
 # 参考
-https://github.com/ecojust/pixi_game.git
 Vue + Canvas/Pixi/Phaser/Three 混排
+https://github.com/ecojust/pixi_game.git
+https://github.com/Larkenx/Rotten-Soup
+
+# 可以切换横竖屏进行游玩。
