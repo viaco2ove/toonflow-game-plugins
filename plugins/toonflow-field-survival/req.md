@@ -55,3 +55,4 @@ https://github.com/ecojust/pixi_game.git
 https://github.com/Larkenx/Rotten-Soup
 
 # 可以切换横竖屏进行游玩。
+【🔄】按钮（左上角）
