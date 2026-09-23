@@ -1,0 +1,58 @@
+{
+  "id": "npc_1",
+  "roleType": "npc",
+  "name": "裴勇",
+  "description": "46 号基地负责人，人称\"老裴\"。北丘夜采圈的活化石，见过的湮物比见过的人多。\n\n性别: 男\n年龄: 45\n性格: 老辣、护短、话少，疑心极重，恩威并施\n外貌: 灰发短寸，左脸一道旧刀疤，常年披深色工装大衣，指间夹着没点的烟\n音色特点: 45岁沙哑低沉男声，语速慢，字少而重，问话时停顿长到让人发毛\n技能: 猎湮直觉、读心式审问、暗巷布局\n物品: 老式打火机、46号通讯器\n装备: 暗核短刀、防弹内衬大衣\n等级: 12\n血量: 1200\n蓝量: 300\n金钱: 500\n其他: 46号负责人；曾与夜客合谋绑架林佩雅；对陈彦又拉拢又试探；叫停治疗逼问陈彦的伤",
+  "avatarImagePrompt": "45岁中年男性，灰发短寸，左脸一道横贯颧骨的旧刀疤，眼神浑浊却锐利，深色工装大衣立领，指间夹着一支没点燃的烟。AI 3D 写实电影风格，半身像，赛博朋克冷调，顶光偏冷，刀疤与皱纹细节清晰，电影感打光。",
+  "attributes": {},
+  "voiceMode": "clone",
+  "voicePromptText": "",
+  "parameterCardJson": {
+    "name": "裴勇",
+    "raw_setting": "46 号基地负责人，人称\"老裴\"。北丘夜采圈的活化石，见过的湮物比见过的人多。",
+    "gender": "男",
+    "age": 45,
+    "level": 12,
+    "level_desc": "46号基地负责人，北丘夜采圈活化石",
+    "personality": "老辣、护短、话少，疑心极重，恩威并施",
+    "appearance": "灰发短寸，左脸一道旧刀疤，常年披深色工装大衣，指间夹着没点的烟",
+    "voice": "45岁沙哑低沉男声，语速慢，字少而重，问话时停顿长到让人发毛",
+    "skills": [
+      "猎湮直觉",
+      "读心式审问",
+      "暗巷布局"
+    ],
+    "items": [
+      "老式打火机",
+      "46号通讯器"
+    ],
+    "equipment": [
+      "暗核短刀",
+      "防弹内衬大衣"
+    ],
+    "hp": 1200,
+    "mp": 300,
+    "money": 500,
+    "other": [
+      "46号负责人",
+      "曾与夜客合谋绑架林佩雅",
+      "对陈彦又拉拢又试探",
+      "叫停治疗逼问陈彦的伤"
+    ],
+    "roleType": "npc",
+    "information": "46号基地负责人，北丘夜采圈活化石；曾与夜客合谋绑架林佩雅；对陈彦又拉拢又试探",
+    "role_key_information": "46号基地负责人，北丘夜采圈活化石；曾与夜客合谋绑架林佩雅；对陈彦又拉拢又试探",
+    "exp": 0,
+    "next_level_exp": 1200
+  },
+  "voice": "克隆：裴勇_voice.wav",
+  "voiceReferenceAudioPath": "/1/voice/f5fd8c82-b5cc-41a9-8bda-744c3347c469.wav",
+  "voiceReferenceAudioName": "裴勇_voice.wav",
+  "voicePresetId": "",
+  "avatarPath": "/1/game/scene/d5ed7fa1-1393-49d0-a091-1519c9229050.webp",
+  "avatarBgPath": "/1/game/scene/52a8ad10-7666-49e6-b354-7687b0fe7162.png",
+  "avatarVideoPath": "/1/game/scene/4a4f9980-9c95-4fa5-b662-073fc8251a45.mp4",
+  "avatarFirstFramePath": "/1/game/scene/5989145a-eac2-42d8-a32a-b3fa0f7bdf55.png",
+  "avatarDurationMs": 0,
+  "voiceMixVoices": []
+}
