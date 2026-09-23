@@ -188,7 +188,14 @@ function stickEnd() {
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 
-// 镜头远近（缩放） 2 适中，5比较远
+
+//比例尺，一个像素代表多少米，一个土块是0.25 米
+let mapscale= 1;
+let mapsize_def ={weight:3000,height:3000}
+//用户出生地， 用户永远在屏幕中间，移动地图跟着移动
+let user_birth_location=[0,0];
+// 镜头远近（缩放）例如2 ， 假设整个画面 30*30 个像素=300 像素
+// 不缩放 300/mapscale 如 =300 米， 缩放后 300/mapscale/zoom = 300/2 = 150 米。
 let zoom = 2;
 
 
