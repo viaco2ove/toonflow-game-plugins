@@ -198,6 +198,11 @@ let canvas_direction_def={
 }
 let canvas_w =canvas_direction_def.vertical_screen.canvas_w;
 let canvas_h = canvas_direction_def.vertical_screen.canvas_h;
+/** 设计基准：横屏 960×600 */
+const DESIGN_W = 960;
+const DESIGN_H = 600;
+const MAX_LONG = 1200; // 画布长边上限，防爆显存
+
 
 const world = computed(() => state.value?.world || { w: canvas_direction_def.vertical_screen.canvas_w, h: canvas_direction_def.vertical_screen.canvas_h });
 /**
@@ -226,65 +231,124 @@ function fitCanvas_old() {
   console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
 }
 
-function fitCanvas(){
+function fitCanvas() {
+  fitCanvas_v3();
+}
+
+function fitCanvas_V2() {
   const c = canvasEl.value;
-  if(!c) return;
-  // 设置绘图缓冲区
-  c.width = canvas_w;
-  c.height = canvas_h;
-  // css样式，填满容器，保持比例，看你业务，这里示例100%
-  c.style.width = "100%";
-  c.style.height = "100%";
+  if (!c) return;
+
+  // canvas 绘图缓冲区永远是设计分辨率
+  c.width = DESIGN_W;
+  c.height = DESIGN_H;
+
+  // CSS 显示尺寸：保持宽高比，适配容器，不拉伸
+  const container = c.parentElement!;
+  const cw = container.clientWidth;
+  const ch = container.clientHeight;
+  const scale = Math.min(cw / DESIGN_W, ch / DESIGN_H);
+
+  c.style.width = `${DESIGN_W * scale}px`;
+  c.style.height = `${DESIGN_H * scale}px`;
+
+  // CSS rotate hack 时，transform-origin 和旋转
+  if (isRotated.value) {
+    // 关键：rotate(90deg) 后宽高互换，需要用 margin 居中补偿
+    c.style.transform = "rotate(90deg)";
+    c.style.transformOrigin = "center center";
+    // 旋转后，CSS 宽高互换，用负 margin 居中
+    const rotatedW = DESIGN_H * scale; // 旋转后屏幕上的宽
+    const rotatedH = DESIGN_W * scale; // 旋转后屏幕上的高
+    c.style.marginLeft = `${(cw - rotatedW) / 2}px`;
+    c.style.marginTop = `${(ch - rotatedH) / 2}px`;
+  } else {
+    c.style.transform = "";
+    c.style.marginLeft = `${(cw - DESIGN_W * scale) / 2}px`;
+    c.style.marginTop = `${(ch - DESIGN_H * scale) / 2}px`;
+  }
+}
+
+/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
+function fitCanvas_v1() {
+  const c = canvasEl.value;
+  if (!c) return;
+  const availW = window.innerWidth;
+  const availH = window.innerHeight;
+  if (availW <= 0 || availH <= 0) return;
+
+  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
+  // 滚动相机偏移让玩家始终在屏幕中心。
+
+  const scale = Math.max(availW / canvas_w/zoom, availH / canvas_h/zoom);
+  c.style.width = Math.floor(canvas_w * scale) + "px";
+  c.style.height = Math.floor(canvas_h * scale) + "px";
+  console.log("fitCanvas scale", scale)
+  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
+}
+
+
+/** 等比缩放画布以适配屏幕（不留黑边） */
+/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
+function fitCanvas_v3() {
+  const c = canvasEl.value;
+  if (!c) return;
+  const availW = window.innerWidth;
+  const availH = window.innerHeight;
+  if (availW <= 0 || availH <= 0) return;
+
+  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
+  // 滚动相机偏移让玩家始终在屏幕中心。
+
+  const scale = Math.max(availW / 960/zoom, availH / 372/zoom);
+  c.style.width = Math.floor(960 * scale) + "px";
+  c.style.height = Math.floor(372 * scale) + "px";
+  console.log("fitCanvas scale", scale)
+  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
 }
 
 
 /**
- * 根据当前视口，计算横屏/竖屏的目标逻辑画布尺寸
- * 返回 { horizontal_screen: {w,h}, vertical_screen:{w,h} }
- * 不是写死，基于 window.screen / visualViewport 计算，WebView 手机可用
+ * 根据当前视口，算出横屏/竖屏两种模式下的逻辑画布尺寸
+ * 横竖屏比例严格保持 16:10，只是宽高互换
  */
 function calcCanvasDirection() {
-  // 可视区域，WebView优先visualViewport，降级window.inner
   const vp = window.visualViewport ?? { width: window.innerWidth, height: window.innerHeight };
   const screenW = vp.width;
   const screenH = vp.height;
 
-  // 你的设计基准比例：横屏 960:600 = 1.6；竖屏 600:960
-  const designAspectHorizontal = 960 / 600;
-  const designAspectVertical = 600 / 960;
+  const aspect = DESIGN_W / DESIGN_H; // 1.6
 
-  // 我们不取原始屏幕像素，取「适配屏幕的逻辑画布尺寸」，保证比例，限制最大画布大小防止显存爆炸
-  const MAX_CANVAS_LONG = 1200; // 画布长边上限，保护性能
-  let hW, hH, vW, vH;
-
-  // 横屏模式：画面比例 960/600
-  if (screenW / screenH >= designAspectHorizontal) {
-    hH = Math.min(screenH, MAX_CANVAS_LONG / designAspectHorizontal);
-    hW = hH * designAspectHorizontal;
+  // 横屏：宽>高，比例 1.6
+  let hW: number, hH: number;
+  if (screenW / screenH >= aspect) {
+    hH = Math.min(screenH, MAX_LONG / aspect);
+    hW = hH * aspect;
   } else {
-    hW = Math.min(screenW, MAX_CANVAS_LONG);
-    hH = hW / designAspectHorizontal;
+    hW = Math.min(screenW, MAX_LONG);
+    hH = hW / aspect;
   }
 
-  // 竖屏模式：画面比例 600/960
-  if (screenW / screenH <= designAspectVertical) {
-    hW = Math.min(screenW, MAX_CANVAS_LONG * designAspectVertical);
-    hH = hW / designAspectVertical;
+  // 竖屏：宽<高，比例 0.625（横屏宽高互换）
+  let vW: number, vH: number;
+  if (screenW / screenH <= 1 / aspect) {
+    vW = Math.min(screenW, MAX_LONG * (1 / aspect));
+    vH = vW / (1 / aspect);
   } else {
-    hH = Math.min(screenH, MAX_CANVAS_LONG);
-    hW = hH * designAspectVertical;
+    vH = Math.min(screenH, MAX_LONG);
+    vW = vH / aspect;
   }
-
-  vW = hH;
-  vH = hW;
 
   return {
     horizontal_screen: { canvas_w: Math.round(hW), canvas_h: Math.round(hH) },
-    vertical_screen: { canvas_w: Math.round(vW), canvas_h: Math.round(vH) }
+    vertical_screen:   { canvas_w: Math.round(vW), canvas_h: Math.round(vH) },
   };
 }
 
 function rotated_fun() {
+  rotated_fun_v1();
+}
+function rotated_fun_v1() {
   const canvas_direction = calcCanvasDirection();
   if (isRotated.value) {
     // CSS hack旋转模式，使用竖屏配置
@@ -296,6 +360,19 @@ function rotated_fun() {
     canvas_h = canvas_direction.horizontal_screen.canvas_h;
   }
   console.log("set canvas size", canvas_w, canvas_h);
+}
+
+function rotated_fun_v2() {
+  if (isRotated.value) {
+    // CSS rotate hack：canvas 内部还是横版 960×600
+    // 只是 CSS 把它旋转90度显示
+    canvas_w = DESIGN_W;
+    canvas_h = DESIGN_H;
+  } else {
+    // 正常横屏
+    canvas_w = DESIGN_W;
+    canvas_h = DESIGN_H;
+  }
 }
 
 
