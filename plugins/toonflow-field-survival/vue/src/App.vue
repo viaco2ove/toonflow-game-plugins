@@ -464,7 +464,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const dy = sy - dh + 4; // 略微下沉，让脚站在地面上
 
   // ★ 朝向：facing 在 135-315（朝左）时水平翻转 sprite
-  const facingLeft = !(e.facing >= 135 && e.facing < 315);
+  const facingLeft = (e.facing >= 135 && e.facing < 315);
 
   applyPixelPerfect(ctx);
 
@@ -479,7 +479,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 
   // 精灵本体（从 tileset 切片，按移动状态切换 walk 帧；facing 决定翻转）
   if (SHEET_TILESET.ready) {
-    drawTile(ctx, tileId, dx, dy, dw, dh, facingLeft);
+    drawTile(ctx, tileId, dx, dy, dw, dh, !facingLeft);
   } else {
     // 兜底彩色胶囊
     const color = e.side === "player" ? "#4ea1ff"
