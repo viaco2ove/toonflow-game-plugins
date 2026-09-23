@@ -184,35 +184,31 @@ const canvasEl = ref<HTMLCanvasElement | null>(null);
 const world = computed(() => state.value?.world || { w: 960, h: 600 });
 
 /**
- * 🔄 按钮（req.md:57-58）：横竖屏切换。
- * 横屏：canvas 960×372 正常显示，填满高度
- * 竖屏：canvas 旋转 90° 显示，用 372×960 的空间
- * 切换时只翻转 CSS transform，绝不变换内部分辨率或世界坐标。
+ * 🔄 按钮（req.md:57-58）：横竖屏切换
+ *
+ * 设计：手机默认竖屏 → 画布直接 960×600 纵向铺满屏幕（无黑边）
+ *      点击 🔄 → 切横屏 → 画布旋转 90° 显示成 600×960（适合安卓 H5 横屏）
+ * 内部分辨率与渲染坐标永不改变，只调 CSS 大小和 transform。
  */
 
-/** 等比缩放画布以适配屏幕（用 window 尺寸，因为是全屏游戏） */
+/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
 function fitCanvas() {
   const c = canvasEl.value;
   if (!c) return;
   const availW = window.innerWidth;
   const availH = window.innerHeight;
   if (availW <= 0 || availH <= 0) return;
-  const isR = isRotated.value;
-  // 旋转模式：canvas 视觉上交换宽高，用 Math.max 填满可用空间
-  const cw = isR ? 372 : 960;
-  const ch = isR ? 960 : 372;
-  // 先算横屏基准 scale，再在旋转时按新比例调整
-  const baseScale = Math.min(availW / 960, availH / 372);
-  const scale = isR
-    ? Math.min(availW / ch, availH / cw)  // 旋转后填满竖向空间
-    : baseScale;
-  c.style.width = Math.floor(cw * scale) + "px";
-  c.style.height = Math.floor(ch * scale) + "px";
+  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
+  // 滚动相机偏移让玩家始终在屏幕中心。
+  const scale = Math.max(availW / 960, availH / 372);
+  c.style.width = Math.floor(960 * scale) + "px";
+  c.style.height = Math.floor(372 * scale) + "px";
 }
 
-/** 🔄 按钮：横竖屏切换（纯 CSS 旋转，不全屏、不锁方向） */
+/** 🔄 按钮：横竖屏切换 */
 function toggleOrientation() {
   isRotated.value = !isRotated.value;
+  // 旋转后让它在下一帧重排
   requestAnimationFrame(fitCanvas);
 }
 
@@ -220,11 +216,38 @@ function onCanvasClick(e: MouseEvent) {
   const c = canvasEl.value;
   if (!c) return;
   const r = c.getBoundingClientRect();
-  const sx = world.value.w / r.width;
-  const sy = world.value.h / r.height;
-  input.value.moveTo = { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy };
+  // 旋转后 clientX/Y 已经在屏幕坐标系里——但 canvas 的 r 也是屏幕坐标系
+  // 旋转等价于把屏幕坐标系旋转回 canvas 坐标系
+  let px = e.clientX - r.left;
+  let py = e.clientY - r.top;
+  if (isRotated.value) {
+    // 旋转 90° 的反向变换：(px, py) → (py, w-px)，前提是 box 不缩放仅旋转
+    // 但实际 r.width/r.height 是旋转后的屏幕尺寸
+    const W = r.width, H = r.height;
+    const nx = py;
+    const ny = W - px;
+    px = nx;
+    py = ny;
+    // 重映射到原始未旋转的 canvas 内部分辨率 (960 × 372)
+    const inner = unrotatedInner({ w: W, h: H });
+    px = (px / W) * inner.w;
+    py = (py / H) * inner.h;
+    input.value.moveTo = {
+      x: (px / inner.w) * world.value.w,
+      y: (py / inner.h) * world.value.h,
+    };
+  } else {
+    const sx = world.value.w / r.width;
+    const sy = world.value.h / r.height;
+    input.value.moveTo = { x: px * sx, y: py * sy };
+  }
   input.value.dx = 0;
   input.value.dy = 0;
+}
+
+/** 旋转时返回旋转前 canvas 的内部分辨率 (未旋转就是 960×372) */
+function unrotatedInner(_r: { w: number; h: number }): { w: number; h: number } {
+  return { w: 960, h: 372 };
 }
 
 // loadAvatar 已移除（角色身体改用 sprite sheet）
@@ -294,10 +317,20 @@ function drawTile(
   ctx: CanvasRenderingContext2D,
   tileId: number,
   dx: number, dy: number, dw: number, dh: number,
+  flipX: boolean = false,
 ) {
   if (!SHEET_TILESET.ready) return;
   const { sx, sy, sw, sh } = tileSrcRect(tileId);
-  ctx.drawImage(SHEET_TILESET.img, sx, sy, sw, sh, dx, dy, dw, dh);
+  if (flipX) {
+    // 水平翻转：先把目标区域缩放为 (-dw, dh)，再 drawImage
+    ctx.save();
+    ctx.translate(dx + dw, dy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(SHEET_TILESET.img, sx, sy, sw, sh, 0, 0, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(SHEET_TILESET.img, sx, sy, sw, sh, dx, dy, dw, dh);
+  }
 }
 
 // ★ 像素艺术：用 imageSmoothingEnabled=false 保证像素清晰（不模糊）
@@ -430,6 +463,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const dx = e.x - dw / 2;
   const dy = sy - dh + 4; // 略微下沉，让脚站在地面上
 
+  // ★ 朝向：facing 在 135-315（朝左）时水平翻转 sprite
+  const facingLeft = !(e.facing >= 135 && e.facing < 315);
+
   applyPixelPerfect(ctx);
 
   // 阴影（脚底）
@@ -441,9 +477,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.fill();
   ctx.restore();
 
-  // 精灵本体（从 tileset 切片，按移动状态切换 walk 帧）
+  // 精灵本体（从 tileset 切片，按移动状态切换 walk 帧；facing 决定翻转）
   if (SHEET_TILESET.ready) {
-    drawTile(ctx, tileId, dx, dy, dw, dh);
+    drawTile(ctx, tileId, dx, dy, dw, dh, facingLeft);
   } else {
     // 兜底彩色胶囊
     const color = e.side === "player" ? "#4ea1ff"
@@ -453,7 +489,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.save();
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.ellipse(e.x, sy - 24, 16, 24, 0, 0, Math.PI * 2);
+    ctx.ellipse(e.x, sy - 24, facingLeft ? -16 : 16, 24, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
@@ -1269,12 +1305,16 @@ body {
 
 /* 🔄 旋转 wrapper：居中 + 可选 90° 旋转 */
 .stage-rotate {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;            /* 旋转后超出部分裁掉，绝不显示黑边 */
 }
 .stage-rotate--on {
   transform: rotate(90deg);
+  /* 旋转 90° 后，原本"宽度"变成"高度"——再 transform-origin: center */
 }
 .stage {
   display: block;
