@@ -182,47 +182,32 @@ function stickEnd() {
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const world = computed(() => state.value?.world || { w: 960, h: 600 });
-
-/**
- * 镜头远近（camera zoom）：
- *   zoom = 1 → 看全图（视口 = world.w × world.h*DEPTH）
- *   zoom = 2 → 拉近一倍（视口 = 一半大小，看到更近的细节）
- *   zoom = 0.5 → 拉远一倍（视口 = 2 倍大小，看更全的地图）
- */
-const cameraZoom = ref(2);
-
-/** canvas 内部分辨率（随 zoom 变化） */
-const canvasW = computed(() => Math.floor(960 / cameraZoom.value));
-const canvasH = computed(() => Math.floor(372 / cameraZoom.value));
-
+// 镜头远近
+const zoom = 1.5;
 /**
  * 🔄 按钮（req.md:57-58）：横竖屏切换
  *
- * 设计：手机默认竖屏 → 画布直接 960×372 纵向铺满屏幕（无黑边）
- *      点击 🔄 → 切横屏 → 画布旋转 90° 显示成 372×960（适合安卓 H5 横屏）
+ * 设计：手机默认竖屏 → 画布直接 960×600 纵向铺满屏幕（无黑边）
+ *      点击 🔄 → 切横屏 → 画布旋转 90° 显示成 600×960（适合安卓 H5 横屏）
  * 内部分辨率与渲染坐标永不改变，只调 CSS 大小和 transform。
  */
 
-/** 等比缩放画布以适配屏幕（不留黑边） */
+/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
 function fitCanvas() {
   const c = canvasEl.value;
   if (!c) return;
   const availW = window.innerWidth;
   const availH = window.innerHeight;
   if (availW <= 0 || availH <= 0) return;
-  // canvas 内部分辨率由模板的 :width/:height 绑定（canvasW, canvasH computed）
-  // 这里只设 CSS 显示尺寸：让 canvas 缩到完全装进屏幕
-  const innerW = canvasW.value;
-  const innerH = canvasH.value;
-  const scale = Math.min(availW / innerW, availH / innerH);
-  c.style.width = Math.floor(innerW * scale) + "px";
-  c.style.height = Math.floor(innerH * scale) + "px";
-}
 
-/** 调整镜头远近（外部调用） */
-function setCameraZoom(z: number) {
-  cameraZoom.value = z;
-  fitCanvas();
+  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
+  // 滚动相机偏移让玩家始终在屏幕中心。
+
+  const scale = Math.max(availW / 960/zoom, availH / 372/zoom);
+  c.style.width = Math.floor(960 * scale) + "px";
+  c.style.height = Math.floor(372 * scale) + "px";
+  console.log("fitCanvas scale", scale)
+  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
 }
 
 /** 🔄 按钮：横竖屏切换 */
@@ -637,8 +622,8 @@ function render() {
   if (!ctx) return;
   const W = c.width;
   const H = c.height;
-  const sx = (W / world.value.w) * cameraZoom.value;
-  const sy = (H / (world.value.h * DEPTH)) * cameraZoom.value;
+  const sx = W / world.value.w;
+  const sy = H / (world.value.h * DEPTH);
 
   // ★ 动态同步 ready 状态（data URL 图片解码完成时）
   for (const sheet of [SHEET_TILESET, SHEET_PLAYER, SHEET_ALLY, SHEET_ENEMY_CHAR]) {
@@ -1073,8 +1058,7 @@ watch(() => state.value?.phase, (p) => {
         <canvas
           ref="canvasEl"
           class="stage"
-          :width="canvasW"
-          :height="canvasH"
+          width="960" height="372"
           @click="onCanvasClick"
         ></canvas>
       </div>
