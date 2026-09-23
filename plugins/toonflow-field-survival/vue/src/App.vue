@@ -40,8 +40,14 @@ function onSelectEntity(e: Entity | null) {
   selectedEntityId.value = e?.id || null;
 }
 
-/** 🔄 横竖屏切换：false=横屏(960×372), true=竖屏(旋转90°用372×960显示) */
+/**
+ * 🔄 横竖屏切换：false=横屏(960×372), true=竖屏(旋转90°用372×960显示)
+ * */
 const isRotated = ref(false);
+/**
+ * 屏幕元素是否旋转90 度
+ */
+const  isStageRotateOn =ref(false);
 
 /** 地图主题（开局后从 state.map 取；也演示 toonflowJsApi 从插件数据表读 map_data） */
 const mapTheme = ref("");
@@ -181,9 +187,19 @@ function stickEnd() {
 
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
-const world = computed(() => state.value?.world || { w: 960, h: 600 });
+
 // 镜头远近
-const zoom = 1.5;
+let zoom = 1.5;
+
+
+let canvas_direction_def={
+  horizontal_screen:{canvas_w:960, canvas_h:600},
+  vertical_screen:{canvas_w:600, canvas_h:960}
+}
+let canvas_w =canvas_direction_def.vertical_screen.canvas_w;
+let canvas_h = canvas_direction_def.vertical_screen.canvas_h;
+
+const world = computed(() => state.value?.world || { w: canvas_direction_def.vertical_screen.canvas_w, h: canvas_direction_def.vertical_screen.canvas_h });
 /**
  * 🔄 按钮（req.md:57-58）：横竖屏切换
  *
@@ -193,7 +209,7 @@ const zoom = 1.5;
  */
 
 /** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
-function fitCanvas() {
+function fitCanvas_old() {
   const c = canvasEl.value;
   if (!c) return;
   const availW = window.innerWidth;
@@ -203,17 +219,134 @@ function fitCanvas() {
   // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
   // 滚动相机偏移让玩家始终在屏幕中心。
 
-  const scale = Math.max(availW / 960/zoom, availH / 372/zoom);
-  c.style.width = Math.floor(960 * scale) + "px";
-  c.style.height = Math.floor(372 * scale) + "px";
+  const scale = Math.max(availW / canvas_w/zoom, availH / canvas_h/zoom);
+  c.style.width = Math.floor(canvas_w * scale) + "px";
+  c.style.height = Math.floor(canvas_h * scale) + "px";
   console.log("fitCanvas scale", scale)
   console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
 }
 
+function fitCanvas(){
+  const c = canvasEl.value;
+  if(!c) return;
+  // 设置绘图缓冲区
+  c.width = canvas_w;
+  c.height = canvas_h;
+  // css样式，填满容器，保持比例，看你业务，这里示例100%
+  c.style.width = "100%";
+  c.style.height = "100%";
+}
+
+
+/**
+ * 根据当前视口，计算横屏/竖屏的目标逻辑画布尺寸
+ * 返回 { horizontal_screen: {w,h}, vertical_screen:{w,h} }
+ * 不是写死，基于 window.screen / visualViewport 计算，WebView 手机可用
+ */
+function calcCanvasDirection() {
+  // 可视区域，WebView优先visualViewport，降级window.inner
+  const vp = window.visualViewport ?? { width: window.innerWidth, height: window.innerHeight };
+  const screenW = vp.width;
+  const screenH = vp.height;
+
+  // 你的设计基准比例：横屏 960:600 = 1.6；竖屏 600:960
+  const designAspectHorizontal = 960 / 600;
+  const designAspectVertical = 600 / 960;
+
+  // 我们不取原始屏幕像素，取「适配屏幕的逻辑画布尺寸」，保证比例，限制最大画布大小防止显存爆炸
+  const MAX_CANVAS_LONG = 1200; // 画布长边上限，保护性能
+  let hW, hH, vW, vH;
+
+  // 横屏模式：画面比例 960/600
+  if (screenW / screenH >= designAspectHorizontal) {
+    hH = Math.min(screenH, MAX_CANVAS_LONG / designAspectHorizontal);
+    hW = hH * designAspectHorizontal;
+  } else {
+    hW = Math.min(screenW, MAX_CANVAS_LONG);
+    hH = hW / designAspectHorizontal;
+  }
+
+  // 竖屏模式：画面比例 600/960
+  if (screenW / screenH <= designAspectVertical) {
+    hW = Math.min(screenW, MAX_CANVAS_LONG * designAspectVertical);
+    hH = hW / designAspectVertical;
+  } else {
+    hH = Math.min(screenH, MAX_CANVAS_LONG);
+    hW = hH * designAspectVertical;
+  }
+
+  vW = hH;
+  vH = hW;
+
+  return {
+    horizontal_screen: { canvas_w: Math.round(hW), canvas_h: Math.round(hH) },
+    vertical_screen: { canvas_w: Math.round(vW), canvas_h: Math.round(vH) }
+  };
+}
+
+function rotated_fun() {
+  const canvas_direction = calcCanvasDirection();
+  if (isRotated.value) {
+    // CSS hack旋转模式，使用竖屏配置
+    canvas_w = canvas_direction.vertical_screen.canvas_w;
+    canvas_h = canvas_direction.vertical_screen.canvas_h;
+  } else {
+    // 正常模式，系统屏幕横竖屏，使用横屏配置
+    canvas_w = canvas_direction.horizontal_screen.canvas_w;
+    canvas_h = canvas_direction.horizontal_screen.canvas_h;
+  }
+  console.log("set canvas size", canvas_w, canvas_h);
+}
+
+
 /** 🔄 按钮：横竖屏切换 */
-function toggleOrientation() {
-  isRotated.value = !isRotated.value;
-  // 旋转后让它在下一帧重排
+/** 判断是否安卓App内嵌H5(WebView) */
+function isAndroidAppWebView(): boolean {
+  const ua = navigator.userAgent;
+  const isAndroid = /android/i.test(ua);
+  const isWebView = /; wv\)/.test(ua); // WebView标识
+  return isAndroid && isWebView;
+}
+
+/** 🔄 横竖屏切换入口 */
+async function toggleOrientation() {
+  await toggleOrientation_android_app_h5();
+}
+
+async function toggleOrientation_android_app_h5() {
+  // 目标状态：isRotated=false → 期望真实系统横竖屏；true → CSS旋转hack
+  const wantLandscape = !isRotated.value;
+
+  // ✅ 不是安卓App‑WebView，直接跳过系统锁屏，直接切CSS hack
+  if (!isAndroidAppWebView()) {
+    console.log("不是安卓App WebView，跳过系统方向锁，使用CSS rotate hack");
+    isRotated.value = !isRotated.value;
+    // pc 元素也不旋转
+    //isStageRotateOn.value = !isRotated.value;
+    rotated_fun();
+    requestAnimationFrame(fitCanvas);
+    return;
+  }
+
+  // 只有安卓App WebView才尝试调用系统锁API
+  try {
+    if (!window.screen?.orientation) {
+      throw new Error("WebView环境不支持screen.orientation");
+    }
+    if (wantLandscape) {
+      await screen.orientation.lock("landscape-primary");
+    } else {
+      await screen.orientation.lock("portrait-primary");
+    }
+    // 锁屏成功，关闭CSS旋转标记
+    isRotated.value = false;
+    console.log("✅ WebView系统方向锁定成功", wantLandscape ? "横屏" : "竖屏");
+  } catch (err) {
+    console.warn("⚠️ WebView系统锁屏失败，降级CSS rotate hack：", err);
+    isRotated.value = !isRotated.value;
+  }
+
+  rotated_fun();
   requestAnimationFrame(fitCanvas);
 }
 
@@ -221,39 +354,23 @@ function onCanvasClick(e: MouseEvent) {
   const c = canvasEl.value;
   if (!c) return;
   const r = c.getBoundingClientRect();
-  // 旋转后 clientX/Y 已经在屏幕坐标系里——但 canvas 的 r 也是屏幕坐标系
-  // 旋转等价于把屏幕坐标系旋转回 canvas 坐标系
-  let px = e.clientX - r.left;
-  let py = e.clientY - r.top;
-  if (isRotated.value) {
-    // 旋转 90° 的反向变换：(px, py) → (py, w-px)，前提是 box 不缩放仅旋转
-    // 但实际 r.width/r.height 是旋转后的屏幕尺寸
-    const W = r.width, H = r.height;
-    const nx = py;
-    const ny = W - px;
-    px = nx;
-    py = ny;
-    // 重映射到原始未旋转的 canvas 内部分辨率 (960 × 372)
-    const inner = unrotatedInner({ w: W, h: H });
-    px = (px / W) * inner.w;
-    py = (py / H) * inner.h;
-    input.value.moveTo = {
-      x: (px / inner.w) * world.value.w,
-      y: (py / inner.h) * world.value.h,
-    };
-  } else {
-    const sx = world.value.w / r.width;
-    const sy = world.value.h / r.height;
-    input.value.moveTo = { x: px * sx, y: py * sy };
-  }
+
+  // 屏幕点 → DOM局部
+  const px = e.clientX - r.left;
+  const py = e.clientY - r.top;
+
+  // 直接映射到世界坐标
+  const sx = world.value.w / r.width;
+  const sy = world.value.h / r.height;
+  input.value.moveTo = {
+    x: px * sx,
+    y: py * sy,
+  };
+
   input.value.dx = 0;
   input.value.dy = 0;
 }
 
-/** 旋转时返回旋转前 canvas 的内部分辨率 (未旋转就是 960×372) */
-function unrotatedInner(_r: { w: number; h: number }): { w: number; h: number } {
-  return { w: 960, h: 372 };
-}
 
 // loadAvatar 已移除（角色身体改用 sprite sheet）
 
@@ -907,8 +1024,17 @@ onMounted(() => {
   initDecorations();
 
   // ★ 画布等比缩放：窗口变化 / 旋转 / 全屏切换后重新适配
-  window.addEventListener("resize", fitCanvas);
-  fitCanvas();
+  // window.addEventListener("resize", fitCanvas);
+  // fitCanvas();
+
+  window.addEventListener("orientationchange", ()=>{
+    rotated_fun();
+    requestAnimationFrame(fitCanvas);
+  })
+  window.visualViewport?.addEventListener("resize", ()=>{
+    rotated_fun();
+    requestAnimationFrame(fitCanvas);
+  })
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
@@ -1035,7 +1161,7 @@ watch(() => state.value?.phase, (p) => {
     </section>
 
     <!-- ===== 战斗阶段 ===== -->
-    <section v-else-if="state.phase === 'playing'" class="play">
+    <section v-else-if="state.phase === 'playing'" class="play { 'stage-rotate--on': isStageRotateOn }">
       <!-- 🔄 横屏按钮（左上角；手机上锁定横屏+全屏，PC 上全屏；req.md:57-58） -->
       <button class="btn btn--rotate" @click="toggleOrientation" title="横竖屏切换">
         🔄
@@ -1054,7 +1180,7 @@ watch(() => state.value?.phase, (p) => {
         <button class="btn btn--exit" @click="exitGame">退出</button>
       </div>
 
-      <div class="stage-rotate" :class="{ 'stage-rotate--on': isRotated }">
+      <div class="stage-rotate" >
         <canvas
           ref="canvasEl"
           class="stage"
@@ -1317,6 +1443,8 @@ body {
   justify-content: center;
   overflow: hidden;            /* 旋转后超出部分裁掉，绝不显示黑边 */
 }
+
+
 .stage-rotate--on {
   transform: rotate(90deg);
   /* 旋转 90° 后，原本"宽度"变成"高度"——再 transform-origin: center */
