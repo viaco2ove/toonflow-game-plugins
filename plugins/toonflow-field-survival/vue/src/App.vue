@@ -9,10 +9,36 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
-import { IMG_GROUND, IMG_PERSON, IMG_BEAR, IMG_TREE, IMG_WATER, IMG_LAND } from "./assets";
+import DebugPanel from "./DebugPanel.vue";
+import {
+  TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
+  TILE_GROUND_ID, TILE_WATER_ID, TILE_POTION_ID,
+  TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
+  TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
+  MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
+  spriteTileId,
+} from "./assets";
 
 const state = ref<GameState | null>(null);
 const ready = ref(false);
+
+/**
+ * Debug 模式：
+ *   - npm run dev  → 默认开启（Vite 启动时 import.meta.env.DEV = true）
+ *   - npm run debug→ 强制开启（mode=debug）
+ *   - npm run build→ 关闭（import.meta.env.PROD = true）
+ *   也可通过 URL ?debug=0 强制关闭
+ */
+const debugMode = ref(
+  (import.meta.env.DEV || import.meta.env.MODE === "debug") &&
+  new URLSearchParams(location.search).get("debug") !== "0",
+);
+
+/** debug 面板选中的实体（用于在 canvas 上画高亮框）*/
+const selectedEntityId = ref<string | null>(null);
+function onSelectEntity(e: Entity | null) {
+  selectedEntityId.value = e?.id || null;
+}
 
 /** 地图主题（开局后从 state.map 取；也演示 toonflowJsApi 从插件数据表读 map_data） */
 const mapTheme = ref("");
@@ -34,8 +60,20 @@ function loadAvatar(avatarPath: string): HTMLImageElement {
   const cached = avatarCache.get(avatarPath);
   if (cached) return cached;
   const img = new Image();
-  img.crossOrigin = "anonymous";
-  img.src = avatarPath.startsWith("http") ? avatarPath : location.origin + avatarPath;
+  // ★ 头像路径解析：
+  //   http(s) → 完整 URL（AI 故事角色头像）
+  //   ./ 开头 → 插件自身资源（走 assetUrl：dev=Vite，prod=data URL）
+  //   / 开头 → 宿主站内资源（补 origin）
+  //   其他    → 当作相对路径走 assetUrl
+  if (avatarPath.startsWith("http")) {
+    img.src = avatarPath;
+  } else if (avatarPath.startsWith("./")) {
+    img.src = assetUrl(avatarPath.slice(2));
+  } else if (avatarPath.startsWith("/")) {
+    img.src = location.origin + avatarPath;
+  } else {
+    img.src = assetUrl(avatarPath);
+  }
   avatarCache.set(avatarPath, img);
   return img;
 }
@@ -61,7 +99,10 @@ function toggle(list: string[], id: string) {
 function roleAvatar(r: RoleOption): string {
   const p = r?.avatarPath || "";
   if (!p) return "";
-  return p.startsWith("http") ? p : location.origin + p;
+  // 绝对 URL（http/https）直接用
+  if (p.startsWith("http")) return p;
+  // 相对路径走 assetUrl：dev 用 Vite server，prod 用 data URL 内联
+  return assetUrl(p.startsWith("./") ? p.slice(2) : p);
 }
 
 const starting = ref(false);
@@ -137,7 +178,55 @@ function stickEnd() {
 
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
-const world = computed(() => state.value?.world || { w: 960, h: 600 });
+/** 世界尺寸：横竖屏独立（横屏 960×600，竖屏 372×990），sprite 比例不变形 */
+const world = computed(() => state.value?.world || currentWorld.value);
+
+/**
+ * 横竖屏模式
+ *
+ * 关键：每种方向用独立的 canvas 内部分辨率和世界坐标，sprite 不变形。
+ * 切换时重新生成地图装饰（rng 范围按对应世界）。
+ *
+ * - landscape（默认 PC 浏览器）：canvas 960×372，世界宽高 960×600
+ * - portrait （手机 App 嵌入）：canvas 372×614，世界宽高 372×990）
+ *
+ * 两种方向都用同一个 viewport（最高 64 像素的 sprite），不拉伸。
+ */
+type Orientation = "landscape" | "portrait";
+const orientation = ref<Orientation>("landscape");
+
+const WORLD_LANDSCAPE = { w: 960, h: 600 };
+const WORLD_PORTRAIT  = { w: 372, h: 990 };
+const canvasW = computed(() => orientation.value === "landscape" ? WORLD_LANDSCAPE.w : WORLD_PORTRAIT.w);
+const canvasH = computed(() => Math.round((orientation.value === "landscape" ? WORLD_LANDSCAPE.h : WORLD_PORTRAIT.h) * 0.62));
+
+/** 当前方向的世界尺寸（用于初始化装饰、生成敌人位置）*/
+const currentWorld = computed(() => orientation.value === "landscape" ? WORLD_LANDSCAPE : WORLD_PORTRAIT);
+
+function toggleOrientation() {
+  orientation.value = orientation.value === "landscape" ? "portrait" : "landscape";
+  // 切换时按新方向重新生成装饰、敌人初始位置
+  initDecorations();
+  applyOrientation();
+}
+
+function applyOrientation() {
+  if (!canvasEl.value) return;
+  requestAnimationFrame(() => render());
+}
+
+/**
+ * 判断是否应该强制竖屏（手机 App 嵌入）
+ */
+function autoDetectOrientation(): Orientation {
+  const urlParam = new URLSearchParams(location.search).get("orientation");
+  if (urlParam === "portrait" || urlParam === "landscape") return urlParam;
+  const ua = navigator.userAgent;
+  const isMobile = /Android|iPhone|iPad|iOS|Mobile|ToonflowApp|Toonflow/i.test(ua);
+  const screenType = (screen.orientation as any)?.type || "";
+  const isPortraitScreen = screenType.includes("portrait");
+  return isMobile && isPortraitScreen ? "portrait" : "landscape";
+}
 
 function onCanvasClick(e: MouseEvent) {
   const c = canvasEl.value;
@@ -202,40 +291,65 @@ function drawFrame(
 }
 
 // ----------------------------------------------------------
-// 内置精灵表（Base64 内联，不依赖外部文件，iframe 内可正常加载）
-// ground.png  128×128  地面tile
-// tree.png    128×128  树（整体图）
-// bear.png    192/3×256/4  小动物（横3帧×竖4方向）
-// person.png  300/4×450/4  角色（横4帧×竖4方向）
-// water.png   128×128  水面tile
-// land.png    128×128  陆地tile
+// 精灵加载（Rotten-Soup dawnlike 资源，相对路径引用 public/images/）
+// 角色走 player_sprites/<id>.png 单图；地面/水/药水从 tileset 按 tile id 切片
 // -------------------------------------------------------
-const SHEET_PERSON  = loadSheet(IMG_PERSON,  75, 112, 4); // 300/4, 450/4
-const SHEET_BEAR    = loadSheet(IMG_BEAR,    64,  64, 3); // 192/3, 256/4
-const SHEET_GROUND  = loadSheet(IMG_GROUND,  128, 128);
-const SHEET_TREE    = loadSheet(IMG_TREE,    128, 128);
-const SHEET_WATER   = loadSheet(IMG_WATER,  128, 128);
-const SHEET_LAND    = loadSheet(IMG_LAND,    128, 128);
+const SHEET_PLAYER      = loadSheet(IMG_PLAYER, 32, 32);
+const SHEET_ALLY        = loadSheet(IMG_ALLY, 32, 32);
+const SHEET_ENEMY_CHAR  = loadSheet(IMG_ENEMY_CHAR, 32, 32);
 
-// 地图装饰物（树木、水体）位置
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "land"; id: string }
+// ★ tileset 大图只加载一次，所有 tile id 共用（同 Rotten-Soup 的 GameDisplay 方案）
+const SHEET_TILESET    = loadSheet(TILESET_URL, TILE_SIZE, TILE_SIZE, TILESET_COLS);
+
+/** 从 tileset 绘制指定 tile id */
+function drawTile(
+  ctx: CanvasRenderingContext2D,
+  tileId: number,
+  dx: number, dy: number, dw: number, dh: number,
+) {
+  if (!SHEET_TILESET.ready) return;
+  const { sx, sy, sw, sh } = tileSrcRect(tileId);
+  ctx.drawImage(SHEET_TILESET.img, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+// ★ 像素艺术：用 imageSmoothingEnabled=false 保证像素清晰（不模糊）
+function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
+  ctx.imageSmoothingEnabled = false;
+}
+
+// 地图装饰物（树木、水体、花木）位置
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot"; id: string; variant?: number }
 const mapDecorations = ref<Decoration[]>([]);
 
-// 初始化地图装饰物
+// 初始化地图装饰物（按当前方向的世界尺寸生成）
 function initDecorations() {
   const decs: Decoration[] = [];
   const rng = (a: number, b: number) => Math.random() * (b - a) + a;
-  // 树木（8-12棵）
-  for (let i = 0; i < 10; i++) {
-    decs.push({ x: rng(80, 880), y: rng(80, 520), kind: "tree", id: `tree_${i}` });
+  const W = currentWorld.value.w;
+  const H = currentWorld.value.h;
+  // 树木（9 棵，绿树/枯树交替）
+  for (let i = 0; i < 9; i++) {
+    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.87), kind: "tree", id: `tree_${i}`, variant: i % 2 });
   }
-  // 水体（2-4处）
-  for (let i = 0; i < 3; i++) {
-    decs.push({ x: rng(100, 860), y: rng(100, 500), kind: "water", id: `water_${i}` });
+  // 水体（4 处）
+  for (let i = 0; i < 4; i++) {
+    decs.push({ x: rng(W * 0.08, W * 0.92), y: rng(H * 0.13, H * 0.87), kind: "water", id: `water_${i}` });
   }
-  // 陆地斑块（4-6处）
+  // 灌木（5 丛）
   for (let i = 0; i < 5; i++) {
-    decs.push({ x: rng(60, 900), y: rng(60, 540), kind: "land", id: `land_${i}` });
+    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.90), kind: "bush", id: `bush_${i}` });
+  }
+  // 蘑菇（4 朵）
+  for (let i = 0; i < 4; i++) {
+    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.90), kind: "mushroom", id: `mush_${i}` });
+  }
+  // 花（7 处）
+  for (let i = 0; i < 7; i++) {
+    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.90), kind: "flower", id: `flower_${i}` });
+  }
+  // 血瓶（3 个）
+  for (let i = 0; i < 3; i++) {
+    decs.push({ x: rng(W * 0.08, W * 0.92), y: rng(H * 0.13, H * 0.87), kind: "pot", id: `pot_${i}` });
   }
   mapDecorations.value = decs;
 }
@@ -258,37 +372,88 @@ function animFrame(phase: "walk" | "idle"): number {
 }
 
 // ----------------------------------------------------------
-// 绘制角色（复用 pixi_game 的 sprite sheet 切帧逻辑）
+// 绘制角色（保持 sprite 实际像素比例，不变形）
+// ★ 关键：sprite 实际内容比例（来自 PIL 测量）:
+//   player=0.857(高22%)  ally=0.846(高18%)  enemy_char=0.750(高33%)
+//   bear=0.800(高25%)     beast=1.067(高-7%,微宽)
+// ★ 目标：保留原图比例，目标高度 48px，宽度按比例计算
+// 例如 player content 24×28 → 比例 0.857 → dh=48 → dw=48*0.857=41
+// 用整数对齐像素: dh=48, dw=42（player）, dw=40(ally), dw=36(enemy), dw=40(bear), dw=52(beast)
 // ----------------------------------------------------------
+
+/**
+ * 角色尺寸配置（保持 sprite 原始宽高比，不变形）
+ *
+ * ★ 关键原则：横纵缩放系数必须相同，否则会变形。
+ *   sprite 文件尺寸都是 32×32（整张图含透明边距）。
+ *   我们用统一的目标高度 dh，再按 sprite 自身宽高比计算 dw：
+ *     scale = dh / 32   →   dw = 32 * scale
+ *
+ *   这样 sprite 里的所有像素都被等比缩放（横纵缩放系数相同），
+ *   内容形状（人形/兽形）保持原样，只整体放大。
+ *
+ * ★ 选不同 dh 是为了视觉层级（玩家大、野怪小、装饰更小）：
+ *   - 玩家角色：dh=64（最大，最显眼）
+ *   - 盟友角色：dh=56（略小）
+ *   - 敌对角色：dh=64（跟玩家同等，视觉对等）
+ *   - 野怪：dh=48（中等等）
+ *   - 装饰（树/水/花）：在各自 draw 调用里单独指定
+ */
+const ENTITY_BASE = 32;  // sprite 原图尺寸 32×32
+
+/** 角色显示高度（用于等比缩放）*/
+const ENTITY_DIMS: Record<string, number> = {
+  player:      64,  // 金甲战士
+  ally:        56,  // 蓝袍法师
+  enemy_char:  64,  // 持枪骑士
+  // 野怪
+  goblin:   48,
+  orc:      48,
+  rat:      48,
+  goat:     48,
+  snake:    48,
+  bat:      48,
+  skeleton: 48,
+  minotaur: 56,
+};
+
+/** 计算等比缩放后的尺寸（宽高比固定 = 原图宽高比 = 1:1）*/
+function fitDim(key: string): { w: number; h: number } {
+  const h = ENTITY_DIMS[key] || 48;
+  // 等比缩放：原图 32×32（1:1），所以 w = h
+  return { w: h, h };
+}
+
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement) {
   const sy = e.y * DEPTH;
-  const s = SHEET_PERSON;
-
-  // 缩放：人物约 48×72 像素（比原来稍大，更接近 2.5D）
-  const dw = 48, dh = 72;
+  // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
+  const key = e.side === "player" ? "player"
+            : e.side === "ally"   ? "ally"
+            : "enemy_char";
+  // ★ 移动判定：vx/vy 不为零 或 上一帧有 dx/dy 输入
+  const moving = Math.abs(e.vx || 0) > 0.01 || Math.abs(e.vy || 0) > 0.01;
+  // 当前帧 tile id（2 帧 walk 动画交替）
+  const tileId = spriteTileId(key, moving, _animTick);
+  const dim = fitDim(key);
+  const dw = dim.w;
+  const dh = dim.h;
   const dx = e.x - dw / 2;
-  const dy = sy - dh;
+  const dy = sy - dh + 4; // 略微下沉，让脚站在地面上
 
-  // 动作帧
-  const moving = e.vx !== 0 || e.vy !== 0;
-  const frame = animFrame(moving ? "walk" : "idle");
-  const dir = dirIndex(e.facing);
+  applyPixelPerfect(ctx);
 
-  // 阴影
+  // 阴影（脚底）
   ctx.save();
-  ctx.globalAlpha = 0.3;
+  ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  ctx.ellipse(e.x, sy + 4, dw * 0.38, dw * 0.18, 0, 0, Math.PI * 2);
+  ctx.ellipse(e.x, sy + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  // 精灵本体
-  if (s.ready) {
-    ctx.drawImage(s.img,
-      frame * s.fw, dir * s.fh, s.fw, s.fh,
-      dx, dy, dw, dh,
-    );
+  // 精灵本体（从 tileset 切片，按移动状态切换 walk 帧）
+  if (SHEET_TILESET.ready) {
+    drawTile(ctx, tileId, dx, dy, dw, dh);
   } else {
     // 兜底彩色胶囊
     const color = e.side === "player" ? "#4ea1ff"
@@ -298,26 +463,34 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.save();
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.ellipse(e.x, sy - 36, 20, 30, 0, 0, Math.PI * 2);
+    ctx.ellipse(e.x, sy - 24, 16, 24, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
-  // ★ 角色头像（req.md 要求：2.5D 小人模型上方显示适合比例的头像）
-  const avatarSize = 28;
+  // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
+  // 布局自上而下：头像(32) → 名字 → sprite
+  const avatarSize = 30;
   const avatarX = e.x - avatarSize / 2;
-  const avatarY = dy - avatarSize - 4;
-  if (avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0) {
-    // 有头像图片时绘制圆形裁剪的头像
+  const avatarY = dy - avatarSize - 16; // 头像底部与名字留 16px（放名字）
+  const hasAvatar = avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0;
+  if (hasAvatar) {
+    applyPixelPerfect(ctx);
     ctx.save();
+    // 头像底色（遮住背后内容）
+    ctx.fillStyle = "#1e1f1f";
+    ctx.beginPath();
+    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2 + 1, 0, Math.PI * 2);
+    ctx.fill();
+    // 圆形裁剪绘制头像
     ctx.beginPath();
     ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
     ctx.clip();
-    ctx.drawImage(avatarImg, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.drawImage(avatarImg!, avatarX, avatarY, avatarSize, avatarSize);
     ctx.restore();
-    // 头像边框
+    // 头像边框（不同阵营不同颜色）
     ctx.save();
-    ctx.strokeStyle = e.side === "player" ? "#4ea1ff" : e.side === "ally" ? "#5fd28a" : "#fff";
+    ctx.strokeStyle = e.side === "player" ? "#4ea1ff" : e.side === "ally" ? "#5fd28a" : "#ff4c4c";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
@@ -325,73 +498,89 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.restore();
   }
 
-  // 头顶名字（角色名优先用 avatar，无则用首字）
-  const headY = dy - 6;
+  // 头顶名字：有头像时放头像下方，无头像时贴 sprite 上方
+  const headY = hasAvatar ? avatarY + avatarSize + 11 : dy - 6;
   ctx.save();
   ctx.textAlign = "center";
-  ctx.font = "bold 11px sans-serif";
-  ctx.fillStyle = "rgba(0,0,0,.55)";
-  ctx.fillText(e.name.slice(0, 3), e.x + 1, headY + 1);
-  ctx.fillStyle = "#fff";
-  ctx.fillText(e.name.slice(0, 3), e.x, headY);
+  ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
+  ctx.fillStyle = "rgba(0,0,0,.85)";
+  ctx.fillText(e.name.slice(0, 4), e.x + 1, headY + 1);
+  ctx.fillStyle = e.side === "enemy" ? "#ffd4d4" : "#fff";
+  ctx.fillText(e.name.slice(0, 4), e.x, headY);
   ctx.restore();
 
-  // 血条
-  const barW = 44, barH = 4;
+  // 血条 - 紧贴 sprite 下边缘（dy + dh 是 sprite 底部）
+  const barW = Math.max(40, dw + 4), barH = 4;
   const barX = e.x - barW / 2;
-  const barY = dy - 10;
+  const barY = sy + 8; // 在脚底（sy = e.y * DEPTH）
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,.5)";
+  // 边框
+  ctx.fillStyle = "rgba(0,0,0,.85)";
+  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+  // 背景
+  ctx.fillStyle = "#3a0d0d";
   ctx.fillRect(barX, barY, barW, barH);
-  ctx.fillStyle = e.side === "enemy" ? "#ff4c4c" : "#57d977";
-  ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
+  // 前景
+  const hpRatio = Math.max(0, e.hp / e.maxHp);
+  ctx.fillStyle = e.side === "enemy" ? "#d63b3b" : "#4ec74e";
+  ctx.fillRect(barX, barY, barW * hpRatio, barH);
   ctx.restore();
 }
 
 // ----------------------------------------------------------
-// 绘制野怪（用 bear.png sprite sheet）
+// 绘制野怪（Rotten-Soup 32×32 像素艺术）
+// ★ 严格保持原图比例（不变形）：
+//   bear content 24×30 → 0.8 → dh=40 → dw=32
+//   beast content 32×30 → 1.067 → dh=40 → dw=42
 // ----------------------------------------------------------
 function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
   const sy = e.y * DEPTH;
-  const s = SHEET_BEAR;
-  const dw = 42, dh = 56;
+  // ★ 根据野怪名字映射到 tileset monster tile
+  const key = mobKeyFor(e.name);
+  // ★ 移动状态：AI 在追玩家时 walking，否则 idle
+  const moving = Math.abs(e.vx || 0) > 0.01 || Math.abs(e.vy || 0) > 0.01;
+  const tileId = spriteTileId(key, moving, _animTick);
+  // 等比缩放（tileset 每个 tile 32×32 → dw = dh）
+  const targetH = ENTITY_DIMS[key] || 48;
+  const dw = targetH;
+  const dh = targetH;
   const dx = e.x - dw / 2;
-  const dy = sy - dh;
+  const dy = sy - dh + 4;
 
-  const moving = e.vx !== 0 || e.vy !== 0;
-  const frame = animFrame(moving ? "walk" : "idle");
-  const dir = dirIndex(e.facing);
+  applyPixelPerfect(ctx);
 
+  // 阴影
   ctx.save();
-  ctx.globalAlpha = 0.3;
+  ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  ctx.ellipse(e.x, sy + 4, dw * 0.36, dw * 0.16, 0, 0, Math.PI * 2);
+  ctx.ellipse(e.x, sy + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
-  if (s.ready) {
-    ctx.drawImage(s.img,
-      frame * s.fw, dir * s.fh, s.fw, s.fh,
-      dx, dy, dw, dh,
-    );
+  if (SHEET_TILESET.ready) {
+    drawTile(ctx, tileId, dx, dy, dw, dh);
   } else {
     // 兜底：棕色圆
     ctx.save();
     ctx.fillStyle = "#8b5a2b";
     ctx.beginPath();
-    ctx.ellipse(e.x, sy - 28, 18, 26, 0, 0, Math.PI * 2);
+    ctx.ellipse(e.x, sy - 16, 14, 18, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
   // 血条
   const barW = 36, barH = 4;
+  const barX = e.x - barW / 2;
+  const barY = dy - 6;
   ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,.5)";
-  ctx.fillRect(e.x - barW / 2, dy - 8, barW, barH);
-  ctx.fillStyle = "#ff4c4c";
-  ctx.fillRect(e.x - barW / 2, dy - 8, barW * Math.max(0, e.hp / e.maxHp), barH);
+  ctx.fillStyle = "rgba(0,0,0,.85)";
+  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+  ctx.fillStyle = "#3a0d0d";
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = "#d63b3b";
+  ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
   ctx.restore();
 }
 
@@ -407,89 +596,105 @@ function render() {
   const sy = H / (world.value.h * DEPTH);
 
   // ★ 动态同步 ready 状态（data URL 图片解码完成时）
-  for (const sheet of [SHEET_GROUND, SHEET_PERSON, SHEET_BEAR, SHEET_TREE, SHEET_WATER, SHEET_LAND]) {
+  for (const sheet of [SHEET_TILESET, SHEET_PLAYER, SHEET_ALLY, SHEET_ENEMY_CHAR]) {
     if (!sheet.ready && sheet.img.complete && sheet.img.naturalWidth > 0) {
       sheet.ready = true;
     }
   }
 
   ctx.clearRect(0, 0, W, H);
-  // 地面：用 ground.png tile 铺满（参考 pixi_game 方案）
-  if (SHEET_GROUND.ready) {
-    const tw = SHEET_GROUND.fw * sx;
-    const th = SHEET_GROUND.fh * DEPTH * sy;
+
+  // 地面：dawnlike tileset 草地 tile（id 116）平铺
+  if (SHEET_TILESET.ready) {
+    const tw = TILE_SIZE * sx;
+    const th = TILE_SIZE * DEPTH * sy;
     for (let tx = 0; tx < W; tx += tw) {
       for (let ty = 0; ty < H; ty += th) {
-        ctx.drawImage(SHEET_GROUND.img, 0, 0, SHEET_GROUND.fw, SHEET_GROUND.fh, tx, ty, tw, th);
+        drawTile(ctx, TILE_GROUND_ID, tx, ty, tw, th);
       }
     }
   } else {
-    // 兜底渐变
+    // 兜底渐变（暗泥土色，Rotten-Soup 风格）
     const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, "#1a3a1f");
-    g.addColorStop(1, "#0a1a0d");
+    g.addColorStop(0, "#3a2418");
+    g.addColorStop(1, "#1a1208");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
   }
 
   // ★ 地图 zones（map-gener agent 产出）：不同 kind 不同色调椭圆区域
   const kindColors: Record<string, string> = {
-    safe: "rgba(94, 210, 138, .16)",
-    danger: "rgba(255, 107, 107, .14)",
-    loot: "rgba(224, 178, 74, .16)",
-    quest: "rgba(110, 168, 254, .14)",
+    safe: "rgba(94, 210, 138, .18)",
+    danger: "rgba(255, 80, 80, .18)",
+    loot: "rgba(224, 178, 74, .2)",
+    quest: "rgba(110, 168, 254, .18)",
   };
   (s.map?.zones || []).forEach((z) => {
     const zy = z.y * DEPTH;
     ctx.save();
     ctx.fillStyle = kindColors[z.kind] || "rgba(255,255,255,.06)";
-    ctx.strokeStyle = "rgba(255,255,255,.14)";
+    ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.ellipse(z.x, zy, z.r, z.r * 0.5, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = "rgba(255,255,255,.55)";
-    ctx.font = "11px sans-serif";
+    ctx.fillStyle = "rgba(255,255,255,.7)";
+    ctx.font = "bold 12px 'Microsoft YaHei', sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(z.name, z.x, zy - 4);
     ctx.restore();
   });
 
-  // 网格
-  ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,.05)";
-  ctx.lineWidth = 1;
-  for (let x = 0; x < world.value.w; x += 60) {
-    ctx.beginPath(); ctx.moveTo(x * sx, 0); ctx.lineTo(x * sx, H); ctx.stroke();
-  }
-  for (let y = 0; y < world.value.h; y += 60) {
-    ctx.beginPath(); ctx.moveTo(0, y * DEPTH * sy); ctx.lineTo(W, y * DEPTH * sy); ctx.stroke();
-  }
-  ctx.restore();
-
   ctx.save();
   ctx.scale(sx, sy);
 
-  // ★ 地图装饰物（树木、水体、陆地斑块）
+  // ★ 地图装饰物（严格保持 sprite 实际内容比例，不变形）
+  // tile 内容实测比例：tree 28×32 → dw35/dh40；shrub 22×18 → dw27/dh22；
+  //                     mushroom 16×16 → dw24/dh24；flower 28×28 → dw21/dh21
+  //                     water 32×32（1:1）
   mapDecorations.value.forEach((dec) => {
     const sy2 = dec.y * DEPTH;
-    const dSize = dec.kind === "tree" ? 40 : 32;
-    const dx = dec.x - dSize / 2;
-    const dy = sy2 - dSize;
 
-    if (dec.kind === "tree" && SHEET_TREE.ready) {
-      ctx.drawImage(SHEET_TREE.img, dx, dy, dSize, dSize);
-    } else if (dec.kind === "water" && SHEET_WATER.ready) {
+    if (dec.kind === "tree" && SHEET_TILESET.ready) {
+      // 树（绿树 7355 / 枯树 7359，交替）
+      const dh = 40, dw = 35;
+      const dx = dec.x - dw / 2;
+      const dy = sy2 - dh + 4;
+      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, dx, dy, dw, dh);
+    } else if (dec.kind === "water" && SHEET_TILESET.ready) {
+      // 水tile（tileset id 4500）→ 32×32
+      const ts = 32;
+      const dx = dec.x - ts / 2;
+      const dy = sy2 - ts + 4;
       ctx.save();
-      ctx.globalAlpha = 0.6;
-      ctx.drawImage(SHEET_WATER.img, dx, dy, dSize, dSize);
+      ctx.globalAlpha = 0.9;
+      drawTile(ctx, TILE_WATER_ID, dx, dy, ts, ts);
       ctx.restore();
-    } else if (dec.kind === "land" && SHEET_LAND.ready) {
-      ctx.save();
-      ctx.globalAlpha = 0.4;
-      ctx.drawImage(SHEET_LAND.img, dx, dy, dSize, dSize);
-      ctx.restore();
+    } else if (dec.kind === "bush" && SHEET_TILESET.ready) {
+      // 灌木（1722）content 22×18 → dh=22, dw=27
+      const dh = 22, dw = 27;
+      const dx = dec.x - dw / 2;
+      const dy = sy2 - dh + 4;
+      drawTile(ctx, TILE_SHRUB_ID, dx, dy, dw, dh);
+    } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
+      // 蘑菇（1724）1:1 → dh=24, dw=24
+      const dh = 24, dw = 24;
+      const dx = dec.x - dw / 2;
+      const dy = sy2 - dh + 4;
+      drawTile(ctx, TILE_MUSHROOM_ID, dx, dy, dw, dh);
+    } else if (dec.kind === "flower" && SHEET_TILESET.ready) {
+      // 花（1482）content 28×28，散落小花 → dh=21, dw=21
+      const dh = 21, dw = 21;
+      const dx = dec.x - dw / 2;
+      const dy = sy2 - dh + 4;
+      drawTile(ctx, TILE_FLOWER_ID, dx, dy, dw, dh);
+    } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
+      // 药水（tileset id 614）: content 16×24, ratio 0.667 → dh=24, dw=16
+      const dh = 24, dw = 16;
+      const dx = dec.x - dw / 2;
+      const dy = sy2 - dh + 4;
+      drawTile(ctx, TILE_POTION_ID, dx, dy, dw, dh);
     } else {
       // 兜底形状
       ctx.save();
@@ -497,58 +702,81 @@ function render() {
       if (dec.kind === "tree") {
         ctx.fillStyle = "#2d5a27";
         ctx.beginPath();
-        ctx.arc(dec.x, sy2, 16, 0, Math.PI * 2);
+        ctx.arc(dec.x, sy2, 14, 0, Math.PI * 2);
         ctx.fill();
       } else if (dec.kind === "water") {
         ctx.fillStyle = "#4a90d9";
         ctx.beginPath();
-        ctx.arc(dec.x, sy2, 14, 0, Math.PI * 2);
+        ctx.arc(dec.x, sy2, 12, 0, Math.PI * 2);
         ctx.fill();
       } else {
         ctx.fillStyle = "#8b7355";
         ctx.beginPath();
-        ctx.arc(dec.x, sy2, 12, 0, Math.PI * 2);
+        ctx.arc(dec.x, sy2, 10, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
     }
   });
 
-  // 宝箱
+  // 宝箱（Rotten-Soup RandomDungeon 的 chest tile：关=57，开=58）
+  // chest content 28×26 → dh=32, dw=34
   s.chests.forEach((ch) => {
+    const dh = 32, dw = 34;
+    const cx = ch.x;
+    const cy = ch.y * DEPTH;
     ctx.save();
-    ctx.fillStyle = ch.opened ? "rgba(160,150,120,.5)" : "#e0b24a";
-    ctx.strokeStyle = "rgba(0,0,0,.5)";
-    ctx.lineWidth = 2;
-    ctx.fillRect(ch.x - 14, ch.y * DEPTH - 14, 28, 22);
-    ctx.strokeRect(ch.x - 14, ch.y * DEPTH - 14, 28, 22);
-    ctx.fillStyle = "rgba(0,0,0,.6)";
-    ctx.font = "12px sans-serif";
+    if (ch.opened) {
+      ctx.globalAlpha = 0.55;
+    }
+    if (SHEET_TILESET.ready) {
+      drawTile(ctx, ch.opened ? TILE_CHEST_OPEN_ID : TILE_CHEST_ID, cx - dw/2, cy - dh + 4, dw, dh);
+    } else {
+      ctx.fillStyle = ch.opened ? "rgba(160,150,120,.5)" : "#e0b24a";
+      ctx.strokeStyle = "rgba(0,0,0,.5)";
+      ctx.lineWidth = 2;
+      ctx.fillRect(cx - 14, cy - 14, 28, 22);
+      ctx.strokeRect(cx - 14, cy - 14, 28, 22);
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,.7)";
+    ctx.font = "11px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText(ch.opened ? "空" : "宝箱", ch.x, ch.y * DEPTH - 20);
     ctx.restore();
   });
 
-  // 血瓶
+  // 血瓶（实体 from state.potions，tileset 药水 tile id 614）
+  // potion content 16×24, ratio 0.667 → dh=24, dw=16
   s.potions.forEach((p) => {
+    const dh = 24, dw = 16;
+    const cx = p.x;
+    const cy = p.y * DEPTH;
+    if (SHEET_TILESET.ready) {
+      drawTile(ctx, TILE_POTION_ID, cx - dw/2, cy - dh + 4, dw, dh);
+    } else {
+      ctx.save();
+      ctx.fillStyle = "#ff5d7a";
+      ctx.strokeStyle = "rgba(0,0,0,.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
     ctx.save();
-    ctx.fillStyle = "#ff5d7a";
-    ctx.strokeStyle = "rgba(0,0,0,.45)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y * DEPTH, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
     ctx.fillStyle = "#fff";
-    ctx.font = "bold 12px sans-serif";
+    ctx.font = "bold 14px sans-serif";
     ctx.textAlign = "center";
     ctx.fillText("+", p.x, p.y * DEPTH + 4);
     ctx.restore();
   });
 
   // 单位（按 y 排序做前后遮挡）
-  //  - enemy 阵营（且不在 roles 列表中）→ 野怪，用 bear.png
-  //  - 其余（player/ally/有 role id 的 enemy）→ 角色，用 person.png
+  //  - enemy 阵营（且不在 roles 列表中）→ 野怪
+  //  - 其余（player/ally/有 role id 的 enemy）→ 角色
   const roleIds = new Set(s.roles.map((r) => r.id));
   [...s.entities]
     .filter((e) => e.alive !== false)
@@ -575,6 +803,27 @@ function render() {
     ctx.fillText(f.text, f.x, f.y * DEPTH - 40);
     ctx.restore();
   });
+
+  // ★ Debug 高亮：选中实体画黄色包围框 + ID 标签
+  if (selectedEntityId.value) {
+    const sel = s.entities.find((e) => e.id === selectedEntityId.value);
+    if (sel) {
+      const sy = sel.y * DEPTH;
+      ctx.save();
+      ctx.strokeStyle = "#ffe79e";
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(sel.x - 28, sy - 56, 56, 64);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(255, 231, 158, 0.9)";
+      ctx.fillRect(sel.x - 28, sy - 76, 56, 16);
+      ctx.fillStyle = "#1e1f1f";
+      ctx.font = "bold 10px monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(sel.id, sel.x, sy - 64);
+      ctx.restore();
+    }
+  }
 
   ctx.restore();
 }
@@ -626,6 +875,30 @@ let stopHost: (() => void) | null = null;
 onMounted(() => {
   // ★ 初始化地图装饰物（树木、水体等）
   initDecorations();
+
+  // ★ 横竖屏自动检测（手机 App 嵌入时强制 portrait，PC 默认 landscape）
+  orientation.value = autoDetectOrientation();
+
+  // ★ CSS 自适应：监听 resize 强制刷新 flex 布局（Safari 等对 aspect-ratio 支持不全时）
+  // 注：我们不修改 canvas.width/height——保持内部分辨率 960×372，
+  //     sprite 在 CSS 缩放下自然等比缩放，不会模糊。
+  const onResize = () => {
+    // 触发 layout reflow（CSS 已经处理 aspect-ratio，这里只是兜底）
+    if (canvasEl.value) {
+      canvasEl.value.style.maxWidth = window.innerWidth + "px";
+      canvasEl.value.style.maxHeight = window.innerHeight + "px";
+    }
+  };
+  window.addEventListener("resize", onResize);
+  onResize();
+
+  // ★ 监听屏幕方向变化（移动设备旋转/横竖屏切换）
+  // 注意：这里只做视觉提示，不自动重置 orientation——用户已点 🔄 后保持他的选择
+  if (screen.orientation && "addEventListener" in screen.orientation) {
+    screen.orientation.addEventListener("change", () => {
+      // 屏幕物理方向变化时记录日志（不强制切换）
+    });
+  }
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
@@ -684,6 +957,7 @@ onBeforeUnmount(() => {
   stopHost?.();
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("keyup", onKeyUp);
+  window.removeEventListener("resize", onResize);
   cancelAnimationFrame(raf);
 });
 
@@ -752,6 +1026,10 @@ watch(() => state.value?.phase, (p) => {
 
     <!-- ===== 战斗阶段 ===== -->
     <section v-else-if="state.phase === 'playing'" class="play">
+      <!-- 🔄 横竖屏切换按钮（绝对定位，不挤占 HUD 空间；req.md:57-58 要求左上角） -->
+      <button class="btn btn--rotate" @click="toggleOrientation" :title="'切换' + (orientation === 'landscape' ? '竖屏' : '横屏')">
+        🔄
+      </button>
       <div class="hud">
         <div class="hud__left">
           <div class="hp"><div class="hp__bar" :style="{ width: hpPct + '%' }"></div></div>
@@ -769,7 +1047,8 @@ watch(() => state.value?.phase, (p) => {
       <canvas
         ref="canvasEl"
         class="stage"
-        :width="world.w" :height="Math.round(world.h * 0.62)"
+        :class="'stage--' + orientation"
+        :width="canvasW" :height="canvasH"
         @click="onCanvasClick"
       ></canvas>
 
@@ -816,10 +1095,20 @@ watch(() => state.value?.phase, (p) => {
       </ul>
       <button class="start" @click="closeOver">关闭</button>
     </section>
+
+    <!-- 调试面板（仅 debug 模式可见） -->
+    <DebugPanel
+      v-if="debugMode"
+      :state="state"
+      @select-entity="onSelectEntity"
+    />
   </div>
 </template>
 
 <style>
+/* ============================================================
+   Rotten-Soup 风格暗色 roguelike 主题
+   ============================================================ */
 * {
   box-sizing: border-box;
 }
@@ -831,8 +1120,10 @@ html, body, #app {
 
 body {
   font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
-  background: #0b1118;
+  background: #1e1f1f;
   color: #e8eef7;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
 }
 
 .fs {
@@ -840,34 +1131,52 @@ body {
   width: 100%;
   position: relative;
   overflow: hidden;
+  background: #1e1f1f;
 }
 
-/* 选人 */
+/* 通用：暗色像素边框风格 */
+.ui-panel {
+  background: #1e1f1f;
+  border: 3px solid #4f4f4f;
+  border-radius: 4px;
+  color: #ececec;
+}
+
+/* ============== 选人阶段 ============== */
 .select {
   height: 100%;
   overflow: auto;
   padding: 18px 20px;
+  background: #1e1f1f;
 }
 
 .select__head h2 {
-  margin: 0 0 4px;
-  font-size: 20px;
+  margin: 0 0 6px;
+  font-size: 22px;
+  color: #ffe79e;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 0 #6a4f1f;
 }
 
 .select__head p {
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   font-size: 13px;
-  color: #9fb0c6;
+  color: #9aa0a6;
 }
 
 .select__group {
   margin-bottom: 14px;
+  background: #2a2b2b;
+  border: 2px solid #3d3d3d;
+  border-radius: 4px;
+  padding: 10px 12px;
 }
 
 .select__group h3 {
   font-size: 14px;
   margin: 0 0 8px;
-  color: #cfe0f5;
+  color: #ffe79e;
+  letter-spacing: 1px;
 }
 
 .chips {
@@ -880,58 +1189,82 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 999px;
+  padding: 6px 12px;
+  border-radius: 0;
   cursor: pointer;
-  border: 1px solid rgba(160, 190, 230, .3);
-  background: rgba(255, 255, 255, .05);
-  color: #dce7f5;
+  border: 2px solid #4f4f4f;
+  background: #2a2b2b;
+  color: #d0d0d0;
   font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.chip:hover {
+  background: #3a3b3b;
+  border-color: #6a6a6a;
 }
 
 .chip img {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 0;
   object-fit: cover;
+  image-rendering: pixelated;
 }
 
 .chip--on {
-  background: #2f6fd0;
-  border-color: #4ea1ff;
-  color: #fff;
+  background: #d4a13e;
+  border-color: #ffe79e;
+  color: #1e1f1f;
+  font-weight: 700;
 }
 
 .chip--danger.chip--on {
   background: #c0392b;
   border-color: #ff6b6b;
+  color: #fff;
 }
 
 .hint {
   font-size: 12px;
-  color: #8fa2ba;
+  color: #8a8e93;
   margin: 6px 0 0;
 }
 
 .start {
   display: block;
   width: 100%;
-  padding: 12px;
-  margin-top: 6px;
-  border: 0;
-  border-radius: 10px;
-  background: #2f6fd0;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
+  padding: 14px;
+  margin-top: 12px;
+  border: 2px solid #6a4f1f;
+  border-radius: 0;
+  background: #d4a13e;
+  color: #1e1f1f;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 2px;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.15s;
+  text-transform: uppercase;
+  box-shadow: 0 3px 0 #6a4f1f;
+}
+
+.start:hover:not(:disabled) {
+  background: #ffe79e;
+}
+
+.start:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #6a4f1f;
 }
 
 .start:disabled {
-  background: #1e4a8a;
+  background: #3a3b3b;
+  border-color: #4f4f4f;
+  box-shadow: 0 3px 0 #2a2b2b;
+  color: #8a8e93;
   cursor: not-allowed;
-  opacity: 0.85;
 }
 
 .start__loading {
@@ -943,8 +1276,8 @@ body {
 .start__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #fff;
+  border: 2px solid rgba(30, 31, 31, 0.3);
+  border-top-color: #1e1f1f;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -953,12 +1286,36 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* 战斗 */
+/* ============== 战斗阶段 ============== */
 .play {
   position: absolute;
   inset: 0;
+  background: #0a0a0a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
+/* canvas 内部按方向独立尺寸（横屏 960×372，竖屏 372×614）*/
+/* CSS 用 min(100vw, 100vh×比例) 算最大填充尺寸，max 限制避免溢出 */
+.stage--landscape {
+  width: min(100%, calc((100vh - 90px) * 960 / 372));
+  aspect-ratio: 960 / 372;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  object-fit: contain;
+}
+
+.stage--portrait {
+  height: min(100%, calc((100vw - 90px) * 614 / 372));
+  aspect-ratio: 372 / 614;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  object-fit: contain;
+}
+
+/* HUD */
 .hud {
   position: absolute;
   top: 0;
@@ -969,79 +1326,139 @@ body {
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background: rgba(4, 10, 18, .55);
-  backdrop-filter: blur(4px);
+  background: rgba(30, 31, 31, 0.85);
+  border-bottom: 3px solid #4f4f4f;
+  color: #ececec;
+  font-size: 12px;
 }
 
 .hud__left {
-  min-width: 180px;
+  min-width: 200px;
 }
 
 .hp {
-  width: 160px;
-  height: 8px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, .16);
+  width: 180px;
+  height: 12px;
+  border: 2px solid #4f4f4f;
+  background: #1e0e0e;
+  position: relative;
   overflow: hidden;
 }
 
 .hp__bar {
   height: 100%;
-  background: linear-gradient(90deg, #57d977, #2fa85a);
+  background: linear-gradient(180deg, #6ee06e 0%, #2fa85a 100%);
+  transition: width 0.2s;
 }
 
 .hud__txt {
   font-size: 11px;
-  color: #cfe0f5;
-  margin-top: 3px;
+  color: #ececec;
+  margin-top: 4px;
+  font-weight: 600;
 }
 
 .hud__mid {
   display: flex;
   gap: 12px;
   font-size: 12px;
-  color: #cfe0f5;
+  color: #d0d0d0;
   flex: 1;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.hud__mid > span {
+  padding: 2px 8px;
+  background: #2a2b2b;
+  border: 1px solid #4f4f4f;
+  border-radius: 2px;
 }
 
 .hud__map {
-  color: #ffe9a8;
+  color: #ffe79e !important;
   font-weight: 600;
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-color: #d4a13e !important;
 }
 
 .btn--exit {
-  border: 0;
-  border-radius: 8px;
+  border: 2px solid #c0392b;
+  border-radius: 0;
   padding: 6px 14px;
   cursor: pointer;
-  background: rgba(255, 90, 90, .9);
+  background: #c0392b;
   color: #fff;
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  box-shadow: 0 2px 0 #6a1f1f;
 }
 
-.stage {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: #0d1a12;
+.btn--exit:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #6a1f1f;
+}
+
+/* 🔄 横竖屏切换按钮（左上角，要求 req.md:57-58） */
+.btn--rotate {
+  position: absolute;
+  left: 8px;
+  top: 50px; /* 避开 HUD */
+  z-index: 6;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 2px solid #d4a13e;
+  border-radius: 0;
+  background: rgba(30, 31, 31, 0.85);
+  color: #ffe79e;
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: 0 2px 0 #6a4f1f;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.3s ease;
+}
+.btn--rotate:active {
+  transform: translateY(2px) rotate(180deg);
+  box-shadow: 0 0 0 #6a4f1f;
+}
+.btn--rotate:hover {
+  background: #3a3b3b;
 }
 
 .events {
   position: absolute;
   left: 12px;
-  top: 52px;
+  top: 60px;
   z-index: 4;
   font-size: 12px;
-  color: #cfe0f5;
+  color: #ececec;
   text-shadow: 0 1px 2px #000;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   pointer-events: none;
+  background: rgba(30, 31, 31, 0.7);
+  padding: 6px 10px;
+  border: 2px solid #4f4f4f;
+  border-radius: 2px;
+  max-width: 260px;
+}
+
+.events > div {
+  color: #d0d0d0;
+}
+
+.events > div:first-child {
+  color: #ffe79e;
+  font-weight: 600;
 }
 
 /* 摇杆 */
@@ -1053,9 +1470,9 @@ body {
   width: 116px;
   height: 116px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, .10);
-  border: 1px solid rgba(255, 255, 255, .22);
-  backdrop-filter: blur(3px);
+  background: rgba(30, 31, 31, 0.7);
+  border: 3px solid #4f4f4f;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
   touch-action: none;
   display: flex;
   align-items: center;
@@ -1066,8 +1483,9 @@ body {
   width: 46px;
   height: 46px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, .35);
-  border: 1px solid rgba(255, 255, 255, .5);
+  background: #d4a13e;
+  border: 2px solid #ffe79e;
+  box-shadow: 0 0 0 2px #6a4f1f;
 }
 
 /* 技能 / 物品 */
@@ -1076,7 +1494,7 @@ body {
   bottom: 18px;
   z-index: 6;
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .slots--skill {
@@ -1085,37 +1503,45 @@ body {
 
 .slots--item {
   right: 18px;
-  bottom: 78px;
+  bottom: 70px;
 }
 
 .slot {
-  width: 47px;
-  height: 35px;
-  border-radius: 10px;
+  width: 52px;
+  height: 48px;
+  border-radius: 0;
   cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, .22);
-  background: rgba(10, 18, 30, .55);
-  backdrop-filter: blur(3px);
-  color: #e8eef7;
-  font-size: 8px;
+  border: 2px solid #4f4f4f;
+  background: #2a2b2b;
+  color: #ececec;
+  font-size: 9px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 1px;
   position: relative;
+  padding: 2px;
+  transition: all 0.1s;
+}
+
+.slot:hover {
+  background: #3a3b3b;
+  border-color: #6a6a6a;
 }
 
 .slot__name {
-    max-width: 41px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: normal;
+  max-width: 46px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
 }
 
 .slot__count {
   font-size: 10px;
-  color: #9fb0c6;
+  color: #ffe79e;
+  font-weight: 700;
 }
 
 .slot__cd {
@@ -1124,18 +1550,26 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, .5);
-  border-radius: 10px;
-  font-size: 14px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 18px;
+  font-weight: 700;
+  color: #ff6b6b;
 }
 
 .slot--empty {
-  opacity: .45;
+  opacity: 0.35;
 }
 
 .slot--page {
   width: 56px;
-  background: rgba(47, 111, 208, .65);
+  background: #3a3b3b;
+  border-color: #6a6a6a;
+  color: #d4a13e;
+  font-weight: 700;
+}
+
+.slot--page:hover {
+  background: #4a4b4b;
 }
 
 .tips {
@@ -1144,35 +1578,57 @@ body {
   left: 50%;
   transform: translateX(-50%);
   font-size: 11px;
-  color: rgba(220, 232, 247, .55);
+  color: rgba(236, 236, 236, 0.5);
   z-index: 4;
+  letter-spacing: 1px;
 }
 
-/* 结算 */
+/* ============== 结算 ============== */
 .over {
   height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 16px;
+  background: #1e1f1f;
 }
 
 .over h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 28px;
+  color: #ffe79e;
+  letter-spacing: 2px;
+  text-shadow: 0 3px 0 #6a4f1f;
 }
 
 .over ul {
   list-style: none;
-  padding: 0;
+  padding: 12px 24px;
   margin: 0;
   font-size: 14px;
-  line-height: 1.9;
-  color: #cfe0f5;
+  line-height: 2;
+  color: #ececec;
+  background: #2a2b2b;
+  border: 2px solid #4f4f4f;
+  border-radius: 4px;
+  min-width: 280px;
+}
+
+.over ul li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+
+.over ul li::before {
+  content: "▸ ";
+  color: #d4a13e;
+  margin-right: 8px;
 }
 
 .over .start {
-  width: 220px;
+  width: 240px;
+  margin-top: 0;
 }
 </style>

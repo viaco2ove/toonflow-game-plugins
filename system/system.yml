@@ -4,4 +4,6 @@ service_project: /mnt/d/users/viaco/tools/Toonflow-game/toonflow-game-app
 service_windows: D:\Users\viaco\tools\Toonflow-game\toonflow-game-app
 current_project_windows: D:\Users\viaco\tools\Toonflow-game\toonflow-game-plugins
 current_project: /mnt/d/users/viaco/tools/Toonflow-game/toonflow-game-plugins
+android_h5_project_windows: D:\Users\viaco\tools\Toonflow-game\Toonflow-game-android-h5
+android_h5_project: /mnt/d/users/viaco/tools/Toonflow-game/Toonflow-game-android-h5
 updated_at: 2026-03-15
