@@ -201,7 +201,7 @@ let canvas_h = canvas_direction_def.vertical_screen.canvas_h;
 /** 设计基准：横屏 960×600 */
 const DESIGN_W = 960;
 const DESIGN_H = 600;
-const MAX_LONG = 1200; // 画布长边上限，防爆显存
+const MAX_LONG = 12000; // 画布长边上限，防爆显存
 
 
 const world = computed(() => state.value?.world || { w: canvas_direction_def.vertical_screen.canvas_w, h: canvas_direction_def.vertical_screen.canvas_h });
