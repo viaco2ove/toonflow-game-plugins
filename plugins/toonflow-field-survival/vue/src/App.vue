@@ -40,6 +40,9 @@ function onSelectEntity(e: Entity | null) {
   selectedEntityId.value = e?.id || null;
 }
 
+/** 🔄 横竖屏切换：false=横屏(960×372), true=竖屏(旋转90°用372×960显示) */
+const isRotated = ref(false);
+
 /** 地图主题（开局后从 state.map 取；也演示 toonflowJsApi 从插件数据表读 map_data） */
 const mapTheme = ref("");
 const mapZones = computed(() => state.value?.map?.zones || []);
@@ -178,54 +181,39 @@ function stickEnd() {
 
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
-/** 世界尺寸：横竖屏独立（横屏 960×600，竖屏 372×990），sprite 比例不变形 */
-const world = computed(() => state.value?.world || currentWorld.value);
+const world = computed(() => state.value?.world || { w: 960, h: 600 });
 
 /**
- * 横竖屏模式
- *
- * 关键：每种方向用独立的 canvas 内部分辨率和世界坐标，sprite 不变形。
- * 切换时重新生成地图装饰（rng 范围按对应世界）。
- *
- * - landscape（默认 PC 浏览器）：canvas 960×372，世界宽高 960×600
- * - portrait （手机 App 嵌入）：canvas 372×614，世界宽高 372×990）
- *
- * 两种方向都用同一个 viewport（最高 64 像素的 sprite），不拉伸。
+ * 🔄 按钮（req.md:57-58）：横竖屏切换。
+ * 横屏：canvas 960×372 正常显示，填满高度
+ * 竖屏：canvas 旋转 90° 显示，用 372×960 的空间
+ * 切换时只翻转 CSS transform，绝不变换内部分辨率或世界坐标。
  */
-type Orientation = "landscape" | "portrait";
-const orientation = ref<Orientation>("landscape");
 
-const WORLD_LANDSCAPE = { w: 960, h: 600 };
-const WORLD_PORTRAIT  = { w: 372, h: 990 };
-const canvasW = computed(() => orientation.value === "landscape" ? WORLD_LANDSCAPE.w : WORLD_PORTRAIT.w);
-const canvasH = computed(() => Math.round((orientation.value === "landscape" ? WORLD_LANDSCAPE.h : WORLD_PORTRAIT.h) * 0.62));
+/** 等比缩放画布以适配屏幕（用 window 尺寸，因为是全屏游戏） */
+function fitCanvas() {
+  const c = canvasEl.value;
+  if (!c) return;
+  const availW = window.innerWidth;
+  const availH = window.innerHeight;
+  if (availW <= 0 || availH <= 0) return;
+  const isR = isRotated.value;
+  // 旋转模式：canvas 视觉上交换宽高，用 Math.max 填满可用空间
+  const cw = isR ? 372 : 960;
+  const ch = isR ? 960 : 372;
+  // 先算横屏基准 scale，再在旋转时按新比例调整
+  const baseScale = Math.min(availW / 960, availH / 372);
+  const scale = isR
+    ? Math.min(availW / ch, availH / cw)  // 旋转后填满竖向空间
+    : baseScale;
+  c.style.width = Math.floor(cw * scale) + "px";
+  c.style.height = Math.floor(ch * scale) + "px";
+}
 
-/** 当前方向的世界尺寸（用于初始化装饰、生成敌人位置）*/
-const currentWorld = computed(() => orientation.value === "landscape" ? WORLD_LANDSCAPE : WORLD_PORTRAIT);
-
+/** 🔄 按钮：横竖屏切换（纯 CSS 旋转，不全屏、不锁方向） */
 function toggleOrientation() {
-  orientation.value = orientation.value === "landscape" ? "portrait" : "landscape";
-  // 切换时按新方向重新生成装饰、敌人初始位置
-  initDecorations();
-  applyOrientation();
-}
-
-function applyOrientation() {
-  if (!canvasEl.value) return;
-  requestAnimationFrame(() => render());
-}
-
-/**
- * 判断是否应该强制竖屏（手机 App 嵌入）
- */
-function autoDetectOrientation(): Orientation {
-  const urlParam = new URLSearchParams(location.search).get("orientation");
-  if (urlParam === "portrait" || urlParam === "landscape") return urlParam;
-  const ua = navigator.userAgent;
-  const isMobile = /Android|iPhone|iPad|iOS|Mobile|ToonflowApp|Toonflow/i.test(ua);
-  const screenType = (screen.orientation as any)?.type || "";
-  const isPortraitScreen = screenType.includes("portrait");
-  return isMobile && isPortraitScreen ? "portrait" : "landscape";
+  isRotated.value = !isRotated.value;
+  requestAnimationFrame(fitCanvas);
 }
 
 function onCanvasClick(e: MouseEvent) {
@@ -321,12 +309,12 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
 interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot"; id: string; variant?: number }
 const mapDecorations = ref<Decoration[]>([]);
 
-// 初始化地图装饰物（按当前方向的世界尺寸生成）
+// 初始化地图装饰物（世界固定 960×600）
 function initDecorations() {
   const decs: Decoration[] = [];
   const rng = (a: number, b: number) => Math.random() * (b - a) + a;
-  const W = currentWorld.value.w;
-  const H = currentWorld.value.h;
+  const W = 960;
+  const H = 600;
   // 树木（9 棵，绿树/枯树交替）
   for (let i = 0; i < 9; i++) {
     decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.87), kind: "tree", id: `tree_${i}`, variant: i % 2 });
@@ -877,29 +865,9 @@ onMounted(() => {
   // ★ 初始化地图装饰物（树木、水体等）
   initDecorations();
 
-  // ★ 横竖屏自动检测（手机 App 嵌入时强制 portrait，PC 默认 landscape）
-  orientation.value = autoDetectOrientation();
-
-  // ★ CSS 自适应：监听 resize 强制刷新 flex 布局（Safari 等对 aspect-ratio 支持不全时）
-  // 注：我们不修改 canvas.width/height——保持内部分辨率 960×372，
-  //     sprite 在 CSS 缩放下自然等比缩放，不会模糊。
-  const onResize = () => {
-    // 触发 layout reflow（CSS 已经处理 aspect-ratio，这里只是兜底）
-    if (canvasEl.value) {
-      canvasEl.value.style.maxWidth = window.innerWidth + "px";
-      canvasEl.value.style.maxHeight = window.innerHeight + "px";
-    }
-  };
-  window.addEventListener("resize", onResize);
-  onResize();
-
-  // ★ 监听屏幕方向变化（移动设备旋转/横竖屏切换）
-  // 注意：这里只做视觉提示，不自动重置 orientation——用户已点 🔄 后保持他的选择
-  if (screen.orientation && "addEventListener" in screen.orientation) {
-    screen.orientation.addEventListener("change", () => {
-      // 屏幕物理方向变化时记录日志（不强制切换）
-    });
-  }
+  // ★ 画布等比缩放：窗口变化 / 旋转 / 全屏切换后重新适配
+  window.addEventListener("resize", fitCanvas);
+  fitCanvas();
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
@@ -958,12 +926,12 @@ onBeforeUnmount(() => {
   stopHost?.();
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("keyup", onKeyUp);
-  window.removeEventListener("resize", onResize);
+  window.removeEventListener("resize", fitCanvas);
   cancelAnimationFrame(raf);
 });
 
 watch(() => state.value?.phase, (p) => {
-  if (p === "playing") requestAnimationFrame(() => render());
+  if (p === "playing") requestAnimationFrame(() => { fitCanvas(); render(); });
 });
 </script>
 
@@ -1027,8 +995,8 @@ watch(() => state.value?.phase, (p) => {
 
     <!-- ===== 战斗阶段 ===== -->
     <section v-else-if="state.phase === 'playing'" class="play">
-      <!-- 🔄 横竖屏切换按钮（绝对定位，不挤占 HUD 空间；req.md:57-58 要求左上角） -->
-      <button class="btn btn--rotate" @click="toggleOrientation" :title="'切换' + (orientation === 'landscape' ? '竖屏' : '横屏')">
+      <!-- 🔄 横屏按钮（左上角；手机上锁定横屏+全屏，PC 上全屏；req.md:57-58） -->
+      <button class="btn btn--rotate" @click="toggleOrientation" title="横竖屏切换">
         🔄
       </button>
       <div class="hud">
@@ -1045,13 +1013,14 @@ watch(() => state.value?.phase, (p) => {
         <button class="btn btn--exit" @click="exitGame">退出</button>
       </div>
 
-      <canvas
-        ref="canvasEl"
-        class="stage"
-        :class="'stage--' + orientation"
-        :width="canvasW" :height="canvasH"
-        @click="onCanvasClick"
-      ></canvas>
+      <div class="stage-rotate" :class="{ 'stage-rotate--on': isRotated }">
+        <canvas
+          ref="canvasEl"
+          class="stage"
+          width="960" height="372"
+          @click="onCanvasClick"
+        ></canvas>
+      </div>
 
       <div class="events">
         <div v-for="(e, i) in lastEvents" :key="i">{{ e }}</div>
@@ -1298,22 +1267,20 @@ body {
   overflow: hidden;
 }
 
-/* canvas 内部按方向独立尺寸（横屏 960×372，竖屏 372×614）*/
-/* CSS 用 min(100vw, 100vh×比例) 算最大填充尺寸，max 限制避免溢出 */
-.stage--landscape {
-  width: min(100%, calc((100vh - 90px) * 960 / 372));
-  aspect-ratio: 960 / 372;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-  object-fit: contain;
+/* 🔄 旋转 wrapper：居中 + 可选 90° 旋转 */
+.stage-rotate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-
-.stage--portrait {
-  height: min(100%, calc((100vw - 90px) * 614 / 372));
-  aspect-ratio: 372 / 614;
+.stage-rotate--on {
+  transform: rotate(90deg);
+}
+.stage {
+  display: block;
+  background: #0a0a0a;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  object-fit: contain;
 }
 
 /* HUD */
@@ -1508,8 +1475,8 @@ body {
 }
 
 .slot {
-  width: 52px;
-  height: 48px;
+  width: 2.5rem;
+  height: 2rem;
   border-radius: 0;
   cursor: pointer;
   border: 2px solid #4f4f4f;
