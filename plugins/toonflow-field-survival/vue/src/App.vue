@@ -189,7 +189,7 @@ function stickEnd() {
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 
 // 镜头远近（缩放） 2 适中，5比较远
-let zoom = 5;
+let zoom = 2;
 
 
 let canvas_direction_def={
@@ -198,6 +198,9 @@ let canvas_direction_def={
 }
 let canvas_w =canvas_direction_def.vertical_screen.canvas_w;
 let canvas_h = canvas_direction_def.vertical_screen.canvas_h;
+
+const canvas_w_ref = ref(canvas_w);
+const canvas_h_ref = ref(canvas_h);
 /** 设计基准：横屏 960×600 */
 const DESIGN_W = 960;
 const DESIGN_H = 600;
@@ -213,49 +216,29 @@ const world = computed(() => state.value?.world || { w: canvas_direction_def.ver
  * 内部分辨率与渲染坐标永不改变，只调 CSS 大小和 transform。
  */
 
-/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
-function fitCanvas_V1() {
-  const c = canvasEl.value;
-  if (!c) return;
-  const availW = window.innerWidth;
-  const availH = window.innerHeight;
-  if (availW <= 0 || availH <= 0) return;
-
-  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
-  // 滚动相机偏移让玩家始终在屏幕中心。
-
-  const scale = Math.max(availW / canvas_w/zoom, availH / canvas_h/zoom);
-  c.style.width = Math.floor(canvas_w * scale) + "px";
-  c.style.height = Math.floor(canvas_h * scale) + "px";
-  console.log("fitCanvas scale", scale)
-  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
-}
-
 function fitCanvas() {
-  fitCanvas_v3();
+  rotated_fun();
+  fitCanvas_v5();
 }
 
-/** 等比缩放画布以适配屏幕（不留黑边） */
-/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
-function fitCanvas_v3() {
+function fitCanvas_v5() {
   const c = canvasEl.value;
   if (!c) return;
   const availW = window.innerWidth;
   const availH = window.innerHeight;
   if (availW <= 0 || availH <= 0) return;
 
-  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
-  // 滚动相机偏移让玩家始终在屏幕中心。
+  let BUF_H = canvas_h;
+  let BUF_W = canvas_w;
 
-  const h_rate= (372/960);
-  const c_height_base = h_rate*canvas_w;
-
-  const scale = Math.max(availW / canvas_w/zoom, availH / c_height_base/zoom);
-  c.style.width = Math.floor(canvas_w * scale) + "px";
-  c.style.height = Math.floor(canvas_w * scale) + "px";
-  console.log("fitCanvas scale", scale)
-  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
+  canvas_w_ref.value = BUF_W;
+  canvas_h_ref.value = BUF_H;
+  // 正常横屏：直接填满
+  const scale = Math.max(availW / BUF_W, availH / BUF_H);
+  c.style.width  = Math.floor(BUF_W * scale) + "px";
+  c.style.height = Math.floor(BUF_H * scale) + "px";
 }
+
 
 
 /**
@@ -283,15 +266,12 @@ function calcCanvasDirection() {
   let vW: number, vH: number;
   if (screenW / screenH <= 1 / aspect) {
     vW = Math.min(screenW, MAX_LONG * (1 / aspect));
-    vH = vW / (1 / aspect);
   } else {
     vH = Math.min(screenH, MAX_LONG);
-    vW = vH / aspect;
   }
 
   return {
-    horizontal_screen: { canvas_w: Math.round(hW), canvas_h: Math.round(hH) },
-    vertical_screen:   { canvas_w: Math.round(vW), canvas_h: Math.round(vH) },
+    screen: { canvas_w: Math.round(hW), canvas_h: Math.round(hH) }
   };
 }
 
@@ -300,15 +280,9 @@ function rotated_fun() {
 }
 function rotated_fun_v1() {
   const canvas_direction = calcCanvasDirection();
-  if (isRotated.value) {
     // CSS hack旋转模式，使用竖屏配置
-    canvas_w = canvas_direction.vertical_screen.canvas_w;
-    canvas_h = canvas_direction.vertical_screen.canvas_h;
-  } else {
-    // 正常模式，系统屏幕横竖屏，使用横屏配置
-    canvas_w = canvas_direction.horizontal_screen.canvas_w;
-    canvas_h = canvas_direction.horizontal_screen.canvas_h;
-  }
+  canvas_w = canvas_direction.screen.canvas_w;
+  canvas_h = canvas_direction.screen.canvas_h;
   console.log("set canvas size", canvas_w, canvas_h);
 }
 
@@ -753,7 +727,7 @@ function render() {
   const ctx = c.getContext("2d");
   if (!ctx) return;
   const W = c.width;
-  const H = c.height;
+  const H = c.height
   const sx = W / world.value.w;
   const sy = H / (world.value.h * DEPTH);
 
@@ -1199,7 +1173,8 @@ watch(() => state.value?.phase, (p) => {
         <canvas
           ref="canvasEl"
           class="stage"
-          width="960" height="372"
+            :width="canvas_w_ref"
+            :height="canvas_h_ref"
           @click="onCanvasClick"
         ></canvas>
       </div>
