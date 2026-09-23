@@ -188,8 +188,8 @@ function stickEnd() {
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 
-// 镜头远近
-let zoom = 2;
+// 镜头远近（缩放） 2 适中，5比较远
+let zoom = 5;
 
 
 let canvas_direction_def={
@@ -214,7 +214,7 @@ const world = computed(() => state.value?.world || { w: canvas_direction_def.ver
  */
 
 /** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
-function fitCanvas_old() {
+function fitCanvas_V1() {
   const c = canvasEl.value;
   if (!c) return;
   const availW = window.innerWidth;
