@@ -189,7 +189,7 @@ function stickEnd() {
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 
 // 镜头远近
-let zoom = 1.5;
+let zoom = 2;
 
 
 let canvas_direction_def={
@@ -235,59 +235,6 @@ function fitCanvas() {
   fitCanvas_v3();
 }
 
-function fitCanvas_V2() {
-  const c = canvasEl.value;
-  if (!c) return;
-
-  // canvas 绘图缓冲区永远是设计分辨率
-  c.width = DESIGN_W;
-  c.height = DESIGN_H;
-
-  // CSS 显示尺寸：保持宽高比，适配容器，不拉伸
-  const container = c.parentElement!;
-  const cw = container.clientWidth;
-  const ch = container.clientHeight;
-  const scale = Math.min(cw / DESIGN_W, ch / DESIGN_H);
-
-  c.style.width = `${DESIGN_W * scale}px`;
-  c.style.height = `${DESIGN_H * scale}px`;
-
-  // CSS rotate hack 时，transform-origin 和旋转
-  if (isRotated.value) {
-    // 关键：rotate(90deg) 后宽高互换，需要用 margin 居中补偿
-    c.style.transform = "rotate(90deg)";
-    c.style.transformOrigin = "center center";
-    // 旋转后，CSS 宽高互换，用负 margin 居中
-    const rotatedW = DESIGN_H * scale; // 旋转后屏幕上的宽
-    const rotatedH = DESIGN_W * scale; // 旋转后屏幕上的高
-    c.style.marginLeft = `${(cw - rotatedW) / 2}px`;
-    c.style.marginTop = `${(ch - rotatedH) / 2}px`;
-  } else {
-    c.style.transform = "";
-    c.style.marginLeft = `${(cw - DESIGN_W * scale) / 2}px`;
-    c.style.marginTop = `${(ch - DESIGN_H * scale) / 2}px`;
-  }
-}
-
-/** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
-function fitCanvas_v1() {
-  const c = canvasEl.value;
-  if (!c) return;
-  const availW = window.innerWidth;
-  const availH = window.innerHeight;
-  if (availW <= 0 || availH <= 0) return;
-
-  // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
-  // 滚动相机偏移让玩家始终在屏幕中心。
-
-  const scale = Math.max(availW / canvas_w/zoom, availH / canvas_h/zoom);
-  c.style.width = Math.floor(canvas_w * scale) + "px";
-  c.style.height = Math.floor(canvas_h * scale) + "px";
-  console.log("fitCanvas scale", scale)
-  console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
-}
-
-
 /** 等比缩放画布以适配屏幕（不留黑边） */
 /** 等比缩放画布以填满整个屏幕（不留黑边，超出裁掉） */
 function fitCanvas_v3() {
@@ -300,9 +247,12 @@ function fitCanvas_v3() {
   // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
   // 滚动相机偏移让玩家始终在屏幕中心。
 
-  const scale = Math.max(availW / 960/zoom, availH / 372/zoom);
-  c.style.width = Math.floor(960 * scale) + "px";
-  c.style.height = Math.floor(372 * scale) + "px";
+  const h_rate= (372/960);
+  const c_height_base = h_rate*canvas_w;
+
+  const scale = Math.max(availW / canvas_w/zoom, availH / c_height_base/zoom);
+  c.style.width = Math.floor(canvas_w * scale) + "px";
+  c.style.height = Math.floor(canvas_w * scale) + "px";
   console.log("fitCanvas scale", scale)
   console.log("fitCanvas size", {width:c.style.width, height:c.style.height})
 }
@@ -362,18 +312,6 @@ function rotated_fun_v1() {
   console.log("set canvas size", canvas_w, canvas_h);
 }
 
-function rotated_fun_v2() {
-  if (isRotated.value) {
-    // CSS rotate hack：canvas 内部还是横版 960×600
-    // 只是 CSS 把它旋转90度显示
-    canvas_w = DESIGN_W;
-    canvas_h = DESIGN_H;
-  } else {
-    // 正常横屏
-    canvas_w = DESIGN_W;
-    canvas_h = DESIGN_H;
-  }
-}
 
 
 /** 🔄 按钮：横竖屏切换 */
