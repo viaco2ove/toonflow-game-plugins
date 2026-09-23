@@ -371,6 +371,10 @@ function animFrame(phase: "walk" | "idle"): number {
   return Math.floor(_animTick / 8) % 4;
 }
 
+/* ---------------- 动画（与 Rotten-Soup 一致：永远 2 帧 walk 循环） ---------------- */
+// 不需要 isMoving——所有 sprite 都用 walk 帧循环播放（约 16 FPS）。
+// _animTick 在 loop() 里每帧 ++，每 8 tick 切换一次帧。
+
 // ----------------------------------------------------------
 // 绘制角色（保持 sprite 实际像素比例，不变形）
 // ★ 关键：sprite 实际内容比例（来自 PIL 测量）:
@@ -430,10 +434,8 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const key = e.side === "player" ? "player"
             : e.side === "ally"   ? "ally"
             : "enemy_char";
-  // ★ 移动判定：vx/vy 不为零 或 上一帧有 dx/dy 输入
-  const moving = Math.abs(e.vx || 0) > 0.01 || Math.abs(e.vy || 0) > 0.01;
-  // 当前帧 tile id（2 帧 walk 动画交替）
-  const tileId = spriteTileId(key, moving, _animTick);
+  // ★ 永远 walk 帧循环（与 Rotten-Soup 一致：sprite.animationSpeed=0.065）
+  const tileId = spriteTileId(key, _animTick);
   const dim = fitDim(key);
   const dw = dim.w;
   const dh = dim.h;
@@ -537,9 +539,8 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
   const sy = e.y * DEPTH;
   // ★ 根据野怪名字映射到 tileset monster tile
   const key = mobKeyFor(e.name);
-  // ★ 移动状态：AI 在追玩家时 walking，否则 idle
-  const moving = Math.abs(e.vx || 0) > 0.01 || Math.abs(e.vy || 0) > 0.01;
-  const tileId = spriteTileId(key, moving, _animTick);
+  // ★ 永远 walk 帧循环（Rotten-Soup 风格）
+  const tileId = spriteTileId(key, _animTick);
   // 等比缩放（tileset 每个 tile 32×32 → dw = dh）
   const targetH = ENTITY_DIMS[key] || 48;
   const dw = targetH;

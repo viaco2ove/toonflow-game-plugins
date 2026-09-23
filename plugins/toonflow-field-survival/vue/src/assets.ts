@@ -70,16 +70,17 @@ export function tileSrcRect(id: number) {
 }
 
 /**
- * 根据动画状态 + 当前帧选择 sprite tile id
- * @param key - 'player' | 'ally' | 'enemy_char' | 'goblin' | ...
- * @param moving - 角色是否在移动（移动时切 walk 帧）
- * @param frameIdx - 全局动画 tick（0..cycle），用于在 2 帧间切换
+ * 根据当前帧选择 sprite tile id
+ *
+ * 模仿 PIXI.AnimatedSprite：永远在 walk 2 帧间循环（不管是 idle 还是 moving），
+ * 跟 Rotten-Soup 完全一致（animationSpeed=0.065，约 16 FPS）。
+ *
+ * 切换节奏：每 8 个 render tick 切一次帧（约 8 * 16ms = 128ms，符合像素 RPG 节奏）
  */
-export function spriteTileId(key: string, moving: boolean, frameIdx: number): number {
+export function spriteTileId(key: string, frameIdx: number): number {
   const cfg = SPRITE_ANIM[key];
   if (!cfg) return 144; // 兜底：空 tile
-  if (!moving) return cfg.idle;
-  // walk: 2 帧交替，每 8 tick 切换一次（与 _animTick 节奏匹配）
+  // 永远 2 帧 walk 循环（与 Rotten-Soup 行为一致：实体始终在动画）
   return cfg.walk[Math.floor(frameIdx / 8) % 2];
 }
 
