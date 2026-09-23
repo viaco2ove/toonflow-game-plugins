@@ -198,9 +198,12 @@ function fitCanvas() {
   const availW = window.innerWidth;
   const availH = window.innerHeight;
   if (availW <= 0 || availH <= 0) return;
+    // 镜头远近
+  const zoom = 2;
   // 用 Math.max 让画布放大到完全铺满两个方向——> 没有黑边
   // 滚动相机偏移让玩家始终在屏幕中心。
-  const scale = Math.max(availW / 960, availH / 372);
+
+  const scale = Math.max(availW / 960/zoom, availH / 372/zoom);
   c.style.width = Math.floor(960 * scale) + "px";
   c.style.height = Math.floor(372 * scale) + "px";
 }
