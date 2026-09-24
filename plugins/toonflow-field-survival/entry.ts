@@ -39,6 +39,35 @@ interface PluginGameContext {
   };
 }
 
+/* ============================================================
+   地图 / 比例尺 / 土块 / Chunk 常量（对齐 25d_ai_game 风格）
+   ============================================================
+
+   25d_ai_game (Godot 3D) 的关键参数：
+     ground_size = 300.0 (m), ground_height = 5.0 (m)
+     block_size  = 0.5 (m, 0.5m 立方体)
+     chunk_size  = 32 blocks = 16 m/chunk
+
+   toonflow-field-survival 改造后：
+     ground_size = 3000 (m)              ← 整体可玩区扩 10×
+     ground_height= 100 (m)（暂未对顶视图生效，预留挖地）
+     block_size  = 0.5 (m)               ← 单方块
+     chunk_size  = 32 blocks = 16 m/chunk
+     scale_meter = 1.0 (默认 1 米 = 1 单位)
+
+   内部坐标系：
+     WORLD = {w: 3000, h: 3000} 单位：米。
+     所有角色 / 装饰物 / 宝箱 / 血瓶 / 怪物的 x/y 现在都是「米」。
+     前端 canvas 通过 scale_meter * zoom 把米 → 屏幕像素绘制。
+*/
+
+const TERRAIN_BLOCK_SIZE_M = 0.5;       // 单个土块 0.5 m
+const CHUNK_SIZE_BLOCKS = 32;            // 每个 chunk 32 块
+const CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M; // 16 m
+const TERRAIN_GROUND_SIZE_M = 3000;      // 总地面 3000 m × 3000 m
+const TERRAIN_GROUND_HEIGHT_M = 100;     // 地下 100 m（预留）
+const TERRAIN_SCALE_METER = 1.0;         // 1 米 = 1 单位（与 chunk 16m 对齐）
+
 /** map-gener agent 产出的地图数据（sanitize 后的结构） */
 interface MapData {
   theme: string;
@@ -54,29 +83,32 @@ interface MapData {
   notes: string;
 }
 
-/** 保底地图（ctx.tsApi / agent 不可用时） */
+/** 保底地图（ctx.tsApi / agent 不可用时）——坐标全部以「米」为单位 */
 function fallbackMap(): MapData {
+  // 玩家出生 (1500, 1500) = 地图中心
   return {
     theme: "野外·清晨",
     narration: "薄雾笼罩着这片荒野，远处传来低沉的嘶吼。收拢心神，活下去。",
     zones: [
-      { name: "营地", x: 480, y: 300, r: 120, kind: "safe", desc: "相对开阔的临时营地" },
-      { name: "荒地", x: 720, y: 420, r: 140, kind: "danger", desc: "视野开阔的危险荒地" },
-      { name: "废墟", x: 240, y: 200, r: 110, kind: "loot", "desc": "可能残留物资的废墟" },
+      { name: "营地", x: 1500, y: 1500, r: 200, kind: "safe",   desc: "相对开阔的临时营地" },
+      { name: "荒地", x: 2100, y: 1900, r: 260, kind: "danger", desc: "视野开阔的危险荒地" },
+      { name: "废墟", x:  800, y: 1000, r: 220, kind: "loot",   desc: "可能残留物资的废墟" },
     ],
     enemy_archetypes: [
       { id: "enemy_1", name: "荒野游荡者", lv: 1, hp: 40, atk: 6, def: 2, speed: 1.4, bounty: { exp: 10, money: 8 }, color: "#9b3a3a" },
     ],
     chests: [
-      { x: 240, y: 200, tier: 1, loot: { exp: 15, money: 12, item: "干粮" } },
-      { x: 810, y: 180, tier: 2, loot: { exp: 20, money: 18, item: "急救包" } },
+      { x:  800, y: 1000, tier: 1, loot: { exp: 15, money: 12, item: "干粮"   } },
+      { x: 2200, y:  900, tier: 2, loot: { exp: 20, money: 18, item: "急救包" } },
+      { x: 1700, y: 2400, tier: 1, loot: { exp: 12, money:  9, item: "工具卷" } },
     ],
     potions: [
-      { x: 300, y: 420, heal: 40 },
-      { x: 660, y: 260, heal: 40 },
+      { x:  600, y: 1800, heal: 40 },
+      { x: 1900, y:  900, heal: 40 },
+      { x: 2400, y: 2300, heal: 40 },
     ],
     waves: [{ archetype: "enemy_1", count: 3, interval: 600 }],
-    notes: "fallback map（agent 不可用）",
+    notes: `fallback map（agent 不可用）- 世界 ${TERRAIN_GROUND_SIZE_M}m，块 ${TERRAIN_BLOCK_SIZE_M}m，chunk ${CHUNK_SIZE_M}m`,
   };
 }
 
@@ -198,9 +230,41 @@ export interface FieldSurvivalState {
 // 工具
 // ---------------------------------------------------------------------------
 
-const WORLD = { w: 960, h: 600 };
+/* ============================================================
+   世界边界（与 25d_ai_game 的 map_config.json 完全一致）
+
+     size = 3000m × 3000m, origin = (0, 0), 范围 ±1500 米
+     所有 entity / 装饰物 / 宝箱 / 血瓶坐标单位：米
+   ============================================================ */
+
+/** x/z 范围（米），±1500 */
+const WORLD_X_RANGE: [number, number] = [-1500, 1500];
+const WORLD_Z_RANGE: [number, number] = [-1500, 1500];
+/** 玩家出生点：origin（地图中心） */
+const PLAYER_SPAWN = { x: 0, y: 0 };
+
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
+const clampX = (v: number) => clamp(v, WORLD_X_RANGE[0] + 10, WORLD_X_RANGE[1] - 10);
+const clampY = (v: number) => clamp(v, WORLD_Z_RANGE[0] + 10, WORLD_Z_RANGE[1] - 10);
+const rndX  = () => rnd(WORLD_X_RANGE[0] + 80, WORLD_X_RANGE[1] - 80);
+const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
+
+/* ---- 战斗距离参数（米） ----
+   speed = 3 米/帧 ≈ 一个成人的步行速度（25d_ai_game 同等感觉）
+   mob 发现玩家 = 80 米；mob 攻击 = 2 米
+   盟友跟随 = 12 米；盟友攻击 = 2 米
+   开箱/拾血瓶 = 2 米
+   技能作用范围 = 30 米
+   */
+const MOVE_SPEED_M = 3.0;
+const MOB_VIEW_M   = 80;
+const MOB_ATK_M    = 2;
+const ALLY_ATK_M   = 2;
+const ALLY_FOLLOW_GAP_M = 12;
+const CHEST_PICKUP_M  = 2;
+const POTION_PICKUP_M = 2;
+const SKILL_RANGE_M   = 30;
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -271,9 +335,22 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
   const card = (ctx?.playerCard || {}) as Record<string, unknown>;
   return {
     phase: "select",
-    version: 2,
+    version: 3,                  // v3：3000m 世界 + 米单位 + scale 元数据
     tick: 0,
-    world: { ...WORLD },
+    world: { w: WORLD_X_RANGE[1] - WORLD_X_RANGE[0], h: WORLD_Z_RANGE[1] - WORLD_Z_RANGE[0] },
+    /** v3 增强：玩家出生点 (0,0) */
+    spawn: { ...PLAYER_SPAWN },
+    /** v3 增强：scale / 视距配置 */
+    scale: {
+      meter: TERRAIN_SCALE_METER,
+      block_size: TERRAIN_BLOCK_SIZE_M,
+      chunk_size_blocks: CHUNK_SIZE_BLOCKS,
+      chunk_size_meters: CHUNK_SIZE_M,
+      ground_size: TERRAIN_GROUND_SIZE_M,
+      ground_height: TERRAIN_GROUND_HEIGHT_M,
+      x_range: [...WORLD_X_RANGE],
+      z_range: [...WORLD_Z_RANGE],
+    },
     roles: Array.isArray(ctx?.roles) ? ctx!.roles! : [],
     selections: { participants: [], spectators: [], enemies: [] },
     entities: [],
@@ -300,8 +377,14 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
 // 战斗与推进
 // ---------------------------------------------------------------------------
 
-/** 按地图 archetypes 生成一波敌人/宝箱/血瓶（无地图时回退内置逻辑） */
+/** 按地图 archetypes 生成一波敌人/宝箱/血瓶（无地图时回退内置逻辑）
+ *  ★ v3：怪物 spawn 在玩家周围 ±100 米（玩家在 (0,0)，开局就能看见） */
 function spawnWave(s: FieldSurvivalState, wave: number) {
+  // 找玩家（怪物围着他刷）
+  const player = s.entities.find((e) => e.side === "player");
+  const px = player?.x ?? PLAYER_SPAWN.x;
+  const py = player?.y ?? PLAYER_SPAWN.y;
+
   const archs = (s.map?.enemy_archetypes && s.map.enemy_archetypes.length)
     ? s.map.enemy_archetypes
     : null;
@@ -311,11 +394,13 @@ function spawnWave(s: FieldSurvivalState, wave: number) {
     const arch = archs.find((a) => a.id === pick.archetype) || archs[0];
     const count = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
     for (let i = 0; i < count; i++) {
+      const angle = rnd(0, Math.PI * 2);
+      const dist = 30 + rnd(0, 70);              // 30-100 米
       const e = makeEntity(
         { id: `${arch.id}_${wave}_${i}`, name: arch.name, hp: Math.round(arch.hp + (wave - 1) * 8), level: arch.lv },
         "enemy",
-        rnd(60, WORLD.w - 60),
-        rnd(60, WORLD.h - 60),
+        clampX(px + Math.cos(angle) * dist),
+        clampY(py + Math.sin(angle) * dist),
         i,
       );
       e.atk = Math.round(arch.atk + (wave - 1) * 1.5);
@@ -323,13 +408,13 @@ function spawnWave(s: FieldSurvivalState, wave: number) {
       (e as any).def = arch.def;
       s.entities.push(e);
     }
-    // 宝箱/血瓶只在第一波铺设（地图数据）
+    // 宝箱/血瓶只在第一波铺设（地图数据，x/y 已在 ±1500 范围内）
     if (wave === 1) {
       (s.map?.chests || []).forEach((c, i) => {
-        s.chests.push({ id: `chest_map_${i}`, x: clamp(c.x, 40, WORLD.w - 40), y: clamp(c.y, 60, WORLD.h - 40), opened: false, ...(c as any) });
+        s.chests.push({ id: `chest_map_${i}`, x: clampX(c.x), y: clampY(c.y), opened: false, ...(c as any) });
       });
       (s.map?.potions || []).forEach((p, i) => {
-        s.potions.push({ id: `potion_map_${i}`, x: clamp(p.x, 40, WORLD.w - 40), y: clamp(p.y, 60, WORLD.h - 40), heal: num(p.heal, 40) });
+        s.potions.push({ id: `potion_map_${i}`, x: clampX(p.x), y: clampY(p.y), heal: num(p.heal, 40) });
       });
     }
     return;
@@ -337,21 +422,27 @@ function spawnWave(s: FieldSurvivalState, wave: number) {
   // 内置回退
   const count = Math.min(2 + wave, 6);
   for (let i = 0; i < count; i++) {
+    const angle = rnd(0, Math.PI * 2);
+    const dist = 30 + rnd(0, 70);
     const e = makeEntity(
       { id: `enemy_${s.tick}_${i}`, name: `野兽 ${i + 1}`, hp: 45 + wave * 12, level: wave },
       "enemy",
-      rnd(60, WORLD.w - 60),
-      rnd(60, WORLD.h - 60),
+      clampX(px + Math.cos(angle) * dist),
+      clampY(py + Math.sin(angle) * dist),
       i,
     );
     e.atk = 7 + wave * 2;
     s.entities.push(e);
   }
   for (let i = 0; i < 2; i++) {
-    s.chests.push({ id: `chest_${s.tick}_${i}`, x: rnd(60, WORLD.w - 60), y: rnd(60, WORLD.h - 60), opened: false });
+    const angle = rnd(0, Math.PI * 2);
+    const dist = 25 + rnd(0, 30);
+    s.chests.push({ id: `chest_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist), y: clampY(py + Math.sin(angle) * dist), opened: false });
   }
   for (let i = 0; i < 3; i++) {
-    s.potions.push({ id: `potion_${s.tick}_${i}`, x: rnd(60, WORLD.w - 60), y: rnd(60, WORLD.h - 60), heal: 18 });
+    const angle = rnd(0, Math.PI * 2);
+    const dist = 20 + rnd(0, 25);
+    s.potions.push({ id: `potion_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist), y: clampY(py + Math.sin(angle) * dist), heal: 18 });
   }
 }
 
@@ -399,7 +490,8 @@ function moveTowards(e: Entity, tx: number, ty: number, speed: number) {
 }
 
 function step(s: FieldSurvivalState, input: any) {
-  const speed = 3.2;
+  // 距离参数全部按米
+  const speed = MOVE_SPEED_M;
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
 
@@ -414,7 +506,7 @@ function step(s: FieldSurvivalState, input: any) {
   } else if (input?.moveTo) {
     const tx = num(input.moveTo.x, player.x);
     const ty = num(input.moveTo.y, player.y);
-    if (dist(player, { x: tx, y: ty }) > 6) moveTowards(player, tx, ty, speed);
+    if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);   // 米
     else { player.vx = 0; player.vy = 0; }
   } else {
     player.vx = 0;
@@ -428,11 +520,13 @@ function step(s: FieldSurvivalState, input: any) {
   allies.forEach((a, i) => {
     const target = enemies.reduce<Entity | null>((best, e) =>
       !best || dist(a, e) < dist(a, best) ? e : best, null);
-    const anchor = { x: player.x + Math.cos((i / Math.max(1, allies.length)) * Math.PI * 2) * 70,
-                     y: player.y + Math.sin((i / Math.max(1, allies.length)) * Math.PI * 2) * 70 };
-    if (target && dist(a, target) < 260) moveTowards(a, target.x, target.y, speed * 0.92);
+    const anchor = {
+      x: player.x + Math.cos((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+      y: player.y + Math.sin((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+    };
+    if (target && dist(a, target) < MOB_VIEW_M) moveTowards(a, target.x, target.y, speed * 0.92);
     else moveTowards(a, anchor.x, anchor.y, speed * 0.8);
-    if (target && dist(a, target) < 34 && a.cooldown <= 0) {
+    if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
       damage(s, target, a.atk);
       a.cooldown = 30;
     }
@@ -443,18 +537,18 @@ function step(s: FieldSurvivalState, input: any) {
     const prey = [player, ...allies].filter((t) => t.alive)
       .reduce<Entity | null>((best, t) => (!best || dist(e, t) < dist(e, best) ? t : best), null);
     if (!prey) return;
-    if (dist(e, prey) > 30) moveTowards(e, prey.x, prey.y, speed * 0.72);
+    if (dist(e, prey) > MOB_ATK_M) moveTowards(e, prey.x, prey.y, speed * 0.72);
     else {
       e.vx = 0; e.vy = 0;
       if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
     }
   });
 
-  // 积分、冷却、越界
+  // 积分、冷却、越界（米边界：±1490）
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
-    e.x = clamp(e.x + e.vx, 12, WORLD.w - 12);
-    e.y = clamp(e.y + e.vy, 12, WORLD.h - 12);
+    e.x = clampX(e.x + e.vx);
+    e.y = clampY(e.y + e.vy);
   });
   s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
@@ -462,7 +556,7 @@ function step(s: FieldSurvivalState, input: any) {
   // 宝箱：走过去开启（优先地图 loot）
   s.chests.forEach((c) => {
     if (c.opened) return;
-    if (dist(player, c) < 30) {
+    if (dist(player, c) < CHEST_PICKUP_M) {
       c.opened = true;
       const loot = (c as any).loot as { exp?: number; money?: number; item?: string } | undefined;
       const expGain = loot?.exp != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
@@ -478,7 +572,7 @@ function step(s: FieldSurvivalState, input: any) {
 
   // 血瓶：走过去回血
   s.potions = s.potions.filter((p) => {
-    if (dist(player, p) >= 28) return true;
+    if (dist(player, p) >= POTION_PICKUP_M) return true;
     const before = player.hp;
     player.hp = clamp(player.hp + p.heal, 0, player.maxHp);
     floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 24);
@@ -515,7 +609,7 @@ export async function handle_action(
   context: PluginGameContext,
 ): Promise<{ code: number; message: string; state: FieldSurvivalState; response?: string; actions?: string[] }> {
   const s: FieldSurvivalState =
-    state && Object.keys(state).length > 0 && (state as any).version === 2
+    state && Object.keys(state).length > 0 && ((state as any).version === 2 || (state as any).version === 3)
       ? (state as unknown as FieldSurvivalState)
       : emptyState(context);
 
@@ -542,23 +636,31 @@ export async function handle_action(
 
       s.selections = { participants, spectators, enemies };
       s.entities = [];
-      s.entities.push(makeEntity(playerRole as any, "player", WORLD.w / 2, WORLD.h / 2, 0));
+      // ★ v3: 玩家出生在 origin (0, 0)，与 map_config.json 一致
+      s.entities.push(makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0));
       participants.forEach((id, i) => {
         const r = byId(id);
         if (!r) return;
-        s.entities.push(makeEntity(r, "ally", WORLD.w / 2 + (i + 1) * 46, WORLD.h / 2, i));
+        // ★ v3: 盟友环绕半径 = 12 米（ALLY_FOLLOW_GAP_M）
+        const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
+        s.entities.push(makeEntity(
+          r, "ally",
+          PLAYER_SPAWN.x + Math.cos(angle) * ALLY_FOLLOW_GAP_M,
+          PLAYER_SPAWN.y + Math.sin(angle) * ALLY_FOLLOW_GAP_M,
+          i,
+        ));
       });
       enemies.forEach((id, i) => {
         const r = byId(id);
         s.entities.push(
           r
-            ? { ...makeEntity(r, "enemy", rnd(80, WORLD.w - 80), rnd(80, WORLD.h - 80), i) }
-            : makeEntity({ id, name: id }, "enemy", rnd(80, WORLD.w - 80), rnd(80, WORLD.h - 80), i),
+            ? { ...makeEntity(r, "enemy", rndX(), rndY(), i) }
+            : makeEntity({ id, name: id }, "enemy", rndX(), rndY(), i),
         );
       });
       spectators.forEach((id) => {
         const r = byId(id);
-        if (r) s.entities.push({ ...makeEntity(r, "spectator", 40, 40 + s.entities.length * 4, 0), alive: true });
+        if (r) s.entities.push({ ...makeEntity(r, "spectator", -40, -40 + s.entities.length * 4, 0), alive: true });
       });
       // ★ map-gener agent：用故事动态数据生成地图（存 t_plugin_session_data.map_data）
       s.map = await ensureMapData(context);
@@ -589,7 +691,7 @@ export async function handle_action(
       const player = s.entities.find((e) => e.side === "player");
       if (!skill || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
-      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < 180);
+      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
       if (!targets.length) { damage(s, s.entities.filter(e=>e.side==="enemy"&&e.alive)[0] || player, 0); return okResp(`${skill.name} 未命中`); }
       skill.cdLeft = skill.cd;
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));

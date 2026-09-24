@@ -4,6 +4,12 @@
  *
  * 阶段：select（选人）→ playing（全屏战斗）→ over（结算）
  * 实时推进通过宿主代发 /plugin/tick（见 bridge.sendTick）。
+ *
+ * 世界数据模型（与 25d_ai_game / map_config.json 一致）：
+ *   - 整个游戏地图 3000×3000 米，origin (0,0)，X/Z 范围 ±1500
+ *   - 单个土块 0.5 米；一个 chunk = 32 块 = 16 米
+ *   - 默认 zoom = 20，相机看到 ±15 米（30×30 米窗口）
+ *   - zoom ∈ [10, 30]：zoom 越大 → 视野越小（放大看脚下）
  */
 import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
@@ -18,6 +24,12 @@ import {
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
   spriteTileId,
 } from "./assets";
+import {
+  TerrainScaleConfig, DEFAULT_SCALE,
+} from "./terrainScale";
+import { ChunkTerrainSystem } from "./chunkTerrain";
+import { loadMapConfig, makeScaleFromMap } from "./mapConfig";
+import type { MapConfig } from "./mapConfig";
 
 const state = ref<GameState | null>(null);
 const ready = ref(false);
@@ -188,16 +200,49 @@ function stickEnd() {
 /* ---------------- 画布渲染 ---------------- */
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 
+/* ============================================================
+   地图 / 比例尺 / 缩放（来自 map_config.json）
 
-//比例尺，一个像素代表多少米，一个土块是0.25 米
-let mapscale= 1;
-let mapsize_def ={weight:3000,height:3000}
-//用户出生地， 用户永远在屏幕中间，移动地图跟着移动
-let user_birth_location=[0,0];
-// 镜头远近（缩放）例如2 ， 假设整个画面 30*30 个像素=300 像素
-// 不缩放 300/mapscale 如 =300 米， 缩放后 300/mapscale/zoom = 300/2 = 150 米。
-let zoom = 2;
+   world_size = 3000 × 3000 米，origin = (0,0)，X/Z 范围 ±1500
+   scale_meter = 1.0，block_size = 0.5 米，chunk_size = 32 块 = 16 米
+   zoom ∈ [10, 30]，default = 20
+   view_radius_m = 15 * (20/zoom) 米（地图配置 def_view 决定）
 
+   显示区域算法：
+     canvas 永远居中显示玩家世界坐标
+     pixel_per_meter = min(canvas_w / view_w, canvas_h / (view_h * DEPTH))
+     view_w, view_h 米 = def_view ± view_radius
+   ============================================================ */
+
+const mapCfg = ref<MapConfig | null>(null);
+const terrainScale = computed<TerrainScaleConfig>(() =>
+  mapCfg.value ? makeScaleFromMap(mapCfg.value) : DEFAULT_SCALE,
+);
+
+/** 当前 zoom（10-30, default 20） */
+const zoom = ref(20);
+
+/** 玩家世界坐标（米），从 state.entities[player] 派生 */
+const playerPos = computed(() => {
+  const s = state.value;
+  if (!s) return { x: terrainScale.value.origin[0], y: terrainScale.value.origin[1] };
+  const me = s.entities.find((e) => e.side === "player");
+  if (me) return { x: me.x, y: me.y };
+  // 兜底：用 state.spawn (entry.ts v3 引入) 或 origin
+  if (s.spawn) return { x: s.spawn.x, y: s.spawn.y };
+  return { x: terrainScale.value.origin[0], y: terrainScale.value.origin[1] };
+});
+
+/* 兼容旧变量（虽然名字难听，留着不破坏其它代码路径） */
+let mapscale = 1;
+let mapsize_def = { weight: 3000, height: 3000 };
+let user_birth_location: [number, number] = [0, 0];
+let _zoom_legacy = 2; // 旧值，已被 ref zoom 取代
+
+/* 当前可见世界尺寸（米）—— 由 zoom 决定 */
+const viewSizeMeters = computed<[number, number]>(() =>
+  terrainScale.value.viewSizeMeters(zoom.value),
+);
 
 let canvas_direction_def={
   horizontal_screen:{canvas_w:960, canvas_h:600},
@@ -205,6 +250,9 @@ let canvas_direction_def={
 }
 let canvas_w =canvas_direction_def.vertical_screen.canvas_w;
 let canvas_h = canvas_direction_def.vertical_screen.canvas_h;
+/* 兜底常量（drawEntity / drawMonster 在未传入屏幕像素时的 fallback） */
+const W_DEFAULT = canvas_w;
+const H_DEFAULT = canvas_h;
 
 const canvas_w_ref = ref(canvas_w);
 const canvas_h_ref = ref(canvas_h);
@@ -351,16 +399,29 @@ function onCanvasClick(e: MouseEvent) {
   if (!c) return;
   const r = c.getBoundingClientRect();
 
-  // 屏幕点 → DOM局部
-  const px = e.clientX - r.left;
-  const py = e.clientY - r.top;
+  // 屏幕点 → canvas 内部像素
+  const cssX = e.clientX - r.left;
+  const cssY = e.clientY - r.top;
+  // CSS 显示尺寸 vs canvas 内部尺寸的比例
+  const ratioX = c.width / r.width;
+  const ratioY = c.height / r.height;
+  const px = cssX * ratioX;
+  const py = cssY * ratioY;
 
-  // 直接映射到世界坐标
-  const sx = world.value.w / r.width;
-  const sy = world.value.h / r.height;
+  // ★ v3：用相机反推 canvas 像素 → 世界米（playerPos + zoom 决定）
+  const ts = terrainScale.value;
+  const [vw, vh] = ts.viewSizeMeters(zoom.value);
+  // canvas 内部坐标系里，px,py 转世界米
+  const ppm = Math.min(c.width / vw, c.height / (vh * DEPTH));
+  const dx = (px - c.width / 2) / ppm;
+  const dy = (py - c.height / 2) / (ppm * DEPTH);
+  // dx, dy 是相对玩家的偏移，加 playerPos 即世界米
+  const me = state.value?.entities.find((e) => e.side === "player");
+  const ppx = me?.x ?? 0;
+  const ppy = me?.y ?? 0;
   input.value.moveTo = {
-    x: px * sx,
-    y: py * sy,
+    x: ppx + dx,
+    y: ppy + dy,
   };
 
   input.value.dx = 0;
@@ -456,31 +517,39 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
   ctx.imageSmoothingEnabled = false;
 }
 
-// 地图装饰物（树木、水体、花木）位置
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot"; id: string; variant?: number }
+// 地图装饰物（树木、水体、花木）位置 —— 优先从 overworld.json 加载
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree"; id: string; variant?: number }
 const mapDecorations = ref<Decoration[]>([]);
 
-// 初始化地图装饰物（世界固定 960×600）
+/** Chunk 系统（按玩家位置动态加载/卸载装饰物） */
+let chunkSystem: ChunkTerrainSystem | null = null;
+
+// 初始化地图装饰物（从 mapCfg.decorations 读，fallback 用 §文件 hard-coded）
 function initDecorations() {
+  if (mapCfg.value?.decorations?.length) {
+    mapDecorations.value = mapCfg.value.decorations as Decoration[];
+    return;
+  }
   const decs: Decoration[] = [];
   const rng = (a: number, b: number) => Math.random() * (b - a) + a;
-  const W = 960;
-  const H = 600;
+  // 兜底用米范围（±1500）
+  const W = 3000;
+  const H = 3000;
   // 树木（9 棵，绿树/枯树交替）
   for (let i = 0; i < 9; i++) {
-    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.87), kind: "tree", id: `tree_${i}`, variant: i % 2 });
+    decs.push({ x: rng(-W*0.45, W*0.45), y: rng(-H*0.45, H*0.45), kind: "tree", id: `tree_${i}`, variant: i % 2 });
   }
   // 水体（4 处）
   for (let i = 0; i < 4; i++) {
-    decs.push({ x: rng(W * 0.08, W * 0.92), y: rng(H * 0.13, H * 0.87), kind: "water", id: `water_${i}` });
+    decs.push({ x: rng(-W*0.4, W*0.4), y: rng(-H*0.4, H*0.4), kind: "water", id: `water_${i}` });
   }
   // 灌木（5 丛）
   for (let i = 0; i < 5; i++) {
-    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.90), kind: "bush", id: `bush_${i}` });
+    decs.push({ x: rng(-W*0.45, W*0.45), y: rng(-H*0.4, H*0.4), kind: "bush", id: `bush_${i}` });
   }
   // 蘑菇（4 朵）
   for (let i = 0; i < 4; i++) {
-    decs.push({ x: rng(W * 0.06, W * 0.94), y: rng(H * 0.13, H * 0.90), kind: "mushroom", id: `mush_${i}` });
+    decs.push({ x: rng(-W*0.45, W*0.45), y: rng(-H*0.4, H*0.4), kind: "mushroom", id: `mush_${i}` });
   }
   // 花（7 处）
   for (let i = 0; i < 7; i++) {
@@ -525,50 +594,50 @@ function animFrame(phase: "walk" | "idle"): number {
 // ----------------------------------------------------------
 
 /**
- * 角色尺寸配置（保持 sprite 原始宽高比，不变形）
+ * 角色尺寸配置（米数 × pixels-per-meter，对应 25d_ai_game 的 biped_character）
  *
- * ★ 关键原则：横纵缩放系数必须相同，否则会变形。
- *   sprite 文件尺寸都是 32×32（整张图含透明边距）。
- *   我们用统一的目标高度 dh，再按 sprite 自身宽高比计算 dw：
- *     scale = dh / 32   →   dw = 32 * scale
+ * ★ v3 关键修复：sprite 屏幕像素 = 米数 × ppm（像素/米）
+ *   zoom 越大 → ppm 越大 → sprite 在屏幕上越大（玩家靠近视口）
+ *   zoom 越小 → ppm 越小 → sprite 在屏幕上越小（玩家看到全图）
+ *   这是 25d_ai_game 的相机数学：保持物理世界一致（米），视觉随 zoom 缩放。
  *
- *   这样 sprite 里的所有像素都被等比缩放（横纵缩放系数相同），
- *   内容形状（人形/兽形）保持原样，只整体放大。
- *
- * ★ 选不同 dh 是为了视觉层级（玩家大、野怪小、装饰更小）：
- *   - 玩家角色：dh=64（最大，最显眼）
- *   - 盟友角色：dh=56（略小）
- *   - 敌对角色：dh=64（跟玩家同等，视觉对等）
- *   - 野怪：dh=48（中等等）
- *   - 装饰（树/水/花）：在各自 draw 调用里单独指定
+ * ★ sprite 是 32×32 像素的等比贴图，所以 dw = dh = 米数 × ppm。
+ * 选不同米数是视觉层级：
+ *   - player/ally/enemy_char: 3.2 米 ≈ 64 px @ zoom=20 (ppm=20)
+ *   - mob: 2.4 米 ≈ 48 px @ zoom=20
+ *   - minotaur/boss: 2.8 米
  */
 const ENTITY_BASE = 32;  // sprite 原图尺寸 32×32
 
-/** 角色显示高度（用于等比缩放）*/
-const ENTITY_DIMS: Record<string, number> = {
-  player:      64,  // 金甲战士
-  ally:        56,  // 蓝袍法师
-  enemy_char:  64,  // 持枪骑士
+/** 角色显示尺寸（米）。sprite 屏幕像素 = ENTITY_DIMS_M[key] × ppm */
+const ENTITY_DIMS_M: Record<string, number> = {
+  player:      3.2,  // 金甲战士
+  ally:        2.8,  // 蓝袍法师
+  enemy_char:  3.2,  // 持枪骑士
   // 野怪
-  goblin:   48,
-  orc:      48,
-  rat:      48,
-  goat:     48,
-  snake:    48,
-  bat:      48,
-  skeleton: 48,
-  minotaur: 56,
+  goblin:   2.4,
+  orc:      2.4,
+  rat:      2.0,
+  goat:     2.4,
+  snake:    2.4,
+  bat:      2.0,
+  skeleton: 2.4,
+  minotaur: 2.8,
 };
 
-/** 计算等比缩放后的尺寸（宽高比固定 = 原图宽高比 = 1:1）*/
+/** 计算等比缩放后的尺寸（米） — 1:1 宽高 */
 function fitDim(key: string): { w: number; h: number } {
-  const h = ENTITY_DIMS[key] || 48;
-  // 等比缩放：原图 32×32（1:1），所以 w = h
-  return { w: h, h };
+  const m = ENTITY_DIMS_M[key] || 2.4;
+  return { w: m, h: m };
 }
 
-function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement) {
-  const sy = e.y * DEPTH;
+function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement, sx?: number, sy?: number, ppm?: number) {
+  // ★ v3：sx/sy 是外部算好的屏幕像素位置（不参与 ctx.scale）
+  // 缺省时回退到 e.x / e.y（米），保证非世界变换下的旧调用仍能工作
+  const px = (sx ?? (e.x + W_DEFAULT / 2));
+  const py = (sy ?? (e.y * DEPTH + H_DEFAULT / 2));
+  // ★ v3：sprite 尺寸 = 米数 × ppm（与 zoom 关联，随 zoom 缩放）
+  const pixelsPerMeter = (ppm ?? 20);
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
   const key = e.side === "player" ? "player"
             : e.side === "ally"   ? "ally"
@@ -576,10 +645,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   // ★ 永远 walk 帧循环（与 Rotten-Soup 一致：sprite.animationSpeed=0.065）
   const tileId = spriteTileId(key, _animTick);
   const dim = fitDim(key);
-  const dw = dim.w;
-  const dh = dim.h;
-  const dx = e.x - dw / 2;
-  const dy = sy - dh + 4; // 略微下沉，让脚站在地面上
+  // ★ v3 关键：sprite 像素 = 米数 × pixelsPerMeter（随 zoom 缩放）
+  const dw = dim.w * pixelsPerMeter;
+  const dh = dim.h * pixelsPerMeter;
+  const dx = px - dw / 2;
+  const dy = py - dh + 4; // 略微下沉，让脚站在地面上
 
   // ★ 朝向：facing 在 135-315（朝左）时水平翻转 sprite
   const facingLeft = (e.facing >= 135 && e.facing < 315);
@@ -591,7 +661,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  ctx.ellipse(e.x, sy + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(px, py + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -607,16 +677,16 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.save();
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.ellipse(e.x, sy - 24, facingLeft ? -16 : 16, 24, 0, 0, Math.PI * 2);
+    ctx.ellipse(px, py - 24, facingLeft ? -16 : 16, 24, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
   // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
-  // 布局自上而下：头像(32) → 名字 → sprite
+  // 布局自上而下：头像(30) → 名字 → sprite
   const avatarSize = 30;
-  const avatarX = e.x - avatarSize / 2;
-  const avatarY = dy - avatarSize - 16; // 头像底部与名字留 16px（放名字）
+  const avatarX = px - avatarSize / 2;
+  const avatarY = dy - avatarSize - 16;
   const hasAvatar = avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0;
   if (hasAvatar) {
     applyPixelPerfect(ctx);
@@ -624,11 +694,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     // 头像底色（遮住背后内容）
     ctx.fillStyle = "#1e1f1f";
     ctx.beginPath();
-    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2 + 1, 0, Math.PI * 2);
+    ctx.arc(px, avatarY + avatarSize / 2, avatarSize / 2 + 1, 0, Math.PI * 2);
     ctx.fill();
     // 圆形裁剪绘制头像
     ctx.beginPath();
-    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.arc(px, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
     ctx.clip();
     ctx.drawImage(avatarImg!, avatarX, avatarY, avatarSize, avatarSize);
     ctx.restore();
@@ -637,7 +707,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.strokeStyle = e.side === "player" ? "#4ea1ff" : e.side === "ally" ? "#5fd28a" : "#ff4c4c";
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(e.x, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
+    ctx.arc(px, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   }
@@ -648,15 +718,15 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.textAlign = "center";
   ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
   ctx.fillStyle = "rgba(0,0,0,.85)";
-  ctx.fillText(e.name.slice(0, 4), e.x + 1, headY + 1);
+  ctx.fillText(e.name.slice(0, 4), px + 1, headY + 1);
   ctx.fillStyle = e.side === "enemy" ? "#ffd4d4" : "#fff";
-  ctx.fillText(e.name.slice(0, 4), e.x, headY);
+  ctx.fillText(e.name.slice(0, 4), px, headY);
   ctx.restore();
 
-  // 血条 - 紧贴 sprite 下边缘（dy + dh 是 sprite 底部）
+  // 血条 - 紧贴 sprite 下边缘（屏幕像素）
   const barW = Math.max(40, dw + 4), barH = 4;
-  const barX = e.x - barW / 2;
-  const barY = sy + 8; // 在脚底（sy = e.y * DEPTH）
+  const barX = px - barW / 2;
+  const barY = py + 8; // 在脚底
   ctx.save();
   // 边框
   ctx.fillStyle = "rgba(0,0,0,.85)";
@@ -677,18 +747,22 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 //   bear content 24×30 → 0.8 → dh=40 → dw=32
 //   beast content 32×30 → 1.067 → dh=40 → dw=42
 // ----------------------------------------------------------
-function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
-  const sy = e.y * DEPTH;
+function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?: number, ppm?: number) {
+  // ★ v3：sx/sy 是屏幕像素位置
+  const px = (sx ?? (e.x + W_DEFAULT / 2));
+  const py = (sy ?? (e.y * DEPTH + H_DEFAULT / 2));
+  // ★ v3：sprite 尺寸 = 米数 × pixelsPerMeter（随 zoom 缩放）
+  const pixelsPerMeter = (ppm ?? 20);
   // ★ 根据野怪名字映射到 tileset monster tile
   const key = mobKeyFor(e.name);
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
   const tileId = spriteTileId(key, _animTick);
-  // 等比缩放（tileset 每个 tile 32×32 → dw = dh）
-  const targetH = ENTITY_DIMS[key] || 48;
-  const dw = targetH;
-  const dh = targetH;
-  const dx = e.x - dw / 2;
-  const dy = sy - dh + 4;
+  // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
+  const targetH_m = ENTITY_DIMS_M[key] || 2.4;
+  const dw = targetH_m * pixelsPerMeter;
+  const dh = targetH_m * pixelsPerMeter;
+  const dx = px - dw / 2;
+  const dy = py - dh + 4;
 
   applyPixelPerfect(ctx);
 
@@ -697,7 +771,7 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
   ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#000";
   ctx.beginPath();
-  ctx.ellipse(e.x, sy + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(px, py + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 
@@ -708,14 +782,14 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity) {
     ctx.save();
     ctx.fillStyle = "#8b5a2b";
     ctx.beginPath();
-    ctx.ellipse(e.x, sy - 16, 14, 18, 0, 0, Math.PI * 2);
+    ctx.ellipse(px, py - 16, 14, 18, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
   // 血条
   const barW = 36, barH = 4;
-  const barX = e.x - barW / 2;
+  const barX = px - barW / 2;
   const barY = dy - 6;
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,.85)";
@@ -735,8 +809,22 @@ function render() {
   if (!ctx) return;
   const W = c.width;
   const H = c.height
-  const sx = W / world.value.w;
-  const sy = H / (world.value.h * DEPTH);
+
+  /* ============================================================
+     相机数学（来自 map_config.json + zoom 系统）
+       view_radius_m = def_view_max * (default_zoom / zoom)
+       在 zoom=20 时，看到 ±15 米（30×30）窗口
+       玩家坐标 → 屏幕坐标：pixel = (entity.x - player.x) * ppm + W/2
+       使用 ctx.transform 把世界米坐标自动投影为屏幕像素
+     ============================================================ */
+  const ts = terrainScale.value;
+  const pp = playerPos.value;
+  const [vw, vh] = ts.viewSizeMeters(zoom.value);
+  // pixel-per-meter：纵向按 DEPTH 2.5D 压缩
+  const ppm_x = W / vw;
+  const ppm_y = H / (vh * DEPTH);
+  const sx = Math.min(ppm_x, ppm_y);
+  const sy = sx;  // 用 ppm_x（同尺度，仅 Y 因 DEPTH 视觉压缩 — 在绘制时通过 e.y * DEPTH 处理）
 
   // ★ 动态同步 ready 状态（data URL 图片解码完成时）
   for (const sheet of [SHEET_TILESET, SHEET_PLAYER, SHEET_ALLY, SHEET_ENEMY_CHAR]) {
@@ -747,10 +835,12 @@ function render() {
 
   ctx.clearRect(0, 0, W, H);
 
-  // 地面：dawnlike tileset 草地 tile（id 116）平铺
+  // 地面：dawnlike tileset 草地 tile 平铺
+  // ★ v3：单位已改为米，屏幕上的 tile 尺寸由 zoom 决定（pixel-per-meter × block_size）
   if (SHEET_TILESET.ready) {
-    const tw = TILE_SIZE * sx;
-    const th = TILE_SIZE * DEPTH * sy;
+    const blockPx = terrainScale.value.block_size * sx;   // 单个方块在屏幕的宽度
+    const tw = blockPx;                                    // 一个方块 = 一片草地贴图
+    const th = blockPx * DEPTH;                            // 2.5D: 高度按 DEPTH 压缩
     for (let tx = 0; tx < W; tx += tw) {
       for (let ty = 0; ty < H; ty += th) {
         drawTile(ctx, TILE_GROUND_ID, tx, ty, tw, th);
@@ -765,115 +855,97 @@ function render() {
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ★ 地图 zones（map-gener agent 产出）：不同 kind 不同色调椭圆区域
+  // ★ 地图 zones（map-gener agent 产出 + overworld.json 静态数据）：
+  // 不同 kind 不同色调椭圆区域。画在相机变换内。
   const kindColors: Record<string, string> = {
     safe: "rgba(94, 210, 138, .18)",
     danger: "rgba(255, 80, 80, .18)",
     loot: "rgba(224, 178, 74, .2)",
     quest: "rgba(110, 168, 254, .18)",
   };
-  (s.map?.zones || []).forEach((z) => {
-    const zy = z.y * DEPTH;
+  const allZones = (s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || [];
+
+  /* ============================================================
+     关键修复：放弃 ctx.scale 世界变换，全部改用屏幕像素空间画
+     每个 item 自己算 worldToScreen(mx, mz) → 屏幕 (px, py)
+     sprite 尺寸常量保持「像素」单位（不会再被 sx 缩放成几十米）
+     ============================================================ */
+  const wx2px = (mx: number) => (mx - pp.x) * sx + W / 2;       // 世界米 X → 屏幕像素 X
+  const wz2py = (mz: number) => (mz - pp.y) * sx * DEPTH + H / 2; // 世界米 Z → 屏幕像素 Y（带 2.5D 压缩）
+  const m2px = (m: number) => m * sx;                           // 任意米数 → 屏幕像素
+
+  // —— zones（米 → 像素）——
+  allZones.forEach((z) => {
+    const zx_px = wx2px(z.x);
+    const zy_px = wz2py(z.y);
+    const r_px  = m2px(z.r);
+    const ry_px = r_px * 0.5;
     ctx.save();
-    ctx.fillStyle = kindColors[z.kind] || "rgba(255,255,255,.06)";
+    ctx.fillStyle = kindColors[(z as any).kind] || "rgba(255,255,255,.06)";
     ctx.strokeStyle = "rgba(255,255,255,.25)";
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.ellipse(z.x, zy, z.r, z.r * 0.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(zx_px, zy_px, r_px, ry_px, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "rgba(255,255,255,.7)";
     ctx.font = "bold 12px 'Microsoft YaHei', sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(z.name, z.x, zy - 4);
+    ctx.fillText(z.name, zx_px, zy_px - 4);
     ctx.restore();
   });
 
-  ctx.save();
-  ctx.scale(sx, sy);
-
-  // ★ 地图装饰物（严格保持 sprite 实际内容比例，不变形）
-  // tile 内容实测比例：tree 28×32 → dw35/dh40；shrub 22×18 → dw27/dh22；
-  //                     mushroom 16×16 → dw24/dh24；flower 28×28 → dw21/dh21
-  //                     water 32×32（1:1）
+  // —— 装饰物（树/枯树/灌木/蘑菇/花/水/石/药水，按像素尺寸）——
   mapDecorations.value.forEach((dec) => {
-    const sy2 = dec.y * DEPTH;
+    const px = wx2px(dec.x);
+    const py = wz2py(dec.y);
 
     if (dec.kind === "tree" && SHEET_TILESET.ready) {
-      // 树（绿树 7355 / 枯树 7359，交替）
       const dh = 40, dw = 35;
-      const dx = dec.x - dw / 2;
-      const dy = sy2 - dh + 4;
-      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, dx, dy, dw, dh);
+      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "water" && SHEET_TILESET.ready) {
-      // 水tile（tileset id 4500）→ 32×32
       const ts = 32;
-      const dx = dec.x - ts / 2;
-      const dy = sy2 - ts + 4;
-      ctx.save();
-      ctx.globalAlpha = 0.9;
-      drawTile(ctx, TILE_WATER_ID, dx, dy, ts, ts);
+      ctx.save(); ctx.globalAlpha = 0.9;
+      drawTile(ctx, TILE_WATER_ID, px - ts / 2, py - ts + 4, ts, ts);
       ctx.restore();
     } else if (dec.kind === "bush" && SHEET_TILESET.ready) {
-      // 灌木（1722）content 22×18 → dh=22, dw=27
       const dh = 22, dw = 27;
-      const dx = dec.x - dw / 2;
-      const dy = sy2 - dh + 4;
-      drawTile(ctx, TILE_SHRUB_ID, dx, dy, dw, dh);
+      drawTile(ctx, TILE_SHRUB_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
-      // 蘑菇（1724）1:1 → dh=24, dw=24
       const dh = 24, dw = 24;
-      const dx = dec.x - dw / 2;
-      const dy = sy2 - dh + 4;
-      drawTile(ctx, TILE_MUSHROOM_ID, dx, dy, dw, dh);
+      drawTile(ctx, TILE_MUSHROOM_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "flower" && SHEET_TILESET.ready) {
-      // 花（1482）content 28×28，散落小花 → dh=21, dw=21
       const dh = 21, dw = 21;
-      const dx = dec.x - dw / 2;
-      const dy = sy2 - dh + 4;
-      drawTile(ctx, TILE_FLOWER_ID, dx, dy, dw, dh);
+      drawTile(ctx, TILE_FLOWER_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
-      // 药水（tileset id 614）: content 16×24, ratio 0.667 → dh=24, dw=16
       const dh = 24, dw = 16;
-      const dx = dec.x - dw / 2;
-      const dy = sy2 - dh + 4;
-      drawTile(ctx, TILE_POTION_ID, dx, dy, dw, dh);
+      drawTile(ctx, TILE_POTION_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else {
-      // 兜底形状
-      ctx.save();
-      ctx.globalAlpha = 0.5;
+      // 兜底形状（屏幕像素）
+      ctx.save(); ctx.globalAlpha = 0.5;
       if (dec.kind === "tree") {
         ctx.fillStyle = "#2d5a27";
-        ctx.beginPath();
-        ctx.arc(dec.x, sy2, 14, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2); ctx.fill();
       } else if (dec.kind === "water") {
         ctx.fillStyle = "#4a90d9";
-        ctx.beginPath();
-        ctx.arc(dec.x, sy2, 12, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
       } else {
         ctx.fillStyle = "#8b7355";
-        ctx.beginPath();
-        ctx.arc(dec.x, sy2, 10, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
       }
       ctx.restore();
     }
   });
 
-  // 宝箱（Rotten-Soup RandomDungeon 的 chest tile：关=57，开=58）
-  // chest content 28×26 → dh=32, dw=34
+  // —— 宝箱（像素尺寸 32×34）——
   s.chests.forEach((ch) => {
     const dh = 32, dw = 34;
-    const cx = ch.x;
-    const cy = ch.y * DEPTH;
+    const cx = wx2px(ch.x);
+    const cy = wz2py(ch.y);
     ctx.save();
-    if (ch.opened) {
-      ctx.globalAlpha = 0.55;
-    }
+    if (ch.opened) ctx.globalAlpha = 0.55;
     if (SHEET_TILESET.ready) {
-      drawTile(ctx, ch.opened ? TILE_CHEST_OPEN_ID : TILE_CHEST_ID, cx - dw/2, cy - dh + 4, dw, dh);
+      drawTile(ctx, ch.opened ? TILE_CHEST_OPEN_ID : TILE_CHEST_ID, cx - dw / 2, cy - dh + 4, dw, dh);
     } else {
       ctx.fillStyle = ch.opened ? "rgba(160,150,120,.5)" : "#e0b24a";
       ctx.strokeStyle = "rgba(0,0,0,.5)";
@@ -886,55 +958,53 @@ function render() {
     ctx.fillStyle = "rgba(0,0,0,.7)";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText(ch.opened ? "空" : "宝箱", ch.x, ch.y * DEPTH - 20);
+    ctx.fillText(ch.opened ? "空" : "宝箱", cx, cy - 20);
     ctx.restore();
   });
 
-  // 血瓶（实体 from state.potions，tileset 药水 tile id 614）
-  // potion content 16×24, ratio 0.667 → dh=24, dw=16
+  // —— 血瓶（像素尺寸 16×24）——
   s.potions.forEach((p) => {
     const dh = 24, dw = 16;
-    const cx = p.x;
-    const cy = p.y * DEPTH;
+    const cx = wx2px(p.x);
+    const cy = wz2py(p.y);
     if (SHEET_TILESET.ready) {
-      drawTile(ctx, TILE_POTION_ID, cx - dw/2, cy - dh + 4, dw, dh);
+      drawTile(ctx, TILE_POTION_ID, cx - dw / 2, cy - dh + 4, dw, dh);
     } else {
       ctx.save();
       ctx.fillStyle = "#ff5d7a";
       ctx.strokeStyle = "rgba(0,0,0,.45)";
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
       ctx.restore();
     }
     ctx.save();
     ctx.fillStyle = "#fff";
     ctx.font = "bold 14px sans-serif";
     ctx.textAlign = "center";
-    ctx.fillText("+", p.x, p.y * DEPTH + 4);
+    ctx.fillText("+", cx, cy + 4);
     ctx.restore();
   });
 
-  // 单位（按 y 排序做前后遮挡）
-  //  - enemy 阵营（且不在 roles 列表中）→ 野怪
-  //  - 其余（player/ally/有 role id 的 enemy）→ 角色
+  // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
   const roleIds = new Set(s.roles.map((r) => r.id));
   [...s.entities]
     .filter((e) => e.alive !== false)
     .sort((a, b) => a.y - b.y)
     .forEach((e) => {
+      const ex = wx2px(e.x);
+      const ey = wz2py(e.y);
       if (e.side === "enemy" && !roleIds.has(e.id)) {
-        drawMonster(ctx, e);
+        drawMonster(ctx, e, ex, ey, sx);
       } else {
-        // ★ 传入头像图片用于显示
-        drawEntity(ctx, e, getEntityAvatar(e));
+        drawEntity(ctx, e, getEntityAvatar(e), ex, ey, sx);
       }
     });
 
-  // 飘字
+  // —— 飘字（屏幕像素）——
   s.floaters.forEach((f) => {
+    const fx = wx2px(f.x);
+    const fy = wz2py(f.y);
     ctx.save();
     ctx.globalAlpha = Math.min(1, f.life / 12);
     ctx.fillStyle = "#fff";
@@ -942,33 +1012,32 @@ function render() {
     ctx.lineWidth = 3;
     ctx.font = "bold 14px sans-serif";
     ctx.textAlign = "center";
-    ctx.strokeText(f.text, f.x, f.y * DEPTH - 40);
-    ctx.fillText(f.text, f.x, f.y * DEPTH - 40);
+    ctx.strokeText(f.text, fx, fy - 40);
+    ctx.fillText(f.text, fx, fy - 40);
     ctx.restore();
   });
 
-  // ★ Debug 高亮：选中实体画黄色包围框 + ID 标签
+  // —— Debug 高亮（屏幕像素）——
   if (selectedEntityId.value) {
     const sel = s.entities.find((e) => e.id === selectedEntityId.value);
     if (sel) {
-      const sy = sel.y * DEPTH;
+      const sxsel = wx2px(sel.x);
+      const sysel = wz2py(sel.y);
       ctx.save();
       ctx.strokeStyle = "#ffe79e";
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 3]);
-      ctx.strokeRect(sel.x - 28, sy - 56, 56, 64);
+      ctx.strokeRect(sxsel - 28, sysel - 56, 56, 64);
       ctx.setLineDash([]);
       ctx.fillStyle = "rgba(255, 231, 158, 0.9)";
-      ctx.fillRect(sel.x - 28, sy - 76, 56, 16);
+      ctx.fillRect(sxsel - 28, sysel - 76, 56, 16);
       ctx.fillStyle = "#1e1f1f";
       ctx.font = "bold 10px monospace";
       ctx.textAlign = "center";
-      ctx.fillText(sel.id, sel.x, sy - 64);
+      ctx.fillText(sel.id, sxsel, sysel - 64);
       ctx.restore();
     }
   }
-
-  ctx.restore();
 }
 
 /* ---------------- 主循环 ---------------- */
@@ -1007,6 +1076,17 @@ function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() { sendTick("exit", {}); }
 function closeOver() { toonflowJsApi.minigame.abort(); }
 
+/* ============================================================
+   缩放控制（zoom +/- 按钮，对应 25d_ai_game 的 camera zoom）
+   zoom 是整数倍，范围 [min_zoom, max_zoom]，来自 overworld.json
+   ============================================================ */
+function zoomIn() {
+  zoom.value = terrainScale.value.clampZoom(zoom.value + 1);
+}
+function zoomOut() {
+  zoom.value = terrainScale.value.clampZoom(zoom.value - 1);
+}
+
 const me = computed(() => state.value?.entities.find((e) => e.side === "player"));
 const hpPct = computed(() => (me.value ? Math.max(0, (me.value.hp / me.value.maxHp) * 100) : 0));
 const lastEvents = computed(() => (state.value?.events || []).slice(-4));
@@ -1015,9 +1095,22 @@ const lastEvents = computed(() => (state.value?.events || []).slice(-4));
 let stopHost: (() => void) | null = null;
 
 
-onMounted(() => {
-  // ★ 初始化地图装饰物（树木、水体等）
-  initDecorations();
+onMounted(async () => {
+  // ★ v3：先加载地图配置（overworld.json），得到 scale / zoom / 装饰物 / chunk 数据
+  try {
+    const cfg = await loadMapConfig();
+    mapCfg.value = cfg;
+    zoom.value = cfg.default_zoom;
+    // 初始化 chunk 系统（基于新 scale）
+    chunkSystem = new ChunkTerrainSystem(makeScaleFromMap(cfg));
+    chunkSystem.init();
+    if (cfg.chunks) chunkSystem.ingestMapData(cfg.chunks);
+    // 装饰物：直接读 cfg.decorations
+    initDecorations();
+  } catch (err) {
+    console.warn("[field-survival] loadMapConfig 失败，使用兜底数据：", err);
+    initDecorations();
+  }
 
   // ★ 画布等比缩放：窗口变化 / 旋转 / 全屏切换后重新适配
   // window.addEventListener("resize", fitCanvas);
@@ -1058,6 +1151,10 @@ onMounted(() => {
       toonflowJsApi.minigame.setFullscreen(true);
       // 确保地图装饰物已初始化
       if (mapDecorations.value.length === 0) initDecorations();
+      // ★ v3 兜底：如果外部 mockHost 没启动（被 Toonflow wrapper 包了 iframe），
+      //   state.entities 里只有玩家/盟友，没有 enemy。在玩家 (0,0) 周围 30-100 米
+      //   环形补 spawn 4-6 只野兽，保证开局立刻能看到怪物。
+      setTimeout(() => spawnLocalMobsIfNeeded(), 300);
       // 成功进入战斗，清除 loading
       starting.value = false;
     }
@@ -1174,6 +1271,22 @@ watch(() => state.value?.phase, (p) => {
           <span>金钱 +{{ state.money }}</span>
         </div>
         <button class="btn btn--exit" @click="exitGame">退出</button>
+      </div>
+
+      <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 overworld.json 决定 -->
+      <div class="zoom-ctrl" :title="`zoom=${zoom}（${viewSizeMeters[0]}m × ${viewSizeMeters[1]}m）`">
+        <button class="zoom-btn" @click="zoomIn" :disabled="zoom >= terrainScale.max_zoom">+</button>
+        <div class="zoom-val">{{ zoom }}</div>
+        <button class="zoom-btn" @click="zoomOut" :disabled="zoom <= terrainScale.min_zoom">−</button>
+      </div>
+
+      <!-- ★ v3 比例尺与方块刻度（右下角 scale ruler，对应 25d_ai_game 的 grid system） -->
+      <div class="scale-ruler" :title="`block=${terrainScale.block_size}m, chunk=${terrainScale.chunk_size_m}m`">
+        <div class="scale-ruler__pct">{{ viewSizeMeters[0].toFixed(1) }}m</div>
+        <div class="scale-ruler__bar"></div>
+        <div class="scale-ruler__lbl">
+          1m × {{ zoom }} | 比例 1:{{ (1 / terrainScale.scale_meter).toFixed(2) }} | world {{ terrainScale.size[0] }}m
+        </div>
       </div>
 
       <div class="stage-rotate" >
@@ -1540,6 +1653,97 @@ body {
 .btn--exit:active {
   transform: translateY(2px);
   box-shadow: 0 0 0 #6a1f1f;
+}
+
+/* ===== 缩放控制（右上角：zoom+ / zoom- 按钮，对应 25d_ai_game 的 camera zoom） ===== */
+.zoom-ctrl {
+  position: absolute;
+  right: 8px;
+  top: 50px;          /* 避开 HUD 顶部 */
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(30, 31, 31, 0.85);
+  border: 2px solid #4f4f4f;
+  border-radius: 4px;
+  box-shadow: 0 2px 0 #1e1f1f;
+  user-select: none;
+}
+.zoom-ctrl .zoom-btn {
+  width: 32px;
+  height: 32px;
+  border: 2px solid #6a4f1f;
+  background: #d4a13e;
+  color: #1e1f1f;
+  font-size: 20px;
+  font-weight: 700;
+  border-radius: 2px;
+  cursor: pointer;
+  line-height: 1;
+}
+.zoom-ctrl .zoom-btn:hover:not(:disabled) {
+  background: #ffe79e;
+}
+.zoom-ctrl .zoom-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.zoom-ctrl .zoom-btn:disabled {
+  background: #3a3b3b;
+  color: #6a6a6a;
+  border-color: #4f4f4f;
+  cursor: not-allowed;
+}
+.zoom-ctrl .zoom-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffe79e;
+  background: #1e1f1f;
+  padding: 2px 6px;
+  border: 1px solid #4f4f4f;
+  min-width: 28px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 比例尺标尺（右下角，对应 25d_ai_game 的 grid system） ===== */
+.scale-ruler {
+  position: absolute;
+  right: 8px;
+  top: 60px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  padding: 4px 6px;
+  background: rgba(30, 31, 31, 0.85);
+  border: 2px solid #4f4f4f;
+  border-radius: 4px;
+  color: #ececec;
+  font-size: 6px;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.scale-ruler__bar {
+  width: 80px;
+  height: 6px;
+  background: linear-gradient(90deg, #ffe79e 50%, #d4a13e 50%);
+  border: 1px solid #1e1f1f;
+  margin-top: 1px;
+}
+.scale-ruler__pct {
+  font-weight: 700;
+  color: #ffe79e;
+}
+.scale-ruler__lbl {
+  font-size: 10px;
+  color: #9aa0a6;
+  margin-top: 1px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 /* 🔄 横竖屏切换按钮（左上角，要求 req.md:57-58） */

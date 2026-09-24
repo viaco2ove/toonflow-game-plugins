@@ -88,13 +88,19 @@ function spawnWave(): void {
   const wave = archetypes[Math.floor(Math.random() * archetypes.length)];
   const count = 3 + Math.floor(state.tick / 600);
   const events: string[] = [];
+  // ★ v3：怪物 spawn 在玩家 (0,0) 周围 ±100 米（开局就看得见）
+  const me = state.entities.find((x) => x.side === "player");
+  const cx = me?.x ?? 0;
+  const cy = me?.y ?? 0;
   for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 30 + Math.random() * 70;     // 离玩家 30-100 米环形分布
     const e: Entity = {
       id: `m${mobIdSeq++}`,
       name: wave.name,
       side: "enemy",
-      x: 50 + Math.random() * 860,
-      y: 100 + Math.random() * 460,
+      x: cx + Math.cos(angle) * dist,
+      y: cy + Math.sin(angle) * dist,
       vx: 0, vy: 0,
       hp: wave.hp, maxHp: wave.hp,
       atk: wave.atk,
@@ -112,26 +118,40 @@ function spawnWave(): void {
 function buildInitialState(roles: RoleOption[]): GameState {
   const playerRole = roles.find((r) => r.roleType === "player") || roles[0];
   const entities: Entity[] = [];
-  entities.push(makeEntity(playerRole, "player", 480, 300));
-  // 默认把第二个角色作为盟友上场
-  if (roles.length > 1) entities.push(makeEntity(roles[1], "ally", 420, 320));
+  // ★ v3：玩家出生在 origin (0, 0)
+  entities.push(makeEntity(playerRole, "player", 0, 0));
+  // 默认把第二个角色作为盟友上场（偏移 12 米，与 entry.ts 的 ALLY_FOLLOW_GAP_M 一致）
+  if (roles.length > 1) entities.push(makeEntity(roles[1], "ally", -12, 12));
 
   return {
     phase: "select",
-    version: 1,
+    version: 3,
     tick: 0,
-    world: { w: 960, h: 600 },
+    // ★ v3：3000×3000 米世界（origin 0,0，坐标范围 ±1500）
+    world: { w: 3000, h: 3000 },
+    spawn: { x: 0, y: 0 },
+    scale: {
+      meter: 1,
+      block_size: 0.5,
+      chunk_size_blocks: 32,
+      chunk_size_meters: 16,
+      ground_size: 3000,
+      ground_height: 100,
+      x_range: [-1500, 1500],
+      z_range: [-1500, 1500],
+    },
     roles,
     selections: { participants: playerRole ? [playerRole.id] : [], spectators: [], enemies: [] },
     entities,
     chests: [
-      { id: "ch1", x: 200, y: 400, opened: false },
-      { id: "ch2", x: 750, y: 250, opened: false },
+      // ★ v3：坐标单位：米（±1500 范围）
+      { id: "ch1", x:  100, y:  150, opened: false },
+      { id: "ch2", x: -200, y:  100, opened: false },
     ],
     potions: [
-      { id: "p1", x: 150, y: 150, heal: 30 },
-      { id: "p2", x: 800, y: 450, heal: 30 },
-      { id: "p3", x: 500, y: 500, heal: 30 },
+      { id: "p1", x:   70, y: -120, heal: 30 },
+      { id: "p2", x: -150, y:   50, heal: 30 },
+      { id: "p3", x:  300, y: -300, heal: 30 },
     ],
     floaters: [],
     skills: [
@@ -188,19 +208,19 @@ function install(): void {
         state.tick++;
         const inp = params?.input || {};
         const me = state.entities.find((x) => x.side === "player");
-        // 移动
+        // ★ v3：米单位移动。speed = 3 米/帧（与 entry.ts 的 MOVE_SPEED_M 一致）
         if (me && me.alive) {
           if (inp.dx || inp.dy) {
-            me.x = Math.max(20, Math.min(940, me.x + (inp.dx || 0) * 4));
-            me.y = Math.max(40, Math.min(560, me.y + (inp.dy || 0) * 4));
+            me.x = Math.max(-1490, Math.min(1490, me.x + (inp.dx || 0) * 3));
+            me.y = Math.max(-1490, Math.min(1490, me.y + (inp.dy || 0) * 3));
             me.facing = inp.dx > 0 ? 90 : inp.dx < 0 ? 270 : me.facing;
           }
           if (inp.moveTo) {
-            me.x = Math.max(20, Math.min(940, inp.moveTo.x));
-            me.y = Math.max(40, Math.min(560, inp.moveTo.y));
+            me.x = Math.max(-1490, Math.min(1490, inp.moveTo.x));
+            me.y = Math.max(-1490, Math.min(1490, inp.moveTo.y));
           }
         }
-        // 敌人 AI：朝玩家移动 + 攻击
+        // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
         state.entities.forEach((e) => {
           if (e.side !== "enemy" || !e.alive) return;
@@ -208,14 +228,15 @@ function install(): void {
           const dx = target.x - e.x;
           const dy = target.y - e.y;
           const d2 = Math.hypot(dx, dy);
-          if (d2 < 250) {
-            const sp = 1.2;
+          // 看见玩家 80 米；追；2 米内攻击
+          if (d2 < 80) {
+            const sp = 2.0;  // 米/帧 ≈ 2.4 m/s 步行追赶
             e.x += (dx / (d2 || 1)) * sp;
             e.y += (dy / (d2 || 1)) * sp;
             e.facing = dx > 0 ? 90 : 270;
           }
           e.cooldown--;
-          if (d2 < 28 && e.cooldown <= 0) {
+          if (d2 < 2 && e.cooldown <= 0) {
             target.hp = Math.max(0, target.hp - e.atk);
             state.floaters.push({ id: "f" + state.tick, text: `-${e.atk}`, x: target.x, y: target.y - 10, life: 12 });
             e.cooldown = 40;
@@ -227,14 +248,14 @@ function install(): void {
             }
           }
         });
-        // 玩家自动攻击最近的敌人（每 30 tick）
+        // 玩家自动攻击最近的敌人（每 30 tick，30 米内）
         if (me && me.alive && state.tick % 30 === 0) {
           let closest: Entity | null = null;
           let minD = Infinity;
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
             const dd = Math.hypot(e.x - me.x, e.y - me.y);
-            if (dd < minD && dd < 200) { minD = dd; closest = e; }
+            if (dd < minD && dd < 30) { minD = dd; closest = e; }
           });
           if (closest) {
             (closest as Entity).hp -= me.atk;
@@ -326,14 +347,24 @@ function install(): void {
         .map((id) => state.roles.find((r) => r.id === id))
         .filter(Boolean) as RoleOption[];
       partR.forEach((r, i) => {
-        state.entities.push(makeEntity(r, i === 0 ? "player" : "ally", 460 + i * 30, 300 + i * 20));
+        // ★ v3：玩家出生 origin (0,0)，盟友环绕（半径 12 米 = ALLY_FOLLOW_GAP_M）
+        const isPlayer = i === 0;
+        const angle = (i / Math.max(1, partR.length)) * Math.PI * 2;
+        state.entities.push(makeEntity(
+          r, isPlayer ? "player" : "ally",
+          isPlayer ? 0 : Math.cos(angle) * 12,
+          isPlayer ? 0 : Math.sin(angle) * 12,
+        ));
       });
-      // 敌对角色：作为敌人 NPC 上场（而不是野兽）
+      // 敌对角色：作为敌人 NPC 上场（而不是野兽）— 玩家附近 ±80 米环形分布
       const enR = state.selections.enemies
         .map((id) => state.roles.find((r) => r.id === id))
         .filter(Boolean) as RoleOption[];
+      const eCount = enR.length;
       enR.forEach((r, i) => {
-        const e = makeEntity(r, "enemy", 200 + i * 50, 200);
+        const angle = eCount > 1 ? (i / eCount) * Math.PI * 2 : 0;
+        const dist = 50 + (i % 3) * 10;   // 50-70 米
+        const e = makeEntity(r, "enemy", Math.cos(angle) * dist, Math.sin(angle) * dist);
         e.hp = 80; e.maxHp = 80; e.atk = 10;
         state.entities.push(e);
       });

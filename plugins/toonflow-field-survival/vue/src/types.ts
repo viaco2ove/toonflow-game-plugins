@@ -71,6 +71,19 @@ export interface GameState {
   version: number;
   tick: number;
   world: { w: number; h: number };
+  /** v3 增强：玩家出生点（米，origin (0,0)） */
+  spawn?: { x: number; y: number };
+  /** v3 增强：scale 配置（来自 overworld.json / map_config.json） */
+  scale?: {
+    meter: number;
+    block_size: number;
+    chunk_size_blocks: number;
+    chunk_size_meters: number;
+    ground_size: number;
+    ground_height: number;
+    x_range?: [number, number];
+    z_range?: [number, number];
+  };
   roles: RoleOption[];
   selections: { participants: string[]; spectators: string[]; enemies: string[] };
   entities: Entity[];
