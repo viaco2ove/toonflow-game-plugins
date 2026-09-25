@@ -21,7 +21,7 @@ import {
   TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
-  GROUND_CELL_M, GROUND_BIOME_SCALE_M, GROUND_TONE_SCALE_M, GROUND_TONE_FINE_SCALE_M,
+  GROUND_CELL_M, GROUND_BIOME_SCALE_M, GROUND_TONE_SCALE_M,
   GROUND_SAND_MAX, GROUND_DIRT_MAX, GROUND_TONE_SPLIT,
   GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
@@ -993,25 +993,25 @@ function valueNoise2D(x: number, z: number, cell: number, seed: number): number 
 /**
  * 世界坐标（米）→ 地表 tile id（草地 / 泥土 / 沙地）
  *
- * ★ v4：两层噪声（对照 Rotten-Soup 的"整片同色 + 大尺度分区"）
- *   - biome（约 26 米）决定该处是 草 / 泥 / 沙，占比约 77% / 14% / 9%；
- *   - tone（约 7 米，混 3 米细节）只在该地貌内部二选一（同色系深浅）。
- * 跨色系只由 biome 决定，tone 不会把相邻格换到另一种地貌 —— 所以同一片区域
- * 内部整片同色，肉眼看到的是"成片地貌"而非逐格跳色的棋盘格。
+ * ★ v6：对照 Rotten-Soup 的实测地表构成（其 maps 里主草图块 id=7864 占各地图地表
+ *   76.9%，其余图块都只占几个百分点）——即"一个无缝主块铺满 + 大尺度稀疏变体"。
+ *   - biome（约 26 米）决定该处是 草 / 泥 / 沙；
+ *   - tone （约 12 米）只在该地貌内部二选一，且必须是同色系、无缝平铺的相邻块。
+ * v5 仍出现棋盘格的根因：旧表把「纯色平滑块 7149」与「强纹理块 9378」按 3 米噪声
+ * 对半混铺，每 3 格就跳一次"纯色 ↔ 纹理"，等于把图块的方形边界画在地上；v6 换用
+ * Rotten-Soup 自己的主草块并把变体降到约 1/4、尺度拉到 12 米，消除该跳变。
  */
+function pickGroundTile(tiles: number[], t: number): number {
+  const idx = t < GROUND_TONE_SPLIT ? 0 : 1;
+  return tiles[Math.min(tiles.length - 1, idx)];
+}
+
 function groundTileAt(wx: number, wz: number): number {
   const biome = valueNoise2D(wx, wz, GROUND_BIOME_SCALE_M, 11);
-  if (biome < GROUND_SAND_MAX) {
-    const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23);
-    return GROUND_SAND_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
-  }
-  if (biome < GROUND_DIRT_MAX) {
-    const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23);
-    return GROUND_DIRT_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
-  }
-  const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23) * 0.7
-          + valueNoise2D(wx, wz, GROUND_TONE_FINE_SCALE_M, 29) * 0.3;
-  return GROUND_GRASS_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
+  const tone = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23);
+  if (biome < GROUND_SAND_MAX) return pickGroundTile(GROUND_SAND_TILES, tone);
+  if (biome < GROUND_DIRT_MAX) return pickGroundTile(GROUND_DIRT_TILES, tone);
+  return pickGroundTile(GROUND_GRASS_TILES, tone);
 }
 
 function render() {
@@ -1977,7 +1977,7 @@ body {
 /* ===== 比例尺标尺（右下角，对应 25d_ai_game 的 grid system） ===== */
 .scale-ruler {
   position: absolute;
-  right: 8px;
+  right: 53px;
   top: 60px;
   z-index: 6;
   display: flex;

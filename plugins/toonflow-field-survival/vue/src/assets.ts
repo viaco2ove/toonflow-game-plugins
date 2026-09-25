@@ -132,15 +132,20 @@ export const TILE_MUSHROOM_ID = 1724;  // 蘑菇
 export const TILE_FLOWER_ID = 1482;    // 花
 
 // tileset 中的地形 tile id（配合 tileSrcRect 使用）
-// ★ 取值依据：直接采样 compiled_tileset_32x32.png 中对应 tile 的平均色（草=绿系 / 泥=棕系 / 沙=黄系）
-export const TILE_GROUND_ID = 7031;         // 深绿草地（暗）
-export const TILE_GRASS_VIVID_ID = 7149;    // 鲜绿草地
-export const TILE_GRASS_MID_ID = 9378;      // 中绿草地
+// ★ v6 取值依据：本插件的 compiled_tileset_32x32.png 与参照项目 Rotten-Soup 的
+//   public/images/compiled_tileset_32x32.png 是同一份文件（3840×3488，MD5 一致），
+//   因此地表 id 直接对齐 Rotten-Soup 全部地图（public/maps/*.json）真实使用的地表 id：
+//     id=7864 主草（RS 各地图地表层占比 76.9%，占其全部地表 tile 35.8%）
+//     id=7984 干草浅色变体（RS 518 格）   id=7765 泥土/土路（RS 241 格）
+//   并用「3×3 平铺 + 4 倍放大」自检筛掉放大后出现方格格线、不可大面积平铺的图块：
+//     id=8940 边界落差/内部梯度≈6.7、id=10647≈4.4（旧沙地，带硬边框）、id=512（旧泥土）、
+//     id=7149 为纯色平滑块（内部无梯度，与纹理块混铺即形成逐块跳变的棋盘格）。
+export const TILE_GRASS_MAIN_ID = 7864;     // 草地（RS 主草，无缝平铺）
+export const TILE_GRASS_DRY_ID = 7984;      // 草地（干草浅色变体，与主草色距 25）
+export const TILE_DIRT_MAIN_ID = 7765;      // 泥土 / 土路（棕色，无缝平铺）
+export const TILE_SAND_MAIN_ID = 7395;      // 沙地（浅沙，平铺无格线）
+export const TILE_SAND_ALT_ID = 8937;       // 沙地（暖沙变体，与主沙色距 15）
 export const TILE_GRASS_LIGHT_ID = 6834;    // 浅黄绿草地（亮）
-export const TILE_DIRT_MID_ID = 512;        // 中棕泥土
-export const TILE_DIRT_DARK_ID = 7030;      // 深棕泥土
-export const TILE_SAND_ID = 10647;          // 沙地（偏黄）
-export const TILE_SAND_MID_ID = 8940;       // 沙地（中）
 export const TILE_SAND_PALE_ID = 8956;      // 沙地（浅）
 // 以下三色保留（当前地表混布未使用，避免破坏其它可能引用）
 export const TILE_GRASS_PALE_ID = 6710;     // 浅草坪
@@ -152,36 +157,35 @@ export const TILE_WATER_SHALLOW_ID = 6963;  // 浅蓝水边
 export const TILE_POTION_ID = 614;          // 药水瓶
 
 /**
- * ★ v4 地表配色表（对照 Rotten-Soup：整片同色 + 大尺度分区，不做逐格跳色）
+ * ★ v6 地表配色表（对照 Rotten-Soup 实测地表构成：整片同色 + 大尺度稀疏变体）
  *
- * 观感目标：同一片地貌内部"整片同色 + 细微暗纹"，只在大尺度上换地貌；
- * 逐格跳色（相邻格忽草忽沙）正是"棋盘格"观感的根因。
+ * 观感目标：地表由「一个无缝主图块」铺满，变体只在 10 米级尺度上稀疏出现且与主块
+ * 同色系；严禁把「纯色块」与「强纹理块」按小尺度噪声对半混铺 —— 那是 v4/v5 仍能看到
+ * 棋盘格的根因（每 3 格出现一次纯色/纹理跳变，等于把图块的方形边界画在地上）。
  *
- * 因此地表由两层噪声决定：
+ * 地表由两层噪声决定：
  *   - biome（约 26 米尺度）：决定该处是 草 / 泥 / 沙；
- *   - tone （约 7 米 + 3 米细节）：只在该地貌内部二选一（同色系深/浅），不跨色系。
- * 阈值用同一套噪声在 400 米见方区域内分位标定，得到草 ≈ 77% / 泥 ≈ 14% / 沙 ≈ 9%。
+ *   - tone （约 12 米尺度）：只在该地貌内部二选一，取自同色系相邻图块。
  */
 export const GROUND_BIOME_SCALE_M = 26.0;      // 地貌尺度（米）
-export const GROUND_TONE_SCALE_M = 7.0;        // 同色系色调尺度（米）
-export const GROUND_TONE_FINE_SCALE_M = 3.0;   // 色调细节尺度（米）
+export const GROUND_TONE_SCALE_M = 12.0;       // 同色系色调尺度（米）★ v6：7 → 12，变体成片更大
 
 /** 地表格边长（米）：1 格 = 1 米 = 1 张 32×32 图块（与 Rotten-Soup 的 tile 比例一致） */
 export const GROUND_CELL_M = 1.0;
 
-/** biome < 该值 → 沙地（分位标定：约占全图 9%） */
+/** biome < 该值 → 沙地（分位标定：约占全图 8%） */
 export const GROUND_SAND_MAX = 0.21;
-/** biome < 该值 → 泥土（约占全图 14%），其余为草地（约 77%） */
+/** biome < 该值 → 泥土（约占全图 11%），其余为草地（约 81%） */
 export const GROUND_DIRT_MAX = 0.325;
-/** tone < 该值 → 取同色系的较深一档 */
-export const GROUND_TONE_SPLIT = 0.5;
+/** tone < 该值 → 取同色系的较浅一档（★ v6：0.5 → 0.62，变体占比降到约 1/4，主块占主导） */
+export const GROUND_TONE_SPLIT = 0.62;
 
-/** 草地两档（鲜绿 / 中绿）——同色系，仅深浅不同 */
-export const GROUND_GRASS_TILES: number[] = [TILE_GRASS_VIVID_ID, TILE_GRASS_MID_ID];
-/** 泥土两档（中棕 / 深棕） */
-export const GROUND_DIRT_TILES: number[] = [TILE_DIRT_MID_ID, TILE_DIRT_DARK_ID];
-/** 沙地两档（中沙 / 偏黄沙） */
-export const GROUND_SAND_TILES: number[] = [TILE_SAND_MID_ID, TILE_SAND_ID];
+/** 草地两档（主草 7864 / 干草浅色变体 7984），同色系、均无缝平铺 */
+export const GROUND_GRASS_TILES: number[] = [TILE_GRASS_MAIN_ID, TILE_GRASS_DRY_ID];
+/** 泥土（单一主块 7765：Rotten-Soup 的土路块，大面积平铺不产生格线） */
+export const GROUND_DIRT_TILES: number[] = [TILE_DIRT_MAIN_ID];
+/** 沙地两档（浅沙 7395 / 暖沙 8937） */
+export const GROUND_SAND_TILES: number[] = [TILE_SAND_MAIN_ID, TILE_SAND_ALT_ID];
 
 /* ★ v5：v3 的 8 档混布地表表（GROUND_TILES / GROUND_FALLBACK_TILE / GROUND_THRESHOLDS）
  *   已确认全仓库零引用（grep 覆盖 vue/src 全部 .ts/.vue），在此删除，
