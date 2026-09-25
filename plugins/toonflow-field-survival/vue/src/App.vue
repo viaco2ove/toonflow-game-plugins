@@ -25,7 +25,7 @@ import {
   GROUND_SAND_MAX, GROUND_DIRT_MAX, GROUND_TONE_SPLIT,
   GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
-  spriteTileId,
+  spriteTileId, resolveAssetPath,
 } from "./assets";
 import {
   TerrainScaleConfig, DEFAULT_SCALE,
@@ -123,13 +123,45 @@ function toggle(list: string[], id: string) {
 function roleAvatar(r: RoleOption): string {
   const p = r?.avatarPath || "";
   if (!p) return "";
-  // 绝对 URL（http/https）直接用
-  if (p.startsWith("http")) return p;
-  // 相对路径走 assetUrl：dev 用 Vite server，prod 用 data URL 内联
-  return assetUrl(p.startsWith("./") ? p.slice(2) : p);
+  // ★ fix②：统一用 resolveAssetPath。
+  //   旧实现把宿主站内绝对路径（/1/game/scene/xxx.webp）也塞给 assetUrl，
+  //   于是被拼成 /plugin/getAsset?pluginId=...&path=ui//1/game/scene/xxx.webp，
+  //   服务端按插件目录解析 → 404（该 webp 实际由宿主 uploads 静态目录托管，
+  //   /1/game/scene/xxx.webp 直取为 200 image/webp）。
+  return resolveAssetPath(p);
 }
 
 const starting = ref(false);
+/** ★ fix③：开始游戏后的状态提示（宿主 /plugin/tick 响应慢时给出可解释的反馈） */
+const startHint = ref("");
+let startTimerSlow = 0;
+let startTimerFail = 0;
+function clearStartTimers() {
+  if (startTimerSlow) { window.clearTimeout(startTimerSlow); startTimerSlow = 0; }
+  if (startTimerFail) { window.clearTimeout(startTimerFail); startTimerFail = 0; }
+}
+
+/**
+ * ★ fix④：像素风开关（复选框放在「退出」按钮旁）
+ *  默认 true = 保持原有像素风渲染；取消勾选后：
+ *    ① 画布 CSS 去掉 image-rendering: pixelated / crisp-edges；
+ *    ② canvas 2D 打开双线性平滑（imageSmoothingEnabled=true + quality=high）。
+ *  用户反馈的"整个界面都很模糊"正是低分辨率画布被像素化放大所致：关闭像素风后
+ *  交给浏览器做平滑插值，观感立刻变清晰（代价是像素细节略柔）。
+ */
+const pixelMode = ref(localStorage.getItem("fs_pixel_mode") !== "0");
+function onPixelModeChange() {
+  try { localStorage.setItem("fs_pixel_mode", pixelMode.value ? "1" : "0"); } catch { /* ignore */ }
+  applyCanvasSmoothing();
+}
+/** 按当前像素风开关同步 canvas 采样方式 */
+function applyCanvasSmoothing() {
+  const c = canvasEl.value;
+  const g = c?.getContext("2d");
+  if (!g) return;
+  g.imageSmoothingEnabled = !pixelMode.value;
+  try { (g as any).imageSmoothingQuality = pixelMode.value ? "low" : "high"; } catch { /* ignore */ }
+}
 
 function init_game(){
   // 初始化游戏
@@ -150,8 +182,20 @@ function startGame() {
       enemies: [...enemies.value],
     },
   });
-  // 兜底：宿主未连接时，2 秒后自动重置按钮状态
-  setTimeout(() => { starting.value = false; }, 2000);
+  // ★ fix③：原实现 2 秒后无条件重置按钮——宿主侧开始游戏要生成地图（较慢），
+  //   「加载中…」在等待期凭空消失，用户看到的就是“点了开始、/plugin/tick 没返回、
+  //   加载中效果就没了”。改为：
+  //     · 加载态一直保持到宿主真的回包（onHostState 收到 playing/over 才清除）；
+  //     · 8 秒未回包 → 提示“宿主响应较慢”（继续加载）；
+  //     · 20 秒仍未回包 → 判定失败，恢复按钮并给出可重试的错误提示。
+  startTimerSlow = window.setTimeout(() => {
+    if (starting.value) startHint.value = "宿主响应较慢（正在生成地图），请稍候…";
+  }, 8000);
+  startTimerFail = window.setTimeout(() => {
+    if (!starting.value) return;
+    starting.value = false;
+    startHint.value = "开始超时：宿主未返回 /plugin/tick(start) 响应，请检查服务端与插件会话后重试";
+  }, 20000);
 }
 
 /* ---------------- 操作输入 ---------------- */
@@ -530,7 +574,12 @@ function drawTile(
 
 // ★ 像素艺术：用 imageSmoothingEnabled=false 保证像素清晰（不模糊）
 function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
-  ctx.imageSmoothingEnabled = false;
+  // ★ fix④：跟随「像素风」复选框——关闭时若仍强制 imageSmoothingEnabled=false，
+  //   每帧绘制都会把它改回去，复选框就失效了。
+  ctx.imageSmoothingEnabled = !pixelMode.value;
+  if (!pixelMode.value) {
+    try { (ctx as any).imageSmoothingQuality = "high"; } catch { /* ignore */ }
+  }
 }
 
 // 地图装饰物（树木、水体、花木）位置 —— 优先从 overworld.json 加载
@@ -770,7 +819,28 @@ function propDimPx(kind: "tree" | "bush" | "water", sx: number, minPx = 8): { w:
  *   - 位移超过 DISPLAY_SNAP_M（真传送 / 新实体）：直接吸附，避免长距离拖尾。
  *   - 玩家本身不插值（相机用的就是它的权威坐标，插值会导致画面与相机错位）。
  */
-const DISPLAY_TAU_S = 0.08;         // 收敛时间常数（秒）：约 0.24 秒内走完 95% 路程
+/**
+ * ★ fix①：移动端性能档位
+ *  判定：UA 含 Android/iPhone/iPad/… 或「触摸设备 + 短边 ≤ 820px」（手机/平板 WebView）。
+ *  该档位下：渲染帧率封顶 30fps、tick 上报降到 5Hz、插值时间常数放宽。
+ */
+const IS_MOBILE = (() => {
+  try {
+    const ua = navigator.userAgent || "";
+    const mobileUA = /Android|iPhone|iPad|iPod|HarmonyOS|Windows Phone|Mobile/i.test(ua);
+    const touch = (navigator.maxTouchPoints || 0) > 0;
+    const sw = (window.screen && window.screen.width) || 9999;
+    const sh = (window.screen && window.screen.height) || 9999;
+    return mobileUA || (touch && Math.min(sw, sh) <= 820);
+  } catch { return false; }
+})();
+
+/** ★ fix①：移动端渲染帧间隔（约 30fps）；桌面端 0 = 不限制（跟随 rAF） */
+const MIN_FRAME_MS = IS_MOBILE ? 33 : 0;
+/** ★ fix①：移动端向宿主上报 tick 的间隔（宿主只镜像位姿，5Hz 足够；本地 tick 仍 10Hz） */
+const SEND_MS = IS_MOBILE ? 200 : 100;
+
+const DISPLAY_TAU_S = IS_MOBILE ? 0.16 : 0.08;  // 收敛时间常数（秒）：移动端上报更稀，放宽以免一顿一顿
 const DISPLAY_MAX_STEP_MPS = 15;    // 显示位置追赶速度上限（米/秒）：位移大时限速，磨掉阶跃
 const DISPLAY_SNAP_M = 25;          // 单帧位移阈值（米）：超过视为真传送，直接吸附
 const displayPos = new Map<string, { x: number; y: number }>();
@@ -1078,12 +1148,15 @@ function render() {
     const originZ = Math.round((gz0 * GROUND_CELL_M - minWZ) * sx);
     const nx = Math.ceil(W / cellPx) + 2;
     const nz = Math.ceil(H / cellPx) + 2;
+    // ★ fix①（性能）：地面图块走记忆化缓存。
+    //   groundTileAt 每格要做两次二维 value-noise（各 4 次哈希 + 双线性插值），
+    //   而同一格在静止/缓慢移动时会被反复求值（每帧 nx×nz ≈ 700~900 次），
+    //   手机上这是每帧最大的 CPU 开销之一。地貌是确定性的 → 同格只算一次。
     for (let j = 0; j < nz; j++) {
-      const wz = (gz0 + j) * GROUND_CELL_M;
+      const gzj = gz0 + j;
       const ty = originZ + j * cellPx;
       for (let i = 0; i < nx; i++) {
-        const wx = (gx0 + i) * GROUND_CELL_M;
-        drawTile(ctx, groundTileAt(wx, wz), originX + i * cellPx, ty, cellPx, cellPx);
+        drawTile(ctx, groundTileAtFast(gx0 + i, gzj), originX + i * cellPx, ty, cellPx, cellPx);
       }
     }
   } else {
@@ -1296,9 +1369,114 @@ function render() {
   }
 }
 
+/* ---------------- ★ fix① 地面图块记忆化缓存 ---------------- */
+/** 缓存键 = (gx+32768)*65536 + (gz+32768)；世界格号 ±1500 ≪ 32768，无碰撞 */
+const groundTileCache = new Map<number, number>();
+const GROUND_TILE_CACHE_MAX = 20000;
+function groundTileAtFast(gx: number, gz: number): number {
+  const key = (gx + 32768) * 65536 + (gz + 32768);
+  const hit = groundTileCache.get(key);
+  if (hit !== undefined) return hit;
+  const v = groundTileAt(gx * GROUND_CELL_M, gz * GROUND_CELL_M);
+  if (groundTileCache.size >= GROUND_TILE_CACHE_MAX) groundTileCache.clear();
+  groundTileCache.set(key, v);
+  return v;
+}
+
+/* ---------------- ★ fix⑤/⑥ 迷你小地图 + 玩家坐标 ---------------- */
+/** 小地图画布像素尺寸（CSS 同尺寸） */
+const MINIMAP_PX = 110;
+/** 小地图半径（米）：超出范围的目标钳制在边缘并描白边提示方位 */
+const MINIMAP_RANGE_M = 60;
+const minimapEl = ref<HTMLCanvasElement | null>(null);
+
+/**
+ * 绘制迷你小地图：以玩家为中心，显示野怪/盟友/宝箱/血瓶的相对位置。
+ * 独立于主画布的 ctx，由 loop()/`watch(phase)` 以 10Hz 调用。
+ */
+function drawMinimap() {
+  const c = minimapEl.value;
+  const s = state.value;
+  if (!c || !s) return;
+  const g = c.getContext("2d");
+  if (!g) return;
+  const N = MINIMAP_PX;
+  const half = N / 2;
+  const ppm = half / MINIMAP_RANGE_M;        // 像素/米
+  const meE = s.entities.find((e) => e.side === "player");
+  const px = meE ? meE.x : 0;
+  const py = meE ? meE.y : 0;
+
+  g.save();
+  g.clearRect(0, 0, N, N);
+  // 底色 + 刻度网格（四等分）
+  g.fillStyle = "rgba(12,16,12,0.78)";
+  g.fillRect(0, 0, N, N);
+  g.strokeStyle = "rgba(190,205,170,0.16)";
+  g.lineWidth = 1;
+  for (let k = 1; k < 4; k++) {
+    const t = Math.round((N / 4) * k) + 0.5;
+    g.beginPath(); g.moveTo(t, 0); g.lineTo(t, N); g.stroke();
+    g.beginPath(); g.moveTo(0, t); g.lineTo(N, t); g.stroke();
+  }
+  // 视野圈
+  g.strokeStyle = "rgba(200,220,180,0.22)";
+  g.beginPath();
+  g.arc(half, half, half - 2, 0, Math.PI * 2);
+  g.stroke();
+
+  const dot = (x: number, y: number, color: string, r: number) => {
+    let dx = (x - px) * ppm;
+    let dy = (y - py) * ppm;
+    const d = Math.hypot(dx, dy);
+    const lim = half - 4;
+    let clamped = false;
+    if (d > lim) { const k = lim / d; dx *= k; dy *= k; clamped = true; }
+    g.beginPath();
+    g.fillStyle = color;
+    g.arc(half + dx, half + dy, r, 0, Math.PI * 2);
+    g.fill();
+    if (clamped) { g.strokeStyle = "rgba(255,255,255,0.7)"; g.lineWidth = 1; g.stroke(); }
+  };
+
+  // 宝箱 / 血瓶（宿主 state 有则画，没有则跳过）
+  const extra = s as unknown as { chests?: Array<{ x: number; y: number }>; potions?: Array<{ x: number; y: number }> };
+  if (Array.isArray(extra.chests)) extra.chests.forEach((o) => dot(o.x, o.y, "rgba(224,178,74,0.9)", 1.6));
+  if (Array.isArray(extra.potions)) extra.potions.forEach((o) => dot(o.x, o.y, "rgba(228,132,196,0.9)", 1.6));
+
+  // 野怪 / 盟友
+  s.entities.forEach((e) => {
+    if (e.alive === false) return;
+    if (e.side === "enemy") dot(e.x, e.y, "#ff5b5b", 3);
+    else if (e.side === "ally") dot(e.x, e.y, "#5b9bff", 2.4);
+  });
+
+  // 玩家：恒在正中，有 facing 则画朝向箭头
+  g.fillStyle = "#8ce07a";
+  const face = (meE as unknown as { facing?: { x?: number; y?: number } } | undefined)?.facing;
+  g.beginPath();
+  if (face && typeof face === "object") {
+    const ang = Math.atan2(face.y ?? 0, face.x ?? 1);
+    g.moveTo(half + Math.cos(ang) * 5.4, half + Math.sin(ang) * 5.4);
+    g.lineTo(half + Math.cos(ang + 2.4) * 4, half + Math.sin(ang + 2.4) * 4);
+    g.lineTo(half + Math.cos(ang - 2.4) * 4, half + Math.sin(ang - 2.4) * 4);
+    g.closePath();
+  } else {
+    g.arc(half, half, 3.2, 0, Math.PI * 2);
+  }
+  g.fill();
+  g.strokeStyle = "rgba(0,0,0,0.65)";
+  g.lineWidth = 1;
+  g.stroke();
+  g.restore();
+}
+
 /* ---------------- 主循环 ---------------- */
 let raf = 0;
 let lastTickAt = 0;
+let lastSendAt = 0;
+let lastMinimapAt = 0;
+let lastFrameAt = 0;
 const TICK_MS = 100;
 
 function loop(ts: number) {
@@ -1306,20 +1484,33 @@ function loop(ts: number) {
   _animTick++;
   const s = state.value;
   if (!s || s.phase !== "playing") return;
-  render();
+  // ★ fix①（性能）：页面切到后台（锁屏 / 切走）时既不应渲染也不应上报 tick
+  if (typeof document !== "undefined" && document.hidden) return;
+  // ★ fix①（性能）：手机端把渲染帧率封顶 30fps（渲染内已按 dt 归一，速度不受影响）
+  // 注意：lastFrameAt 与 render() 内部的 lastRenderAt（显示位置插值时钟）是两个独立变量
+  if (!MIN_FRAME_MS || ts - lastFrameAt >= MIN_FRAME_MS) { lastFrameAt = ts; render(); }
+  // ★ fix⑤：迷你小地图独立低频刷新（10Hz 足够，避免与主画面抢 CPU）
+  if (ts - lastMinimapAt >= 100) {
+    lastMinimapAt = ts;
+    drawMinimap();
+  }
   if (ts - lastTickAt >= TICK_MS) {
     lastTickAt = ts;
-    // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）
+    // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）——本地仍保持 10Hz
     localTick();
-    sendTick("tick", {
-      input: {
-        dx: input.value.dx,
-        dy: input.value.dy,
-        moveTo: input.value.moveTo,
-      },
-      // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
-      player: lastLocalPose ? { ...lastLocalPose } : undefined,
-    });
+    // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
+    if (ts - lastSendAt >= SEND_MS) {
+      lastSendAt = ts;
+      sendTick("tick", {
+        input: {
+          dx: input.value.dx,
+          dy: input.value.dy,
+          moveTo: input.value.moveTo,
+        },
+        // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
+        player: lastLocalPose ? { ...lastLocalPose } : undefined,
+      });
+    }
   }
 }
 
@@ -1450,8 +1641,10 @@ onMounted(async () => {
       toonflowJsApi.minigame.setFullscreen(false);
       // 重新初始化地图装饰物（每次进入都重新生成）
       initDecorations();
-      // 重置开始按钮 loading 状态
+      // 重置开始按钮 loading 状态（★ fix③：同时清掉超时计时与提示）
       starting.value = false;
+      clearStartTimers();
+      startHint.value = "";
     }
     if (newPhase === "playing" && prevPhase !== "playing") {
       // 进入战斗：自动切全屏（runtime 时机）
@@ -1462,8 +1655,10 @@ onMounted(async () => {
       //   state.entities 里只有玩家/盟友，没有 enemy。在玩家 (0,0) 周围 30-100 米
       //   环形补 spawn 4-6 只野兽，保证开局立刻能看到怪物。
       setTimeout(() => spawnLocalMobsIfNeeded(), 300);
-      // 成功进入战斗，清除 loading
+      // 成功进入战斗，清除 loading（★ fix③：同时清掉超时计时与提示）
       starting.value = false;
+      clearStartTimers();
+      startHint.value = "";
     }
     // ★ 开局后：优先 state.map；缺失时用 toonflowJsApi 从插件数据表拉 map_data 兜底
     const m = (state.value as any)?.map as MapData | null | undefined;
@@ -1483,6 +1678,8 @@ onMounted(async () => {
   });
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  // ★ fix④：按持久化的像素风开关初始化画布采样方式
+  applyCanvasSmoothing();
   raf = requestAnimationFrame(loop);
   notifyLoaded();
   // 兜底：宿主未推送状态时也要显示，避免白屏
@@ -1498,7 +1695,7 @@ onBeforeUnmount(() => {
 });
 
 watch(() => state.value?.phase, (p) => {
-  if (p === "playing") requestAnimationFrame(() => { fitCanvas(); render(); });
+  if (p === "playing") requestAnimationFrame(() => { fitCanvas(); applyCanvasSmoothing(); render(); drawMinimap(); });
 });
 </script>
 
@@ -1558,6 +1755,8 @@ watch(() => state.value?.phase, (p) => {
         </span>
         <span v-else>开始游戏</span>
       </button>
+      <!-- ★ fix③：开始游戏的等待/超时提示（宿主 /plugin/tick 未回包时不再静默） -->
+      <p v-if="startHint" class="start-hint">{{ startHint }}</p>
     </section>
 
     <!-- ===== 战斗阶段 ===== -->
@@ -1578,6 +1777,11 @@ watch(() => state.value?.phase, (p) => {
           <span>金钱 +{{ state.money }}</span>
         </div>
         <button class="btn btn--exit" @click="exitGame">退出</button>
+        <!-- ★ fix④：像素风开关（默认开；取消勾选 → 关闭像素化渲染，界面变清晰） -->
+        <label class="pixel-toggle" title="像素风渲染开关：取消勾选可关闭像素化，画面更平滑清晰">
+          <input type="checkbox" v-model="pixelMode" @change="onPixelModeChange" />
+          <span>像素风</span>
+        </label>
       </div>
 
       <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 overworld.json 决定 -->
@@ -1585,6 +1789,23 @@ watch(() => state.value?.phase, (p) => {
         <button class="zoom-btn" @click="zoomIn" :disabled="zoom >= terrainScale.max_zoom">+</button>
         <div class="zoom-val">{{ zoom }}</div>
         <button class="zoom-btn" @click="zoomOut" :disabled="zoom <= terrainScale.min_zoom">−</button>
+      </div>
+
+      <!-- ★ fix⑤/⑥：右侧信息列（zoom-ctrl 下方）：迷你小地图 + 玩家当前坐标 -->
+      <div class="right-col">
+        <div class="minimap" :title="`迷你小地图：绿=你 / 蓝=盟友 / 红=野怪 / 黄=宝箱 / 粉=血瓶｜半径 ${MINIMAP_RANGE_M}m`">
+          <canvas ref="minimapEl" class="minimap__cv" :width="MINIMAP_PX" :height="MINIMAP_PX"></canvas>
+          <div class="minimap__legend">
+            <span class="lg lg--me">你</span>
+            <span class="lg lg--ally">盟友</span>
+            <span class="lg lg--enemy">野怪</span>
+          </div>
+        </div>
+        <div class="coord-box" :title="`当前世界坐标（米）：X ${(me?.x ?? 0).toFixed(1)} / Z ${(me?.y ?? 0).toFixed(1)}`">
+          <div class="coord-box__row">X <b>{{ (me?.x ?? 0).toFixed(1) }}</b> m</div>
+          <div class="coord-box__row">Z <b>{{ (me?.y ?? 0).toFixed(1) }}</b> m</div>
+          <div class="coord-box__sub">区块 {{ Math.floor((me?.x ?? 0) / terrainScale.chunk_size_m) }}, {{ Math.floor((me?.y ?? 0) / terrainScale.chunk_size_m) }}</div>
+        </div>
       </div>
 
       <!-- ★ v3 比例尺与方块刻度（右下角 scale ruler，对应 25d_ai_game 的 grid system） -->
@@ -1600,6 +1821,7 @@ watch(() => state.value?.phase, (p) => {
         <canvas
           ref="canvasEl"
           class="stage"
+          :class="{ 'stage--smooth': !pixelMode }"
             :width="canvas_w_ref"
             :height="canvas_h_ref"
           @click="onCanvasClick"
@@ -1876,6 +2098,117 @@ body {
   image-rendering: crisp-edges;
 }
 
+/* ★ fix④：取消勾选「像素风」后，画布交给浏览器做平滑插值（界面立刻变清晰） */
+.stage--smooth {
+  image-rendering: auto;
+  image-rendering: smooth;
+  image-rendering: -webkit-optimize-contrast;
+}
+
+/* ★ fix④：像素风复选框（HUD 的「退出」按钮旁） */
+.pixel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #e8e2d0;
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.pixel-toggle input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #8ce07a;
+  cursor: pointer;
+}
+.pixel-toggle:active { transform: scale(0.97); }
+
+/* ★ fix③：开始游戏的等待/超时提示 */
+.start-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #f0c674;
+  text-align: center;
+}
+
+/* ★ fix⑤/⑥：右侧信息列（迷你小地图 + 坐标），位于 zoom-ctrl 下方 */
+.right-col {
+  position: absolute;
+  right: 8px;
+  top: 216px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+/* 短屏（手机横屏）缩放，保证小地图 + 坐标不会被裁掉 */
+@media (max-height: 460px) {
+  .right-col { transform: scale(0.78); transform-origin: top right; }
+}
+@media (max-height: 380px) {
+  .right-col { transform: scale(0.68); transform-origin: top right; }
+}
+.minimap {
+  width: 110px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.minimap__cv {
+  display: block;
+  width: 110px;
+  height: 110px;
+}
+.minimap__legend {
+  display: flex;
+  justify-content: space-around;
+  padding: 2px 0 3px;
+  font-size: 10px;
+  color: #cfd6c4;
+}
+.lg::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 3px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+.lg--me::before { background: #8ce07a; }
+.lg--ally::before { background: #5b9bff; }
+.lg--enemy::before { background: #ff5b5b; }
+.coord-box {
+  min-width: 104px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #e8e2d0;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 6px;
+}
+.coord-box__row b {
+  color: #ffe9a8;
+  font-variant-numeric: tabular-nums;
+}
+.coord-box__sub {
+  font-size: 10px;
+  color: #a9b39c;
+}
+
 /* HUD */
 .hud {
   position: absolute;
@@ -1921,12 +2254,15 @@ body {
 
 .hud__mid {
   display: flex;
-  gap: 12px;
+  gap: 1px;
   font-size: 12px;
   color: #d0d0d0;
   flex: 1;
   align-items: center;
   flex-wrap: wrap;
+  position: absolute;
+  top:42px;
+  left: 38px;
 }
 
 .hud__mid > span {
@@ -1969,7 +2305,7 @@ body {
 .zoom-ctrl {
   position: absolute;
   right: 8px;
-  top: 107px;          /* 避开 HUD 顶部 */
+  top: 72px;          /* 避开 HUD 顶部 */
   z-index: 7;
   display: flex;
   flex-direction: column;
@@ -1983,12 +2319,12 @@ body {
   user-select: none;
 }
 .zoom-ctrl .zoom-btn {
-  width: 32px;
-  height: 32px;
+  width: 2rem;
+  height: 1rem;
   border: 2px solid #6a4f1f;
   background: #d4a13e;
   color: #1e1f1f;
-  font-size: 20px;
+  font-size: 10px;
   font-weight: 700;
   border-radius: 2px;
   cursor: pointer;
@@ -2022,7 +2358,7 @@ body {
 .scale-ruler {
   position: absolute;
   right: 53px;
-  top: 168px;
+  top: 71px;
   z-index: 6;
   display: flex;
   flex-direction: column;
@@ -2088,7 +2424,7 @@ body {
 .events {
   position: absolute;
   left: 12px;
-  top: 120px;
+  top: 78px;
   z-index: 5;
   font-size: 12px;
   color: #ececec;

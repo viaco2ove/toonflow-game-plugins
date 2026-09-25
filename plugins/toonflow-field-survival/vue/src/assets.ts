@@ -105,6 +105,37 @@ export function assetUrl(rel: string): string {
   return base ? base + rel2 : `./${rel2}`;
 }
 
+/**
+ * ★ fix②：统一的素材/头像路径解析（修 getAsset 404）
+ *
+ * 问题：宿主下发的 avatarPath 有两类——
+ *   1) 插件自身资源：`./ui/...` 或 `images/...`（在插件包内，必须走 getAsset + token）；
+ *   2) 宿主站内资源：`/1/game/scene/xxx.webp` 这种「以 / 开头的站内绝对路径」
+ *      （文件由宿主 uploads 目录托管，压根不在插件包内）。
+ * 旧实现把 (2) 无脑拼到 `getAsset?path=ui/` 后面，服务端按插件目录解析 → 404：
+ *   /plugin/getAsset?...&path=ui//1/game/scene/8fe50371-....webp
+ * 正确做法：(2) 直接用宿主 origin 直取（宿主静态目录已托管 /1/...，实测 200 image/webp）。
+ */
+export function resolveAssetPath(p: string): string {
+  const s = (p || "").trim();
+  if (!s) return "";
+  // 绝对 URL / data URL / blob 原样返回
+  if (/^(https?:)?\/\//i.test(s) || s.startsWith("data:") || s.startsWith("blob:")) return s;
+  // 站内绝对路径：直取宿主静态目录（不再经过 getAsset）
+  if (s.startsWith("/")) {
+    try {
+      const base = pluginBase();
+      // getAsset 环境下 iframe 的 origin 就是宿主服务端 origin
+      const origin = base ? new URL(base).origin : location.origin;
+      return `${origin}${s}`;
+    } catch {
+      return s;
+    }
+  }
+  // 相对路径：插件自身资源 → 仍走 assetUrl（getAsset + token / Vite dev / data URL）
+  return assetUrl(s.startsWith("./") ? s.slice(2) : s);
+}
+
 // ---------------------------------------------------------------
 // 野怪 / 装饰：全部用 tileset tile id（与 Rotten-Soup EntityFactory
 // 和 RandomDungeon/RandomSimplex 的 id 一致）：

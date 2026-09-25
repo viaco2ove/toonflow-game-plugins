@@ -94,7 +94,7 @@ export class TerrainScaleConfig {
     this.def_view = { x: [-15, 15], z: [-15, 15] };
     this.default_zoom = 20;
     this.min_zoom = 10;
-    this.max_zoom = 30;
+    this.max_zoom = 100;
     this.height_range = [-1, 8];
     this.baseline = -10;
     this.underground_depth = 5;

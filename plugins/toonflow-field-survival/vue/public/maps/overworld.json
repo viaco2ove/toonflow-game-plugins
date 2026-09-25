@@ -20,7 +20,7 @@
 
   "default_zoom": 20,
   "min_zoom": 10,
-  "max_zoom": 30,
+  "max_zoom": 100,
 
   "name": "overworld",
   "theme": "野外·清晨",
