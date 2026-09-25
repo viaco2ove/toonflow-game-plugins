@@ -2082,7 +2082,7 @@ body {
 .pad {
   position: absolute;
   left: 18px;
-  bottom: 18px;
+  bottom: 100px;
   z-index: 6;
   width: 73px;
   height: 73px;
