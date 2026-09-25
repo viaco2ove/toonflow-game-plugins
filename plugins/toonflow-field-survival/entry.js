@@ -148,11 +148,30 @@ function emptyState(ctx) {
   };
 }
 
+/** ★ fix③：宿主 agent 超时上限（同 entry.ts）——/plugin/tick(start) 不能被地图生成挂住 */
+const MAP_AGENT_TIMEOUT_MS = 12000;
+function withTimeout(p, ms, msg) {
+  let timer = null;
+  return Promise.race([
+    p.finally(() => { if (timer) clearTimeout(timer); }),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(msg)), ms); }),
+  ]);
+}
+
 async function ensureMapData(ctx) {
   const tsApi = ctx?.tsApi;
   if (!tsApi?.agent?.run || !tsApi?.pluginData?.set) return fallbackMap();
+  // ★ fix③：本会话已有可用地图 → 直接复用（start 立即返回）
   try {
-    const r = await tsApi.agent.run("field-survival-map-gener", { storyDigest: "" });
+    const stored = await tsApi.pluginData.get("map_data");
+    if (stored && Array.isArray(stored.enemy_archetypes) && stored.enemy_archetypes.length) return stored;
+  } catch { /* 读取失败 → 继续生成 */ }
+  try {
+    const r = await withTimeout(
+      tsApi.agent.run("field-survival-map-gener", { storyDigest: "" }),
+      MAP_AGENT_TIMEOUT_MS,
+      `map agent 超时（>${MAP_AGENT_TIMEOUT_MS}ms）`,
+    );
     const map = (r?.output || fallbackMap());
     if (!Array.isArray(map.enemy_archetypes) || !map.enemy_archetypes.length) {
       map.enemy_archetypes = fallbackMap().enemy_archetypes;

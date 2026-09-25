@@ -139,13 +139,39 @@ function buildStoryDigest(ctx?: PluginGameContext): string {
  *  2) 不可用/失败 → 保底地图（也存 map_data，保证可玩）。
  * 地图数据不进 plugin_state（plugin_state 每帧全量写回，地图只在开局/维护时写）。
  */
+/** ★ fix③：宿主 agent 超时上限——/plugin/tick(action=start) 不能被地图生成无限期挂住，
+ *  超时即抛错走 fallback 分支，保证 web 端「开始游戏」一定有响应。 */
+const MAP_AGENT_TIMEOUT_MS = 12000;
+
+/** 给 Promise 加超时（宿主 agent 卡死时的兜底） */
+function withTimeout<T>(p: Promise<T>, ms: number, msg: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return Promise.race([
+    p.finally(() => { if (timer) clearTimeout(timer as any); }),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(msg)), ms);
+    }),
+  ]);
+}
+
 async function ensureMapData(ctx?: PluginGameContext): Promise<MapData> {
   const tsApi = ctx?.tsApi;
   if (!tsApi?.agent?.run || !tsApi?.pluginData?.set) return fallbackMap();
+  // ★ fix③：本会话已有可用地图 → 直接复用（start 立即返回，不再每次开局都等 LLM）
   try {
-    const r = await tsApi.agent.run("field-survival-map-gener", {
-      storyDigest: buildStoryDigest(ctx),
-    });
+    const stored = await tsApi.pluginData.get("map_data");
+    if (stored && Array.isArray((stored as any).enemy_archetypes) && (stored as any).enemy_archetypes.length) {
+      return stored as MapData;
+    }
+  } catch { /* 读取失败 → 继续走生成 */ }
+  try {
+    const r = await withTimeout(
+      tsApi.agent.run("field-survival-map-gener", {
+        storyDigest: buildStoryDigest(ctx),
+      }),
+      MAP_AGENT_TIMEOUT_MS,
+      `map agent 超时（>${MAP_AGENT_TIMEOUT_MS}ms）`,
+    );
     const map = (r?.output || fallbackMap()) as MapData;
     if (!Array.isArray(map.enemy_archetypes) || !map.enemy_archetypes.length) {
       (map as any).enemy_archetypes = fallbackMap().enemy_archetypes;
