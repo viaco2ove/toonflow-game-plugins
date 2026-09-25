@@ -2143,8 +2143,8 @@ body {
 /* ★ fix⑤/⑥：右侧信息列（迷你小地图 + 坐标），位于 zoom-ctrl 下方 */
 .right-col {
   position: absolute;
-  right: 8px;
-  top: 150px;
+  right: 47px;
+  top: 51px;
   z-index: 6;
   display: flex;
   flex-direction: column;
@@ -2305,7 +2305,7 @@ body {
 .zoom-ctrl {
   position: absolute;
   right: 8px;
-  top: 72px;          /* 避开 HUD 顶部 */
+  top: 6px;          /* 避开 HUD 顶部 */
   z-index: 7;
   display: flex;
   flex-direction: column;
@@ -2358,7 +2358,7 @@ body {
 .scale-ruler {
   position: absolute;
   right: 53px;
-  top: 71px;
+  top: 6px;
   z-index: 6;
   display: flex;
   flex-direction: column;
@@ -2385,7 +2385,7 @@ body {
   color: #ffe79e;
 }
 .scale-ruler__lbl {
-  font-size: 10px;
+  font-size: 6x;
   color: #9aa0a6;
   margin-top: 1px;
   text-align: right;
@@ -2482,15 +2482,15 @@ body {
   bottom: 18px;
   z-index: 6;
   display: flex;
-  gap: 6px;
+  gap: 2px;
 }
 
 .slots--skill {
-  right: 18px;
+  right: 2px;
 }
 
 .slots--item {
-  right: 18px;
+  right: 2px;
   bottom: 70px;
 }
 
@@ -2549,7 +2549,7 @@ body {
 }
 
 .slot--page {
-  width: 56px;
+  width: 34px;
   background: #3a3b3b;
   border-color: #6a6a6a;
   color: #d4a13e;
