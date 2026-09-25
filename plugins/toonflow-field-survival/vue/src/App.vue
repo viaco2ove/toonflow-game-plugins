@@ -111,6 +111,95 @@ function getEntityAvatar(e: Entity): HTMLImageElement | undefined {
   return undefined;
 }
 
+/** 取实体的头像路径（与 getEntityAvatar 同源，供动图解码使用） */
+function entityAvatarPath(e: Entity): string | undefined {
+  if (e.avatarPath) return e.avatarPath;
+  const role = roles.value.find((r) => r.id === e.id);
+  return role?.avatarPath || undefined;
+}
+
+/** 与 loadAvatar 完全一致的路径解析（http / ./ / 站内绝对路径 / 相对路径） */
+function avatarUrlOf(avatarPath: string): string {
+  if (avatarPath.startsWith("http")) return avatarPath;
+  if (avatarPath.startsWith("./")) return assetUrl(avatarPath.slice(2));
+  if (avatarPath.startsWith("/")) return location.origin + avatarPath;
+  return assetUrl(avatarPath);
+}
+
+/**
+ * ★ fix⑥（动图头像不播放的根因）：头像此前统一走 new Image() + ctx.drawImage()，
+ *   而 drawImage 只绘制图像的「当前帧」—— 动画 WebP 经它画出来必然是一张静止图。
+ *   这不是 canvas 不支持动图，而是这条绘制路径根本不驱动动画帧。
+ *
+ *   这里用 ImageDecoder（Chromium 94+，宿主运行在 127.0.0.1 属 secure context）
+ *   把动图逐帧解码成 VideoFrame 缓存，绘制时按各帧 duration 自行轮播。
+ *   解码失败 / 非动图 / 环境不支持 ImageDecoder 时标记为 "static"，
+ *   自动回退到原来的静态 img 绘制，行为与改动前一致。
+ */
+interface AvatarAnim {
+  frames: any[];
+  /** 各帧时长（ms） */
+  durations: number[];
+  /** 各帧起始时刻（ms，累加） */
+  starts: number[];
+  /** 一轮总时长（ms） */
+  total: number;
+}
+const avatarAnimCache = new Map<string, AvatarAnim | "static" | "pending">();
+
+function ensureAvatarAnim(avatarPath: string): void {
+  if (avatarAnimCache.has(avatarPath)) return;
+  const Decoder = (window as any).ImageDecoder;
+  if (typeof Decoder === "undefined") {
+    avatarAnimCache.set(avatarPath, "static");
+    return;
+  }
+  avatarAnimCache.set(avatarPath, "pending");
+  const url = avatarUrlOf(avatarPath);
+  void (async () => {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.arrayBuffer();
+      const decoder = new Decoder({ data, type: res.headers.get("content-type") || "image/webp" });
+      await decoder.tracks.ready;
+      const track = decoder.tracks.selectedTrack;
+      const n: number = track?.frameCount || 0;
+      if (n <= 1) {
+        avatarAnimCache.set(avatarPath, "static");
+        return;
+      }
+      const frames: any[] = [];
+      const durations: number[] = [];
+      for (let i = 0; i < n; i++) {
+        const { image } = await decoder.decode({ frameIndex: i });
+        frames.push(image);
+        durations.push(Math.max(16, Math.round((image.duration || 100000) / 1000)));
+      }
+      const starts: number[] = [];
+      let acc = 0;
+      for (const d of durations) { starts.push(acc); acc += d; }
+      avatarAnimCache.set(avatarPath, { frames, durations, starts, total: acc || 1 });
+    } catch {
+      // 解码失败（跨域 / 非动图 / 旧内核）→ 回退静态，绝不影响主流程
+      avatarAnimCache.set(avatarPath, "static");
+    }
+  })();
+}
+
+/** 返回该路径当前应绘制的那一帧；不是动图时返回 null（调用方回退静态 img） */
+function avatarAnimFrame(avatarPath: string | undefined): any | null {
+  if (!avatarPath) return null;
+  ensureAvatarAnim(avatarPath);
+  const entry = avatarAnimCache.get(avatarPath);
+  if (!entry || entry === "static" || entry === "pending") return null;
+  const t = performance.now() % entry.total;
+  for (let i = entry.starts.length - 1; i >= 0; i--) {
+    if (t >= entry.starts[i]) return entry.frames[i];
+  }
+  return entry.frames[0];
+}
+
 const roles = computed<RoleOption[]>(() => state.value?.roles || []);
 const playerRole = computed(() => roles.value.find((r) => r.roleType === "player") || roles.value[0]);
 
@@ -312,6 +401,18 @@ const H_DEFAULT = canvas_h;
 
 const canvas_w_ref = ref(canvas_w);
 const canvas_h_ref = ref(canvas_h);
+/**
+ * ★ fix⑤（画面模糊根因）：位图缓冲 / 逻辑坐标系 的比例系数 k。
+ *
+ * 逻辑坐标系（render() 里的 W×H、以及头像 40px / 字号 / 线宽等一切像素常量）
+ * 始终保持原设计值不变；canvas 元素的 width/height 属性（= 真实位图密度）
+ * 按「CSS 显示尺寸 × devicePixelRatio」放大，绘制时用 ctx.setTransform(k,…)
+ * 一次性映射回逻辑坐标系。
+ *
+ * 这样视觉尺寸与所有绘制语义完全不变，只是位图从「1 个 CSS 像素 = 1 个位图像素」
+ * 提升到「1 个物理像素 = 1 个位图像素」，彻底消除被浏览器放大数倍后的发虚。
+ */
+const renderScale = ref(1);
 /** 设计基准：横屏 960×600 */
 const DESIGN_W = 960;
 const DESIGN_H = 600;
@@ -339,15 +440,32 @@ function fitCanvas_v5() {
   const availH = window.innerHeight;
   if (availW <= 0 || availH <= 0) return;
 
-  let BUF_H = canvas_h;
-  let BUF_W = canvas_w;
+  const BUF_H = canvas_h;
+  const BUF_W = canvas_w;
 
-  canvas_w_ref.value = BUF_W;
-  canvas_h_ref.value = BUF_H;
-  // 正常横屏：直接填满
+  // 正常横屏：直接填满（cover）
   const scale = Math.max(availW / BUF_W, availH / BUF_H);
-  c.style.width  = Math.floor(BUF_W * scale) + "px";
-  c.style.height = Math.floor(BUF_H * scale) + "px";
+  const cssW = Math.max(1, Math.floor(BUF_W * scale));
+  const cssH = Math.max(1, Math.floor(BUF_H * scale));
+  c.style.width  = cssW + "px";
+  c.style.height = cssH + "px";
+
+  // ★ fix⑤（画面模糊根因修复）：旧实现把 canvas 的 width/height 属性直接设成
+  //   BUF_W / BUF_H（逻辑尺寸，手机竖屏约 390×244），而 CSS 又把这块小位图放大到
+  //   cssW×cssH（1300+ px）来铺满屏幕 —— 相当于一张 390px 宽的位图被浏览器
+  //   放大数倍（且是非整数倍）显示。所以宿主下发的清晰头像 webp、像素精灵
+  //   全都会被二次插值搞糊，跟素材本身清晰度没有任何关系。
+  //   现改为：位图缓冲 = 实际显示尺寸 × devicePixelRatio，配合 render() 里的
+  //   ctx.setTransform(k) 做到 1 个位图像素 = 1 个物理像素。
+  //   上限取 2：手机 DPR 普遍是 2~3，取满 3 会让每帧填充像素涨到 9 倍，
+  //   和上一轮做的移动端 30fps / 限频优化互相打架；DPR=2 已基本消除肉眼模糊。
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const bufW = Math.max(1, Math.round(cssW * dpr));
+  const bufH = Math.max(1, Math.round(cssH * dpr));
+  canvas_w_ref.value = bufW;
+  canvas_h_ref.value = bufH;
+  renderScale.value = bufW / BUF_W;
+  console.log("[fitCanvas_v5] css", cssW, cssH, "buffer", bufW, bufH, "dpr", window.devicePixelRatio, "k", renderScale.value.toFixed(3));
 }
 
 
@@ -931,7 +1049,10 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const avatarSize = Math.max(14, Math.min(40, Math.round(dw * 0.8)));  // ★ v4：随角色尺寸（≈0.8 格）
   const avatarX = px - avatarSize / 2;
   const avatarY = dy - avatarSize - 16;
-  const hasAvatar = avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0;
+  // ★ fix⑥：动图头像优先取「当前动画帧」，静态图仍走 HTMLImageElement
+  const avatarPath = entityAvatarPath(e);
+  const animFrame = avatarAnimFrame(avatarPath);
+  const hasAvatar = !!animFrame || (avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0);
   if (hasAvatar) {
     applyPixelPerfect(ctx);
     ctx.save();
@@ -944,7 +1065,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.beginPath();
     ctx.arc(px, avatarY + avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
     ctx.clip();
-    ctx.drawImage(avatarImg!, avatarX, avatarY, avatarSize, avatarSize);
+    ctx.drawImage(animFrame ?? avatarImg!, avatarX, avatarY, avatarSize, avatarSize);
     ctx.restore();
     // 头像边框（不同阵营不同颜色）
     ctx.save();
@@ -1099,8 +1220,13 @@ function render() {
   if (!c || !s) return;
   const ctx = c.getContext("2d");
   if (!ctx) return;
-  const W = c.width;
-  const H = c.height
+  // ★ fix⑤：位图缓冲 = 逻辑尺寸 × k（k = 显示尺寸 × DPR / 逻辑尺寸）。
+  //   逻辑坐标系保持原设计值，下面所有像素常量（头像 40px、字号、线宽）视觉大小
+  //   完全不变，只是位图密度提到物理像素级 → 不再被浏览器放大搞糊。
+  const k = renderScale.value > 0 ? renderScale.value : 1;
+  const W = Math.round(c.width / k);
+  const H = Math.round(c.height / k);
+  ctx.setTransform(k, 0, 0, k, 0, 0);
 
   /* ============================================================
      相机数学（来自 map_config.json + zoom 系统）
@@ -2143,8 +2269,8 @@ body {
 /* ★ fix⑤/⑥：右侧信息列（迷你小地图 + 坐标），位于 zoom-ctrl 下方 */
 .right-col {
   position: absolute;
-  right: 47px;
-  top: 51px;
+  right: 8px;
+  top: 121px;
   z-index: 6;
   display: flex;
   flex-direction: column;
@@ -2305,7 +2431,7 @@ body {
 .zoom-ctrl {
   position: absolute;
   right: 8px;
-  top: 6px;          /* 避开 HUD 顶部 */
+  top: 44px;          /* 避开 HUD 顶部 */
   z-index: 7;
   display: flex;
   flex-direction: column;
@@ -2358,7 +2484,7 @@ body {
 .scale-ruler {
   position: absolute;
   right: 53px;
-  top: 6px;
+  top: 44px;
   z-index: 6;
   display: flex;
   flex-direction: column;
