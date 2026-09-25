@@ -1527,11 +1527,11 @@ function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() { sendTick("exit", {}); }
 
 /**
- * 结算页「退出」：沿用项目既有的退出机制 —— toonflowJsApi.minigame.abort()
- * 向宿主发送 { type:"tf_plugin_action", kind:"abort" }，由宿主放弃/结束当前小游戏并关闭面板。
- * （与原结算页唯一按钮「关闭」的行为一致，仅按语义更名为「退出」。）
+ * 结算页「退出」：回到选人阶段（主菜单）
  */
-function exitOver() { toonflowJsApi.minigame.abort(); }
+function exitOver() {
+  if (state.value) state.value.phase = 'select';
+}
 
 /**
  * 结算页「复活」：原地复活 —— 位置不变，血量与状态恢复为可正常游玩。
@@ -2220,7 +2220,7 @@ body {
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  background: rgba(30, 31, 31, 0.85);
+  background: #1e1f1f4d;
   border-bottom: 3px solid #4f4f4f;
   color: #ececec;
   font-size: 12px;
@@ -2285,11 +2285,11 @@ body {
 .btn--exit {
   border: 2px solid #c0392b;
   border-radius: 0;
-  padding: 6px 14px;
+  padding: 2px 6px;
   cursor: pointer;
   background: #c0392b;
   color: #fff;
-  font-size: 12px;
+  font-size: 8px;
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
