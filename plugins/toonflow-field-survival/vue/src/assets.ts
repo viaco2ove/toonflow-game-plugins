@@ -152,31 +152,40 @@ export const TILE_WATER_SHALLOW_ID = 6963;  // 浅蓝水边
 export const TILE_POTION_ID = 614;          // 药水瓶
 
 /**
- * ★ 地表分层表（原先定义但未被使用，本次启用）
- *  索引 i 表示"噪声值 < GROUND_THRESHOLDS[i]"时使用的地表 tile；
- *  顺序由低洼湿润到干燥：深草 → 鲜草 → 中草 → 浅草 → 中泥 → 深泥 → 黄沙 → 中沙。
+ * ★ v4 地表配色表（对照 Rotten-Soup：整片同色 + 大尺度分区，不做逐格跳色）
+ *
+ * 观感目标：同一片地貌内部"整片同色 + 细微暗纹"，只在大尺度上换地貌；
+ * 逐格跳色（相邻格忽草忽沙）正是"棋盘格"观感的根因。
+ *
+ * 因此地表由两层噪声决定：
+ *   - biome（约 26 米尺度）：决定该处是 草 / 泥 / 沙；
+ *   - tone （约 7 米 + 3 米细节）：只在该地貌内部二选一（同色系深/浅），不跨色系。
+ * 阈值用同一套噪声在 400 米见方区域内分位标定，得到草 ≈ 77% / 泥 ≈ 14% / 沙 ≈ 9%。
  */
-export const GROUND_TILES: number[] = [
-  TILE_GROUND_ID,       // 深绿草地
-  TILE_GRASS_VIVID_ID,  // 鲜绿草地
-  TILE_GRASS_MID_ID,    // 中绿草地
-  TILE_GRASS_LIGHT_ID,  // 浅黄绿草地
-  TILE_DIRT_MID_ID,     // 中棕泥土
-  TILE_DIRT_DARK_ID,    // 深棕泥土
-  TILE_SAND_ID,         // 沙地（偏黄）
-  TILE_SAND_MID_ID,     // 沙地（中）
-];
+export const GROUND_BIOME_SCALE_M = 26.0;      // 地貌尺度（米）
+export const GROUND_TONE_SCALE_M = 7.0;        // 同色系色调尺度（米）
+export const GROUND_TONE_FINE_SCALE_M = 3.0;   // 色调细节尺度（米）
 
-/** 最后一档地表（噪声值 ≥ GROUND_THRESHOLDS 末项时使用） */
-export const GROUND_FALLBACK_TILE = TILE_SAND_PALE_ID;
+/** 地表格边长（米）：1 格 = 1 米 = 1 张 32×32 图块（与 Rotten-Soup 的 tile 比例一致） */
+export const GROUND_CELL_M = 1.0;
 
-/**
- * ★ 地表噪声阈值：与 GROUND_TILES 一一对应。
- *  由 0.5 米采样格在 260 米见方区域内实测分位标定：
- *  全局占比 草地 ≈ 49% / 泥土 ≈ 22% / 沙地 ≈ 29%（原实现草地占 80%，故整屏一片绿）；
- *  任意一屏（24×16 米）最少包含 草 24% / 泥 15% / 沙 8%，杜绝"整屏同色"。
- */
-export const GROUND_THRESHOLDS: number[] = [0.314, 0.407, 0.461, 0.511, 0.565, 0.601, 0.68, 0.753];
+/** biome < 该值 → 沙地（分位标定：约占全图 9%） */
+export const GROUND_SAND_MAX = 0.21;
+/** biome < 该值 → 泥土（约占全图 14%），其余为草地（约 77%） */
+export const GROUND_DIRT_MAX = 0.325;
+/** tone < 该值 → 取同色系的较深一档 */
+export const GROUND_TONE_SPLIT = 0.5;
+
+/** 草地两档（鲜绿 / 中绿）——同色系，仅深浅不同 */
+export const GROUND_GRASS_TILES: number[] = [TILE_GRASS_VIVID_ID, TILE_GRASS_MID_ID];
+/** 泥土两档（中棕 / 深棕） */
+export const GROUND_DIRT_TILES: number[] = [TILE_DIRT_MID_ID, TILE_DIRT_DARK_ID];
+/** 沙地两档（中沙 / 偏黄沙） */
+export const GROUND_SAND_TILES: number[] = [TILE_SAND_MID_ID, TILE_SAND_ID];
+
+/* ★ v5：v3 的 8 档混布地表表（GROUND_TILES / GROUND_FALLBACK_TILE / GROUND_THRESHOLDS）
+ *   已确认全仓库零引用（grep 覆盖 vue/src 全部 .ts/.vue），在此删除，
+ *   避免"逐格跳色"的旧方案被再次误用；地表只走上面的两层噪声 + GROUND_*_TILES。 */
 
 /** 野怪名字 → mob sprite key（后端命名里带这些关键字时命中） */
 export function mobKeyFor(name: string): string {

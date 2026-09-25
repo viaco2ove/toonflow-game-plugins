@@ -18,12 +18,12 @@ import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import {
   TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
-  TILE_GROUND_ID, TILE_WATER_ID, TILE_POTION_ID,
+  TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
-  TILE_GRASS_LIGHT_ID, TILE_DIRT_DARK_ID, TILE_DIRT_LIGHT_ID, TILE_DIRT_ORANGE_ID,
-  TILE_WATER_DEEP_ID, TILE_WATER_SHALLOW_ID,
-  GROUND_TILES, GROUND_THRESHOLDS, GROUND_FALLBACK_TILE,
+  GROUND_CELL_M, GROUND_BIOME_SCALE_M, GROUND_TONE_SCALE_M, GROUND_TONE_FINE_SCALE_M,
+  GROUND_SAND_MAX, GROUND_DIRT_MAX, GROUND_TONE_SPLIT,
+  GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
   spriteTileId,
 } from "./assets";
@@ -434,8 +434,12 @@ function onCanvasClick(e: MouseEvent) {
 
 // loadAvatar 已移除（角色身体改用 sprite sheet）
 
-/** 2.5D：屏幕 y = 世界 y * 0.62，营造俯视斜角 */
-const DEPTH = 0.62;
+/**
+ * 纵向压缩系数（2.5D 斜视角）。
+ * Rotten-Soup 是正俯视：地块为正方形、纵向不做压缩。toonflow 旧值 0.62 把画面纵向压扁，
+ * 表现为"地块变扁、树变矮胖"，与参照画面差距明显。v4 改为 1.0（等距俯视、正方形地块）。
+ */
+const DEPTH = 1.0;
 
 // ============================================================
 // 精灵资源管理（参考 pixi_game 的 PNG sprite sheet 方案）
@@ -692,76 +696,57 @@ function animFrame(phase: "walk" | "idle"): number {
 // 不需要 isMoving——所有 sprite 都用 walk 帧循环播放（约 16 FPS）。
 // _animTick 在 loop() 里每帧 ++，每 8 tick 切换一次帧。
 
-// ----------------------------------------------------------
-// 绘制角色（保持 sprite 实际像素比例，不变形）
-// ★ 关键：sprite 实际内容比例（来自 PIL 测量）:
-//   player=0.857(高22%)  ally=0.846(高18%)  enemy_char=0.750(高33%)
-//   bear=0.800(高25%)     beast=1.067(高-7%,微宽)
-// ★ 目标：保留原图比例，目标高度 48px，宽度按比例计算
-// 例如 player content 24×28 → 比例 0.857 → dh=48 → dw=48*0.857=41
-// 用整数对齐像素: dh=48, dw=42（player）, dw=40(ally), dw=36(enemy), dw=40(bear), dw=52(beast)
-// ----------------------------------------------------------
-
+/* ---------------- 尺寸基准（★ v4：以「地格」为唯一尺度基准，对齐 Rotten-Soup） ----------------
+ * Rotten-Soup 的 sprite 与地面图块同为 32×32：角色、树、灌木在画面里都占「1 格」，
+ * 所以人与树差不多高、剪影都清晰可辨 —— 比例天然协调。
+ * toonflow v1~v3 曾用"米 × ppm"给角色定 1.6~1.8 米、树定 2.6×3.0 米，
+ * 两者都远离"1 格"这一基准，于是"比例完全失衡、各种东西都很诡异"。
+ * v4 起一律用格数描述尺寸：屏幕像素 = 格数 × sx（每格像素），随 zoom 等比缩放。
+ * ----------------------------------------------------------------------------------- */
 /**
- * 角色尺寸配置（米数 × pixels-per-meter，对应 25d_ai_game 的 biped_character）
+ * 角色显示尺寸（单位：地表格，1 格 = 1 米）
  *
- * ★ v3 关键修复：sprite 屏幕像素 = 米数 × ppm（像素/米）
- *   zoom 越大 → ppm 越大 → sprite 在屏幕上越大（玩家靠近视口）
- *   zoom 越小 → ppm 越小 → sprite 在屏幕上越小（玩家看到全图）
- *   这是 25d_ai_game 的相机数学：保持物理世界一致（米），视觉随 zoom 缩放。
- *
- * ★ sprite 是 32×32 像素的等比贴图，所以 dw = dh = 米数 × ppm。
- * 选不同米数是视觉层级：
- *   - player/ally/enemy_char: 3.2 米 ≈ 64 px @ zoom=20 (ppm=20)
- *   - mob: 2.4 米 ≈ 48 px @ zoom=20
- *   - minotaur/boss: 2.8 米
+ * 对照 Rotten-Soup（32×32 图块）：角色、树、灌木在画面里都占「1 格」——
+ * 所以人与树差不多高、各自剪影清晰可辨。toonflow 旧实现把角色放大到 1.6~1.8 格、
+ * 树放大到 2.6×3.0 格，两者都远离 1 格基准，于是"比例完全失衡、各种东西都很诡异"。
+ * v4 改为以「格」为唯一尺度基准：屏幕像素 = 格数 × sx（每格像素），随 zoom 等比缩放。
  */
-const ENTITY_BASE = 32;  // sprite 原图尺寸 32×32
-
-/**
- * 角色显示尺寸（米）。sprite 屏幕像素 = ENTITY_DIMS_M[key] × ppm
- * ★ fix①：原值整体偏大（player/ally/enemy_char = 3.2 / 2.8 / 3.2 米，zoom=20 时
- *   就是 64 / 56 / 64 px，比场景里 40px 的树还高），于是"小人比树大"。
- *   这里改为贴近真实人体身高：zoom=20（默认）时 player ≈ 32px、野怪 11~46px，
- *   全部小于树（3.0 米 ≈ 60px），比例恢复正常。
- *   注意：角色与充当参照物的大件道具必须都走"米 × ppm"，比例才能在任意 zoom 下保持一致。
- */
-const ENTITY_DIMS_M: Record<string, number> = {
-  player:      1.60,  // 金甲战士
-  ally:        1.55,  // 蓝袍法师
-  enemy_char:  1.70,  // 持枪骑士
-  // 野怪
-  goblin:   1.15,
-  orc:      1.80,
-  rat:      0.55,
+const ENTITY_DIM_TILES: Record<string, number> = {
+  player:      1.00,  // 金甲战士（与地格同尺寸，与树同级）
+  ally:        1.00,  // 蓝袍法师
+  enemy_char:  1.05,  // 持枪骑士
+  // 野怪：族内保留体型差，但不偏离"1 格级"，避免大小怪一样大
+  goblin:   0.95,
+  orc:      1.15,
+  rat:      0.70,
   goat:     1.00,
-  snake:    0.80,
-  bat:      0.60,
-  skeleton: 1.60,
-  minotaur: 2.30,
+  snake:    0.85,
+  bat:      0.75,
+  skeleton: 1.05,
+  minotaur: 1.45,     // boss
 };
 
 /**
- * 场景道具显示尺寸（米）——只含充当"尺度参照物"的大件（树/枯树、灌木、水面）。
- * 花、蘑菇、药水、宝箱属于小装饰（不构成尺度参照），保留原有固定像素尺寸。
- * w/h 比例取自原固定像素值，保证不变形。
+ * 场景道具显示尺寸（单位：地表格）——树 / 灌木 / 水面都是 1 格级，与角色同一尺度基准。
+ * 树略高（1.15 格）以保证剪影可读，但与角色同量级，不再出现"树比人高一倍"的失衡。
  */
-const SCENE_PROP_DIMS_M: Record<string, { w: number; h: number }> = {
-  tree:  { w: 2.60, h: 3.00 },   // 原 35×40 px
-  bush:  { w: 1.35, h: 1.10 },   // 原 27×22 px
-  water: { w: 2.00, h: 2.00 },   // 原 32×32 px
+const SCENE_PROP_DIM_TILES: Record<string, { w: number; h: number }> = {
+  tree:  { w: 1.15, h: 1.15 },
+  bush:  { w: 1.00, h: 1.00 },
+  water: { w: 1.00, h: 1.00 },
 };
 
-/** 计算等比缩放后的尺寸（米） — 1:1 宽高 */
-function fitDim(key: string): { w: number; h: number } {
-  const m = ENTITY_DIMS_M[key] || 1.5;
-  return { w: m, h: m };
+/** 实体显示尺寸（格 → 屏幕像素，1:1 宽高；取整保证"每格整数像素"，避免非整数缩放接缝） */
+function fitDim(key: string, sx: number): { w: number; h: number } {
+  const t = ENTITY_DIM_TILES[key] ?? 1.0;
+  const px = Math.max(4, Math.round(t * sx));
+  return { w: px, h: px };
 }
 
-/** 道具尺寸（米）→ 屏幕像素（minPx 仅防极端情况归零；zoom≥10 时按米数等比缩放，不会盖过角色） */
+/** 道具尺寸（格 → 屏幕像素；minPx 仅防极端情况归零） */
 function propDimPx(kind: "tree" | "bush" | "water", sx: number, minPx = 8): { w: number; h: number } {
-  const m = SCENE_PROP_DIMS_M[kind] || { w: 1.5, h: 1.5 };
-  return { w: Math.max(minPx, m.w * sx), h: Math.max(minPx, m.h * sx) };
+  const t = SCENE_PROP_DIM_TILES[kind] || { w: 1.0, h: 1.0 };
+  return { w: Math.max(minPx, Math.round(t.w * sx)), h: Math.max(minPx, Math.round(t.h * sx)) };
 }
 
 /**
@@ -822,10 +807,12 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
             : "enemy_char";
   // ★ 永远 walk 帧循环（与 Rotten-Soup 一致：sprite.animationSpeed=0.065）
   const tileId = spriteTileId(key, _animTick);
-  const dim = fitDim(key);
-  // ★ v3 关键：sprite 像素 = 米数 × pixelsPerMeter（随 zoom 缩放）
-  const dw = dim.w * pixelsPerMeter;
-  const dh = dim.h * pixelsPerMeter;
+  // ★ v5 修正：fitDim 返回的已是「屏幕像素」（格数 × sx），此处严禁再乘一次
+  //   pixelsPerMeter（历史 bug：tile 数 × sx² 会把角色放大到 400~1024px）。
+  //   与 drawMonster 的 dw = 格数 × ppm 保持完全一致的口径。
+  const dim = fitDim(key, pixelsPerMeter);
+  const dw = dim.w;
+  const dh = dim.h;
   const dx = px - dw / 2;
   const dy = py - dh + 4; // 略微下沉，让脚站在地面上
 
@@ -862,7 +849,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 
   // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
   // 布局自上而下：头像(30) → 名字 → sprite
-  const avatarSize = 30;
+  const avatarSize = Math.max(14, Math.min(40, Math.round(dw * 0.8)));  // ★ v4：随角色尺寸（≈0.8 格）
   const avatarX = px - avatarSize / 2;
   const avatarY = dy - avatarSize - 16;
   const hasAvatar = avatarImg && avatarImg.complete && avatarImg.naturalWidth > 0;
@@ -902,7 +889,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.restore();
 
   // 血条 - 紧贴 sprite 下边缘（屏幕像素）
-  const barW = Math.max(40, dw + 4), barH = 4;
+  const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
   const barX = px - barW / 2;
   const barY = py + 8; // 在脚底
   ctx.save();
@@ -936,9 +923,9 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
   const tileId = spriteTileId(key, _animTick);
   // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
-  const targetH_m = ENTITY_DIMS_M[key] || 1.5;   // ★ fix①：兜底值随 ENTITY_DIMS_M 收敛下调
-  const dw = targetH_m * pixelsPerMeter;
-  const dh = targetH_m * pixelsPerMeter;
+  const targetTiles = ENTITY_DIM_TILES[key] ?? 1.0;   // ★ v4：格数基准（与角色/树同尺度）
+  const dw = Math.max(4, Math.round(targetTiles * pixelsPerMeter));
+  const dh = Math.max(4, Math.round(targetTiles * pixelsPerMeter));
   const dx = px - dw / 2;
   const dy = py - dh + 4;
 
@@ -966,7 +953,7 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   }
 
   // 血条
-  const barW = 36, barH = 4;
+  const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
   const barX = px - barW / 2;
   const barY = dy - 6;
   ctx.save();
@@ -1004,19 +991,27 @@ function valueNoise2D(x: number, z: number, cell: number, seed: number): number 
 }
 
 /**
- * 世界坐标（米）→ 地表 tile id（草地 / 泥土 / 沙地混布）
- * 5 米大块决定地貌走向，2 米细节打碎边界，逐块 ±0.04 抖动消除条纹感。
- * 分层表与阈值见 assets.ts 的 GROUND_TILES / GROUND_THRESHOLDS / GROUND_FALLBACK_TILE。
+ * 世界坐标（米）→ 地表 tile id（草地 / 泥土 / 沙地）
+ *
+ * ★ v4：两层噪声（对照 Rotten-Soup 的"整片同色 + 大尺度分区"）
+ *   - biome（约 26 米）决定该处是 草 / 泥 / 沙，占比约 77% / 14% / 9%；
+ *   - tone（约 7 米，混 3 米细节）只在该地貌内部二选一（同色系深浅）。
+ * 跨色系只由 biome 决定，tone 不会把相邻格换到另一种地貌 —— 所以同一片区域
+ * 内部整片同色，肉眼看到的是"成片地貌"而非逐格跳色的棋盘格。
  */
 function groundTileAt(wx: number, wz: number): number {
-  const big = valueNoise2D(wx, wz, 5.0, 11);
-  const fine = valueNoise2D(wx, wz, 2.0, 23);
-  const jitter = (hash2(Math.floor(wx * 2), Math.floor(wz * 2), 5) - 0.5) * 0.08;
-  const v = Math.min(1, Math.max(0, big * 0.55 + fine * 0.45 + jitter));
-  for (let i = 0; i < GROUND_THRESHOLDS.length; i++) {
-    if (v < GROUND_THRESHOLDS[i]) return GROUND_TILES[i];
+  const biome = valueNoise2D(wx, wz, GROUND_BIOME_SCALE_M, 11);
+  if (biome < GROUND_SAND_MAX) {
+    const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23);
+    return GROUND_SAND_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
   }
-  return GROUND_FALLBACK_TILE;
+  if (biome < GROUND_DIRT_MAX) {
+    const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23);
+    return GROUND_DIRT_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
+  }
+  const t = valueNoise2D(wx, wz, GROUND_TONE_SCALE_M, 23) * 0.7
+          + valueNoise2D(wx, wz, GROUND_TONE_FINE_SCALE_M, 29) * 0.3;
+  return GROUND_GRASS_TILES[t < GROUND_TONE_SPLIT ? 0 : 1];
 }
 
 function render() {
@@ -1038,11 +1033,17 @@ function render() {
   const ts = terrainScale.value;
   const pp = playerPos.value;
   const [vw, vh] = ts.viewSizeMeters(zoom.value);
-  // pixel-per-meter：纵向按 DEPTH 2.5D 压缩
+  // pixel-per-meter：纵向按 DEPTH 做视角压缩（DEPTH=1 即等距俯视）
   const ppm_x = W / vw;
   const ppm_y = H / (vh * DEPTH);
-  const sx = Math.min(ppm_x, ppm_y);
-  const sy = sx;  // 用 ppm_x（同尺度，仅 Y 因 DEPTH 视觉压缩 — 在绘制时通过 e.y * DEPTH 处理）
+  // ★ v4：取整为"每米整数像素"——地块 / 精灵都落在整数像素边界上，
+  //   避免非整数缩放带来的接缝、摩尔纹与逐像素游动（世界格与地表格严格对齐）。
+  // ★ v5：改为「覆盖式」取较大比值（对应 Rotten-Soup 的 stage 缩放基准 px/米），
+  //   保证 1 格 = 1 米 = 整数像素时精灵与图块 1:1 贴图（默认 zoom=20 → 32px，
+  //   与 Rotten-Soup tileSize=32 一致）；若取 min 会得到 20px，
+  //   画布两侧多出 9m 无实体区域且图块被 0.625 非整数缩小，产生新接缝。
+  const sx = Math.max(4, Math.round(Math.max(ppm_x, ppm_y)));
+  const sy = sx;
 
   // ★ 动态同步 ready 状态（data URL 图片解码完成时）
   for (const sheet of [SHEET_TILESET, SHEET_PLAYER, SHEET_ALLY, SHEET_ENEMY_CHAR]) {
@@ -1053,29 +1054,27 @@ function render() {
 
   ctx.clearRect(0, 0, W, H);
 
-  // 地面：dawnlike tileset 平铺（★ v3.2 多样化地表）
-  //   双频 value-noise（5 米大块定地貌 + 2 米碎化解边界）+ 逐块抖动 → 8 段阈值
-  //   → 草地(4 档绿) / 泥土(2 档棕) / 沙地(3 档黄) 混布；
-  //   每个 0.5 米方块独立取色（block_size 来自 terrainScale），不再出现 4 米同色大块。
-  //   实测每屏（24×16 米）至少 草 24% / 泥 15% / 沙 8%，平均 草 49% / 泥 22% / 沙 29%。
+  // 地面：dawnlike tileset 平铺（★ v4：1 格 = 1 米 = 1 张 32×32 图块，严格对齐世界格）
+  //   与 Rotten-Soup 同构：地块恒定 1 格、格边固定在世界坐标上；
+  //   移动时整片地貌随世界滚动，不会出现贴图逐像素游动 / 摩尔纹；
+  //   配色见 groundTileAt：大尺度分草/泥/沙，同一地貌内部只换深浅 → 不再有棋盘格。
   if (SHEET_TILESET.ready) {
-    const blockPx = terrainScale.value.block_size * sx;   // 单个方块在屏幕的宽度
-    const tw = blockPx;                                    // 一个方块 = 一片地表贴图
-    const th = blockPx * DEPTH;                            // 2.5D: 高度按 DEPTH 压缩
-    const mPerTileX = terrainScale.value.block_size;       // 米/block
-    // ★ fix②：原此处 `const pp = me;` 把外层 pp（= playerPos.value 的 .value 结果）遮蔽成了
-    //   computed ref 本身，于是下方 pp.x / pp.y 恒为 undefined → 0；地面永远以世界原点 (0,0)
-    //   作为相机中心，玩家移动时地面纹丝不动（看起来像贴在屏幕上的静态背景图）。
-    //   这里直接复用外层 pp（玩家世界坐标，单位米），地面即随玩家一起滚动。
-    const vw = W / sx;                                     // 地面横向覆盖宽度（米）= 可用像素 ÷ ppm
-    const vh = H / (sx * DEPTH);
-    const minWX = (pp?.x ?? 0) - vw / 2;
-    const minWZ = (pp?.y ?? 0) - vh / 2;
-    for (let tx = 0; tx < W; tx += tw) {
-      const wx = minWX + (tx / tw) * mPerTileX;
-      for (let ty = 0; ty < H; ty += th) {
-        const wz = minWZ + (ty / th) * mPerTileX;
-        drawTile(ctx, groundTileAt(wx, wz), tx, ty, tw, th);
+    const cellPx = Math.max(4, Math.round(GROUND_CELL_M * sx));  // 1 格在屏幕上的像素（整数，无接缝）
+    const minWX = (pp?.x ?? 0) - W / (2 * sx);                   // 屏幕左边缘的世界 X（米）
+    const minWZ = (pp?.y ?? 0) - H / (2 * sx);                   // 屏幕上边缘的世界 Z（米）
+    const gx0 = Math.floor(minWX / GROUND_CELL_M);               // 起始世界格号
+    const gz0 = Math.floor(minWZ / GROUND_CELL_M);
+    // 起始格左上角的屏幕像素（取整后按整数像素步进 → 与世界格对齐且无累积误差）
+    const originX = Math.round((gx0 * GROUND_CELL_M - minWX) * sx);
+    const originZ = Math.round((gz0 * GROUND_CELL_M - minWZ) * sx);
+    const nx = Math.ceil(W / cellPx) + 2;
+    const nz = Math.ceil(H / cellPx) + 2;
+    for (let j = 0; j < nz; j++) {
+      const wz = (gz0 + j) * GROUND_CELL_M;
+      const ty = originZ + j * cellPx;
+      for (let i = 0; i < nx; i++) {
+        const wx = (gx0 + i) * GROUND_CELL_M;
+        drawTile(ctx, groundTileAt(wx, wz), originX + i * cellPx, ty, cellPx, cellPx);
       }
     }
   } else {
@@ -1111,7 +1110,7 @@ function render() {
     const zx_px = wx2px(z.x);
     const zy_px = wz2py(z.y);
     const r_px  = m2px(z.r);
-    const ry_px = r_px * 0.5;
+    const ry_px  = r_px;   // ★ v4：DEPTH=1 → 正圆，不再纵向压扁
     ctx.save();
     ctx.fillStyle = kindColors[(z as any).kind] || "rgba(255,255,255,.06)";
     ctx.strokeStyle = "rgba(255,255,255,.25)";
@@ -1147,13 +1146,13 @@ function render() {
       const d = propDimPx("bush", sx);
       drawTile(ctx, TILE_SHRUB_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
     } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
-      const dh = 24, dw = 24;
+      const dh = Math.round(0.90 * sx), dw = dh;
       drawTile(ctx, TILE_MUSHROOM_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "flower" && SHEET_TILESET.ready) {
-      const dh = 21, dw = 21;
+      const dh = Math.round(0.80 * sx), dw = dh;
       drawTile(ctx, TILE_FLOWER_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
-      const dh = 24, dw = 16;
+      const dh = Math.round(0.90 * sx), dw = Math.round(0.60 * sx);
       drawTile(ctx, TILE_POTION_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else {
       // 兜底形状（屏幕像素）
@@ -1174,7 +1173,7 @@ function render() {
 
   // —— 宝箱（像素尺寸 32×34）——
   s.chests.forEach((ch) => {
-    const dh = 32, dw = 34;
+    const dh = Math.round(1.10 * sx), dw = Math.round(1.15 * sx);
     const cx = wx2px(ch.x);
     const cy = wz2py(ch.y);
     ctx.save();
@@ -1199,7 +1198,7 @@ function render() {
 
   // —— 血瓶（像素尺寸 16×24）——
   s.potions.forEach((p) => {
-    const dh = 24, dw = 16;
+    const dh = Math.round(0.90 * sx), dw = Math.round(0.60 * sx);
     const cx = wx2px(p.x);
     const cy = wz2py(p.y);
     if (SHEET_TILESET.ready) {
