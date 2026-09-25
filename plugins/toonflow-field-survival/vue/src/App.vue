@@ -131,8 +131,17 @@ function roleAvatar(r: RoleOption): string {
 
 const starting = ref(false);
 
+function init_game(){
+  // 初始化游戏
+  // 例如生成地图数据，设置为游戏状态刚开始
+}
+
 function startGame() {
-  if (starting.value) return;
+  if (starting.value) {
+    console.log("starting.value not null");
+    return
+  };
+  init_game();
   starting.value = true;
   sendTick("start", {
     selections: {
@@ -2075,8 +2084,8 @@ body {
   left: 18px;
   bottom: 18px;
   z-index: 6;
-  width: 116px;
-  height: 116px;
+  width: 73px;
+  height: 73px;
   border-radius: 50%;
   background: rgba(30, 31, 31, 0.7);
   border: 3px solid #4f4f4f;
