@@ -333,6 +333,26 @@ function install(): void {
       return;
     }
 
+    // ★ 死亡弹窗「复活」：原地复活（玩家坐标不变、满血、over → playing）
+    if (d.type === "tf_plugin_tick" && d.action === "revive" && state.phase === "over") {
+      const me = state.entities.find((x) => x.side === "player");
+      if (me) {
+        me.alive = true;
+        me.hp = me.maxHp;
+        me.vx = 0;
+        me.vy = 0;
+        // 复活保护：场上存活敌人进入 2 秒攻击冷却，避免复活即被秒
+        state.entities.forEach((e) => {
+          if (e.side === "enemy" && e.alive) e.cooldown = Math.max(e.cooldown || 0, 20);
+        });
+        state.result = null;
+        state.phase = "playing";
+        state.events.push("[mock] 你在原地复活");
+        push();
+      }
+      return;
+    }
+
     // ★ start 处理（从 select → playing）
     if (d.type === "tf_plugin_tick" && d.action === "start" && state.phase === "select") {
       // 应用选择

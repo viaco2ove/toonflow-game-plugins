@@ -1334,7 +1334,39 @@ function useItem(i: number) { sendTick("item", { index: i }); }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() { sendTick("exit", {}); }
-function closeOver() { toonflowJsApi.minigame.abort(); }
+
+/**
+ * 结算页「退出」：沿用项目既有的退出机制 —— toonflowJsApi.minigame.abort()
+ * 向宿主发送 { type:"tf_plugin_action", kind:"abort" }，由宿主放弃/结束当前小游戏并关闭面板。
+ * （与原结算页唯一按钮「关闭」的行为一致，仅按语义更名为「退出」。）
+ */
+function exitOver() { toonflowJsApi.minigame.abort(); }
+
+/**
+ * 结算页「复活」：原地复活 —— 位置不变，血量与状态恢复为可正常游玩。
+ *   主路径：sendTick("revive") → 宿主（entry.ts / entry.js）或本地模拟宿主（mockHost.ts）
+ *           把玩家 alive=true、hp=maxHp，phase 由 over 回到 playing，玩家坐标保持死亡处不变。
+ *   兜底：宿主未接入 revive 动作时（旧宿主 / 纯静态打开 game.html），前端本地自愈，
+ *         保证「复活」按钮在任何环境下都能继续游玩。
+ */
+function reviveGame() {
+  sendTick("revive", {});
+  window.setTimeout(localReviveIfStillOver, 300);
+}
+
+function localReviveIfStillOver() {
+  const s = state.value;
+  if (!s || s.phase !== "over") return;      // 宿主已完成复活，无需兜底
+  const me0 = s.entities.find((e) => e.side === "player");
+  if (!me0) return;
+  me0.alive = true;
+  me0.hp = me0.maxHp;                        // 满血
+  me0.vx = 0;
+  me0.vy = 0;
+  s.result = null;
+  s.phase = "playing";                       // 回到可正常游玩
+  lastLocalPose = { x: me0.x, y: me0.y, facing: me0.facing };   // 位置不变，并接管本地权威位姿
+}
 
 /* ============================================================
    缩放控制（zoom +/- 按钮，对应 25d_ai_game 的 camera zoom）
@@ -1615,7 +1647,10 @@ watch(() => state.value?.phase, (p) => {
         <li>获得金钱：{{ state.result?.money }}</li>
         <li>掉落物品：{{ (state.result?.drops || []).join('、') || '无' }}</li>
       </ul>
-      <button class="start" @click="closeOver">关闭</button>
+      <div class="over__actions">
+        <button class="start over__revive" @click="reviveGame">复活</button>
+        <button class="start over__exit" @click="exitOver">退出</button>
+      </div>
     </section>
 
     <!-- 调试面板（仅 debug 模式可见） -->
@@ -1934,7 +1969,7 @@ body {
 .zoom-ctrl {
   position: absolute;
   right: 8px;
-  top: 50px;          /* 避开 HUD 顶部 */
+  top: 107px;          /* 避开 HUD 顶部 */
   z-index: 7;
   display: flex;
   flex-direction: column;
@@ -1987,7 +2022,7 @@ body {
 .scale-ruler {
   position: absolute;
   right: 53px;
-  top: 60px;
+  top: 168px;
   z-index: 6;
   display: flex;
   flex-direction: column;
@@ -2244,8 +2279,25 @@ body {
   margin-right: 8px;
 }
 
+.over__actions {
+  display: flex;
+  gap: 14px;
+}
+
 .over .start {
-  width: 240px;
+  width: 150px;
   margin-top: 0;
+}
+
+/* 「退出」：沿用结算页原有的中性暗色样式，与「复活」主按钮区分 */
+.over__exit {
+  background: #3a3b3b;
+  border-color: #4f4f4f;
+  color: #cfd6df;
+  box-shadow: 0 3px 0 #2a2b2b;
+}
+
+.over__exit:hover:not(:disabled) {
+  background: #4a4b4b;
 }
 </style>

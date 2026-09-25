@@ -261,7 +261,6 @@ const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
 const MOVE_SPEED_M = 3.0;      // 米/秒
 const TICK_DT_S = 0.1;         // 一次 tick = 100ms（与前端 TICK_MS 对齐）
 const MOB_VIEW_M   = 80;
-const MOB_VIEW_M   = 80;
 const MOB_ATK_M    = 2;
 const ALLY_ATK_M   = 2;
 const ALLY_FOLLOW_GAP_M = 12;
@@ -754,6 +753,27 @@ export async function handle_action(
         s.skillPage = (s.skillPage + delta + pages) % pages;
       }
       return okResp("");
+    }
+
+    case "revive": {
+      // ★ 死亡弹窗「复活」：原地复活 —— 玩家坐标保持死亡处不变，
+      //   血量恢复满、alive 复位、冷却与速度清零，phase 回到 playing 继续可玩。
+      const player = s.entities.find((e) => e.side === "player");
+      if (!player) return okResp("");
+      // 仅死亡/结算态可复活；仍在战斗中且存活时忽略（避免当作回血道具滥用）
+      if (s.phase === "playing" && player.alive) return okResp("");
+      player.alive = true;
+      player.hp = player.maxHp;
+      player.vx = 0;
+      player.vy = 0;
+      // 复活保护：给场上存活敌人一段攻击冷却（2 秒），避免复活瞬间被贴脸秒杀
+      s.entities.forEach((e) => {
+        if (e.side === "enemy" && e.alive) e.cooldown = Math.max(e.cooldown || 0, 20);
+      });
+      s.result = null;
+      s.phase = "playing";
+      pushEvent(s, `你在原地复活（生命 ${Math.round(player.hp)}/${Math.round(player.maxHp)}）`);
+      return { code: 0, message: "revive", state: s, response: "复活成功" };
     }
 
     case "exit":

@@ -477,6 +477,24 @@ export async function handle_action(action, params, state, context) {
       }
       return okResp("");
     }
+    case "revive": {
+      // ★ 死亡弹窗「复活」：原地复活 —— 玩家坐标保持死亡处不变，
+      //   血量恢复满、alive 复位、冷却与速度清零，phase 回到 playing 继续可玩。
+      const player = s.entities.find((e) => e.side === "player");
+      if (!player) return okResp("");
+      if (s.phase === "playing" && player.alive) return okResp("");
+      player.alive = true;
+      player.hp = player.maxHp;
+      player.vx = 0;
+      player.vy = 0;
+      s.entities.forEach((e) => {
+        if (e.side === "enemy" && e.alive) e.cooldown = Math.max(e.cooldown || 0, 20);
+      });
+      s.result = null;
+      s.phase = "playing";
+      pushEvent(s, `你在原地复活（生命 ${Math.round(player.hp)}/${Math.round(player.maxHp)}）`);
+      return { code: 0, message: "revive", state: s, response: "复活成功" };
+    }
     case "exit":
     case "quit": {
       if (s.phase !== "playing") return okResp("");
