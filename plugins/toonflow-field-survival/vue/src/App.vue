@@ -2088,8 +2088,8 @@ body {
 .events {
   position: absolute;
   left: 12px;
-  top: 60px;
-  z-index: 4;
+  top: 120px;
+  z-index: 5;
   font-size: 12px;
   color: #ececec;
   text-shadow: 0 1px 2px #000;
