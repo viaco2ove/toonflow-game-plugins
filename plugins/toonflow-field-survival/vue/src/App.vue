@@ -2144,12 +2144,12 @@ body {
 .right-col {
   position: absolute;
   right: 8px;
-  top: 216px;
+  top: 150px;
   z-index: 6;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  gap: 1px;
   pointer-events: none;
 }
 /* 短屏（手机横屏）缩放，保证小地图 + 坐标不会被裁掉 */
@@ -2175,7 +2175,7 @@ body {
   display: flex;
   justify-content: space-around;
   padding: 2px 0 3px;
-  font-size: 10px;
+  font-size: 6px;
   color: #cfd6c4;
 }
 .lg::before {
@@ -2191,10 +2191,10 @@ body {
 .lg--ally::before { background: #5b9bff; }
 .lg--enemy::before { background: #ff5b5b; }
 .coord-box {
-  min-width: 104px;
+  min-width: 69px;
   padding: 4px 8px;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 6px;
+  line-height: 1.2;
   color: #e8e2d0;
   background: rgba(0, 0, 0, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.28);
@@ -2205,7 +2205,7 @@ body {
   font-variant-numeric: tabular-nums;
 }
 .coord-box__sub {
-  font-size: 10px;
+  font-size: 6px;
   color: #a9b39c;
 }
 
@@ -2426,12 +2426,12 @@ body {
   left: 12px;
   top: 78px;
   z-index: 5;
-  font-size: 12px;
+  font-size: 8px;
   color: #ececec;
   text-shadow: 0 1px 2px #000;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
   pointer-events: none;
   background: rgba(30, 31, 31, 0.7);
   padding: 6px 10px;
