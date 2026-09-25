@@ -12,6 +12,85 @@ sys.path.insert(0, CLI_ROOT)
 from toon_plugins.toon_client import ToonClient
 
 
+# ── 打包跳过目录（默认瘦身）────────────────────────────────────────────────
+# 在原 {".git","__pycache__","node_modules"} 基础上追加 虚拟环境 / 编辑器 /
+# 各类缓存 以及体积占比最大的 test_data（现场测试数据，默认无需随包分发）。
+# 默认瘦身；必要时可回退：设置环境变量 TOON_INCLUDE_TEST_DATA=1，或加 CLI 参数
+# --include-test-data，即可把 test_data 从跳过集合中移除（两处打包逻辑均生效）。
+SKIP_DIRS = {
+    ".git", "__pycache__", "node_modules",
+    ".venv", "venv", ".idea", ".vscode",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    "test_data",
+}
+
+# 可选跳过的目录：默认跳过，但可通过 include-test-data 回退放行
+SKIP_DIRS_OPTIONAL = {"test_data"}
+
+# raw 流式上传的默认切换阈值：8MB（可由 .env 的 plugin_upload_raw_threshold 覆盖）
+DEFAULT_RAW_UPLOAD_THRESHOLD = 8 * 1024 * 1024
+
+
+def want_include_test_data(cli_flag=False):
+    """是否需要把 test_data 一并打包（默认瘦身，必要时回退）。
+
+    任一为真即回退：CLI 参数 --include-test-data，或环境变量 TOON_INCLUDE_TEST_DATA=1。
+    """
+    if cli_flag:
+        return True
+    return str(os.environ.get("TOON_INCLUDE_TEST_DATA", "")).strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def resolve_skip_dirs(with_test_data=False):
+    """返回本次打包要跳过的目录集合。
+
+    默认返回 SKIP_DIRS；with_test_data 为真时把 test_data 从跳过集合中移除。
+    """
+    if with_test_data:
+        return {d for d in SKIP_DIRS if d not in SKIP_DIRS_OPTIONAL}
+    return set(SKIP_DIRS)
+
+
+def upload_plugin_zip(client, plugin_id, zip_bytes, upload_mode="auto", zip_path=None):
+    """按体积自动（或显式）选择插件上传通道。
+
+    - json：沿用 base64 JSON 通道（小包，兼容旧服务端）
+    - raw ：走 /plugin/install-raw 流式上传，绕开 base64 膨胀与 express.json 体积上限
+
+    阈值默认 8MB（.env 的 plugin_upload_raw_threshold 可覆盖）；upload_mode 取
+    auto|raw|json，auto 时超过阈值自动改走 raw。raw 需要 zip 落盘：zip_path 已存在时
+    直接复用（例如已保存的 .tpg），否则写系统临时文件并在上传完成后删除。
+    """
+    import base64
+    import tempfile
+
+    threshold = getattr(client, "plugin_upload_raw_threshold", 0) or DEFAULT_RAW_UPLOAD_THRESHOLD
+    mode = upload_mode if upload_mode in ("raw", "json") else (
+        "raw" if len(zip_bytes) > threshold else "json")
+
+    if mode == "json":
+        return client.install_plugin(plugin_id, base64.b64encode(zip_bytes).decode("ascii"))
+
+    tmp_path = None
+    path = zip_path
+    if not path:
+        fd, path = tempfile.mkstemp(prefix="toonplugin-", suffix=".tpg")
+        os.close(fd)
+        with open(path, "wb") as f:
+            f.write(zip_bytes)
+        tmp_path = path
+    try:
+        return client.install_plugin_stream(plugin_id, path)
+    finally:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
 def resolve_client(env_path=None):
     if env_path is None:
         for base in [os.getcwd(), os.path.dirname(CLI_ROOT)]:
@@ -42,16 +121,20 @@ def main(ctx, env):
 @click.option("--install", "-i", help="Install specified plugins (comma-separated)")
 @click.option("--plugins-dir", default="plugins", help="Plugin root")
 @click.option("--no-tpg", is_flag=True, help="Don't save .tpg files locally")
+@click.option("--upload-mode", type=click.Choice(["auto", "raw", "json"]), default="auto",
+              help="Upload channel: auto (by size) / raw (stream) / json (base64)")
+@click.option("--include-test-data", is_flag=True,
+              help="Include test_data/ in package (default: slim package, test_data skipped)")
 @click.option("--enable/--no-enable", default=True, help="Enable after install")
 @click.pass_context
-def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
+def plugins(ctx, install_all, install, plugins_dir, no_tpg, upload_mode, include_test_data, enable):
     """List / install plugins"""
 
     client = resolve_client(ctx.obj["env_path"])
 
     # ── Install mode ──────────────────────────────────────────────
     if install_all or install:
-        import zipfile, io, base64
+        import zipfile, io
 
         if install_all:
             targets = sorted(p for p in os.listdir(plugins_dir)
@@ -143,9 +226,9 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
                         click.secho("  [WARN] " + tname + ": build error: " + str(ex),
                                     fg="yellow")
 
-            # Build zip in memory
+            # Build zip in memory（默认瘦身：SKIP_DIRS 剔除 test_data 等冗余目录）
             buf = io.BytesIO()
-            skip = {".git", "__pycache__", "node_modules"}
+            skip = resolve_skip_dirs(want_include_test_data(include_test_data))
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for base, dirs, files in os.walk(pdir):
                     dirs[:] = [d for d in dirs if d not in skip]
@@ -155,21 +238,23 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
                         fp = os.path.join(base, fn)
                         rel = os.path.relpath(fp, pdir).replace(os.sep, "/")
                         zf.write(fp, rel)
-            zip_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+            zip_bytes = buf.getvalue()
 
             # Save .tpg to disk (optional)
+            tpg_path = None
             if not no_tpg:
                 tpg_dir = os.path.join(os.path.dirname(CLI_ROOT), "plugins_tbg")
                 os.makedirs(tpg_dir, exist_ok=True)
                 version = manifest.get("version", "0.0.0")
                 tpg_path = os.path.join(tpg_dir, tname + "-" + version + ".tpg")
                 with open(tpg_path, "wb") as f:
-                    f.write(base64.b64decode(zip_b64))
+                    f.write(zip_bytes)
                 click.echo("  [TPG] saved: " + tpg_path)
 
-            # Call REST API (no-tpg: base64 only, no disk write on server either)
+            # Upload：auto 按体积选 raw/json；raw 复用已落盘的 .tpg，--no-tpg 时走临时文件
             try:
-                result = client.install_plugin(plugin_id, zip_b64)
+                result = upload_plugin_zip(client, plugin_id, zip_bytes, upload_mode,
+                                           zip_path=tpg_path)
                 # Toonflow returns {pluginId, version, dirName, upgraded}
                 # MCP mode may return {ok, version}
                 ok = (result.get("ok") in (True, "true")) or bool(result.get("pluginId"))
@@ -203,11 +288,15 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, enable):
 
 @main.command(name="install")
 @click.argument("plugin_dir", type=click.Path(exists=True))
+@click.option("--upload-mode", type=click.Choice(["auto", "raw", "json"]), default="auto",
+              help="Upload channel: auto (by size) / raw (stream) / json (base64)")
+@click.option("--include-test-data", is_flag=True,
+              help="Include test_data/ in package (default: slim package, test_data skipped)")
 @click.option("--enable/--no-enable", default=True, help="Enable after install")
 @click.pass_context
-def install_cmd(ctx, plugin_dir, enable):
+def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
     """Install a single plugin from directory"""
-    import zipfile, io, base64
+    import zipfile, io
 
     client = resolve_client(ctx.obj["env_path"])
     manifest_path = os.path.join(plugin_dir, "manifest.json")
@@ -274,8 +363,9 @@ def install_cmd(ctx, plugin_dir, enable):
             except Exception as ex:
                 click.secho("[WARN] build error: " + str(ex), fg="yellow")
 
+    # 打包（默认瘦身：SKIP_DIRS 剔除 test_data 等冗余目录）
     buf = io.BytesIO()
-    skip = {".git", "__pycache__", "node_modules"}
+    skip = resolve_skip_dirs(want_include_test_data(include_test_data))
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for base, dirs, files in os.walk(plugin_dir):
             dirs[:] = [d for d in dirs if d not in skip]
@@ -285,10 +375,10 @@ def install_cmd(ctx, plugin_dir, enable):
                 fp = os.path.join(base, fn)
                 rel = os.path.relpath(fp, plugin_dir).replace(os.sep, "/")
                 zf.write(fp, rel)
-    zip_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    zip_bytes = buf.getvalue()
 
     click.echo("Installing " + plugin_id + " ...")
-    result = client.install_plugin(plugin_id, zip_b64)
+    result = upload_plugin_zip(client, plugin_id, zip_bytes, upload_mode)
     ok = (result.get("ok") in (True, "true")) or bool(result.get("pluginId"))
     if ok:
         click.secho("[OK] Installed v" + result.get("version", "?"), fg="green")

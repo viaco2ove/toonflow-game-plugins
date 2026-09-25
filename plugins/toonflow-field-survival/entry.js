@@ -25,7 +25,8 @@ const WORLD_X_RANGE = [-1500, 1500];
 const WORLD_Z_RANGE = [-1500, 1500];
 const PLAYER_SPAWN = { x: 0, y: 0 };
 
-const MOVE_SPEED_M = 3.0;
+const MOVE_SPEED_M = 3.0;   // 米/秒
+const TICK_DT_S = 0.1;     // 一次 tick = 100ms（与前端 TICK_MS 对齐）
 const MOB_VIEW_M = 80;
 const MOB_ATK_M = 2;
 const ALLY_ATK_M = 2;
@@ -107,7 +108,7 @@ function makeEntity(role, side, x, y, idx) {
     atk: side === "enemy" ? 8 : 14,
     level: num(role?.level, 1) || 1,
     avatarPath: str(role?.avatarPath) || void 0,
-    facing: 1, cooldown: 0, alive: true,
+    facing: 0, cooldown: 0, alive: true,   // facing 角度制：0=右 90=下 180=左 270=上
   };
 }
 
@@ -165,6 +166,18 @@ async function ensureMapData(ctx) {
   }
 }
 
+/** ★ fix③：波次落点统一围绕"玩家当前位置"，不再 rndX()/rndY() 全图随机
+ *  （原实现怪物会落在 ±1420 米的任意位置：玩家既看不见也打不到，运气差还会
+ *    恰好落在身边＝"怪物凭空出现在旁边"。此与 entry.ts 的同名逻辑保持一致。）*/
+function spawnAnchor(s, minM, maxM) {
+  const p = s.entities.find((e) => e.side === "player");
+  const cx = p ? p.x : PLAYER_SPAWN.x;
+  const cy = p ? p.y : PLAYER_SPAWN.y;
+  const angle = rnd(0, Math.PI * 2);
+  const distM = minM + rnd(0, maxM - minM);
+  return { x: clampX(cx + Math.cos(angle) * distM), y: clampY(cy + Math.sin(angle) * distM) };
+}
+
 function spawnWave(s, wave) {
   const archs = (s.map?.enemy_archetypes && s.map.enemy_archetypes.length) ? s.map.enemy_archetypes : null;
   if (archs) {
@@ -173,9 +186,10 @@ function spawnWave(s, wave) {
     const arch = archs.find((a) => a.id === pick.archetype) || archs[0];
     const count = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
     for (let i = 0; i < count; i++) {
+      const at = spawnAnchor(s, 30, 100);      // ★ fix③：玩家周围 30~100 米
       const e = makeEntity(
         { id: `${arch.id}_${wave}_${i}`, name: arch.name, hp: Math.round(arch.hp + (wave - 1) * 8), level: arch.lv },
-        "enemy", rndX(), rndY(), i,
+        "enemy", at.x, at.y, i,
       );
       e.atk = Math.round(arch.atk + (wave - 1) * 1.5);
       e.bounty = { ...arch.bounty };
@@ -194,16 +208,19 @@ function spawnWave(s, wave) {
   }
   const count = Math.min(2 + wave, 6);
   for (let i = 0; i < count; i++) {
+    const at = spawnAnchor(s, 30, 100);        // ★ fix③
     const e = makeEntity({ id: `enemy_${s.tick}_${i}`, name: `野兽 ${i + 1}`, hp: 45 + wave * 12, level: wave },
-      "enemy", rndX(), rndY(), i);
+      "enemy", at.x, at.y, i);
     e.atk = 7 + wave * 2;
     s.entities.push(e);
   }
   for (let i = 0; i < 2; i++) {
-    s.chests.push({ id: `chest_${s.tick}_${i}`, x: rndX(), y: rndY(), opened: false });
+    const at = spawnAnchor(s, 25, 55);         // ★ fix③：宝箱
+    s.chests.push({ id: `chest_${s.tick}_${i}`, x: at.x, y: at.y, opened: false });
   }
   for (let i = 0; i < 3; i++) {
-    s.potions.push({ id: `potion_${s.tick}_${i}`, x: rndX(), y: rndY(), heal: 18 });
+    const at = spawnAnchor(s, 20, 45);         // ★ fix③：血瓶
+    s.potions.push({ id: `potion_${s.tick}_${i}`, x: at.x, y: at.y, heal: 18 });
   }
 }
 
@@ -246,29 +263,39 @@ function moveTowards(e, tx, ty, speed) {
   const d = Math.hypot(dx, dy) || 1;
   e.vx = (dx / d) * speed;
   e.vy = (dy / d) * speed;
-  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 1 : -1;
+  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
 }
 
-function step(s, input) {
-  const speed = MOVE_SPEED_M;
+function step(s, input, poseHint) {
+  const speed = MOVE_SPEED_M;   // 米/秒
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
 
-  const dx = num(input?.dx, 0);
-  const dy = num(input?.dy, 0);
-  if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-    const len = Math.hypot(dx, dy) || 1;
-    player.vx = (dx / len) * speed;
-    player.vy = (dy / len) * speed;
-    if (Math.abs(dx) > 0.01) player.facing = dx > 0 ? 1 : -1;
-  } else if (input?.moveTo) {
-    const tx = num(input.moveTo.x, player.x);
-    const ty = num(input.moveTo.y, player.y);
-    if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);
-    else { player.vx = 0; player.vy = 0; }
-  } else {
+  // ★ 关键修复（坐标双写）：玩家位姿权威在客户端，宿主只镜像 tick 参数里的 player
+  const pose = poseHint || input?.player;
+  if (pose && Number.isFinite(num(pose.x, NaN)) && Number.isFinite(num(pose.y, NaN))) {
+    player.x = clampX(num(pose.x, player.x));
+    player.y = clampY(num(pose.y, player.y));
+    player.facing = num(pose.facing, player.facing);
     player.vx = 0;
     player.vy = 0;
+  } else {
+    const dx = num(input?.dx, 0);
+    const dy = num(input?.dy, 0);
+    if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+      const len = Math.hypot(dx, dy) || 1;
+      player.vx = (dx / len) * speed;
+      player.vy = (dy / len) * speed;
+      player.facing = dx > 0 ? 0 : dx < 0 ? 180 : (dy > 0 ? 90 : 270);
+    } else if (input?.moveTo) {
+      const tx = num(input.moveTo.x, player.x);
+      const ty = num(input.moveTo.y, player.y);
+      if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);
+      else { player.vx = 0; player.vy = 0; }
+    } else {
+      player.vx = 0;
+      player.vy = 0;
+    }
   }
 
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
@@ -299,10 +326,11 @@ function step(s, input) {
     }
   });
 
+  // 速度 m/s × dt（修复：原先按『米/帧』直接加，10 倍误差）
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
-    e.x = clampX(e.x + e.vx);
-    e.y = clampY(e.y + e.vy);
+    e.x = clampX(e.x + e.vx * TICK_DT_S);
+    e.y = clampY(e.y + e.vy * TICK_DT_S);
   });
   s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
@@ -380,8 +408,9 @@ export async function handle_action(action, params, state, context) {
       });
       enemies.forEach((id, i) => {
         const r = byId(id);
+        const at = spawnAnchor(s, 30, 100);   // ★ fix③：初始敌对角色同样落在玩家周围 30~100 米，不再全图随机
         s.entities.push(
-          r ? { ...makeEntity(r, "enemy", rndX(), rndY(), i) } : makeEntity({ id, name: id }, "enemy", rndX(), rndY(), i),
+          r ? { ...makeEntity(r, "enemy", at.x, at.y, i) } : makeEntity({ id, name: id }, "enemy", at.x, at.y, i),
         );
       });
       spectators.forEach((id) => {
@@ -401,7 +430,7 @@ export async function handle_action(action, params, state, context) {
     case "tick": {
       if (s.phase !== "playing") return okResp("");
       s.tick += 1;
-      step(s, params?.input || params);
+      step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
       return okResp("");
     }
     case "skill": {

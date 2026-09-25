@@ -206,19 +206,20 @@ function install(): void {
       }
       if (action === "tick") {
         state.tick++;
-        const inp = params?.input || {};
+        const params2 = params || {};
         const me = state.entities.find((x) => x.side === "player");
-        // ★ v3：米单位移动。speed = 3 米/帧（与 entry.ts 的 MOVE_SPEED_M 一致）
+        // ★ 修复：玩家位姿由 game.html 本地 tick 权威推进并随 tick 上报（params.player），
+        //   mock 宿主只镜像、不再按 input.dx/dy 重复积分（原先 +3 米/帧 与前端 0.3 米/帧 双写，
+        //   造成"走一小步就停 / 松手瞬移"）。
         if (me && me.alive) {
-          if (inp.dx || inp.dy) {
-            me.x = Math.max(-1490, Math.min(1490, me.x + (inp.dx || 0) * 3));
-            me.y = Math.max(-1490, Math.min(1490, me.y + (inp.dy || 0) * 3));
-            me.facing = inp.dx > 0 ? 90 : inp.dx < 0 ? 270 : me.facing;
+          const pose = params2.player;
+          if (pose && Number.isFinite(pose.x) && Number.isFinite(pose.y)) {
+            me.x = Math.max(-1490, Math.min(1490, pose.x));
+            me.y = Math.max(-1490, Math.min(1490, pose.y));
+            if (Number.isFinite(pose.facing)) me.facing = pose.facing;
           }
-          if (inp.moveTo) {
-            me.x = Math.max(-1490, Math.min(1490, inp.moveTo.x));
-            me.y = Math.max(-1490, Math.min(1490, inp.moveTo.y));
-          }
+          me.vx = 0;
+          me.vy = 0;
         }
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
@@ -230,10 +231,10 @@ function install(): void {
           const d2 = Math.hypot(dx, dy);
           // 看见玩家 80 米；追；2 米内攻击
           if (d2 < 80) {
-            const sp = 2.0;  // 米/帧 ≈ 2.4 m/s 步行追赶
+            const sp = 2.0 * 0.1;  // 2.0 米/秒 × 0.1 秒/帧 = 0.2 米/帧（步行追赶，与 entry 对齐）
             e.x += (dx / (d2 || 1)) * sp;
             e.y += (dy / (d2 || 1)) * sp;
-            e.facing = dx > 0 ? 90 : 270;
+            e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
           }
           e.cooldown--;
           if (d2 < 2 && e.cooldown <= 0) {

@@ -132,9 +132,51 @@ export const TILE_MUSHROOM_ID = 1724;  // 蘑菇
 export const TILE_FLOWER_ID = 1482;    // 花
 
 // tileset 中的地形 tile id（配合 tileSrcRect 使用）
-export const TILE_GROUND_ID = 7031; // 纯深绿草地（可无缝平铺）
-export const TILE_WATER_ID = 4500;  // 水面
-export const TILE_POTION_ID = 614;  // 药水瓶
+// ★ 取值依据：直接采样 compiled_tileset_32x32.png 中对应 tile 的平均色（草=绿系 / 泥=棕系 / 沙=黄系）
+export const TILE_GROUND_ID = 7031;         // 深绿草地（暗）
+export const TILE_GRASS_VIVID_ID = 7149;    // 鲜绿草地
+export const TILE_GRASS_MID_ID = 9378;      // 中绿草地
+export const TILE_GRASS_LIGHT_ID = 6834;    // 浅黄绿草地（亮）
+export const TILE_DIRT_MID_ID = 512;        // 中棕泥土
+export const TILE_DIRT_DARK_ID = 7030;      // 深棕泥土
+export const TILE_SAND_ID = 10647;          // 沙地（偏黄）
+export const TILE_SAND_MID_ID = 8940;       // 沙地（中）
+export const TILE_SAND_PALE_ID = 8956;      // 沙地（浅）
+// 以下三色保留（当前地表混布未使用，避免破坏其它可能引用）
+export const TILE_GRASS_PALE_ID = 6710;     // 浅草坪
+export const TILE_DIRT_LIGHT_ID = 7050;     // 浅棕泥土
+export const TILE_DIRT_ORANGE_ID = 6833;    // 暖棕（农田）
+export const TILE_WATER_ID = 4500;          // 水面（深水）
+export const TILE_WATER_DEEP_ID = 6965;     // 深蓝水
+export const TILE_WATER_SHALLOW_ID = 6963;  // 浅蓝水边
+export const TILE_POTION_ID = 614;          // 药水瓶
+
+/**
+ * ★ 地表分层表（原先定义但未被使用，本次启用）
+ *  索引 i 表示"噪声值 < GROUND_THRESHOLDS[i]"时使用的地表 tile；
+ *  顺序由低洼湿润到干燥：深草 → 鲜草 → 中草 → 浅草 → 中泥 → 深泥 → 黄沙 → 中沙。
+ */
+export const GROUND_TILES: number[] = [
+  TILE_GROUND_ID,       // 深绿草地
+  TILE_GRASS_VIVID_ID,  // 鲜绿草地
+  TILE_GRASS_MID_ID,    // 中绿草地
+  TILE_GRASS_LIGHT_ID,  // 浅黄绿草地
+  TILE_DIRT_MID_ID,     // 中棕泥土
+  TILE_DIRT_DARK_ID,    // 深棕泥土
+  TILE_SAND_ID,         // 沙地（偏黄）
+  TILE_SAND_MID_ID,     // 沙地（中）
+];
+
+/** 最后一档地表（噪声值 ≥ GROUND_THRESHOLDS 末项时使用） */
+export const GROUND_FALLBACK_TILE = TILE_SAND_PALE_ID;
+
+/**
+ * ★ 地表噪声阈值：与 GROUND_TILES 一一对应。
+ *  由 0.5 米采样格在 260 米见方区域内实测分位标定：
+ *  全局占比 草地 ≈ 49% / 泥土 ≈ 22% / 沙地 ≈ 29%（原实现草地占 80%，故整屏一片绿）；
+ *  任意一屏（24×16 米）最少包含 草 24% / 泥 15% / 沙 8%，杜绝"整屏同色"。
+ */
+export const GROUND_THRESHOLDS: number[] = [0.314, 0.407, 0.461, 0.511, 0.565, 0.601, 0.68, 0.753];
 
 /** 野怪名字 → mob sprite key（后端命名里带这些关键字时命中） */
 export function mobKeyFor(name: string): string {

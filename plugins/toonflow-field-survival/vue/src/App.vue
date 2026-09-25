@@ -21,6 +21,9 @@ import {
   TILE_GROUND_ID, TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
+  TILE_GRASS_LIGHT_ID, TILE_DIRT_DARK_ID, TILE_DIRT_LIGHT_ID, TILE_DIRT_ORANGE_ID,
+  TILE_WATER_DEEP_ID, TILE_WATER_SHALLOW_ID,
+  GROUND_TILES, GROUND_THRESHOLDS, GROUND_FALLBACK_TILE,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
   spriteTileId,
 } from "./assets";
@@ -562,13 +565,119 @@ function initDecorations() {
   mapDecorations.value = decs;
 }
 
+/**
+ * ★ v3 兜底：外部 mockHost 未启动时（被 Toonflow 编辑器 wrapper iframe 包装），
+ *   state.entities 里只有玩家/盟友，看不到怪物。在玩家位置周围 30-100 米
+ *   环形补 spawn 4-6 只野兽，让玩家开局立刻能看到。重复调用安全：检查
+ *   state.entities 里是否已有 enemy，若有则跳过。
+ */
+function spawnLocalMobsIfNeeded(): void {
+  if (!state.value || state.value.phase !== "playing") return;
+  const hasEnemy = state.value.entities.some((e) => e.side === "enemy");
+  if (hasEnemy) return;
+  const me = state.value.entities.find((e) => e.side === "player");
+  const cx = me?.x ?? 0;
+  const cy = me?.y ?? 0;
+  const archetypes = [
+    { name: "哥布林斥候", hp: 30, atk: 6 },
+    { name: "巨狼",       hp: 60, atk: 10 },
+    { name: "毒蛇",       hp: 25, atk: 8 },
+    { name: "蝙蝠",       hp: 20, atk: 5 },
+    { name: "骷髅兵",     hp: 50, atk: 12 },
+  ];
+  const seen = new Set<string>();
+  let seq = 0;
+  for (let i = 0; i < 5; i++) {
+    const arch = archetypes[i % archetypes.length];
+    const angle = Math.random() * Math.PI * 2;
+    const dist  = 30 + Math.random() * 70;   // 30-100 米环形
+    const id    = `localmob_${Date.now()}_${seq++}`;
+    seen.add(id);
+    state.value.entities.push({
+      id, name: arch.name, side: "enemy",
+      x: cx + Math.cos(angle) * dist,
+      y: cy + Math.sin(angle) * dist,
+      vx: 0, vy: 0,
+      hp: arch.hp, maxHp: arch.hp,
+      atk: arch.atk, level: 1,
+      facing: 180, cooldown: 0, alive: true,
+    });
+  }
+  state.value.events.push(`[local-mob] 已 spawn ${seen.size} 只野兽`);
+}
+
+/**
+ * 客户端权威 tick（★ 单一数据源）
+ *
+ * 设计：玩家位姿（x/y/facing）只在 game.html 内推进一次（每 100ms 一 tick），
+ *   再把结果通过 sendTick 的 player 字段上报宿主；宿主只做镜像、不再重复积分，
+ *   消除"前端 0.3 米/帧 + 宿主 3 米/帧"双写导致的位移回退 / 松手瞬移。
+ * 速度：与 entry.ts 的 MOVE_SPEED_M 同为 3 米/秒（一 tick 位移 0.3 米）。
+ * 边界：与 entry.ts clampX/clampY 对齐，取 ±1490 米。
+ */
+const LOCAL_MOVE_SPEED_M = 3;     // 米/秒（与 entry.ts MOVE_SPEED_M 一致）
+const TICK_DT = 0.1;              // 与 loop() 的 TICK_MS=100 对应
+const WORLD_LIMIT_M = 1490;       // 与 entry.ts WORLD_X_RANGE(±1500) - 10 对齐
+/** 本地权威位姿缓存：宿主 state 推回时用它覆盖宿主侧玩家坐标（防回退） */
+let lastLocalPose: { x: number; y: number; facing: number } | null = null;
+
+function localTick(): void {
+  if (!state.value || state.value.phase !== "playing") return;
+  const s = state.value;
+  // 1. 推进玩家位置（全流程唯一积分点）
+  const me = s.entities.find((e) => e.side === "player");
+  if (me) {
+    const dx = input.value.dx;
+    const dy = input.value.dy;
+    if (dx !== 0 || dy !== 0) {
+      // 斜向归一化：任意方向速度一致
+      const len = Math.hypot(dx, dy) || 1;
+      me.x += (dx / len) * LOCAL_MOVE_SPEED_M * TICK_DT;
+      me.y += (dy / len) * LOCAL_MOVE_SPEED_M * TICK_DT;
+      // facing 统一角度制：0=右 90=下 180=左 270=上（与渲染层 dirIndex / facingLeft 一致）
+      me.facing = (dx > 0 ? 0 : dx < 0 ? 180 : dy > 0 ? 90 : 270);
+      input.value.moveTo = null;
+    } else if (input.value.moveTo) {
+      // 朝 moveTo 走一步
+      const tx = input.value.moveTo.x;
+      const ty = input.value.moveTo.y;
+      const ddx = tx - me.x;
+      const ddy = ty - me.y;
+      const dist = Math.hypot(ddx, ddy);
+      if (dist < 0.3) {
+        input.value.moveTo = null;
+      } else {
+        const step = Math.min(dist, LOCAL_MOVE_SPEED_M * TICK_DT);
+        me.x += (ddx / dist) * step;
+        me.y += (ddy / dist) * step;
+        me.facing = (Math.abs(ddx) > Math.abs(ddy))
+          ? (ddx > 0 ? 0 : 180)
+          : (ddy > 0 ? 90 : 270);
+      }
+    }
+    // 松手立即停止：清空速度，宿主侧不会再产生余速滑行
+    me.vx = 0;
+    me.vy = 0;
+    // 限制玩家在世界范围内（±1490，与 entry.ts 一致）
+    me.x = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.x));
+    me.y = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.y));
+    // 记录本地权威位姿，供 onHostState 覆盖宿主回推值
+    lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
+  }
+  // 2. 推进 tick 计数
+  s.tick = (s.tick || 0) + 1;
+  // 3. 定期补 spawn 野兽（每 600 tick = 60 秒一波）— mockHost 跑的时候这步无效（会跳过已有 enemy）
+  if (s.tick % 600 === 0) spawnLocalMobsIfNeeded();
+}
+
 // 方向索引（pixi_game 约定）：0=下 1=左 2=右 3=上
+// ★ facing 统一角度制：0=右 90=下 180=左 270=上（与 localTick / 渲染层一致，原映射左右互换）
 function dirIndex(facing: number): number {
   const d = ((facing % 360) + 360) % 360;
   if (d >= 315 || d < 45)  return 2;  // 右
-  if (d >= 45  && d < 135) return 1;  // 左
-  if (d >= 135 && d < 225) return 0;  // 下
-  return 3;                             // 上
+  if (d >= 45  && d < 135) return 0;  // 下
+  if (d >= 135 && d < 225) return 1;  // 左
+  return 3;                            // 上
 }
 
 // 动画帧索引（用时间戳循环）
@@ -609,26 +718,95 @@ function animFrame(phase: "walk" | "idle"): number {
  */
 const ENTITY_BASE = 32;  // sprite 原图尺寸 32×32
 
-/** 角色显示尺寸（米）。sprite 屏幕像素 = ENTITY_DIMS_M[key] × ppm */
+/**
+ * 角色显示尺寸（米）。sprite 屏幕像素 = ENTITY_DIMS_M[key] × ppm
+ * ★ fix①：原值整体偏大（player/ally/enemy_char = 3.2 / 2.8 / 3.2 米，zoom=20 时
+ *   就是 64 / 56 / 64 px，比场景里 40px 的树还高），于是"小人比树大"。
+ *   这里改为贴近真实人体身高：zoom=20（默认）时 player ≈ 32px、野怪 11~46px，
+ *   全部小于树（3.0 米 ≈ 60px），比例恢复正常。
+ *   注意：角色与充当参照物的大件道具必须都走"米 × ppm"，比例才能在任意 zoom 下保持一致。
+ */
 const ENTITY_DIMS_M: Record<string, number> = {
-  player:      3.2,  // 金甲战士
-  ally:        2.8,  // 蓝袍法师
-  enemy_char:  3.2,  // 持枪骑士
+  player:      1.60,  // 金甲战士
+  ally:        1.55,  // 蓝袍法师
+  enemy_char:  1.70,  // 持枪骑士
   // 野怪
-  goblin:   2.4,
-  orc:      2.4,
-  rat:      2.0,
-  goat:     2.4,
-  snake:    2.4,
-  bat:      2.0,
-  skeleton: 2.4,
-  minotaur: 2.8,
+  goblin:   1.15,
+  orc:      1.80,
+  rat:      0.55,
+  goat:     1.00,
+  snake:    0.80,
+  bat:      0.60,
+  skeleton: 1.60,
+  minotaur: 2.30,
+};
+
+/**
+ * 场景道具显示尺寸（米）——只含充当"尺度参照物"的大件（树/枯树、灌木、水面）。
+ * 花、蘑菇、药水、宝箱属于小装饰（不构成尺度参照），保留原有固定像素尺寸。
+ * w/h 比例取自原固定像素值，保证不变形。
+ */
+const SCENE_PROP_DIMS_M: Record<string, { w: number; h: number }> = {
+  tree:  { w: 2.60, h: 3.00 },   // 原 35×40 px
+  bush:  { w: 1.35, h: 1.10 },   // 原 27×22 px
+  water: { w: 2.00, h: 2.00 },   // 原 32×32 px
 };
 
 /** 计算等比缩放后的尺寸（米） — 1:1 宽高 */
 function fitDim(key: string): { w: number; h: number } {
-  const m = ENTITY_DIMS_M[key] || 2.4;
+  const m = ENTITY_DIMS_M[key] || 1.5;
   return { w: m, h: m };
+}
+
+/** 道具尺寸（米）→ 屏幕像素（minPx 仅防极端情况归零；zoom≥10 时按米数等比缩放，不会盖过角色） */
+function propDimPx(kind: "tree" | "bush" | "water", sx: number, minPx = 8): { w: number; h: number } {
+  const m = SCENE_PROP_DIMS_M[kind] || { w: 1.5, h: 1.5 };
+  return { w: Math.max(minPx, m.w * sx), h: Math.max(minPx, m.h * sx) };
+}
+
+/**
+ * ★ fix③：实体"显示位置"插值
+ *
+ * 宿主推送（postMessage / HTTP 桥）的到达节奏与渲染帧率（60fps）不一致，且可能成批补发；
+ * 直接把推送坐标画出来，就是"长时间不动 → 一帧跳一段"的瞬移观感（用户反馈的
+ * "松手后野怪瞬间跳到旁边"正是这种阶跃）。
+ * 这里给每个实体维护一个显示位置，按帧向权威位置收敛：
+ *   - 常规移动：指数收敛（时间常数 DISPLAY_TAU_S），把阶跃磨成平滑滑动；
+ *   - 位移较大（推送成批补发）：按 DISPLAY_MAX_STEP_MPS 限速滑动，绝不出现"一帧跳一段"；
+ *   - 位移超过 DISPLAY_SNAP_M（真传送 / 新实体）：直接吸附，避免长距离拖尾。
+ *   - 玩家本身不插值（相机用的就是它的权威坐标，插值会导致画面与相机错位）。
+ */
+const DISPLAY_TAU_S = 0.08;         // 收敛时间常数（秒）：约 0.24 秒内走完 95% 路程
+const DISPLAY_MAX_STEP_MPS = 15;    // 显示位置追赶速度上限（米/秒）：位移大时限速，磨掉阶跃
+const DISPLAY_SNAP_M = 25;          // 单帧位移阈值（米）：超过视为真传送，直接吸附
+const displayPos = new Map<string, { x: number; y: number }>();
+let lastRenderAt = 0;
+
+function entityDisplayPos(e: Entity, dtSec: number): { x: number; y: number } {
+  let cur = displayPos.get(e.id);
+  if (!cur) {
+    // 新出现的实体：首次直接落在权威位置（不做从原点滑入）
+    cur = { x: e.x, y: e.y };
+    displayPos.set(e.id, cur);
+    return cur;
+  }
+  const dx = e.x - cur.x;
+  const dy = e.y - cur.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 0.0001) return cur;
+  if (d > DISPLAY_SNAP_M) {
+    // 真传送：一步到位
+    cur.x = e.x;
+    cur.y = e.y;
+    return cur;
+  }
+  const dt = Math.max(dtSec, 0.001);
+  let k = 1 - Math.exp(-dt / DISPLAY_TAU_S);
+  const maxK = (DISPLAY_MAX_STEP_MPS * dt) / d;   // 单帧追赶上限
+  if (k > maxK) k = maxK;
+  cur.x += dx * k;
+  cur.y += dy * k;
+  return cur;
 }
 
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement, sx?: number, sy?: number, ppm?: number) {
@@ -758,7 +936,7 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
   const tileId = spriteTileId(key, _animTick);
   // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
-  const targetH_m = ENTITY_DIMS_M[key] || 2.4;
+  const targetH_m = ENTITY_DIMS_M[key] || 1.5;   // ★ fix①：兜底值随 ENTITY_DIMS_M 收敛下调
   const dw = targetH_m * pixelsPerMeter;
   const dh = targetH_m * pixelsPerMeter;
   const dx = px - dw / 2;
@@ -800,6 +978,46 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
   ctx.restore();
 }
+/* ---------------- 地表噪声（多样化地表，模块级纯函数） ---------------- */
+
+/** 二维格点 hash → [0,1) */
+function hash2(ix: number, iz: number, seed: number): number {
+  const s = Math.sin(ix * 127.1 + iz * 311.7 + seed * 74.7) * 43758.5453;
+  return s - Math.floor(s);
+}
+
+/** 二维 value-noise（双线性 + smoothstep 插值）→ [0,1)，cell 为米 */
+function valueNoise2D(x: number, z: number, cell: number, seed: number): number {
+  const fx = x / cell;
+  const fz = z / cell;
+  const ix = Math.floor(fx);
+  const iz = Math.floor(fz);
+  const tx = fx - ix;
+  const tz = fz - iz;
+  const sx = tx * tx * (3 - 2 * tx);
+  const sz = tz * tz * (3 - 2 * tz);
+  const a = hash2(ix, iz, seed);
+  const b = hash2(ix + 1, iz, seed);
+  const c = hash2(ix, iz + 1, seed);
+  const d = hash2(ix + 1, iz + 1, seed);
+  return (a * (1 - sx) + b * sx) * (1 - sz) + (c * (1 - sx) + d * sx) * sz;
+}
+
+/**
+ * 世界坐标（米）→ 地表 tile id（草地 / 泥土 / 沙地混布）
+ * 5 米大块决定地貌走向，2 米细节打碎边界，逐块 ±0.04 抖动消除条纹感。
+ * 分层表与阈值见 assets.ts 的 GROUND_TILES / GROUND_THRESHOLDS / GROUND_FALLBACK_TILE。
+ */
+function groundTileAt(wx: number, wz: number): number {
+  const big = valueNoise2D(wx, wz, 5.0, 11);
+  const fine = valueNoise2D(wx, wz, 2.0, 23);
+  const jitter = (hash2(Math.floor(wx * 2), Math.floor(wz * 2), 5) - 0.5) * 0.08;
+  const v = Math.min(1, Math.max(0, big * 0.55 + fine * 0.45 + jitter));
+  for (let i = 0; i < GROUND_THRESHOLDS.length; i++) {
+    if (v < GROUND_THRESHOLDS[i]) return GROUND_TILES[i];
+  }
+  return GROUND_FALLBACK_TILE;
+}
 
 function render() {
   const c = canvasEl.value;
@@ -835,15 +1053,29 @@ function render() {
 
   ctx.clearRect(0, 0, W, H);
 
-  // 地面：dawnlike tileset 草地 tile 平铺
-  // ★ v3：单位已改为米，屏幕上的 tile 尺寸由 zoom 决定（pixel-per-meter × block_size）
+  // 地面：dawnlike tileset 平铺（★ v3.2 多样化地表）
+  //   双频 value-noise（5 米大块定地貌 + 2 米碎化解边界）+ 逐块抖动 → 8 段阈值
+  //   → 草地(4 档绿) / 泥土(2 档棕) / 沙地(3 档黄) 混布；
+  //   每个 0.5 米方块独立取色（block_size 来自 terrainScale），不再出现 4 米同色大块。
+  //   实测每屏（24×16 米）至少 草 24% / 泥 15% / 沙 8%，平均 草 49% / 泥 22% / 沙 29%。
   if (SHEET_TILESET.ready) {
     const blockPx = terrainScale.value.block_size * sx;   // 单个方块在屏幕的宽度
-    const tw = blockPx;                                    // 一个方块 = 一片草地贴图
+    const tw = blockPx;                                    // 一个方块 = 一片地表贴图
     const th = blockPx * DEPTH;                            // 2.5D: 高度按 DEPTH 压缩
+    const mPerTileX = terrainScale.value.block_size;       // 米/block
+    // ★ fix②：原此处 `const pp = me;` 把外层 pp（= playerPos.value 的 .value 结果）遮蔽成了
+    //   computed ref 本身，于是下方 pp.x / pp.y 恒为 undefined → 0；地面永远以世界原点 (0,0)
+    //   作为相机中心，玩家移动时地面纹丝不动（看起来像贴在屏幕上的静态背景图）。
+    //   这里直接复用外层 pp（玩家世界坐标，单位米），地面即随玩家一起滚动。
+    const vw = W / sx;                                     // 地面横向覆盖宽度（米）= 可用像素 ÷ ppm
+    const vh = H / (sx * DEPTH);
+    const minWX = (pp?.x ?? 0) - vw / 2;
+    const minWZ = (pp?.y ?? 0) - vh / 2;
     for (let tx = 0; tx < W; tx += tw) {
+      const wx = minWX + (tx / tw) * mPerTileX;
       for (let ty = 0; ty < H; ty += th) {
-        drawTile(ctx, TILE_GROUND_ID, tx, ty, tw, th);
+        const wz = minWZ + (ty / th) * mPerTileX;
+        drawTile(ctx, groundTileAt(wx, wz), tx, ty, tw, th);
       }
     }
   } else {
@@ -901,16 +1133,19 @@ function render() {
     const py = wz2py(dec.y);
 
     if (dec.kind === "tree" && SHEET_TILESET.ready) {
-      const dh = 40, dw = 35;
-      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, px - dw / 2, py - dh + 4, dw, dh);
+      // ★ fix①：树改走"米 × ppm"，与角色同一尺度基准（zoom=20 时 ≈60px，高于 1.6 米的小人）
+      const d = propDimPx("tree", sx);
+      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
     } else if (dec.kind === "water" && SHEET_TILESET.ready) {
-      const ts = 32;
+      // ★ fix①：水面同样按米（2 米 ≈ 40px）
+      const d = propDimPx("water", sx);
       ctx.save(); ctx.globalAlpha = 0.9;
-      drawTile(ctx, TILE_WATER_ID, px - ts / 2, py - ts + 4, ts, ts);
+      drawTile(ctx, TILE_WATER_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
       ctx.restore();
     } else if (dec.kind === "bush" && SHEET_TILESET.ready) {
-      const dh = 22, dw = 27;
-      drawTile(ctx, TILE_SHRUB_ID, px - dw / 2, py - dh + 4, dw, dh);
+      // ★ fix①：灌木按米（1.1 米 ≈ 22px，与原像素尺寸接近，仅补上 zoom 联动）
+      const d = propDimPx("bush", sx);
+      drawTile(ctx, TILE_SHRUB_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
     } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
       const dh = 24, dw = 24;
       drawTile(ctx, TILE_MUSHROOM_ID, px - dw / 2, py - dh + 4, dw, dh);
@@ -988,12 +1223,25 @@ function render() {
 
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
   const roleIds = new Set(s.roles.map((r) => r.id));
+  // ★ fix③：除玩家外，实体一律用"显示位置"绘制（见 entityDisplayPos）。
+  //   宿主推送与渲染帧率不同步时，直接画权威坐标会出现"长时间不动 → 一帧跳一段"的瞬移；
+  //   排序也改用显示位置，保证前后遮挡与画面一致。
+  const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const dtSec = Math.max(0.001, Math.min(0.1, lastRenderAt ? (_nowMs - lastRenderAt) / 1000 : 0.016));
+  lastRenderAt = _nowMs;
+  const aliveIds = new Set<string>();
+  s.entities.forEach((e) => { if (e.alive !== false) aliveIds.add(e.id); });
+  Array.from(displayPos.keys()).forEach((id) => { if (!aliveIds.has(id)) displayPos.delete(id); });
   [...s.entities]
     .filter((e) => e.alive !== false)
-    .sort((a, b) => a.y - b.y)
-    .forEach((e) => {
-      const ex = wx2px(e.x);
-      const ey = wz2py(e.y);
+    .map((e) => {
+      const d = e.side === "player" ? { x: e.x, y: e.y } : entityDisplayPos(e, dtSec);
+      return { e, drawX: d.x, drawY: d.y };
+    })
+    .sort((a, b) => a.drawY - b.drawY)
+    .forEach(({ e, drawX, drawY }) => {
+      const ex = wx2px(drawX);
+      const ey = wz2py(drawY);
       if (e.side === "enemy" && !roleIds.has(e.id)) {
         drawMonster(ctx, e, ex, ey, sx);
       } else {
@@ -1053,12 +1301,16 @@ function loop(ts: number) {
   render();
   if (ts - lastTickAt >= TICK_MS) {
     lastTickAt = ts;
+    // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）
+    localTick();
     sendTick("tick", {
       input: {
         dx: input.value.dx,
         dy: input.value.dy,
         moveTo: input.value.moveTo,
       },
+      // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
+      player: lastLocalPose ? { ...lastLocalPose } : undefined,
     });
   }
 }
@@ -1127,8 +1379,23 @@ onMounted(async () => {
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
-    const newPhase = (d.state as GameState)?.phase;
-    state.value = d.state as GameState;
+    const incoming = d.state as GameState;
+    const newPhase = incoming?.phase;
+    // ★ 关键修复：玩家位姿以本地 tick 为唯一数据源。
+    //   宿主推送的 state 中玩家 x/y/facing 是宿主侧镜像值（宿主已不再积分玩家输入），
+    //   若整份替换会把本地刚推进的位移回退 → 表现为"走一小步被拖回 / 松手瞬移"。
+    if (newPhase === "playing" && prevPhase === "playing" && lastLocalPose) {
+      const meHost = incoming?.entities?.find((e) => e.side === "player");
+      if (meHost) {
+        meHost.x = lastLocalPose.x;
+        meHost.y = lastLocalPose.y;
+        meHost.facing = lastLocalPose.facing;
+      }
+    } else if (newPhase !== "playing") {
+      // 回到选人 / 结算：清空本地位姿缓存，下一局以宿主 spawn 为准
+      lastLocalPose = null;
+    }
+    state.value = incoming;
     ready.value = true;
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态

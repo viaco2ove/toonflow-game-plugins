@@ -251,13 +251,16 @@ const rndX  = () => rnd(WORLD_X_RANGE[0] + 80, WORLD_X_RANGE[1] - 80);
 const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
 
 /* ---- 战斗距离参数（米） ----
-   speed = 3 米/帧 ≈ 一个成人的步行速度（25d_ai_game 同等感觉）
+   MOVE_SPEED_M = 3 米/秒（一 tick 位移 = MOVE_SPEED_M × TICK_DT_S = 0.3 米）
+   ★ 修复：原注释写作"3 米/帧"，与前端 3 米/秒 相差 10 倍，是位移异常/瞬移的根因之一
    mob 发现玩家 = 80 米；mob 攻击 = 2 米
    盟友跟随 = 12 米；盟友攻击 = 2 米
    开箱/拾血瓶 = 2 米
    技能作用范围 = 30 米
    */
-const MOVE_SPEED_M = 3.0;
+const MOVE_SPEED_M = 3.0;      // 米/秒
+const TICK_DT_S = 0.1;         // 一次 tick = 100ms（与前端 TICK_MS 对齐）
+const MOB_VIEW_M   = 80;
 const MOB_VIEW_M   = 80;
 const MOB_ATK_M    = 2;
 const ALLY_ATK_M   = 2;
@@ -325,7 +328,7 @@ function makeEntity(
     atk: side === "enemy" ? 8 : 14,
     level: num(role?.level, 1) || 1,
     avatarPath: str(role?.avatarPath) || undefined,
-    facing: 1,
+    facing: 0,   // 角度制：0=右 90=下 180=左 270=上
     cooldown: 0,
     alive: true,
   };
@@ -379,6 +382,16 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
 
 /** 按地图 archetypes 生成一波敌人/宝箱/血瓶（无地图时回退内置逻辑）
  *  ★ v3：怪物 spawn 在玩家周围 ±100 米（玩家在 (0,0)，开局就能看见） */
+/** ★ fix③：波次/敌人落点统一围绕玩家当前位置（而不是全图随机） */
+function spawnAnchor(s: FieldSurvivalState, minM: number, maxM: number): { x: number; y: number } {
+  const p = s.entities.find((e) => e.side === "player");
+  const cx = p ? p.x : PLAYER_SPAWN.x;
+  const cy = p ? p.y : PLAYER_SPAWN.y;
+  const angle = rnd(0, Math.PI * 2);
+  const distM = minM + rnd(0, maxM - minM);
+  return { x: clampX(cx + Math.cos(angle) * distM), y: clampY(cy + Math.sin(angle) * distM) };
+}
+
 function spawnWave(s: FieldSurvivalState, wave: number) {
   // 找玩家（怪物围着他刷）
   const player = s.entities.find((e) => e.side === "player");
@@ -486,31 +499,44 @@ function moveTowards(e: Entity, tx: number, ty: number, speed: number) {
   const d = Math.hypot(dx, dy) || 1;
   e.vx = (dx / d) * speed;
   e.vy = (dy / d) * speed;
-  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 1 : -1;
+  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
 }
 
-function step(s: FieldSurvivalState, input: any) {
-  // 距离参数全部按米
+function step(s: FieldSurvivalState, input: any, poseHint?: any) {
+  // 速度统一为"米/秒"，位移按 MOVE_SPEED_M × TICK_DT_S 积分
   const speed = MOVE_SPEED_M;
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
 
-  // 用户移动：摇杆向量优先，其次点地目标
-  const dx = num(input?.dx, 0);
-  const dy = num(input?.dy, 0);
-  if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
-    const len = Math.hypot(dx, dy) || 1;
-    player.vx = (dx / len) * speed;
-    player.vy = (dy / len) * speed;
-    if (Math.abs(dx) > 0.01) player.facing = dx > 0 ? 1 : -1;
-  } else if (input?.moveTo) {
-    const tx = num(input.moveTo.x, player.x);
-    const ty = num(input.moveTo.y, player.y);
-    if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);   // 米
-    else { player.vx = 0; player.vy = 0; }
-  } else {
+  /* ★ 关键修复（坐标双写）：玩家位姿的权威在客户端。
+     game.html 每 100ms 已在本地推进一次玩家坐标，并通过 tick 参数的 player 字段上报；
+     宿主侧只镜像该结果，不再用 input.dx/dy 重复积分玩家，
+     避免双写导致位移被回退（走一小步就停）或松手后瞬移。 */
+  const pose = poseHint || input?.player;
+  if (pose && Number.isFinite(num(pose.x, NaN)) && Number.isFinite(num(pose.y, NaN))) {
+    player.x = clampX(num(pose.x, player.x));
+    player.y = clampY(num(pose.y, player.y));
+    player.facing = num(pose.facing, player.facing);
     player.vx = 0;
     player.vy = 0;
+  } else {
+    // 兼容旧客户端（未上报 player）：退化为宿主侧积分，速度同样按 米/秒 × dt
+    const dx = num(input?.dx, 0);
+    const dy = num(input?.dy, 0);
+    if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+      const len = Math.hypot(dx, dy) || 1;
+      player.vx = (dx / len) * speed;
+      player.vy = (dy / len) * speed;
+      player.facing = dx > 0 ? 0 : dx < 0 ? 180 : (dy > 0 ? 90 : 270);
+    } else if (input?.moveTo) {
+      const tx = num(input.moveTo.x, player.x);
+      const ty = num(input.moveTo.y, player.y);
+      if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);   // 米/秒
+      else { player.vx = 0; player.vy = 0; }
+    } else {
+      player.vx = 0;
+      player.vy = 0;
+    }
   }
 
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
@@ -544,11 +570,11 @@ function step(s: FieldSurvivalState, input: any) {
     }
   });
 
-  // 积分、冷却、越界（米边界：±1490）
+  // 积分、冷却、越界（边界 ±1490 = WORLD ±1500 - 10，与前端 WORLD_LIMIT_M 一致；速度 m/s × dt）
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
-    e.x = clampX(e.x + e.vx);
-    e.y = clampY(e.y + e.vy);
+    e.x = clampX(e.x + e.vx * TICK_DT_S);
+    e.y = clampY(e.y + e.vy * TICK_DT_S);
   });
   s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
@@ -650,12 +676,15 @@ export async function handle_action(
           i,
         ));
       });
+      // ★ fix③：敌对角色改为围绕玩家 30~60 米环形落点
+      //   （原 rndX()/rndY() 全图随机 ⇒ 敌对角色落在 ±1420 米任意位置，玩家既看不见也打不到）
       enemies.forEach((id, i) => {
         const r = byId(id);
+        const at = spawnAnchor(s, 30, 60);
         s.entities.push(
           r
-            ? { ...makeEntity(r, "enemy", rndX(), rndY(), i) }
-            : makeEntity({ id, name: id }, "enemy", rndX(), rndY(), i),
+            ? { ...makeEntity(r, "enemy", at.x, at.y, i) }
+            : makeEntity({ id, name: id }, "enemy", at.x, at.y, i),
         );
       });
       spectators.forEach((id) => {
@@ -679,7 +708,7 @@ export async function handle_action(
     case "tick": {
       if (s.phase !== "playing") return okResp("");
       s.tick += 1;
-      step(s, params?.input || params);
+      step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
       return okResp("");
     }
 
