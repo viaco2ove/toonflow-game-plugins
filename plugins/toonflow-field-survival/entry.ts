@@ -270,8 +270,8 @@ export interface FieldSurvivalState {
 /** x/z 范围（米），±1500 */
 const WORLD_X_RANGE: [number, number] = [-1500, 1500];
 const WORLD_Z_RANGE: [number, number] = [-1500, 1500];
-/** 玩家出生点：origin（地图中心） */
-const PLAYER_SPAWN = { x: 0, y: 0 };
+/** 玩家出生点：mulberryTown 中心（Rotten-Soup mulberryTown.json Actors 层 PLAYER 在 (34,32) tile → 世界 (12.5, 4) ≈ (13, 4)） */
+const PLAYER_SPAWN = { x: 13, y: 4 };
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
