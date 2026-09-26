@@ -1,5 +1,5 @@
 {
-  "_说明": "本地调试用测试数据（npm run dev 或直接打开 game.html 时加载）。roles 缺失时 mockHost.ts 会自动用默认角色。",
+  "description": "本地调试用测试数据（npm run dev 或直接打开 game.html 时加载）。roles 缺失时 mockHost.ts 会自动用默认角色。",
   "world": { "w": 960, "h": 600 },
   "roles": [
     { "id": "r01", "name": "陈彦", "roleType": "player", "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/player/avatar.webp", "description": "赦夜人主角" },
