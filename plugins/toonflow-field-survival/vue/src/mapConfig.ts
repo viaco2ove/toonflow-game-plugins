@@ -240,7 +240,10 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
             y: wz,
             name: npcName,
             variant: obj.gid ? obj.gid - 1 : 0,
-          });
+            // ★ NPC 行为数据（渲染层做游走动画用）
+            wanders: props.wanders === true,
+            seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
+          } as any);
         } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
           // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
           const wx = obj.x / 32 - W / 2;

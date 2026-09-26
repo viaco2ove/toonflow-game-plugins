@@ -2113,17 +2113,31 @@ function renderOneDecoration(
       ctx.fillText(dest, px, py - sx * 1.1);
       ctx.restore();
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
-      // NPC：用 Actors 层 gid 对应的真实精灵 tile（Rotten-Soup 的 gid-1 = tileset 索引）
-      //   variant 在 normalizeTiledMap 里已存 gid-1
+      // ★ NPC：真实精灵 tile + 2 帧走路动画 + 游走（Rotten-Soup 的 AnimatedSprite 等价）
+      //   Dawnlike 人物动画规律：第 2 帧 = 基础 tile + 8（与 player [4334, 4342] 一致）
       const npcName = (dec as any).name || "NPC";
-      const npcTile = dec.variant && dec.variant > 0 ? dec.variant : 4696; // 4696 = Rotten-Soup 默认村民
-      drawTile(ctx, npcTile, px - sx / 2, py - sx * 1.5 + 4, sx, sx * 1.5);
-      // 名字
+      const baseTile = dec.variant && dec.variant > 0 ? dec.variant : 4695; // 兜底 = 默认村民第一帧
+      const walkFrame = Math.floor((_animTick + (dec as any).seed || 0) / 14) % 2; // ~220ms 切帧，每个 NPC 相位不同
+      const npcTile = baseTile + walkFrame * 8;
+      // 游走：wanders 的 NPC 绕出生点做平滑李萨如曲线漂移（±1.2 米），不走的原地踏步
+      const wanders = (dec as any).wanders === true;
+      const seed = (dec as any).seed || 0;
+      const t = _animTick * 0.012 + seed;
+      const dxW = wanders ? Math.sin(t) * 1.2 : 0;
+      const dyW = wanders ? Math.sin(t * 0.7 + 1.3) * 0.8 : 0;
+      // 面向：按水平漂移方向翻转（|sin|>0.15 才算在走）
+      const walking = wanders && Math.abs(Math.cos(t)) > 0.15;
+      const drawX = px + dxW * sx;
+      const drawY = py + dyW * sx;
+      // 走路时轻微上下起伏（1px 级别）
+      const bob = walking ? Math.abs(Math.sin(t * 6)) * sx * 0.06 : 0;
+      drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5);
+      // 名字（跟随 NPC 位置）
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.78)";
       ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(npcName, px, py + sx * 0.2);
+      ctx.fillText(npcName, drawX, drawY + sx * 0.2);
       ctx.restore();
     } else if (dec.kind === "npc") {
       // Fallback: 简化圆形
