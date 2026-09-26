@@ -273,6 +273,12 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
   return {
     ...f,
     name: String(obj.name ?? "overworld"),
+    // ★ 按地图实际大小（不强制 ±1500 大地图）
+    size: [W, H],
+    x_range: [-W / 2, W / 2],
+    z_range: [-H / 2, H / 2],
+    x_range_def_view: [-W / 2, W / 2],
+    z_range_def_view: [-H / 2, H / 2],
     decorations,
     zones,
     chunks: [],

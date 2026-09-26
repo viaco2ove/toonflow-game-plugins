@@ -1031,7 +1031,18 @@ function spawnLocalMobsIfNeeded(): void {
  */
 const LOCAL_MOVE_SPEED_M = 3;     // 米/秒（与 entry.ts MOVE_SPEED_M 一致）
 const TICK_DT = 0.1;              // 与 loop() 的 TICK_MS=100 对应
-const WORLD_LIMIT_M = 1490;       // 与 entry.ts WORLD_X_RANGE(±1500) - 10 对齐
+// ★ 按地图实际大小自适应 WORLD_LIMIT（不再硬编码 ±1500）
+let worldLimitCache = { w: 0, h: 0, limit: 0 };
+function worldLimitM(): number {
+  const cfg = mapCfg.value;
+  if (!cfg) return 1490;
+  const w = cfg.size?.[0] ?? 3000;
+  const h = cfg.size?.[1] ?? 3000;
+  if (worldLimitCache.w === w && worldLimitCache.h === h) return worldLimitCache.limit;
+  const limit = Math.max(w, h) / 2 - 1;
+  worldLimitCache = { w, h, limit };
+  return limit;
+}
 /** 区域刷新机制 */
 const DETECTION_RADIUS_M = 10;      // 脱战检测半径（米）
 const ZONE_RESPAWN_SEC = 45;       // 离开区域后刷新野怪时间（秒）
@@ -1081,8 +1092,8 @@ function localTick(): void {
     me.vx = 0;
     me.vy = 0;
     // 限制玩家在世界范围内（±1490，与 entry.ts 一致）
-    me.x = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.x));
-    me.y = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.y));
+    me.x = Math.max(-worldLimitM(), Math.min(worldLimitM(), me.x));
+    me.y = Math.max(-worldLimitM(), Math.min(worldLimitM(), me.y));
 
     // —— 碰撞检测：树/枯树/木桩不可穿越 —— 玩家半径 0.4 米，障碍半径 0.5 米
     const PLAYER_R = 0.4;
