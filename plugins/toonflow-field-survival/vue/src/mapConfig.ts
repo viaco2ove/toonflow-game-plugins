@@ -1,6 +1,6 @@
 /**
  * mapConfig.ts
- * overworld.json 地图数据加载器（对应 25d_ai_game 的 config/MapConfig.gd）
+ * mulberryTown.json 地图数据加载器（对应 25d_ai_game 的 config/MapConfig.gd）
  *
  * 真实正本结构（来自 25d_ai_game 提供的 map_config.json 模板）：
  * {
@@ -20,7 +20,7 @@
  *   "underground_y_range": [-150, 150],
  *   "max_zoom": 30,
  *
- *   // 业务数据（不是 MapConfig.gd 的字段，是 overworld.json 独有的运行时数据）
+ *   // 业务数据（不是 MapConfig.gd 的字段，是 mulberryTown.json 独有的运行时数据）
  *   "theme": "野外·清晨",
  *   "narration": "...",
  *   "decorations": [ { "id": "t1", "kind": "tree", "x": 50, "y": -200, "variant": 0 }, ... ],
@@ -95,7 +95,7 @@ export interface MapChunk {
 }
 
 /**
- * overworld.json 的完整 schema（核心 + 运行时数据）
+ * mulberryTown.json 的完整 schema（核心 + 运行时数据）
  *
  * 字段命名沿用 25d_ai_game 的 x/z（不是 x/y），前端代码内部统一处理。
  * 几乎所有坐标都是「米」，不是像素。
@@ -118,7 +118,7 @@ export interface MapConfig {
   underground_x_range: [number, number];
   underground_y_range: [number, number];
 
-  // — 运行时数据（overworld.json 独有） —
+  // — 运行时数据（mulberryTown.json 独有） —
   name: string;
   theme: string;
   narration: string;
@@ -159,7 +159,7 @@ export function fallbackMapConfig(): MapConfig {
     name: "overworld",
     theme: "野外·清晨",
     narration: "薄雾笼罩着这片荒野，远处传来低沉的嘶吼。收拢心神，活下去。",
-    notes: "fallback（未找到 overworld.json 时使用）",
+    notes: "fallback（未找到 mulberryTown.json 时使用）",
     decorations: [
       { id: "t01", kind: "tree", x: 50,    y: -200, variant: 0 },
       { id: "t02", kind: "tree", x: -120,  y:  80,  variant: 1 },
@@ -307,13 +307,13 @@ export function makeScaleFromMap(map: MapConfig): TerrainScaleConfig {
 }
 
 /* ============================================================
-   异步加载 overworld.json（与 map_config.json 完全一致 + 运行时数据）
+   异步加载 mulberryTown.json（与 map_config.json 完全一致 + 运行时数据）
    ============================================================ */
 
 export const OVERWORLD_URLS = [
-  assetUrl("maps/overworld.json"),
-  "/maps/overworld.json",
-  "./maps/overworld.json",
+  assetUrl("maps/mulberryTown.json"),
+  "/maps/mulberryTown.json",
+  "./maps/mulberryTown.json",
 ];
 
 export async function loadMapConfig(): Promise<MapConfig> {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""完整复刻 Rotten-Soup 的 mulberryTown.json → overworld.json 的城镇部分
+"""完整复刻 Rotten-Soup 的 mulberryTown.json → mulberryTown.json 的城镇部分
    - 43×56 米 mulberry 内部（地表 + 房屋 + 农田 + 木桩）
    - 加一圈紧密相连的绿树围墙（边界 y=±28.5, x=±21.5，每 1 米一棵，留 4 个 4m 出口）
    - 城外保留少量树
@@ -27,7 +27,7 @@ def main():
     tile_layers = [l for l in layers if l.get('type') == 'tilelayer']
     print(f'found {len(tile_layers)} tile layers ({W}x{H})')
 
-    base = json.load(open('public/maps/overworld.json', encoding='utf-8'))
+    base = json.load(open('public/maps/mulberryTown.json', encoding='utf-8'))
     decorations = []
     dec_id = 0
 
@@ -207,7 +207,7 @@ def main():
     ]
 
     base['decorations'] = decorations
-    open('public/maps/overworld.json', 'w', encoding='utf-8').write(
+    open('public/maps/mulberryTown.json', 'w', encoding='utf-8').write(
         json.dumps(base, ensure_ascii=False, indent=2)
     )
     print(f'total decorations: {len(decorations)}, file written')

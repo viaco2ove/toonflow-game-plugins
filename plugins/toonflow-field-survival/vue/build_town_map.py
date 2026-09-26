@@ -3,7 +3,7 @@
 import json
 
 def main():
-    data = json.load(open('public/maps/overworld.json', 'r', encoding='utf-8'))
+    data = json.load(open('public/maps/mulberryTown.json', 'r', encoding='utf-8'))
 
     # 矩形区域 rx=21.5 ry=28
     data['zones'] = [
@@ -169,7 +169,7 @@ def main():
 
     data['decorations'] = decorations
 
-    open('public/maps/overworld.json', 'w', encoding='utf-8').write(
+    open('public/maps/mulberryTown.json', 'w', encoding='utf-8').write(
         json.dumps(data, ensure_ascii=False, indent=2)
     )
     print('Done: 43x56 rectangle town, sparse tree perimeter, gates with posts')

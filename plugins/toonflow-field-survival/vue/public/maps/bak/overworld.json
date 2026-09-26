@@ -1,5 +1,5 @@
 {
-  "_comment": "野外生存 · 地图数据（overworld.json）— 等价于 25d_ai_game 的 map_config.json + 运行时实体。世界坐标单位：米。origin = (0, 0)，X/Z 范围 ±1500，比例尺 1 米 = 1 单位。",
+  "_comment": "野外生存 · 地图数据（mulberryTown.json）— 等价于 25d_ai_game 的 map_config.json + 运行时实体。世界坐标单位：米。origin = (0, 0)，X/Z 范围 ±1500，比例尺 1 米 = 1 单位。",
   "size": [
     3000,
     3000

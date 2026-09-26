@@ -436,10 +436,10 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
   const isStandalone = !location.href.includes("getAsset") && window.parent === window;
   if (!isStandalone) return false;
   const roles = await loadRoles();
-  // ★ v5：尝试读 overworld.json 拿 playerSpawn（mulberryTown 等 Tiled 格式地图）
+  // ★ v5：尝试读 mulberryTown.json 拿 playerSpawn（mulberryTown 等 Tiled 格式地图）
   let mapSpawn: { x: number; y: number } | undefined;
   try {
-    const r = await fetch("./maps/overworld.json");
+    const r = await fetch("./maps/mulberryTown.json");
     if (r.ok) {
       const d = await r.json();
       // 找 objectgroup 里 entity_type=PLAYER 的对象

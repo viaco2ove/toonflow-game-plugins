@@ -86,7 +86,7 @@ export interface GameState {
   world: { w: number; h: number };
   /** v3 增强：玩家出生点（米，origin (0,0)） */
   spawn?: { x: number; y: number };
-  /** v3 增强：scale 配置（来自 overworld.json / map_config.json） */
+  /** v3 增强：scale 配置（来自 mulberryTown.json / map_config.json） */
   scale?: {
     meter: number;
     block_size: number;

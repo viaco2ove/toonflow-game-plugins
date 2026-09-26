@@ -853,7 +853,7 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
   }
 }
 
-// 地图装饰物（树木、水体、花木）位置 —— 优先从 overworld.json 加载
+// 地图装饰物（树木、水体、花木）位置 —— 优先从 mulberryTown.json 加载
 interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road"; id: string; variant?: number; name?: string; tileId?: number; layer?: number }
 const mapDecorations = ref<Decoration[]>([]);
 /** 装饰物按 chunk 索引（key = "cx,cz"）——按区域加载时只取当前 loaded_chunks 内的 */
@@ -1611,7 +1611,7 @@ function render() {
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ★ 地图 zones（map-gener agent 产出 + overworld.json 静态数据）：
+  // ★ 地图 zones（map-gener agent 产出 + mulberryTown.json 静态数据）：
   // 不同 kind 不同色调椭圆区域。画在相机变换内。
   // ★ v4：新增区域 kind 配色（城镇安全区 + 6 个野区；旧 kind 保留兼容）
   const kindColors: Record<string, string> = {
@@ -2365,7 +2365,7 @@ let stopHost: (() => void) | null = null;
 
 /** 应用启动：加载地图 → 初始化 chunk / 装饰 → 开启渲染循环 */
 onMounted(async () => {
-  // ★ v3：先加载地图配置（overworld.json），得到 scale / zoom / 装饰物 / chunk 数据
+  // ★ v3：先加载地图配置（mulberryTown.json），得到 scale / zoom / 装饰物 / chunk 数据
   try {
     const cfg = await loadMapConfig();
     mapCfg.value = cfg;
@@ -2581,7 +2581,7 @@ watch(() => state.value?.phase, (p) => {
         </label>
       </div>
 
-      <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 overworld.json 决定 -->
+      <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 mulberryTown.json 决定 -->
       <div class="zoom-ctrl" :title="`zoom=${zoom}（${viewSizeMeters[0]}m × ${viewSizeMeters[1]}m）`">
         <button class="zoom-btn" @click="zoomIn" :disabled="zoom >= terrainScale.max_zoom">+</button>
         <div class="zoom-val">{{ zoom }}</div>
