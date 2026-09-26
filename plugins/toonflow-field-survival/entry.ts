@@ -208,7 +208,7 @@ interface Entity {
   alive: boolean;
 }
 
-interface Chest { id: string; x: number; y: number; opened: boolean; }
+interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number; }
 interface ItemSlot { name: string; count: number; heal: number; }
@@ -236,6 +236,10 @@ export interface FieldSurvivalState {
   playerCard: Record<string, unknown>;
   map?: MapData | null;
   mapSource?: "agent" | "fallback" | "stored";
+  /** ★ v4：区域运行时状态（城镇 + 6 野区） */
+  regions?: RegionState[];
+  /** ★ v4：城镇（安全区）建筑与中立角色 */
+  town?: TownData | null;
   // 结算
   exp: number;
   money: number;
@@ -279,14 +283,14 @@ const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
 /* ---- 战斗距离参数（米） ----
    MOVE_SPEED_M = 3 米/秒（一 tick 位移 = MOVE_SPEED_M × TICK_DT_S = 0.3 米）
    ★ 修复：原注释写作"3 米/帧"，与前端 3 米/秒 相差 10 倍，是位移异常/瞬移的根因之一
-   mob 发现玩家 = 80 米；mob 攻击 = 2 米
-   盟友跟随 = 12 米；盟友攻击 = 2 米
-   开箱/拾血瓶 = 2 米
-   技能作用范围 = 30 米
+   ★ v4：敌人探测半径 = MOB_DETECT_M = 10 米（此前 MOB_VIEW_M=80 从未被敌人分支引用，
+         野怪无视距离全图直线追击 —— 现在 10 米探测 → 追击 → 12 米脱战归位）
+   mob 攻击 = 2 米；盟友视野 = 80 米；盟友跟随 = 12 米；盟友攻击 = 2 米
+   开箱/拾血瓶 = 2 米；技能作用范围 = 30 米
    */
 const MOVE_SPEED_M = 3.0;      // 米/秒
 const TICK_DT_S = 0.1;         // 一次 tick = 100ms（与前端 TICK_MS 对齐）
-const MOB_VIEW_M   = 80;
+const MOB_VIEW_M   = 80;       // ★ v4：仅盟友 AI 使用（敌人改用 MOB_DETECT_M）
 const MOB_ATK_M    = 2;
 const ALLY_ATK_M   = 2;
 const ALLY_FOLLOW_GAP_M = 12;
@@ -295,6 +299,59 @@ const POTION_PICKUP_M = 2;
 const SKILL_RANGE_M   = 30;
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
+
+/* ============================================================
+   ★ v4 区域刷新（Region Respawn）+ 城镇安全区 + 敌人探测/脱战
+   ------------------------------------------------------------
+   1) 世界按「城镇（安全区） + 6 个野区」划分（正六边形拓扑，区域名见 WORLD_REGIONS）；
+      主角出生地 = 晨曦镇（安全区），镇内布置建筑与中立角色，城镇永不刷新野怪。
+   2) 每个野区各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
+      （补满该区域配额）；玩家在场时计时挂起；不再用 enemies.length===0 触发。
+   3) 敌人探测半径 = MOB_DETECT_M（10 米），超出 MOB_DISENGAGE_M（12 米）脱战，
+      归位到巢点（homeX/homeY）附近游荡。
+   4) 敌人复活 = 区域刷新机制重新生成（死亡实体当帧从世界移除，不再残留 alive=false）。
+   ============================================================ */
+
+/** 区域刷新间隔：玩家离开该区域 45 秒后刷新一次（45s / 0.1s = 450 tick） */
+const REGION_RESPAWN_SEC = 45;
+const REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;    // TICK_DT_S = 0.1
+/** ★ 敌人探测半径（米）—— v4 修复项：让 10 米探测真正生效 */
+const MOB_DETECT_M = 10;
+/** 脱战阈值（米）：> 探测半径 2 米迟滞，避免在边界反复进出战斗 */
+const MOB_DISENGAGE_M = 12;
+/** 离巢超过此距离 → 归位；归位后游荡半径 */
+const MOB_LEASH_R_M = 8;
+const MOB_WANDER_R_M = 8;
+/** 野怪落点距城镇边界的最小缓冲（保证城镇安全区内部无野怪） */
+const TOWN_SPAWN_BUFFER_M = 20;
+
+type RegionKind = "safe" | "forest" | "shore" | "mine" | "ruin" | "marsh" | "wild";
+
+interface RegionDef {
+  id: string;
+  name: string;
+  /** 短名（小地图/世界图标签，2 字） */
+  short: string;
+  kind: RegionKind;
+  x: number; y: number; r: number;
+  safe: boolean;
+  /** 区域等级（决定野怪血量/攻击成长） */
+  lv: number;
+  /** 野怪配额（区域刷新时补满到这个数量） */
+  mobs: number;
+  desc: string;
+}
+
+/** 区域划分方案：城镇居中（安全区），6 个野区环绕（环半径 480 m，区域半径 240 m） */
+const WORLD_REGIONS: RegionDef[] = [
+  { id: "town",  name: "晨曦镇",   short: "晨曦", kind: "safe",   x: 0,    y: 0,     r: 160, safe: true,  lv: 0, mobs: 0, desc: "玩家出生的城镇（安全区）：商铺、民居、水井与中立居民，不刷新野怪" },
+  { id: "wood",  name: "东岭林场", short: "东岭", kind: "forest", x: 480,  y: 0,     r: 240, safe: false, lv: 1, mobs: 4, desc: "低矮林地，狼群与哥布林斥候游荡" },
+  { id: "shore", name: "东北浅滩", short: "东北", kind: "shore",  x: 240,  y: 416,   r: 240, safe: false, lv: 1, mobs: 3, desc: "水边滩地，毒蛇与蝙蝠出没" },
+  { id: "mine",  name: "西北矿丘", short: "西北", kind: "mine",   x: -240, y: 416,   r: 240, safe: false, lv: 2, mobs: 4, desc: "废弃矿丘，骷髅兵与哥布林盘踞" },
+  { id: "ruin",  name: "西郊废墟", short: "西郊", kind: "ruin",   x: -480, y: 0,     r: 240, safe: false, lv: 2, mobs: 4, desc: "残垣断壁，骷髅兵与荒野游荡者" },
+  { id: "marsh", name: "西南沼地", short: "西南", kind: "marsh",  x: -240, y: -416,  r: 240, safe: false, lv: 3, mobs: 5, desc: "沼泽泥地，毒蛇群与巨狼" },
+  { id: "wild",  name: "东南荒原", short: "东南", kind: "wild",   x: 240,  y: -416,  r: 240, safe: false, lv: 3, mobs: 5, desc: "开阔荒原，成群野兽巡行" },
+];
 
 function str(v: unknown, d = ""): string {
   return typeof v === "string" ? v : v == null ? d : String(v);
@@ -397,6 +454,8 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
     events: [],
     map: null,
     mapSource: "fallback",
+    regions: [],                 // ★ v4：由 initRegions() 填充（城镇 + 6 野区）
+    town: null,                  // ★ v4：由 ensureTown() 填充（建筑 + 中立角色）
     result: null,
   };
 }
@@ -527,6 +586,211 @@ function moveTowards(e: Entity, tx: number, ty: number, speed: number) {
   if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
 }
 
+/* ------------------------------------------------------------
+   ★ v4 区域系统工具（区域判定 / 城镇 / 区域刷新 / 野怪生成）
+   ------------------------------------------------------------ */
+
+/** 判断坐标落在哪个区域（城镇优先；野区取最近中心 —— 与六边形拓扑等价） */
+function regionAt(x: number, y: number): RegionDef {
+  const p = { x, y };
+  const town = WORLD_REGIONS[0];
+  if (dist(p, town) <= town.r) return town;
+  let best = WORLD_REGIONS[1];
+  let bestD = Infinity;
+  for (let i = 1; i < WORLD_REGIONS.length; i++) {
+    const r = WORLD_REGIONS[i];
+    const d = Math.hypot(r.x - x, r.y - y);
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+/** 离给定坐标最近的野区（城镇出生点用：敌对角色落点不在城镇内） */
+function nearestWildRegion(x: number, y: number): RegionDef {
+  let best = WORLD_REGIONS[1];
+  let bestD = Infinity;
+  for (let i = 1; i < WORLD_REGIONS.length; i++) {
+    const r = WORLD_REGIONS[i];
+    const d = Math.hypot(r.x - x, r.y - y);
+    if (d < bestD) { bestD = d; best = r; }
+  }
+  return best;
+}
+
+/** 各区域野怪名称（刻意与前端 mobKeyFor 的精灵映射对齐：
+ *  狼/兽→orc、蛇→snake、蝠→bat、骷髅→skeleton、默认→goblin） */
+const REGION_MOB_NAMES: Record<string, string[]> = {
+  wood:  ["巨狼", "哥布林斥候"],
+  shore: ["毒蛇", "蝙蝠"],
+  mine:  ["骷髅兵", "哥布林斥候"],
+  ruin:  ["骷髅兵", "荒野游荡者"],
+  marsh: ["毒蛇", "巨狼"],
+  wild:  ["哥布林斥候", "巨狼", "荒野游荡者"],
+};
+
+/** 野怪属性模板（无地图数据时的内置保底，与前端兜底野怪同源） */
+const MOB_PRESETS: Record<string, { hp: number; atk: number }> = {
+  "哥布林斥候": { hp: 30, atk: 6 },
+  "巨狼":       { hp: 60, atk: 10 },
+  "毒蛇":       { hp: 25, atk: 8 },
+  "蝙蝠":       { hp: 20, atk: 5 },
+  "骷髅兵":     { hp: 50, atk: 12 },
+  "荒野游荡者": { hp: 40, atk: 6 },
+};
+
+let _mobSeq = 0;
+
+/** 初始化区域运行时状态（进入 playing 时调用；旧 state 缺 regions 时在 tick 里自愈补建） */
+function initRegions(s: FieldSurvivalState): void {
+  s.regions = WORLD_REGIONS.map((r) => ({
+    id: r.id, name: r.name, short: r.short, kind: r.kind,
+    x: r.x, y: r.y, r: r.r, safe: r.safe, lv: r.lv, mobs: r.mobs, desc: r.desc,
+    aliveCount: 0, playerInside: false, leftTick: -1, nextSpawnTick: -1, spawnCount: 0,
+  }));
+}
+
+/** 某区域内当前存活的野怪数量 */
+function countAliveInRegion(s: FieldSurvivalState, regionId: string): number {
+  let n = 0;
+  for (const e of s.entities) {
+    if (e.side === "enemy" && e.alive !== false && (e as any).regionId === regionId) n++;
+  }
+  return n;
+}
+
+/** 在区域内取一个合法落点（避让城镇安全缓冲；尽量不贴脸玩家） */
+function regionSpawnPoint(s: FieldSurvivalState, region: RegionDef): { x: number; y: number } {
+  const player = s.entities.find((e) => e.side === "player");
+  const town = WORLD_REGIONS[0];
+  let x = region.x, y = region.y;
+  for (let t = 0; t < 8; t++) {
+    const a = rnd(0, Math.PI * 2);
+    const d = region.r * (0.35 + rnd(0, 0.55));      // 0.35r ~ 0.9r：落点留在本区域内
+    const cx = clampX(region.x + Math.cos(a) * d);
+    const cy = clampY(region.y + Math.sin(a) * d);
+    if (Math.hypot(cx - town.x, cy - town.y) < town.r + TOWN_SPAWN_BUFFER_M) continue;  // 不进城镇
+    if (player && player.alive && Math.hypot(cx - player.x, cy - player.y) < 12) continue;  // 不贴脸
+    x = cx; y = cy;
+    break;
+  }
+  return { x, y };
+}
+
+/** 在指定区域生成 n 只野怪（★ v4：敌人复活即由此重新生成，不再依赖 alive=false 残留实体） */
+function spawnRegionMobs(s: FieldSurvivalState, region: RegionDef, n: number): void {
+  const names = REGION_MOB_NAMES[region.id] || ["荒野游荡者"];
+  const archs = (s.map?.enemy_archetypes && s.map.enemy_archetypes.length) ? s.map.enemy_archetypes : null;
+  const lv = Math.max(1, region.lv);
+  for (let i = 0; i < n; i++) {
+    const name = names[(_mobSeq + i) % names.length];
+    const at = regionSpawnPoint(s, region);
+    const preset = MOB_PRESETS[name] || { hp: 40, atk: 6 };
+    const arch = archs ? archs[(_mobSeq + i) % archs.length] : null;
+    const hp = Math.round((arch ? num(arch.hp, preset.hp) * 0.6 : preset.hp) + (lv - 1) * 10);
+    const e = makeEntity({ id: `mob_${region.id}_${_mobSeq++}`, name, hp, level: lv }, "enemy", at.x, at.y, i);
+    e.atk = Math.round((arch ? num(arch.atk, preset.atk) * 0.6 : preset.atk) + (lv - 1) * 2);
+    (e as any).regionId = region.id;
+    (e as any).homeX = at.x;
+    (e as any).homeY = at.y;
+    (e as any).aiState = "idle";
+    (e as any).wanderTimer = 0;
+    (e as any).bounty = (arch && (arch as any).bounty)
+      ? { ...(arch as any).bounty }
+      : { exp: 8 + lv * 4, money: 5 + lv * 3 };
+    s.entities.push(e);
+  }
+}
+
+/** 区域刷新计时器：玩家离开某区域 → 该区域 45 秒后刷新一次（补满配额） */
+function regionTick(s: FieldSurvivalState, player: Entity): void {
+  if (!Array.isArray(s.regions) || !s.regions.length) initRegions(s);
+  if (!s.town || !(s.town as any).buildings) ensureTown(s);
+  const cur = regionAt(player.x, player.y);
+  for (const r of s.regions!) {
+    const inside = r.id === cur.id;
+    r.aliveCount = countAliveInRegion(s, r.id);
+    if (inside) {
+      // 玩家在场：刷新计时挂起（不刷新），清除"刚离开"排期
+      r.playerInside = true;
+      r.leftTick = -1;
+      r.nextSpawnTick = -1;
+      continue;
+    }
+    const wasInside = r.playerInside;
+    r.playerInside = false;
+    if (r.safe) continue;                              // 城镇（安全区）永不刷新野怪
+    if (wasInside || r.nextSpawnTick < 0) {
+      // 玩家刚离开该区域（或从未排期）→ 从此刻起 45 秒后刷新一次
+      r.leftTick = s.tick;
+      r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;
+      continue;
+    }
+    if (s.tick >= r.nextSpawnTick) {
+      const gap = Math.max(0, r.mobs - r.aliveCount);
+      if (gap > 0) {
+        spawnRegionMobs(s, r, gap);
+        r.spawnCount += 1;
+        pushEvent(s, `「${r.name}」重新聚集了 ${gap} 只野怪`);
+      }
+      r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;  // 持续驻留刷新（每 45s 一次）
+    }
+  }
+}
+
+/**
+ * 城镇（安全区）建筑清单
+ *
+ * 坐标单位「米」，矩形中心 + 宽高。
+ * w / h 现在是「瓦片数」（1 瓦片 ≈ 1 米，与 Rotten-Soup mulberryTown.json
+ * 单格对齐），前端按 tileset 真实像素平铺绘制。
+ *   - inn   6×7 大体量双段屋顶（与 RS 大屋相近）
+ *   - shop  5×6 中型铺面
+ *   - house 4×5 标准民居（mulberryTown.json 主要房屋尺寸）
+ *   - well  2×2 水井
+ */
+const TOWN_BUILDINGS: Array<{ kind: string; name: string; x: number; y: number; w: number; h: number }> = [
+  { kind: "inn",   name: "旅店",   x: -46, y: -42, w: 6, h: 7 },
+  { kind: "shop",  name: "杂货铺", x:  46, y: -38, w: 5, h: 6 },
+  { kind: "house", name: "民居",   x: -78, y:  22, w: 4, h: 5 },
+  { kind: "house", name: "民居",   x: -50, y:  62, w: 4, h: 5 },
+  { kind: "house", name: "民居",   x:  56, y:  30, w: 4, h: 5 },
+  { kind: "house", name: "民居",   x:  82, y:  -8, w: 4, h: 5 },
+  { kind: "house", name: "民居",   x:   0, y: -78, w: 5, h: 6 },
+  { kind: "well",  name: "水井",   x:   0, y:  34, w: 2, h: 2 },
+];
+
+/** 城镇中立角色（不参与战斗，仅作安全区氛围） */
+const TOWN_NPCS: Array<{ name: string; x: number; y: number }> = [
+  { name: "镇长 老白", x: -20, y:  14 },
+  { name: "铁匠 大壮", x:  30, y: -16 },
+  { name: "商人 阿福", x:  20, y:  26 },
+  { name: "守卫 石岩", x: -32, y: -14 },
+];
+
+/** 建立城镇（安全区）：建筑清单 + 中立角色实体（幂等） */
+function ensureTown(s: FieldSurvivalState): void {
+  const town = WORLD_REGIONS[0];
+  if (!s.town || !(s.town as any).buildings) {
+    s.town = {
+      id: town.id, name: town.name, x: town.x, y: town.y, r: town.r, safe: true,
+      buildings: TOWN_BUILDINGS.map((b, i) => ({ ...b, id: `b_${i}` })),
+      npcs: TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n })),
+    };
+  }
+  if (!s.entities.some((e) => e.side === "neutral")) {
+    TOWN_NPCS.forEach((n, i) => {
+      const e = makeEntity({ id: `npc_${i}`, name: n.name, hp: 200 }, "neutral", n.x, n.y, i);
+      e.atk = 0;
+      e.facing = [0, 90, 180, 270][i % 4];
+      (e as any).regionId = town.id;
+      (e as any).homeX = n.x;
+      (e as any).homeY = n.y;
+      (e as any).aiState = "npc";
+      s.entities.push(e);
+    });
+  }
+}
+
 function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   // 速度统一为"米/秒"，位移按 MOVE_SPEED_M × TICK_DT_S 积分
   const speed = MOVE_SPEED_M;
@@ -583,16 +847,53 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     }
   });
 
-  // 敌人 AI：追最近的参展单位（含用户）
+  // ★ v4 敌人 AI：探测半径 10 米（MOB_DETECT_M）→ 追击 → 2 米攻击
+  //          → 超出 12 米（MOB_DISENGAGE_M）脱战 → 归位巢点并在 8 米内游荡
   enemies.forEach((e) => {
+    const ex = e as any;
     const prey = [player, ...allies].filter((t) => t.alive)
       .reduce<Entity | null>((best, t) => (!best || dist(e, t) < dist(e, best) ? t : best), null);
-    if (!prey) return;
-    if (dist(e, prey) > MOB_ATK_M) moveTowards(e, prey.x, prey.y, speed * 0.72);
-    else {
+    const home = { x: num(ex.homeX, e.x), y: num(ex.homeY, e.y) };   // 巢点（无则取当前位）
+    const preyIn = prey ? dist(e, prey) : Infinity;
+    // ① 追击态：超出脱战半径 → 停止追击（转归位）；否则贴身攻击/继续接近
+    if (ex.aiState === "chase") {
+      if (!prey || preyIn > MOB_DISENGAGE_M) {
+        ex.aiState = "return";
+        e.vx = 0; e.vy = 0;
+        return;
+      }
+      if (preyIn > MOB_ATK_M) { moveTowards(e, prey!.x, prey!.y, speed * 0.72); return; }
       e.vx = 0; e.vy = 0;
       if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
+      return;
     }
+    // ② 巡逻态：探测半径内发现玩家/盟友 → 进入追击
+    if (prey && preyIn <= MOB_DETECT_M) {
+      ex.aiState = "chase";
+      if (preyIn > MOB_ATK_M) { moveTowards(e, prey.x, prey.y, speed * 0.72); return; }
+      e.vx = 0; e.vy = 0;
+      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
+      return;
+    }
+    // ③ 脱战/巡逻：离巢超过 8 米 → 归位；否则在巢点周围小范围游荡（绝不全图直线追）
+    if (ex.aiState !== "idle" && ex.aiState !== "npc") { ex.aiState = "idle"; ex.wanderTimer = 0; }
+    if (dist(e, home) > MOB_LEASH_R_M) {
+      moveTowards(e, home.x, home.y, speed * 0.55);
+      ex.wanderTimer = 0;
+      return;
+    }
+    if (!(num(ex.wanderTimer, 0) > 0)) {
+      const wa = rnd(0, Math.PI * 2);
+      const wr = rnd(2, MOB_WANDER_R_M);
+      ex.wanderX = clampX(home.x + Math.cos(wa) * wr);
+      ex.wanderY = clampY(home.y + Math.sin(wa) * wr);
+      ex.wanderTimer = Math.round(rnd(30, 90));
+    }
+    ex.wanderTimer = num(ex.wanderTimer, 0) - 1;
+    const wx = num(ex.wanderX, home.x);
+    const wy = num(ex.wanderY, home.y);
+    if (Math.hypot(wx - e.x, wy - e.y) > 1) moveTowards(e, wx, wy, speed * 0.35);
+    else { e.vx = 0; e.vy = 0; }
   });
 
   // 积分、冷却、越界（边界 ±1490 = WORLD ±1500 - 10，与前端 WORLD_LIMIT_M 一致；速度 m/s × dt）
@@ -631,12 +932,13 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     return false;
   });
 
-  // 清场补波
-  if (enemies.length === 0) {
-    const wave = Math.floor(s.tick / 600) + 1;
-    spawnWave(s, wave);
-    pushEvent(s, `第 ${wave} 波来袭`);
-  }
+  // ★ v4 区域刷新：敌人复活改为「随区域刷新机制重新生成」——
+  //   先把本帧阵亡的敌人实体从世界移除（不再保留 alive=false 的残留实体）
+  s.entities = s.entities.filter((e) => !(e.side === "enemy" && e.alive === false));
+
+  // ★ v4 每个区域各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
+  //   （城镇安全区不刷新；不再用 enemies.length===0 触发清场补波）
+  regionTick(s, player);
 
   // 死亡判定
   if (!player.alive && s.phase === "playing") {
@@ -660,7 +962,7 @@ export async function handle_action(
   context: PluginGameContext,
 ): Promise<{ code: number; message: string; state: FieldSurvivalState; response?: string; actions?: string[] }> {
   const s: FieldSurvivalState =
-    state && Object.keys(state).length > 0 && ((state as any).version === 2 || (state as any).version === 3)
+    state && Object.keys(state).length > 0 && ((state as any).version === 2 || (state as any).version === 3 || (state as any).version === 4)
       ? (state as unknown as FieldSurvivalState)
       : emptyState(context);
 
@@ -701,16 +1003,20 @@ export async function handle_action(
           i,
         ));
       });
-      // ★ fix③：敌对角色改为围绕玩家 30~60 米环形落点
-      //   （原 rndX()/rndY() 全图随机 ⇒ 敌对角色落在 ±1420 米任意位置，玩家既看不见也打不到）
+      // ★ v4：敌对角色落在「最近的野区」内
+      //   （玩家出生于城镇安全区，若沿用"围绕玩家 30~60 米"的落点会落进城镇内部）
+      const startRegion = nearestWildRegion(PLAYER_SPAWN.x, PLAYER_SPAWN.y);
       enemies.forEach((id, i) => {
         const r = byId(id);
-        const at = spawnAnchor(s, 30, 60);
-        s.entities.push(
-          r
-            ? { ...makeEntity(r, "enemy", at.x, at.y, i) }
-            : makeEntity({ id, name: id }, "enemy", at.x, at.y, i),
-        );
+        const at = regionSpawnPoint(s, startRegion);
+        const e = r
+          ? makeEntity(r, "enemy", at.x, at.y, i)
+          : makeEntity({ id, name: id }, "enemy", at.x, at.y, i);
+        (e as any).regionId = startRegion.id;
+        (e as any).homeX = at.x;
+        (e as any).homeY = at.y;
+        (e as any).aiState = "idle";
+        s.entities.push(e);
       });
       spectators.forEach((id) => {
         const r = byId(id);
@@ -719,7 +1025,55 @@ export async function handle_action(
       // ★ map-gener agent：用故事动态数据生成地图（存 t_plugin_session_data.map_data）
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
-      if (!s.entities.some((e) => e.side === "enemy")) spawnWave(s, 1);
+
+      // ★ v4：区域划分（晨曦镇 + 6 野区）写入 map.zones —— 主地图与小地图据此显示区域名称
+      if (s.map) {
+        s.map.zones = WORLD_REGIONS.map((r) => ({
+          name: r.name, x: r.x, y: r.y, r: r.r, kind: r.kind, desc: r.desc,
+        }));
+      }
+      // ★ v4：建立城镇（安全区：建筑 + 中立角色）与区域运行时状态
+      ensureTown(s);
+      initRegions(s);
+      // ★ v4：初始铺怪 —— 每个野区各刷满自己的配额（城镇配额 0，安全区内无野怪）
+      WORLD_REGIONS.forEach((r) => { if (!r.safe && r.mobs > 0) spawnRegionMobs(s, r, r.mobs); });
+      // ★ v4：宝箱 / 血瓶仍按地图数据铺设一次（区域刷新只补野怪，不重置宝箱）
+      if (!s.chests.length) {
+        (s.map?.chests || []).forEach((c, i) => {
+          s.chests.push({
+            ...(c as any),
+            id: `chest_map_${i}`,
+            x: clampX(num((c as any).x, 0)),
+            y: clampY(num((c as any).y, 0)),
+            opened: false,
+          });
+        });
+      }
+      if (!s.potions.length) {
+        (s.map?.potions || []).forEach((p, i) => {
+          s.potions.push({
+            id: `potion_map_${i}`,
+            x: clampX(num((p as any).x, 0)),
+            y: clampY(num((p as any).y, 0)),
+            heal: num((p as any).heal, 40),
+          });
+        });
+      }
+      // 兜底：地图数据没给宝箱 / 血瓶时，按野区（非城镇）各铺 3 个
+      if (!s.chests.length) {
+        ["wood", "ruin", "wild"].forEach((rid, i) => {
+          const r = WORLD_REGIONS.find((z) => z.id === rid) as RegionDef;
+          const at = regionSpawnPoint(s, r);
+          s.chests.push({ id: `chest_${rid}_${i}`, x: at.x, y: at.y, opened: false, loot: { exp: 12 + i * 5, money: 10 + i * 4, item: "干粮" } });
+        });
+      }
+      if (!s.potions.length) {
+        ["shore", "mine", "marsh"].forEach((rid, i) => {
+          const r = WORLD_REGIONS.find((z) => z.id === rid) as RegionDef;
+          const at = regionSpawnPoint(s, r);
+          s.potions.push({ id: `potion_${rid}_${i}`, x: at.x, y: at.y, heal: 24 + i * 6 });
+        });
+      }
       s.phase = "playing";
       s.tick = 0;
       const theme = str(s.map?.theme, "野外");

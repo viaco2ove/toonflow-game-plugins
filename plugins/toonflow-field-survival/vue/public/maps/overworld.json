@@ -1,119 +1,2038 @@
 {
   "_comment": "野外生存 · 地图数据（overworld.json）— 等价于 25d_ai_game 的 map_config.json + 运行时实体。世界坐标单位：米。origin = (0, 0)，X/Z 范围 ±1500，比例尺 1 米 = 1 单位。",
-
-  "size": [3000, 3000],
-  "origin": [0, 0],
+  "size": [
+    3000,
+    3000
+  ],
+  "origin": [
+    0,
+    0
+  ],
   "scale_meter": 1,
-
-  "x_range": [-1500, 1500],
-  "z_range": [-1500, 1500],
-
-  "x_range_def_view": [-15, 15],
-  "z_range_def_view": [-15, 15],
-
-  "height_range": [-1, 8],
+  "x_range": [
+    -1500,
+    1500
+  ],
+  "z_range": [
+    -1500,
+    1500
+  ],
+  "x_range_def_view": [
+    -15,
+    15
+  ],
+  "z_range_def_view": [
+    -15,
+    15
+  ],
+  "height_range": [
+    -1,
+    8
+  ],
   "baseline": -10,
   "depth_underground_land": 5,
-
-  "underground_x_range": [-150, 150],
-  "underground_y_range": [-150, 150],
-
+  "underground_x_range": [
+    -150,
+    150
+  ],
+  "underground_y_range": [
+    -150,
+    150
+  ],
   "default_zoom": 20,
   "min_zoom": 10,
   "max_zoom": 100,
-
   "name": "overworld",
   "theme": "野外·清晨",
   "narration": "薄雾笼罩着这片荒野，远处传来低沉的嘶吼。收拢心神，活下去。",
   "notes": "3000m × 3000m 地图，origin (0,0)，玩家出生 (0,0)，zoom 20 默认显示 ±15 米窗口",
-
   "zones": [
-    { "name": "营地",     "x":    0, "y":    0, "r": 15, "kind": "safe",   "desc": "玩家出生的安全区" },
-    { "name": "荒地",     "x":  300, "y":  200, "r": 80, "kind": "danger", "desc": "野兽频繁出没" },
-    { "name": "废墟",     "x": -400, "y": -300, "r": 60, "kind": "loot",   "desc": "可能残留物资" },
-    { "name": "清泉",     "x":  600, "y": -500, "r": 40, "kind": "safe",   "desc": "补给点" },
-    { "name": "祭坛",     "x": -700, "y":  500, "r": 50, "kind": "quest",  "desc": "可触发支线" }
+    {
+      "name": "城镇",
+      "x": 0,
+      "y": 0,
+      "rx": 21.5,
+      "ry": 28,
+      "kind": "safe",
+      "desc": "玩家出生的安全区，无怪物刷新",
+      "refresh_rate": 0,
+      "mob_types": []
+    },
+    {
+      "name": "荒地",
+      "x": 300,
+      "y": 200,
+      "r": 80,
+      "kind": "danger",
+      "desc": "野兽出没，每45秒刷新",
+      "refresh_rate": 45,
+      "mob_types": [
+        "wolf",
+        "boar"
+      ]
+    },
+    {
+      "name": "废墟",
+      "x": -400,
+      "y": -300,
+      "r": 60,
+      "kind": "loot",
+      "desc": "可能残留物资，每60秒刷新",
+      "refresh_rate": 60,
+      "mob_types": [
+        "skeleton"
+      ]
+    },
+    {
+      "name": "清泉",
+      "x": 600,
+      "y": -500,
+      "r": 40,
+      "kind": "safe",
+      "desc": "补给点，无怪物刷新",
+      "refresh_rate": 0,
+      "mob_types": []
+    },
+    {
+      "name": "祭坛",
+      "x": -700,
+      "y": 500,
+      "r": 50,
+      "kind": "quest",
+      "desc": "可触发支线，每90秒刷新",
+      "refresh_rate": 90,
+      "mob_types": [
+        "spirit"
+      ]
+    }
   ],
-
   "decorations": [
-    { "_note": "玩家 (0,0) 周围 ±50 米密铺（开局立刻能看到）" },
-    { "id": "t01", "kind": "tree",     "x":   12, "y":   -8, "variant": 0 },
-    { "id": "t02", "kind": "dead_tree", "x":  -18, "y":   20, "variant": 1 },
-    { "id": "t03", "kind": "tree",     "x":   25, "y":   18, "variant": 0 },
-    { "id": "t04", "kind": "tree",     "x":  -32, "y":   -4, "variant": 1 },
-    { "id": "t05", "kind": "tree",     "x":    8, "y":   35, "variant": 0 },
-    { "id": "t06", "kind": "dead_tree", "x":  -10, "y":  -38, "variant": 1 },
-    { "id": "t07", "kind": "tree",     "x":   44, "y":   -2, "variant": 0 },
-    { "id": "t08", "kind": "tree",     "x":  -42, "y":   36, "variant": 0 },
-
-    { "id": "b01", "kind": "bush",     "x":    6, "y":  -15, "variant": 0 },
-    { "id": "b02", "kind": "bush",     "x":   20, "y":   30, "variant": 0 },
-    { "id": "b03", "kind": "bush",     "x":  -22, "y":   10, "variant": 0 },
-
-    { "id": "m01", "kind": "mushroom", "x":    4, "y":   16, "variant": 0 },
-    { "id": "m02", "kind": "mushroom", "x":  -14, "y":  -22, "variant": 0 },
-
-    { "id": "f01", "kind": "flower",   "x":   16, "y":  -16, "variant": 0 },
-    { "id": "f02", "kind": "flower",   "x":  -26, "y":   22, "variant": 0 },
-    { "id": "f03", "kind": "flower",   "x":   32, "y":   12, "variant": 0 },
-
-    { "id": "r01", "kind": "rock",     "x":   38, "y":  -28 },
-    { "id": "r02", "kind": "rock",     "x":  -38, "y":   28 },
-
-    { "_note": "更远的散布（玩家走动后会陆续看到）" },
-    { "id": "t10", "kind": "tree",     "x":  120, "y":  -60, "variant": 0 },
-    { "id": "t11", "kind": "dead_tree", "x": -150, "y":  100, "variant": 1 },
-    { "id": "t12", "kind": "tree",     "x":  250, "y":  180, "variant": 0 },
-    { "id": "t13", "kind": "tree",     "x":  -80, "y":  250, "variant": 1 },
-    { "id": "t14", "kind": "tree",     "x":  180, "y": -180, "variant": 0 },
-    { "id": "t15", "kind": "tree",     "x": -250, "y": -120, "variant": 1 },
-    { "id": "t16", "kind": "tree",     "x":   60, "y":  300, "variant": 0 },
-    { "id": "t17", "kind": "dead_tree", "x":  400, "y": -100, "variant": 1 },
-    { "id": "t18", "kind": "tree",     "x": -300, "y":  200, "variant": 0 },
-
-    { "id": "w01", "kind": "water",    "x": -200, "y": -50 },
-    { "id": "w02", "kind": "water",    "x":  350, "y":  120 },
-
-    { "id": "b10", "kind": "bush",     "x":  200, "y": -250 },
-    { "id": "b11", "kind": "bush",     "x": -350, "y":   80 },
-
-    { "id": "m10", "kind": "mushroom", "x":  170, "y":   30 },
-    { "id": "f10", "kind": "flower",   "x":  -60, "y":  -150 },
-    { "id": "f11", "kind": "flower",   "x":  220, "y":  -60 },
-
-    { "id": "r10", "kind": "rock",     "x": -180, "y":  300 },
-    { "id": "r11", "kind": "rock",     "x":  450, "y": -300 }
+    {
+      "id": "tree_n_-21",
+      "kind": "tree",
+      "x": -21,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-20",
+      "kind": "fence",
+      "x": -20,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-19",
+      "kind": "tree",
+      "x": -19,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-18",
+      "kind": "fence",
+      "x": -18,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-17",
+      "kind": "tree",
+      "x": -17,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-16",
+      "kind": "fence",
+      "x": -16,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-15",
+      "kind": "tree",
+      "x": -15,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-14",
+      "kind": "fence",
+      "x": -14,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-13",
+      "kind": "tree",
+      "x": -13,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-12",
+      "kind": "fence",
+      "x": -12,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-11",
+      "kind": "tree",
+      "x": -11,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-6",
+      "kind": "fence",
+      "x": -6,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-5",
+      "kind": "tree",
+      "x": -5,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_-4",
+      "kind": "fence",
+      "x": -4,
+      "y": -28
+    },
+    {
+      "id": "tree_n_-3",
+      "kind": "tree",
+      "x": -3,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "tree_n_3",
+      "kind": "tree",
+      "x": 3,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_4",
+      "kind": "fence",
+      "x": 4,
+      "y": -28
+    },
+    {
+      "id": "tree_n_5",
+      "kind": "tree",
+      "x": 5,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_6",
+      "kind": "fence",
+      "x": 6,
+      "y": -28
+    },
+    {
+      "id": "tree_n_11",
+      "kind": "tree",
+      "x": 11,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_12",
+      "kind": "fence",
+      "x": 12,
+      "y": -28
+    },
+    {
+      "id": "tree_n_13",
+      "kind": "tree",
+      "x": 13,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_14",
+      "kind": "fence",
+      "x": 14,
+      "y": -28
+    },
+    {
+      "id": "tree_n_15",
+      "kind": "tree",
+      "x": 15,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_16",
+      "kind": "fence",
+      "x": 16,
+      "y": -28
+    },
+    {
+      "id": "tree_n_17",
+      "kind": "tree",
+      "x": 17,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_18",
+      "kind": "fence",
+      "x": 18,
+      "y": -28
+    },
+    {
+      "id": "tree_n_19",
+      "kind": "tree",
+      "x": 19,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "fence_n_20",
+      "kind": "fence",
+      "x": 20,
+      "y": -28
+    },
+    {
+      "id": "tree_n_21",
+      "kind": "tree",
+      "x": 21,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "tree_s_-21",
+      "kind": "tree",
+      "x": -21,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-20",
+      "kind": "fence",
+      "x": -20,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-19",
+      "kind": "tree",
+      "x": -19,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-18",
+      "kind": "fence",
+      "x": -18,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-17",
+      "kind": "tree",
+      "x": -17,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-16",
+      "kind": "fence",
+      "x": -16,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-15",
+      "kind": "tree",
+      "x": -15,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-14",
+      "kind": "fence",
+      "x": -14,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-13",
+      "kind": "tree",
+      "x": -13,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-12",
+      "kind": "fence",
+      "x": -12,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-11",
+      "kind": "tree",
+      "x": -11,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-10",
+      "kind": "fence",
+      "x": -10,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-9",
+      "kind": "tree",
+      "x": -9,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "tree_s_-3",
+      "kind": "tree",
+      "x": -3,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_-2",
+      "kind": "fence",
+      "x": -2,
+      "y": 28
+    },
+    {
+      "id": "tree_s_-1",
+      "kind": "tree",
+      "x": -1,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_0",
+      "kind": "fence",
+      "x": 0,
+      "y": 28
+    },
+    {
+      "id": "tree_s_1",
+      "kind": "tree",
+      "x": 1,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_2",
+      "kind": "fence",
+      "x": 2,
+      "y": 28
+    },
+    {
+      "id": "tree_s_3",
+      "kind": "tree",
+      "x": 3,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "tree_s_9",
+      "kind": "tree",
+      "x": 9,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_10",
+      "kind": "fence",
+      "x": 10,
+      "y": 28
+    },
+    {
+      "id": "tree_s_11",
+      "kind": "tree",
+      "x": 11,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_12",
+      "kind": "fence",
+      "x": 12,
+      "y": 28
+    },
+    {
+      "id": "tree_s_13",
+      "kind": "tree",
+      "x": 13,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_14",
+      "kind": "fence",
+      "x": 14,
+      "y": 28
+    },
+    {
+      "id": "tree_s_15",
+      "kind": "tree",
+      "x": 15,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_16",
+      "kind": "fence",
+      "x": 16,
+      "y": 28
+    },
+    {
+      "id": "tree_s_17",
+      "kind": "tree",
+      "x": 17,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_18",
+      "kind": "fence",
+      "x": 18,
+      "y": 28
+    },
+    {
+      "id": "tree_s_19",
+      "kind": "tree",
+      "x": 19,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "fence_s_20",
+      "kind": "fence",
+      "x": 20,
+      "y": 28
+    },
+    {
+      "id": "tree_s_21",
+      "kind": "tree",
+      "x": 21,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "tree_e_-28",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-27",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -27
+    },
+    {
+      "id": "tree_e_-26",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -26,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-25",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -25
+    },
+    {
+      "id": "tree_e_-24",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -24,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-23",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -23
+    },
+    {
+      "id": "tree_e_-22",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -22,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-21",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -21
+    },
+    {
+      "id": "tree_e_-20",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -20,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-19",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -19
+    },
+    {
+      "id": "tree_e_-18",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -18,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-17",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -17
+    },
+    {
+      "id": "tree_e_-16",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -16,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-15",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -15
+    },
+    {
+      "id": "tree_e_-14",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -14,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-13",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -13
+    },
+    {
+      "id": "tree_e_-12",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -12,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-11",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -11
+    },
+    {
+      "id": "tree_e_-10",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -10,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-9",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -9
+    },
+    {
+      "id": "tree_e_-8",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -8,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_-7",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -7
+    },
+    {
+      "id": "tree_e_-6",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -6,
+      "variant": 0
+    },
+    {
+      "id": "tree_e_6",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 6,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_7",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 7
+    },
+    {
+      "id": "tree_e_8",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 8,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_9",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 9
+    },
+    {
+      "id": "tree_e_10",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 10,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_11",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 11
+    },
+    {
+      "id": "tree_e_12",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 12,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_13",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 13
+    },
+    {
+      "id": "tree_e_14",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 14,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_15",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 15
+    },
+    {
+      "id": "tree_e_16",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 16,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_17",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 17
+    },
+    {
+      "id": "tree_e_18",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 18,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_19",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 19
+    },
+    {
+      "id": "tree_e_20",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 20,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_21",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 21
+    },
+    {
+      "id": "tree_e_22",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 22,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_23",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 23
+    },
+    {
+      "id": "tree_e_24",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 24,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_25",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 25
+    },
+    {
+      "id": "tree_e_26",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 26,
+      "variant": 0
+    },
+    {
+      "id": "fence_e_27",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 27
+    },
+    {
+      "id": "tree_e_28",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 28,
+      "variant": 0
+    },
+    {
+      "id": "fence_w_-28",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -28
+    },
+    {
+      "id": "tree_w_-27",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -27,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-26",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -26
+    },
+    {
+      "id": "tree_w_-25",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -25,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-24",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -24
+    },
+    {
+      "id": "tree_w_-23",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -23,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-22",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -22
+    },
+    {
+      "id": "tree_w_-21",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -21,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-20",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -20
+    },
+    {
+      "id": "tree_w_-19",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -19,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-18",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -18
+    },
+    {
+      "id": "tree_w_-17",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -17,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-16",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -16
+    },
+    {
+      "id": "tree_w_-15",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -15,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-14",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -14
+    },
+    {
+      "id": "tree_w_-13",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -13,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-12",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -12
+    },
+    {
+      "id": "tree_w_-11",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -11,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_-10",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -10
+    },
+    {
+      "id": "tree_w_-9",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -9,
+      "variant": 1
+    },
+    {
+      "id": "tree_w_3",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 3,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_4",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 4
+    },
+    {
+      "id": "tree_w_5",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 5,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_6",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 6
+    },
+    {
+      "id": "tree_w_7",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 7,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_8",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 8
+    },
+    {
+      "id": "tree_w_9",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 9,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_10",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 10
+    },
+    {
+      "id": "tree_w_11",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 11,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_12",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 12
+    },
+    {
+      "id": "tree_w_13",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 13,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_14",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 14
+    },
+    {
+      "id": "tree_w_15",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 15,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_16",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 16
+    },
+    {
+      "id": "tree_w_17",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 17,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_18",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 18
+    },
+    {
+      "id": "tree_w_19",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 19,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_20",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 20
+    },
+    {
+      "id": "tree_w_21",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 21,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_22",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 22
+    },
+    {
+      "id": "tree_w_23",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 23,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_24",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 24
+    },
+    {
+      "id": "tree_w_25",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 25,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_26",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 26
+    },
+    {
+      "id": "tree_w_27",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 27,
+      "variant": 1
+    },
+    {
+      "id": "fence_w_28",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 28
+    },
+    {
+      "id": "road_ns_-25",
+      "kind": "road",
+      "x": 0,
+      "y": -25
+    },
+    {
+      "id": "road_ns_-24",
+      "kind": "road",
+      "x": 0,
+      "y": -24
+    },
+    {
+      "id": "road_ns_-23",
+      "kind": "road",
+      "x": 0,
+      "y": -23
+    },
+    {
+      "id": "road_ns_-22",
+      "kind": "road",
+      "x": 0,
+      "y": -22
+    },
+    {
+      "id": "road_ns_-21",
+      "kind": "road",
+      "x": 0,
+      "y": -21
+    },
+    {
+      "id": "road_ns_-20",
+      "kind": "road",
+      "x": 0,
+      "y": -20
+    },
+    {
+      "id": "road_ns_-19",
+      "kind": "road",
+      "x": 0,
+      "y": -19
+    },
+    {
+      "id": "road_ns_-18",
+      "kind": "road",
+      "x": 0,
+      "y": -18
+    },
+    {
+      "id": "road_ns_-17",
+      "kind": "road",
+      "x": 0,
+      "y": -17
+    },
+    {
+      "id": "road_ns_-16",
+      "kind": "road",
+      "x": 0,
+      "y": -16
+    },
+    {
+      "id": "road_ns_-15",
+      "kind": "road",
+      "x": 0,
+      "y": -15
+    },
+    {
+      "id": "road_ns_-14",
+      "kind": "road",
+      "x": 0,
+      "y": -14
+    },
+    {
+      "id": "road_ns_-13",
+      "kind": "road",
+      "x": 0,
+      "y": -13
+    },
+    {
+      "id": "road_ns_-12",
+      "kind": "road",
+      "x": 0,
+      "y": -12
+    },
+    {
+      "id": "road_ns_-11",
+      "kind": "road",
+      "x": 0,
+      "y": -11
+    },
+    {
+      "id": "road_ns_-10",
+      "kind": "road",
+      "x": 0,
+      "y": -10
+    },
+    {
+      "id": "road_ns_-9",
+      "kind": "road",
+      "x": 0,
+      "y": -9
+    },
+    {
+      "id": "road_ns_-8",
+      "kind": "road",
+      "x": 0,
+      "y": -8
+    },
+    {
+      "id": "road_ns_-7",
+      "kind": "road",
+      "x": 0,
+      "y": -7
+    },
+    {
+      "id": "road_ns_-6",
+      "kind": "road",
+      "x": 0,
+      "y": -6
+    },
+    {
+      "id": "road_ns_-5",
+      "kind": "road",
+      "x": 0,
+      "y": -5
+    },
+    {
+      "id": "road_ns_-4",
+      "kind": "road",
+      "x": 0,
+      "y": -4
+    },
+    {
+      "id": "road_ns_-3",
+      "kind": "road",
+      "x": 0,
+      "y": -3
+    },
+    {
+      "id": "road_ns_-2",
+      "kind": "road",
+      "x": 0,
+      "y": -2
+    },
+    {
+      "id": "road_ns_-1",
+      "kind": "road",
+      "x": 0,
+      "y": -1
+    },
+    {
+      "id": "road_ns_0",
+      "kind": "road",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "road_ns_1",
+      "kind": "road",
+      "x": 0,
+      "y": 1
+    },
+    {
+      "id": "road_ns_2",
+      "kind": "road",
+      "x": 0,
+      "y": 2
+    },
+    {
+      "id": "road_ns_3",
+      "kind": "road",
+      "x": 0,
+      "y": 3
+    },
+    {
+      "id": "road_ns_4",
+      "kind": "road",
+      "x": 0,
+      "y": 4
+    },
+    {
+      "id": "road_ns_5",
+      "kind": "road",
+      "x": 0,
+      "y": 5
+    },
+    {
+      "id": "road_ns_6",
+      "kind": "road",
+      "x": 0,
+      "y": 6
+    },
+    {
+      "id": "road_ns_7",
+      "kind": "road",
+      "x": 0,
+      "y": 7
+    },
+    {
+      "id": "road_ns_8",
+      "kind": "road",
+      "x": 0,
+      "y": 8
+    },
+    {
+      "id": "road_ns_9",
+      "kind": "road",
+      "x": 0,
+      "y": 9
+    },
+    {
+      "id": "road_ns_10",
+      "kind": "road",
+      "x": 0,
+      "y": 10
+    },
+    {
+      "id": "road_ns_11",
+      "kind": "road",
+      "x": 0,
+      "y": 11
+    },
+    {
+      "id": "road_ns_12",
+      "kind": "road",
+      "x": 0,
+      "y": 12
+    },
+    {
+      "id": "road_ns_13",
+      "kind": "road",
+      "x": 0,
+      "y": 13
+    },
+    {
+      "id": "road_ns_14",
+      "kind": "road",
+      "x": 0,
+      "y": 14
+    },
+    {
+      "id": "road_ns_15",
+      "kind": "road",
+      "x": 0,
+      "y": 15
+    },
+    {
+      "id": "road_ns_16",
+      "kind": "road",
+      "x": 0,
+      "y": 16
+    },
+    {
+      "id": "road_ns_17",
+      "kind": "road",
+      "x": 0,
+      "y": 17
+    },
+    {
+      "id": "road_ns_18",
+      "kind": "road",
+      "x": 0,
+      "y": 18
+    },
+    {
+      "id": "road_ns_19",
+      "kind": "road",
+      "x": 0,
+      "y": 19
+    },
+    {
+      "id": "road_ns_20",
+      "kind": "road",
+      "x": 0,
+      "y": 20
+    },
+    {
+      "id": "road_ns_21",
+      "kind": "road",
+      "x": 0,
+      "y": 21
+    },
+    {
+      "id": "road_ns_22",
+      "kind": "road",
+      "x": 0,
+      "y": 22
+    },
+    {
+      "id": "road_ns_23",
+      "kind": "road",
+      "x": 0,
+      "y": 23
+    },
+    {
+      "id": "road_ns_24",
+      "kind": "road",
+      "x": 0,
+      "y": 24
+    },
+    {
+      "id": "road_ns_25",
+      "kind": "road",
+      "x": 0,
+      "y": 25
+    },
+    {
+      "id": "road_ew_-19",
+      "kind": "road",
+      "x": -19,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-18",
+      "kind": "road",
+      "x": -18,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-17",
+      "kind": "road",
+      "x": -17,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-16",
+      "kind": "road",
+      "x": -16,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-15",
+      "kind": "road",
+      "x": -15,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-14",
+      "kind": "road",
+      "x": -14,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-13",
+      "kind": "road",
+      "x": -13,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-12",
+      "kind": "road",
+      "x": -12,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-11",
+      "kind": "road",
+      "x": -11,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-10",
+      "kind": "road",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-9",
+      "kind": "road",
+      "x": -9,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-8",
+      "kind": "road",
+      "x": -8,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-7",
+      "kind": "road",
+      "x": -7,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-6",
+      "kind": "road",
+      "x": -6,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-5",
+      "kind": "road",
+      "x": -5,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-4",
+      "kind": "road",
+      "x": -4,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-3",
+      "kind": "road",
+      "x": -3,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-2",
+      "kind": "road",
+      "x": -2,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-1",
+      "kind": "road",
+      "x": -1,
+      "y": 0
+    },
+    {
+      "id": "road_ew_0",
+      "kind": "road",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "road_ew_1",
+      "kind": "road",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "id": "road_ew_2",
+      "kind": "road",
+      "x": 2,
+      "y": 0
+    },
+    {
+      "id": "road_ew_3",
+      "kind": "road",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "id": "road_ew_4",
+      "kind": "road",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "id": "road_ew_5",
+      "kind": "road",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "id": "road_ew_6",
+      "kind": "road",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "id": "road_ew_7",
+      "kind": "road",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "id": "road_ew_8",
+      "kind": "road",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "id": "road_ew_9",
+      "kind": "road",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "id": "road_ew_10",
+      "kind": "road",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "id": "road_ew_11",
+      "kind": "road",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "id": "road_ew_12",
+      "kind": "road",
+      "x": 12,
+      "y": 0
+    },
+    {
+      "id": "road_ew_13",
+      "kind": "road",
+      "x": 13,
+      "y": 0
+    },
+    {
+      "id": "road_ew_14",
+      "kind": "road",
+      "x": 14,
+      "y": 0
+    },
+    {
+      "id": "road_ew_15",
+      "kind": "road",
+      "x": 15,
+      "y": 0
+    },
+    {
+      "id": "road_ew_16",
+      "kind": "road",
+      "x": 16,
+      "y": 0
+    },
+    {
+      "id": "road_ew_17",
+      "kind": "road",
+      "x": 17,
+      "y": 0
+    },
+    {
+      "id": "road_ew_18",
+      "kind": "road",
+      "x": 18,
+      "y": 0
+    },
+    {
+      "id": "road_ew_19",
+      "kind": "road",
+      "x": 19,
+      "y": 0
+    },
+    {
+      "id": "house_blacksmith",
+      "kind": "building",
+      "x": -12,
+      "y": -18,
+      "variant": 0
+    },
+    {
+      "id": "forge",
+      "kind": "furniture",
+      "x": -12,
+      "y": -21,
+      "variant": 0
+    },
+    {
+      "id": "house_shop",
+      "kind": "building",
+      "x": 12,
+      "y": -18,
+      "variant": 1
+    },
+    {
+      "id": "counter",
+      "kind": "furniture",
+      "x": 12,
+      "y": -21,
+      "variant": 1
+    },
+    {
+      "id": "house_elder",
+      "kind": "building",
+      "x": -12,
+      "y": 18,
+      "variant": 2
+    },
+    {
+      "id": "carpet",
+      "kind": "furniture",
+      "x": -12,
+      "y": 15,
+      "variant": 2
+    },
+    {
+      "id": "house_inn",
+      "kind": "building",
+      "x": 12,
+      "y": 18,
+      "variant": 3
+    },
+    {
+      "id": "bed",
+      "kind": "furniture",
+      "x": 12,
+      "y": 15,
+      "variant": 3
+    },
+    {
+      "id": "npc_blacksmith",
+      "kind": "npc",
+      "x": -8,
+      "y": -18,
+      "variant": 0,
+      "name": "铁匠"
+    },
+    {
+      "id": "npc_merchant",
+      "kind": "npc",
+      "x": 8,
+      "y": -18,
+      "variant": 1,
+      "name": "商人"
+    },
+    {
+      "id": "npc_elder",
+      "kind": "npc",
+      "x": -8,
+      "y": 18,
+      "variant": 2,
+      "name": "长者"
+    },
+    {
+      "id": "npc_innkeeper",
+      "kind": "npc",
+      "x": 8,
+      "y": 18,
+      "variant": 3,
+      "name": "旅馆老板"
+    },
+    {
+      "id": "npc_guard_n",
+      "kind": "npc",
+      "x": 0,
+      "y": -25,
+      "variant": 4,
+      "name": "守卫"
+    },
+    {
+      "id": "npc_guard_s",
+      "kind": "npc",
+      "x": 0,
+      "y": 25,
+      "variant": 4,
+      "name": "守卫"
+    },
+    {
+      "id": "npc_guard_e",
+      "kind": "npc",
+      "x": 19,
+      "y": 0,
+      "variant": 4,
+      "name": "守卫"
+    },
+    {
+      "id": "npc_guard_w",
+      "kind": "npc",
+      "x": -19,
+      "y": 0,
+      "variant": 4,
+      "name": "守卫"
+    },
+    {
+      "id": "farm_0_0",
+      "kind": "farm",
+      "x": -16,
+      "y": 5
+    },
+    {
+      "id": "farm_0_1",
+      "kind": "farm",
+      "x": -13,
+      "y": 5
+    },
+    {
+      "id": "farm_0_2",
+      "kind": "farm",
+      "x": -10,
+      "y": 5
+    },
+    {
+      "id": "farm_1_0",
+      "kind": "farm",
+      "x": -16,
+      "y": 8
+    },
+    {
+      "id": "farm_1_1",
+      "kind": "farm",
+      "x": -13,
+      "y": 8
+    },
+    {
+      "id": "farm_1_2",
+      "kind": "farm",
+      "x": -10,
+      "y": 8
+    },
+    {
+      "id": "farm_2_0",
+      "kind": "farm",
+      "x": -16,
+      "y": 11
+    },
+    {
+      "id": "farm_2_1",
+      "kind": "farm",
+      "x": -13,
+      "y": 11
+    },
+    {
+      "id": "farm_2_2",
+      "kind": "farm",
+      "x": -10,
+      "y": 11
+    },
+    {
+      "id": "tree_corner_ne",
+      "kind": "tree",
+      "x": 18,
+      "y": -23,
+      "variant": 0
+    },
+    {
+      "id": "tree_corner_nw",
+      "kind": "tree",
+      "x": -18,
+      "y": -23,
+      "variant": 1
+    },
+    {
+      "id": "tree_corner_se",
+      "kind": "tree",
+      "x": 18,
+      "y": 23,
+      "variant": 0
+    },
+    {
+      "id": "tree_corner_sw",
+      "kind": "tree",
+      "x": -18,
+      "y": 23,
+      "variant": 1
+    },
+    {
+      "id": "tree_wild_1",
+      "kind": "tree",
+      "x": 120,
+      "y": -60,
+      "variant": 0
+    },
+    {
+      "id": "tree_wild_2",
+      "kind": "tree",
+      "x": -150,
+      "y": 100,
+      "variant": 1
+    },
+    {
+      "id": "water_wild_1",
+      "kind": "water",
+      "x": -200,
+      "y": -50
+    },
+    {
+      "id": "ruin1",
+      "kind": "building",
+      "x": -380,
+      "y": -280,
+      "variant": 4
+    },
+    {
+      "id": "ruin2",
+      "kind": "building",
+      "x": -420,
+      "y": -320,
+      "variant": 5
+    }
   ],
-
   "chests": [
-    { "_note": "玩家 (0,0) 附近（开局就能看到一两个宝箱）" },
-    { "id": "ch_near_1", "x":   22, "y":  -28, "tier": 1, "loot": { "exp": 15, "money": 12, "item": "干粮" } },
-    { "id": "ch_near_2", "x":  -35, "y":   30, "tier": 2, "loot": { "exp": 20, "money": 18, "item": "急救包" } },
-    { "_note": "散场宝箱（玩家走动后才会看到）" },
-    { "id": "ch1", "x":  100, "y":  150, "tier": 1, "loot": { "exp": 15, "money": 12, "item": "干粮" } },
-    { "id": "ch2", "x": -200, "y":  100, "tier": 2, "loot": { "exp": 20, "money": 18, "item": "急救包" } },
-    { "id": "ch3", "x": -500, "y": -200, "tier": 1, "loot": { "exp": 12, "money":  9, "item": "工具卷" } },
-    { "id": "ch4", "x":  450, "y":  300, "tier": 2, "loot": { "exp": 25, "money": 20, "item": "药剂" } }
+    {
+      "_note": "玩家 (0,0) 附近（开局就能看到一两个宝箱）"
+    },
+    {
+      "id": "ch_near_1",
+      "x": 22,
+      "y": -28,
+      "tier": 1,
+      "loot": {
+        "exp": 15,
+        "money": 12,
+        "item": "干粮"
+      }
+    },
+    {
+      "id": "ch_near_2",
+      "x": -35,
+      "y": 30,
+      "tier": 2,
+      "loot": {
+        "exp": 20,
+        "money": 18,
+        "item": "急救包"
+      }
+    },
+    {
+      "_note": "散场宝箱（玩家走动后才会看到）"
+    },
+    {
+      "id": "ch1",
+      "x": 100,
+      "y": 150,
+      "tier": 1,
+      "loot": {
+        "exp": 15,
+        "money": 12,
+        "item": "干粮"
+      }
+    },
+    {
+      "id": "ch2",
+      "x": -200,
+      "y": 100,
+      "tier": 2,
+      "loot": {
+        "exp": 20,
+        "money": 18,
+        "item": "急救包"
+      }
+    },
+    {
+      "id": "ch3",
+      "x": -500,
+      "y": -200,
+      "tier": 1,
+      "loot": {
+        "exp": 12,
+        "money": 9,
+        "item": "工具卷"
+      }
+    },
+    {
+      "id": "ch4",
+      "x": 450,
+      "y": 300,
+      "tier": 2,
+      "loot": {
+        "exp": 25,
+        "money": 20,
+        "item": "药剂"
+      }
+    }
   ],
-
   "potions": [
-    { "_note": "玩家附近" },
-    { "id": "p_near_1", "x":  -16, "y":   24, "heal": 40 },
-    { "id": "p_near_2", "x":   28, "y":   12, "heal": 30 },
-    { "_note": "散场" },
-    { "id": "p1", "x":   70, "y": -120, "heal": 40 },
-    { "id": "p2", "x": -150, "y":   50, "heal": 40 },
-    { "id": "p3", "x":  300, "y": -300, "heal": 30 },
-    { "id": "p4", "x": -350, "y":  150, "heal": 30 }
+    {
+      "_note": "玩家附近"
+    },
+    {
+      "id": "p_near_1",
+      "x": -16,
+      "y": 24,
+      "heal": 40
+    },
+    {
+      "id": "p_near_2",
+      "x": 28,
+      "y": 12,
+      "heal": 30
+    },
+    {
+      "_note": "散场"
+    },
+    {
+      "id": "p1",
+      "x": 70,
+      "y": -120,
+      "heal": 40
+    },
+    {
+      "id": "p2",
+      "x": -150,
+      "y": 50,
+      "heal": 40
+    },
+    {
+      "id": "p3",
+      "x": 300,
+      "y": -300,
+      "heal": 30
+    },
+    {
+      "id": "p4",
+      "x": -350,
+      "y": 150,
+      "heal": 30
+    }
   ],
-
   "chunks": [
     {
-      "cx": 0, "cz": 0,
+      "cx": 0,
+      "cz": 0,
       "destroyed": [
-        { "x":  30, "y":   5, "z": 0 },
-        { "x":  32, "y":   5, "z": 0 },
-        { "x":  -8, "y":  10, "z": 1 }
+        {
+          "x": 30,
+          "y": 5,
+          "z": 0
+        },
+        {
+          "x": 32,
+          "y": 5,
+          "z": 0
+        },
+        {
+          "x": -8,
+          "y": 10,
+          "z": 1
+        }
       ]
     }
   ]

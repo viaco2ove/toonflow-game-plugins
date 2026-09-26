@@ -187,6 +187,27 @@ export const TILE_WATER_DEEP_ID = 6965;     // 深蓝水
 export const TILE_WATER_SHALLOW_ID = 6963;  // 浅蓝水边
 export const TILE_POTION_ID = 614;          // 药水瓶
 
+// 建筑相关 tiles（来自 Dawnlike tileset，与 Rotten-Soup mulberryTown.json 一致）
+export const TILE_HOUSE_ROOF_LEFT_ID = 9184;   // 屋顶左
+export const TILE_HOUSE_ROOF_MID_ID = 9185;    // 屋顶中
+export const TILE_HOUSE_ROOF_RIGHT_ID = 9186;  // 屋顶右
+export const TILE_HOUSE_TOP_LEFT_ID = 9304;    // 墙体左上
+export const TILE_HOUSE_TOP_MID_ID = 9305;     // 墙体上中
+export const TILE_HOUSE_TOP_RIGHT_ID = 9306;   // 墙体右上
+export const TILE_HOUSE_BOTTOM_ID = 9310;      // 墙体底部
+export const TILE_HOUSE_DOOR_ID = 9425;        // 门
+export const TILE_HOUSE_WINDOW_ID = 9424;      // 窗户
+export const TILE_HOUSE_WINDOW_RIGHT_ID = 9426;// 窗（右）
+// NPC 头顶气泡
+export const TILE_DIALOG_BUBBLE_ID = 8623;
+// 木栅栏
+export const TILE_FENCE_POST_ID = 9298;        // 木桩
+export const TILE_FENCE_RAIL_ID = 8297;        // 横梁
+// 农田
+export const TILE_FARM_DIRT_ID = 8005;         // 农田泥土
+export const TILE_FARM_GREEN_ID = 7766;        // 绿色作物
+export const TILE_FARM_TOP_ID = 7745;          // 田地上沿
+
 /**
  * ★ v6 地表配色表（对照 Rotten-Soup 实测地表构成：整片同色 + 大尺度稀疏变体）
  *

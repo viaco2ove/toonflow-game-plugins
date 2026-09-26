@@ -21,6 +21,11 @@ import {
   TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
+  TILE_HOUSE_ROOF_LEFT_ID, TILE_HOUSE_ROOF_MID_ID, TILE_HOUSE_ROOF_RIGHT_ID,
+  TILE_HOUSE_TOP_LEFT_ID, TILE_HOUSE_TOP_MID_ID, TILE_HOUSE_TOP_RIGHT_ID,
+  TILE_HOUSE_BOTTOM_ID, TILE_HOUSE_DOOR_ID, TILE_HOUSE_WINDOW_ID, TILE_HOUSE_WINDOW_RIGHT_ID,
+  TILE_DIALOG_BUBBLE_ID, TILE_FENCE_POST_ID, TILE_FENCE_RAIL_ID,
+  TILE_FARM_DIRT_ID, TILE_FARM_GREEN_ID, TILE_FARM_TOP_ID,
   GROUND_CELL_M, GROUND_BIOME_SCALE_M, GROUND_TONE_SCALE_M,
   GROUND_SAND_MAX, GROUND_DIRT_MAX, GROUND_TONE_SPLIT,
   GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
@@ -690,6 +695,152 @@ function drawTile(
   }
 }
 
+/* ============================================================
+ * ★ 城镇建筑像素艺术绘制（与 Rotten-Soup mulberryTown.json 同构）
+ *
+ * 瓦片类型：
+ *   - 屋顶（顶行）：左 / 中 / 右 = 9184 / 9185 / 9186（带斜面封边）
+ *   - 墙体（中间行）：左 / 中 / 右 = 9304 / 9305 / 9306
+ *   - 墙底（最底行）：9310（带阴影描边）
+ *   - 门：9425（占 2 行高，靠最底，门口朝南）
+ *   - 窗：9424 / 9426
+ *   - 室内地面：9189（用于最底行中间 / 室内细节）
+ *
+ * 每种建筑 kind 有不同的尺寸与内部格局：
+ *   - inn   6×7 大屋：屋顶 2 行 + 墙 4 行（含 2 行门面）+ 底 1 行
+ *   - shop  5×6 中型铺面
+ *   - house 4×5 标准民居
+ *   - well  2×2 水井（特殊：圆顶石井）
+ * ============================================================ */
+interface TownBuilding {
+  id: string;
+  kind?: string;
+  name?: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 选瓦片：列索引 → (左/中/右) 屋顶 / 墙顶 / 墙底
+ * 行索引：
+ *   0        = 屋顶顶行（只有左 / 中 / 右三块）
+ *   1        = 屋顶中行（同 0）
+ *   2..h-2   = 墙身
+ *   h-1      = 墙底
+ *   门窗放 2..h-2 中间一行（朝南/朝相机）。
+ */
+function drawTownBuildingTiles(
+  ctx: CanvasRenderingContext2D,
+  b: TownBuilding,
+  ppm: number,                 // pixels per meter（=每瓦片边长）
+  wx2px: (x: number) => number,
+  wz2py: (z: number) => number,
+) {
+  const kind = b.kind || "house";
+  const w = Math.max(2, b.w | 0);
+  const h = Math.max(2, b.h | 0);
+  const cx = wx2px(b.x);
+  const cy = wz2py(b.y);
+  const tile = Math.max(4, Math.round(ppm)); // 单瓦片像素边长（与角色同尺度）
+  const bw = w * tile;     // 建筑总宽（像素）
+  const bh = h * tile;     // 建筑总高（像素）
+  const x0 = cx - bw / 2;  // 建筑最左
+  const y0 = cy - bh + 4;  // 建筑最上（与原"building"装饰物同一锚点）
+
+  // —— 水井：单独绘制（圆顶石井 + 水面），不画方屋 ——
+  if (kind === "well") {
+    drawWellPixel(ctx, x0, y0, bw, bh, tile);
+    return;
+  }
+
+  // 行类型：
+  //   0            → 屋顶顶行
+  //   1            → 屋顶中行
+  //   2 .. h-2     → 墙身（门窗在此）
+  //   h-1          → 墙底
+  for (let row = 0; row < h; row++) {
+    const ty = y0 + row * tile;
+    for (let col = 0; col < w; col++) {
+      const tx = x0 + col * tile;
+      const isLeft   = col === 0;
+      const isRight  = col === w - 1;
+      const isMiddle = !isLeft && !isRight;
+      const doorCol  = (w / 2) | 0;        // 朝南的门在中列
+      const isDoorCol = isMiddle && col === doorCol;
+
+      // 行 0/1：屋顶
+      if (row === 0 || row === 1) {
+        const tileId = isLeft
+          ? TILE_HOUSE_ROOF_LEFT_ID
+          : (isRight ? TILE_HOUSE_ROOF_RIGHT_ID : TILE_HOUSE_ROOF_MID_ID);
+        drawTile(ctx, tileId, tx, ty, tile, tile);
+        continue;
+      }
+
+      // 行 h-1：墙底
+      if (row === h - 1) {
+        drawTile(ctx, TILE_HOUSE_BOTTOM_ID, tx, ty, tile, tile);
+        continue;
+      }
+
+      // 行 2 .. h-2：墙身
+      //   - 左 / 右：墙顶左 / 右（带尖角）
+      //   - 中列 + 是"门面行"：门（占两行 → 第二行重复画门，营造 2 格高门洞）
+      //   - 中列 + 是"窗行"：窗（仅 shop / inn 偶数行放窗）
+      //   - 其余：墙顶中
+      const facadeRow = row === h - 2;       // 紧贴墙底的那行 = 门面行
+      const windowRow = (kind === "shop" || kind === "inn") && !facadeRow && (row % 2 === 0);
+
+      if (isLeft) {
+        drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, tx, ty, tile, tile);
+      } else if (isRight) {
+        drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, tx, ty, tile, tile);
+      } else if (isDoorCol && facadeRow) {
+        drawTile(ctx, TILE_HOUSE_DOOR_ID, tx, ty, tile, tile);
+      } else if (isDoorCol && row === h - 3) {
+        // 门洞上方再画一行门（与门面行连成 2 格高门洞）
+        drawTile(ctx, TILE_HOUSE_DOOR_ID, tx, ty, tile, tile);
+      } else if (windowRow && (col === doorCol - 1 || col === doorCol + 1)) {
+        // 门两侧的格子放窗
+        drawTile(ctx, col < doorCol ? TILE_HOUSE_WINDOW_ID : TILE_HOUSE_WINDOW_RIGHT_ID, tx, ty, tile, tile);
+      } else {
+        drawTile(ctx, TILE_HOUSE_TOP_MID_ID, tx, ty, tile, tile);
+      }
+    }
+  }
+}
+
+/**
+ * 水井像素艺术：
+ *   - 2×2 水井用 4 个瓦片拼出"石井 + 水面"：
+ *     [木井栏顶] [木井栏顶]
+ *     [石块环]   [水面]
+ *   - tileset 中没有专用井 tile，借用屋顶中（9185）+ 墙底（9310）+ 水（4500）组合。
+ */
+function drawWellPixel(
+  ctx: CanvasRenderingContext2D,
+  x0: number, y0: number, bw: number, bh: number, tile: number,
+) {
+  // 左上 / 右上：木井栏顶（屋顶中瓦片作为占位；没有专用井栏 tile，借用屋顶木纹）
+  drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0,             y0,             tile, tile);
+  drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + tile,     y0,             tile, tile);
+  // 左下：石块（墙底瓦片带阴影边）
+  drawTile(ctx, TILE_HOUSE_BOTTOM_ID,   x0,             y0 + tile,      tile, tile);
+  // 右下：水面
+  drawTile(ctx, TILE_WATER_ID,          x0 + tile,     y0 + tile,      tile, tile);
+  // 井口轮廓：在水面中心画一个深色圆点（井口黑眼）
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.beginPath();
+  const cx = x0 + tile + tile / 2;
+  const cy = y0 + tile + tile / 2;
+  ctx.arc(cx, cy, tile * 0.22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 // ★ 像素艺术：用 imageSmoothingEnabled=false 保证像素清晰（不模糊）
 function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
   // ★ fix④：跟随「像素风」复选框——关闭时若仍强制 imageSmoothingEnabled=false，
@@ -701,7 +852,7 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
 }
 
 // 地图装饰物（树木、水体、花木）位置 —— 优先从 overworld.json 加载
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree"; id: string; variant?: number }
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road"; id: string; variant?: number; name?: string }
 const mapDecorations = ref<Decoration[]>([]);
 
 /** Chunk 系统（按玩家位置动态加载/卸载装饰物） */
@@ -751,28 +902,30 @@ function initDecorations() {
  *   环形补 spawn 4-6 只野兽，让玩家开局立刻能看到。重复调用安全：检查
  *   state.entities 里是否已有 enemy，若有则跳过。
  */
-function spawnLocalMobsIfNeeded(): void {
-  if (!state.value || state.value.phase !== "playing") return;
-  const hasEnemy = state.value.entities.some((e) => e.side === "enemy");
-  if (hasEnemy) return;
-  const me = state.value.entities.find((e) => e.side === "player");
-  const cx = me?.x ?? 0;
-  const cy = me?.y ?? 0;
-  const archetypes = [
-    { name: "哥布林斥候", hp: 30, atk: 6 },
-    { name: "巨狼",       hp: 60, atk: 10 },
-    { name: "毒蛇",       hp: 25, atk: 8 },
-    { name: "蝙蝠",       hp: 20, atk: 5 },
-    { name: "骷髅兵",     hp: 50, atk: 12 },
-  ];
-  const seen = new Set<string>();
+/**
+ * 区域刷新野怪
+ * @param zoneData 区域数据（包含 refresh_rate, mob_types）
+ * @param cx 玩家 x 坐标
+ * @param cy 玩家 y 坐标
+ */
+function spawnZoneMobs(zoneData: any, cx: number, cy: number): void {
+  const mobTypeMap: Record<string, { name: string; hp: number; atk: number }> = {
+    wolf:     { name: "巨狼",       hp: 60, atk: 10 },
+    boar:     { name: "野猪",       hp: 50, atk: 8 },
+    skeleton: { name: "骷髅兵",     hp: 50, atk: 12 },
+    goblin:   { name: "哥布林斥候", hp: 30, atk: 6 },
+    snake:    { name: "毒蛇",       hp: 25, atk: 8 },
+    bat:      { name: "蝙蝠",       hp: 20, atk: 5 },
+  };
+  const defaultTypes = ["wolf", "boar", "goblin"];
+  const types = (zoneData.mob_types?.length ? zoneData.mob_types : defaultTypes);
   let seq = 0;
-  for (let i = 0; i < 5; i++) {
-    const arch = archetypes[i % archetypes.length];
+  for (let i = 0; i < 4; i++) {
+    const typeKey = types[i % types.length];
+    const arch = mobTypeMap[typeKey] ?? mobTypeMap["wolf"];
     const angle = Math.random() * Math.PI * 2;
-    const dist  = 30 + Math.random() * 70;   // 30-100 米环形
-    const id    = `localmob_${Date.now()}_${seq++}`;
-    seen.add(id);
+    const dist = 20 + Math.random() * 40;   // 20-60 米环形
+    const id = `zone_${zoneData.name}_${Date.now()}_${seq++}`;
     state.value.entities.push({
       id, name: arch.name, side: "enemy",
       x: cx + Math.cos(angle) * dist,
@@ -783,7 +936,69 @@ function spawnLocalMobsIfNeeded(): void {
       facing: 180, cooldown: 0, alive: true,
     });
   }
-  state.value.events.push(`[local-mob] 已 spawn ${seen.size} 只野兽`);
+}
+
+/**
+ * 区域野怪刷新主逻辑
+ */
+function spawnLocalMobsIfNeeded(): void {
+  if (!state.value || state.value.phase !== "playing") return;
+  const me = state.value.entities.find((e) => e.side === "player");
+  if (!me) return;
+
+  const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
+  const currentZone = zones.find((z) => Math.hypot(z.x - me.x, z.y - me.y) <= z.r);
+
+  // 安全区不刷新
+  if (currentZone?.kind === "safe" || currentZone?.refresh_rate === 0) return;
+
+  // 检查该区域野怪是否已全死
+  const zoneEnemies = state.value.entities.filter((e) => {
+    if (e.side !== "enemy") return false;
+    const zoneName = (e as any).zoneName;
+    return zoneName === currentZone?.name;
+  });
+  const allDead = zoneEnemies.length > 0 && zoneEnemies.every((e) => !e.alive);
+
+  // 有活着的怪，不刷新
+  if (zoneEnemies.some((e) => e.alive)) return;
+
+  // 根据区域配置决定是否刷新
+  if (currentZone) {
+    // 有区域配置：检查刷新计时
+    if (!zoneRespawnReady && !allDead) return;
+    spawnZoneMobs(currentZone, me.x, me.y);
+    zoneRespawnReady = false;
+    state.value.events.push(`[${currentZone.name}] 野怪刷新！`);
+  } else {
+    // 野外（无区域配置）：每 60 秒自动刷新
+    const hasEnemy = state.value.entities.some((e) => e.side === "enemy");
+    if (hasEnemy) return;
+    const archetypes = [
+      { name: "哥布林斥候", hp: 30, atk: 6 },
+      { name: "巨狼",       hp: 60, atk: 10 },
+      { name: "毒蛇",       hp: 25, atk: 8 },
+      { name: "蝙蝠",       hp: 20, atk: 5 },
+      { name: "骷髅兵",     hp: 50, atk: 12 },
+    ];
+    let seq = 0;
+    for (let i = 0; i < 5; i++) {
+      const arch = archetypes[i % archetypes.length];
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 30 + Math.random() * 70;
+      const id = `localmob_${Date.now()}_${seq++}`;
+      state.value.entities.push({
+        id, name: arch.name, side: "enemy",
+        x: me.x + Math.cos(angle) * dist,
+        y: me.y + Math.sin(angle) * dist,
+        vx: 0, vy: 0,
+        hp: arch.hp, maxHp: arch.hp,
+        atk: arch.atk, level: 1,
+        facing: 180, cooldown: 0, alive: true,
+      });
+    }
+    state.value.events.push(`[local-mob] 已 spawn 5 只野兽`);
+  }
 }
 
 /**
@@ -798,8 +1013,16 @@ function spawnLocalMobsIfNeeded(): void {
 const LOCAL_MOVE_SPEED_M = 3;     // 米/秒（与 entry.ts MOVE_SPEED_M 一致）
 const TICK_DT = 0.1;              // 与 loop() 的 TICK_MS=100 对应
 const WORLD_LIMIT_M = 1490;       // 与 entry.ts WORLD_X_RANGE(±1500) - 10 对齐
+/** 区域刷新机制 */
+const DETECTION_RADIUS_M = 10;      // 脱战检测半径（米）
+const ZONE_RESPAWN_SEC = 45;       // 离开区域后刷新野怪时间（秒）
+const TICK_RATE_MS = 100;          // tick 间隔（毫秒）
 /** 本地权威位姿缓存：宿主 state 推回时用它覆盖宿主侧玩家坐标（防回退） */
 let lastLocalPose: { x: number; y: number; facing: number } | null = null;
+/** 区域刷新追踪 */
+let currentZoneName: string | null = null;       // 玩家当前所在区域
+let zoneLeftTick: number = 0;                    // 离开区域的 tick 时间
+let zoneRespawnReady = false;                    // 是否可以刷新该区域野怪
 
 function localTick(): void {
   if (!state.value || state.value.phase !== "playing") return;
@@ -843,6 +1066,34 @@ function localTick(): void {
     me.y = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.y));
     // 记录本地权威位姿，供 onHostState 覆盖宿主回推值
     lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
+
+    // 区域刷新追踪（支持圆形和矩形区域）
+    const zones = (state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || [];
+    const zone = zones.find((z: any) => {
+      // 优先用矩形范围（rx/ry），否则用圆形（r）
+      if (z.rx !== undefined && z.ry !== undefined) {
+        return me.x >= z.x - z.rx && me.x <= z.x + z.rx &&
+               me.y >= z.y - z.ry && me.y <= z.y + z.ry;
+      }
+      return Math.hypot(z.x - me.x, z.y - me.y) <= z.r;
+    });
+    const zoneName = zone?.name ?? null;
+    if (zoneName !== currentZoneName) {
+      if (currentZoneName !== null && zoneRespawnReady === false) {
+        // 离开了区域，启动 45 秒计时器
+        zoneLeftTick = s.tick;
+        zoneRespawnReady = false;
+      }
+      currentZoneName = zoneName;
+    }
+    // 检查是否 45 秒已过（每 tick = 100ms）
+    if (zoneLeftTick > 0 && !zoneRespawnReady) {
+      const elapsedSec = ((s.tick - zoneLeftTick) * TICK_DT);
+      if (elapsedSec >= ZONE_RESPAWN_SEC) {
+        zoneRespawnReady = true;
+        zoneLeftTick = 0;
+      }
+    }
   }
   // 2. 推进 tick 计数
   s.tick = (s.tick || 0) + 1;
@@ -1001,6 +1252,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
   const key = e.side === "player" ? "player"
             : e.side === "ally"   ? "ally"
+            : e.side === "neutral" ? "ally"     // ★ v4：城镇中立角色用友方 sprite，避免显示成敌人
             : "enemy_char";
   // ★ 永远 walk 帧循环（与 Rotten-Soup 一致：sprite.animationSpeed=0.065）
   const tileId = spriteTileId(key, _animTick);
@@ -1035,6 +1287,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     const color = e.side === "player" ? "#4ea1ff"
       : e.side === "ally" ? "#5fd28a"
       : e.side === "enemy" ? "#ff6b6b"
+      : e.side === "neutral" ? "#e0c86a"
       : "#9aa4b2";
     ctx.save();
     ctx.fillStyle = color;
@@ -1296,11 +1549,18 @@ function render() {
 
   // ★ 地图 zones（map-gener agent 产出 + overworld.json 静态数据）：
   // 不同 kind 不同色调椭圆区域。画在相机变换内。
+  // ★ v4：新增区域 kind 配色（城镇安全区 + 6 个野区；旧 kind 保留兼容）
   const kindColors: Record<string, string> = {
     safe: "rgba(94, 210, 138, .18)",
     danger: "rgba(255, 80, 80, .18)",
     loot: "rgba(224, 178, 74, .2)",
     quest: "rgba(110, 168, 254, .18)",
+    forest: "rgba(94, 178, 106, .14)",
+    shore: "rgba(96, 176, 196, .14)",
+    mine: "rgba(178, 150, 96, .14)",
+    ruin: "rgba(168, 132, 168, .14)",
+    marsh: "rgba(110, 156, 128, .14)",
+    wild: "rgba(196, 156, 96, .14)",
   };
   const allZones = (s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || [];
 
@@ -1334,6 +1594,110 @@ function render() {
     ctx.restore();
   });
 
+  // ★ v4：城镇（安全区）建筑 —— 由宿主 state.town.buildings 驱动
+  //   w/h 现在是瓦片数（与 Rotten-Soup mulberryTown.json 同构），
+  //   按 Dawnlike tileset 真实像素平铺绘制：屋顶 + 墙体 + 门 / 窗 + 地面。
+  const townExtra = (s as unknown as {
+    town?: { name?: string; x?: number; y?: number; r?: number; buildings?: Array<{ id: string; kind?: string; name?: string; x: number; y: number; w: number; h: number }> };
+  }).town;
+  if (townExtra && Array.isArray(townExtra.buildings) && townExtra.buildings.length) {
+    // 远景：缩放过小（< 8 px / tile）时只画一个色块 + 名字，避免 4x4 像素的屋顶拼出来全是噪点
+    const lowDetail = sx < 8;
+    if (lowDetail) {
+      const blockColor: Record<string, string> = {
+        inn:   "#7c4b3a",
+        shop:  "#5c5340",
+        house: "#6b4a3a",
+        well:  "#3f4a52",
+      };
+      townExtra.buildings.forEach((b) => {
+        const bxx = wx2px(b.x);
+        const byy = wz2py(b.y);
+        const bw = Math.max(4, m2px(b.w));
+        const bh = Math.max(4, m2px(b.h));
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(bxx - bw / 2 + 2, byy - bh / 2 + 3, bw, bh);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = blockColor[b.kind || "house"] || blockColor.house;
+        ctx.fillRect(bxx - bw / 2, byy - bh / 2, bw, bh);
+        ctx.strokeStyle = "rgba(20,14,8,.6)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bxx - bw / 2, byy - bh / 2, bw, bh);
+        ctx.restore();
+      });
+    } else if (SHEET_TILESET.ready) {
+      // tileset 已就绪 → 用真实像素艺术（与 Rotten-Soup mulberryTown.json 同构）
+      townExtra.buildings.forEach((b) => drawTownBuildingTiles(ctx, b, sx, wx2px, wz2py));
+    } else {
+      // 兜底：tileset 未就绪时的纯色块（与旧版一致）
+      const blockColor: Record<string, string> = {
+        inn:   "#7c4b3a",
+        shop:  "#5c5340",
+        house: "#6b4a3a",
+        well:  "#3f4a52",
+      };
+      townExtra.buildings.forEach((b) => {
+        const bxx = wx2px(b.x);
+        const byy = wz2py(b.y);
+        const bw = Math.max(4, m2px(b.w));
+        const bh = Math.max(4, m2px(b.h));
+        const fill = blockColor[b.kind || "house"] || blockColor.house;
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(bxx - bw / 2 + 2, byy - bh / 2 + 3, bw, bh);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = fill;
+        ctx.fillRect(bxx - bw / 2, byy - bh / 2, bw, bh);
+        ctx.strokeStyle = "rgba(20,14,8,.85)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bxx - bw / 2, byy - bh / 2, bw, bh);
+        ctx.restore();
+      });
+    }
+    // 建筑名（任意缩放都画，缩放过小时省略字体）
+    if (sx >= 8) {
+      townExtra.buildings.forEach((b) => {
+        const bxx = wx2px(b.x);
+        const byy = wz2py(b.y);
+        const bw = Math.max(4, m2px(b.w));
+        const bh = Math.max(4, m2px(b.h));
+        ctx.save();
+        ctx.fillStyle = "rgba(255,246,214,.92)";
+        ctx.font = `bold ${Math.max(9, Math.min(13, Math.round(sx * 0.55)))}px 'Microsoft YaHei', sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText(b.name || "", bxx, byy - bh / 2 - 4);
+        ctx.restore();
+      });
+    }
+  }
+
+  // —— 土路（道路网络）——
+  // 绘制十字形土路：水平 y=0 和垂直 x=0，宽 1.5 米
+  if (SHEET_TILESET.ready) {
+    const roadW = Math.max(1, Math.round(1.5 * sx));
+    // 水平路
+    ctx.save();
+    for (let x = -30; x <= 30; x++) {
+      const pxr = wx2px(x);
+      drawTile(ctx, 7765, pxr, wz2py(0) - roadW / 2, sx, roadW);
+    }
+    // 垂直路
+    for (let z = -30; z <= 30; z++) {
+      const pyr = wz2py(z);
+      drawTile(ctx, 7765, wx2px(0) - roadW / 2, pyr, roadW, sx);
+    }
+    ctx.restore();
+  } else {
+    // 兜底：纯色棕色
+    const roadW = Math.max(2, Math.round(1.5 * sx));
+    ctx.fillStyle = "#6b4423";
+    ctx.fillRect(0, wz2py(0) - roadW / 2, W, roadW);
+    ctx.fillRect(wx2px(0) - roadW / 2, 0, roadW, H);
+  }
+
   // —— 装饰物（树/枯树/灌木/蘑菇/花/水/石/药水，按像素尺寸）——
   mapDecorations.value.forEach((dec) => {
     const px = wx2px(dec.x);
@@ -1362,6 +1726,140 @@ function render() {
     } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
       const dh = Math.round(0.90 * sx), dw = Math.round(0.60 * sx);
       drawTile(ctx, TILE_POTION_ID, px - dw / 2, py - dh + 4, dw, dh);
+    } else if (dec.kind === "road" && SHEET_TILESET.ready) {
+      // 土路 tile（用泥土 tile）
+      drawTile(ctx, TILE_DIRT_MAIN_ID, px - sx / 2, py - sx / 2, sx, sx);
+    } else if (dec.kind === "building" && SHEET_TILESET.ready) {
+      // 用 tileset 真实图块绘制房屋（与 Rotten-Soup 风格一致）
+      const v = dec.variant || 0;
+      const bw = sx * 3;  // 3 格宽
+      const bh = sx * 3;  // 3 格高
+      const x0 = px - bw / 2;
+      const y0 = py - bh + 4;
+      // 屋顶层（2 行 × 3 列）
+      drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0 - sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0 - sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0 - sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0, sx, sx);
+      drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0, sx, sx);
+      drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0, sx, sx);
+      // 墙体层（3 行 × 3 列）
+      drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_TOP_MID_ID, x0 + sx, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx * 2, sx, sx);
+      drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 2, sx, sx);
+      drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx * 2, sx, sx);
+      drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0, y0 + sx * 3, sx, sx);
+      drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 3, sx, sx);
+      drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0 + sx * 2, y0 + sx * 3, sx, sx);
+    } else if (dec.kind === "building") {
+      // Fallback: 纯色方块
+      const bw = sx * 3, bh = sx * 3;
+      const x0 = px - bw / 2, y0 = py - bh + 4;
+      ctx.save();
+      ctx.fillStyle = "#8a7a6a";
+      ctx.fillRect(x0, y0, bw, bh);
+      ctx.restore();
+    } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
+      // NPC 用 tileset 绘制（头顶对话框 + 身体）
+      const npcName = (dec as any).name || "NPC";
+      // 对话气泡
+      drawTile(ctx, TILE_DIALOG_BUBBLE_ID, px - sx * 0.5, py - sx * 2.2, sx, sx * 0.7);
+      // NPC 身体（用树 tile 作为占位，后续可替换为 NPC tile）
+      drawTile(ctx, TILE_SHRUB_ID, px - sx * 0.5, py - sx, sx, sx * 2);
+      // 名字
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.78)";
+      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(npcName, px, py + sx * 1.2);
+      ctx.restore();
+    } else if (dec.kind === "npc") {
+      // Fallback: 简化圆形
+      const sz = Math.round(0.8 * sx);
+      ctx.save();
+      ctx.fillStyle = "#d4a574";
+      ctx.beginPath();
+      ctx.arc(px, py - sz * 0.3, sz * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      const npcName = (dec as any).name || "NPC";
+      ctx.fillStyle = "rgba(0,0,0,0.78)";
+      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(npcName, px, py + sz * 0.4);
+      ctx.restore();
+    } else if (dec.kind === "fence" && SHEET_TILESET.ready) {
+      // 用 tileset 木桩绘制栅栏（连续多个桩）
+      const v = dec.variant || 0;
+      const gap = sx * 1.5;  // 1.5 米间距
+      const numPosts = 3;    // 画 3 个桩
+      for (let i = 0; i < numPosts; i++) {
+        drawTile(ctx, TILE_FENCE_POST_ID, px - sx / 2 + i * gap, py - sx, sx, sx);
+      }
+      // 横梁（用 rail tile）
+      drawTile(ctx, TILE_FENCE_RAIL_ID, px - sx / 2, py - sx * 0.7, sx * 3, sx * 0.3);
+    } else if (dec.kind === "fence") {
+      // Fallback: 棕色竖线
+      const dh = Math.round(0.8 * sx), dw = Math.round(0.22 * sx);
+      ctx.save();
+      ctx.fillStyle = "#7a5a3a";
+      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+      ctx.restore();
+    } else if (dec.kind === "furniture") {
+      // 家具：根据 variant 显示不同物品
+      const dh = Math.round(0.5 * sx), dw = Math.round(0.8 * sx);
+      ctx.save();
+      const variant = dec.variant || 0;
+      if (variant === 0) {
+        // 锻造台（铁匠）
+        ctx.fillStyle = "#3a3a3a";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#ff6b1a";
+        ctx.fillRect(px - dw / 4, py - dh + 4, dw / 2, dh / 2);
+      } else if (variant === 1) {
+        // 柜台（杂货）
+        ctx.fillStyle = "#8b6914";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#d4a13e";
+        ctx.fillRect(px - dw / 2 + 1, py - dh + 4, dw - 2, 1);
+      } else if (variant === 2) {
+        // 地毯（长者）
+        ctx.fillStyle = "#a02828";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#ffd700";
+        for (let i = 0; i < 3; i++) {
+          ctx.fillRect(px - dw / 2 + 1, py - dh + 5 + i * 2, dw - 2, 0.5);
+        }
+      } else {
+        // 床（旅馆）
+        ctx.fillStyle = "#a0826d";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#e0c8a8";
+        ctx.fillRect(px - dw / 2 + 2, py - dh + 6, dw - 4, dh - 4);
+      }
+      ctx.restore();
+    } else if (dec.kind === "farm" && SHEET_TILESET.ready) {
+      // 农田用 tileset 绘制（与 Rotten-Soup 风格一致）
+      const fw = sx * 3, fh = sx * 2;
+      const x0 = px - fw / 2, y0 = py - fh + 4;
+      // 3×2 农田格子
+      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0 + sx, sx, sx);
+    } else if (dec.kind === "farm") {
+      // Fallback: 棕色田地
+      const dh = Math.round(2 * sx), dw = dh;
+      ctx.save();
+      ctx.fillStyle = "#5c3a1e";
+      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+      ctx.restore();
+    } else if (dec.kind === "rock" && SHEET_TILESET.ready) {
+      const dh = Math.round(0.9 * sx), dw = dh;
+      drawTile(ctx, TILE_ROCK_ID, px - dw / 2, py - dh + 4, dw, dh);
     } else {
       // 兜底形状（屏幕像素）
       ctx.save(); ctx.globalAlpha = 0.5;
@@ -1575,6 +2073,7 @@ function drawMinimap() {
     if (e.alive === false) return;
     if (e.side === "enemy") dot(e.x, e.y, "#ff5b5b", 3);
     else if (e.side === "ally") dot(e.x, e.y, "#5b9bff", 2.4);
+    else if (e.side === "neutral") dot(e.x, e.y, "#e0c86a", 2.2);   // ★ v4：城镇中立角色
   });
 
   // 玩家：恒在正中，有 facing 则画朝向箭头
@@ -1594,6 +2093,69 @@ function drawMinimap() {
   g.strokeStyle = "rgba(0,0,0,0.65)";
   g.lineWidth = 1;
   g.stroke();
+
+  // ★ v4：区域名称 —— 当前区域徽标（顶部）+ 邻近区域名称（按方位贴边指示）
+  const zoneList = ((s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || []) as Array<
+    { name: string; x: number; y: number; r: number; kind?: string }
+  >;
+  if (zoneList.length) {
+    const curZone = zoneList.find((z) => Math.hypot(z.x - px, z.y - py) <= z.r);
+    g.save();
+    // 绘制区域范围圆圈（边界）
+    zoneList.forEach((z) => {
+      const dxw = (z.x - px) * ppm;
+      const dyw = (z.y - py) * ppm;
+      const rr = z.r * ppm;
+      const lx = half + dxw;
+      const ly = half + dyw;
+      // 安全区=绿色半透明，危险区=红色半透明，普通=棕色半透明
+      g.beginPath();
+      if (z.kind === "safe") {
+        g.strokeStyle = "rgba(140,224,122,0.5)";
+        g.fillStyle = "rgba(140,224,122,0.12)";
+      } else if (z.kind === "danger") {
+        g.strokeStyle = "rgba(255,90,90,0.5)";
+        g.fillStyle = "rgba(255,90,90,0.12)";
+      } else {
+        g.strokeStyle = "rgba(226,216,186,0.5)";
+        g.fillStyle = "rgba(226,216,186,0.10)";
+      }
+      g.lineWidth = 1;
+      g.arc(lx, ly, rr, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+    });
+    g.font = "bold 9px 'Microsoft YaHei', sans-serif";
+    g.textAlign = "center";
+    // 邻近区域：沿玩家 → 区域中心方向贴边，显示区域名
+    zoneList.forEach((z) => {
+      if (curZone && z.name === curZone.name) return;
+      const dxw = z.x - px;
+      const dyw = z.y - py;
+      const dd = Math.hypot(dxw, dyw) || 1;
+      const lim = half - 12;
+      const lx = half + (dxw / dd) * lim;
+      const ly = half + (dyw / dd) * lim;
+      const txt = z.name.length > 4 ? z.name.slice(0, 4) : z.name;
+      const tw = g.measureText(txt).width;
+      g.fillStyle = "rgba(8,10,8,0.62)";
+      g.fillRect(lx - tw / 2 - 2, ly - 6, tw + 4, 11);
+      g.fillStyle = z.kind === "safe" ? "#8ce07a" : "rgba(226,216,186,0.82)";
+      g.fillText(txt, lx, ly + 3);
+    });
+    // 当前区域徽标（左上角）
+    const curName = curZone ? curZone.name : "荒野";
+    const isSafe = !!curZone && curZone.kind === "safe";
+    const badge = isSafe ? `${curName}（安全区）` : curName;
+    g.font = "bold 10px 'Microsoft YaHei', sans-serif";
+    g.textAlign = "left";
+    const bw2 = g.measureText(badge).width;
+    g.fillStyle = isSafe ? "rgba(24,60,34,0.82)" : "rgba(20,18,14,0.72)";
+    g.fillRect(2, 2, bw2 + 8, 14);
+    g.fillStyle = isSafe ? "#9df08a" : "#f0e2b4";
+    g.fillText(badge, 6, 12.5);
+    g.restore();
+  }
   g.restore();
 }
 
@@ -1771,12 +2333,20 @@ onMounted(async () => {
       starting.value = false;
       clearStartTimers();
       startHint.value = "";
+      // 重置区域追踪变量
+      currentZoneName = null;
+      zoneLeftTick = 0;
+      zoneRespawnReady = false;
     }
     if (newPhase === "playing" && prevPhase !== "playing") {
       // 进入战斗：自动切全屏（runtime 时机）
       toonflowJsApi.minigame.setFullscreen(true);
       // 确保地图装饰物已初始化
       if (mapDecorations.value.length === 0) initDecorations();
+      // 重置区域追踪（开局立即可刷新）
+      currentZoneName = null;
+      zoneLeftTick = 0;
+      zoneRespawnReady = true;
       // ★ v3 兜底：如果外部 mockHost 没启动（被 Toonflow wrapper 包了 iframe），
       //   state.entities 里只有玩家/盟友，没有 enemy。在玩家 (0,0) 周围 30-100 米
       //   环形补 spawn 4-6 只野兽，保证开局立刻能看到怪物。

@@ -42,7 +42,8 @@ import { assetUrl } from "./assets";
 export type DecorationKind =
   | "tree" | "dead_tree"
   | "bush" | "mushroom" | "flower"
-  | "water" | "rock" | "pot";
+  | "water" | "rock" | "pot"
+  | "building" | "npc" | "fence" | "furniture" | "farm";
 
 export interface MapDecoration {
   id: string;
@@ -71,9 +72,17 @@ export interface MapZone {
   name: string;
   x: number;
   y: number;
-  r: number;
+  /** 圆形区域半径（米），rx/ry 不设置时使用 r */
+  r?: number;
+  /** 矩形区域半长宽（米），优先于 r */
+  rx?: number;
+  ry?: number;
   kind: string;
   desc?: string;
+  /** 怪物刷新时间（秒），0=不刷新 */
+  refresh_rate?: number;
+  /** 该区域刷新的怪物类型列表 */
+  mob_types?: string[];
 }
 
 /** 单个 chunk 的方块数据（可选，不存就视为默认全泥土块） */
@@ -170,9 +179,9 @@ export function fallbackMapConfig(): MapConfig {
       { id: "p2", x: -150, y:  50,  heal: 40 },
     ],
     zones: [
-      { name: "营地", x:   0,   y:   0,   r: 15, kind: "safe",   desc: "玩家出生的开阔地带" },
-      { name: "荒地", x: 300,   y: 200,   r: 30, kind: "danger", desc: "野兽出没的危险区域" },
-      { name: "废墟", x:-400,   y:-300,   r: 25, kind: "loot",   desc: "可能残留物资的废墟" },
+      { name: "城镇", x:   0,   y:   0,   r: 30, kind: "safe",   desc: "玩家出生的安全区，无怪物刷新", refresh_rate: 0 },
+      { name: "荒地", x: 300,   y: 200,   r: 80, kind: "danger", desc: "野兽出没，每45秒刷新", refresh_rate: 45, mob_types: ["wolf", "boar"] },
+      { name: "废墟", x:-400,   y:-300,   r: 60, kind: "loot",   desc: "可能残留物资", refresh_rate: 60, mob_types: ["skeleton"] },
     ],
     chunks: [],
   };
@@ -306,6 +315,8 @@ export function normalizeMapConfig(raw: unknown): MapConfig | null {
           r: num(z?.r, 30),
           kind: str(z?.kind, "safe"),
           desc: z?.desc != null ? String(z.desc) : undefined,
+          refresh_rate: z?.refresh_rate != null ? num(z.refresh_rate, 0) : undefined,
+          mob_types: Array.isArray(z?.mob_types) ? z.mob_types.map(String) : undefined,
         }))
       : [],
     chunks: Array.isArray(obj.chunks)

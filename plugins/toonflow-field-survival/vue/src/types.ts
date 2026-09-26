@@ -1,4 +1,5 @@
-export type Side = "player" | "ally" | "enemy" | "spectator";
+/** ★ v4：新增 neutral（城镇中立角色，不参与战斗） */
+export type Side = "player" | "ally" | "enemy" | "spectator" | "neutral";
 
 export interface Entity {
   id: string;
@@ -16,6 +17,18 @@ export interface Entity {
   facing: number;
   cooldown: number;
   alive: boolean;
+  /** ★ v4：所属区域 id（enemy / neutral 使用） */
+  regionId?: string;
+  /** ★ v4：巢点（脱战归位目标） */
+  homeX?: number;
+  homeY?: number;
+  /** ★ v4：敌人 AI 状态 idle | chase | return | npc */
+  aiState?: string;
+  wanderX?: number;
+  wanderY?: number;
+  wanderTimer?: number;
+  bounty?: { exp?: number; money?: number };
+  def?: number;
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }
@@ -97,6 +110,10 @@ export interface GameState {
   /** map-gener agent 生成的地图（null = 未生成/不可用） */
   map: MapData | null;
   mapSource?: "agent" | "fallback" | "stored";
+  /** ★ v4：区域运行时状态（城镇 + 6 野区，各自维护刷新计时） */
+  regions?: RegionState[];
+  /** ★ v4：城镇（安全区）建筑与中立角色清单 */
+  town?: TownData | null;
   exp: number;
   money: number;
   drops: string[];
