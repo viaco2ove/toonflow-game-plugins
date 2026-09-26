@@ -2113,18 +2113,17 @@ function renderOneDecoration(
       ctx.fillText(dest, px, py - sx * 1.1);
       ctx.restore();
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
-      // NPC 用 tileset 绘制（头顶对话框 + 身体）
+      // NPC：用 Actors 层 gid 对应的真实精灵 tile（Rotten-Soup 的 gid-1 = tileset 索引）
+      //   variant 在 normalizeTiledMap 里已存 gid-1
       const npcName = (dec as any).name || "NPC";
-      // 对话气泡
-      drawTile(ctx, TILE_DIALOG_BUBBLE_ID, px - sx * 0.5, py - sx * 2.2, sx, sx * 0.7);
-      // NPC 身体（用树 tile 作为占位，后续可替换为 NPC tile）
-      drawTile(ctx, TILE_SHRUB_ID, px - sx * 0.5, py - sx, sx, sx * 2);
+      const npcTile = dec.variant && dec.variant > 0 ? dec.variant : 4696; // 4696 = Rotten-Soup 默认村民
+      drawTile(ctx, npcTile, px - sx / 2, py - sx * 1.5 + 4, sx, sx * 1.5);
       // 名字
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.78)";
       ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText(npcName, px, py + sx * 1.2);
+      ctx.fillText(npcName, px, py + sx * 0.2);
       ctx.restore();
     } else if (dec.kind === "npc") {
       // Fallback: 简化圆形
@@ -3054,8 +3053,8 @@ body {
   white-space: nowrap;
 }
 .pixel-toggle input {
-  width: 13px;
-  height: 13px;
+  width: 22px;
+  height: 22px;
   margin: 0;
   accent-color: #8ce07a;
   cursor: pointer;
