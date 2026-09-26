@@ -390,7 +390,18 @@ function install(): void {
       return;
     }
 
-    // ★ start 处理（从 select → playing）
+    // ★ over 状态兜底：玩家死亡/退出后再点"开始游戏" → 重置回选人面板
+    //   必须先看 phase === "over" 再判断 select，否则初次 start 会被这条截胡。
+    if (d.type === "tf_plugin_tick" && d.action === "start" && state.phase === "over") {
+      state.phase = "select";
+      state.result = null;
+      state.entities = [];
+      state.events.push("[mock] 重置回选人面板，可重新开始");
+      push();
+      return;
+    }
+
+    // 真正开局：从 select → playing
     if (d.type === "tf_plugin_tick" && d.action === "start" && state.phase === "select") {
       // 应用选择
       const sel = (d.params?.selections) || {};
