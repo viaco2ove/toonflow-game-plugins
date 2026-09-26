@@ -108,1015 +108,696 @@
   ],
   "decorations": [
     {
-      "id": "tree_n_-21",
+      "id": "bn_-21",
       "kind": "tree",
       "x": -21,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-20",
-      "kind": "fence",
-      "x": -20,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-19",
+      "id": "bn_-19",
       "kind": "tree",
       "x": -19,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-18",
-      "kind": "fence",
-      "x": -18,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-17",
+      "id": "bn_-17",
       "kind": "tree",
       "x": -17,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-16",
-      "kind": "fence",
-      "x": -16,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-15",
+      "id": "bn_-15",
       "kind": "tree",
       "x": -15,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-14",
-      "kind": "fence",
-      "x": -14,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-13",
+      "id": "bn_-13",
       "kind": "tree",
       "x": -13,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-12",
-      "kind": "fence",
-      "x": -12,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-11",
+      "id": "bn_-11",
       "kind": "tree",
       "x": -11,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-6",
-      "kind": "fence",
-      "x": -6,
-      "y": -28
+      "id": "bn_-9",
+      "kind": "tree",
+      "x": -9,
+      "y": -28,
+      "variant": 0
     },
     {
-      "id": "tree_n_-5",
+      "id": "bn_-7",
+      "kind": "tree",
+      "x": -7,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-5",
       "kind": "tree",
       "x": -5,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_-4",
-      "kind": "fence",
-      "x": -4,
-      "y": -28
-    },
-    {
-      "id": "tree_n_-3",
+      "id": "bn_-3",
       "kind": "tree",
       "x": -3,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "tree_n_3",
+      "id": "bn_3",
       "kind": "tree",
       "x": 3,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_4",
-      "kind": "fence",
-      "x": 4,
-      "y": -28
-    },
-    {
-      "id": "tree_n_5",
+      "id": "bn_5",
       "kind": "tree",
       "x": 5,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_6",
-      "kind": "fence",
-      "x": 6,
-      "y": -28
+      "id": "bn_7",
+      "kind": "tree",
+      "x": 7,
+      "y": -28,
+      "variant": 0
     },
     {
-      "id": "tree_n_11",
+      "id": "bn_9",
+      "kind": "tree",
+      "x": 9,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_11",
       "kind": "tree",
       "x": 11,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_12",
-      "kind": "fence",
-      "x": 12,
-      "y": -28
-    },
-    {
-      "id": "tree_n_13",
+      "id": "bn_13",
       "kind": "tree",
       "x": 13,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_14",
-      "kind": "fence",
-      "x": 14,
-      "y": -28
-    },
-    {
-      "id": "tree_n_15",
+      "id": "bn_15",
       "kind": "tree",
       "x": 15,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_16",
-      "kind": "fence",
-      "x": 16,
-      "y": -28
-    },
-    {
-      "id": "tree_n_17",
+      "id": "bn_17",
       "kind": "tree",
       "x": 17,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_18",
-      "kind": "fence",
-      "x": 18,
-      "y": -28
-    },
-    {
-      "id": "tree_n_19",
+      "id": "bn_19",
       "kind": "tree",
       "x": 19,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "fence_n_20",
-      "kind": "fence",
-      "x": 20,
-      "y": -28
-    },
-    {
-      "id": "tree_n_21",
+      "id": "bn_21",
       "kind": "tree",
       "x": 21,
       "y": -28,
-      "variant": 1
+      "variant": 0
     },
     {
-      "id": "tree_s_-21",
+      "id": "bs_-21",
       "kind": "tree",
       "x": -21,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-20",
-      "kind": "fence",
-      "x": -20,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-19",
+      "id": "bs_-19",
       "kind": "tree",
       "x": -19,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-18",
-      "kind": "fence",
-      "x": -18,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-17",
+      "id": "bs_-17",
       "kind": "tree",
       "x": -17,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-16",
-      "kind": "fence",
-      "x": -16,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-15",
+      "id": "bs_-15",
       "kind": "tree",
       "x": -15,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-14",
-      "kind": "fence",
-      "x": -14,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-13",
+      "id": "bs_-13",
       "kind": "tree",
       "x": -13,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-12",
-      "kind": "fence",
-      "x": -12,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-11",
+      "id": "bs_-11",
       "kind": "tree",
       "x": -11,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-10",
-      "kind": "fence",
-      "x": -10,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-9",
+      "id": "bs_-9",
       "kind": "tree",
       "x": -9,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "tree_s_-3",
+      "id": "bs_-7",
+      "kind": "tree",
+      "x": -7,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-5",
+      "kind": "tree",
+      "x": -5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-3",
       "kind": "tree",
       "x": -3,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_-2",
-      "kind": "fence",
-      "x": -2,
-      "y": 28
-    },
-    {
-      "id": "tree_s_-1",
-      "kind": "tree",
-      "x": -1,
-      "y": 28,
-      "variant": 1
-    },
-    {
-      "id": "fence_s_0",
-      "kind": "fence",
-      "x": 0,
-      "y": 28
-    },
-    {
-      "id": "tree_s_1",
-      "kind": "tree",
-      "x": 1,
-      "y": 28,
-      "variant": 1
-    },
-    {
-      "id": "fence_s_2",
-      "kind": "fence",
-      "x": 2,
-      "y": 28
-    },
-    {
-      "id": "tree_s_3",
+      "id": "bs_3",
       "kind": "tree",
       "x": 3,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "tree_s_9",
+      "id": "bs_5",
+      "kind": "tree",
+      "x": 5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_7",
+      "kind": "tree",
+      "x": 7,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_9",
       "kind": "tree",
       "x": 9,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_10",
-      "kind": "fence",
-      "x": 10,
-      "y": 28
-    },
-    {
-      "id": "tree_s_11",
+      "id": "bs_11",
       "kind": "tree",
       "x": 11,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_12",
-      "kind": "fence",
-      "x": 12,
-      "y": 28
-    },
-    {
-      "id": "tree_s_13",
+      "id": "bs_13",
       "kind": "tree",
       "x": 13,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_14",
-      "kind": "fence",
-      "x": 14,
-      "y": 28
-    },
-    {
-      "id": "tree_s_15",
+      "id": "bs_15",
       "kind": "tree",
       "x": 15,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_16",
-      "kind": "fence",
-      "x": 16,
-      "y": 28
-    },
-    {
-      "id": "tree_s_17",
+      "id": "bs_17",
       "kind": "tree",
       "x": 17,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_18",
-      "kind": "fence",
-      "x": 18,
-      "y": 28
-    },
-    {
-      "id": "tree_s_19",
+      "id": "bs_19",
       "kind": "tree",
       "x": 19,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "fence_s_20",
-      "kind": "fence",
-      "x": 20,
-      "y": 28
-    },
-    {
-      "id": "tree_s_21",
+      "id": "bs_21",
       "kind": "tree",
       "x": 21,
       "y": 28,
       "variant": 1
     },
     {
-      "id": "tree_e_-28",
+      "id": "be_-28",
       "kind": "tree",
       "x": 21.5,
       "y": -28,
       "variant": 0
     },
     {
-      "id": "fence_e_-27",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -27
-    },
-    {
-      "id": "tree_e_-26",
+      "id": "be_-26",
       "kind": "tree",
       "x": 21.5,
       "y": -26,
       "variant": 0
     },
     {
-      "id": "fence_e_-25",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -25
-    },
-    {
-      "id": "tree_e_-24",
+      "id": "be_-24",
       "kind": "tree",
       "x": 21.5,
       "y": -24,
       "variant": 0
     },
     {
-      "id": "fence_e_-23",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -23
-    },
-    {
-      "id": "tree_e_-22",
+      "id": "be_-22",
       "kind": "tree",
       "x": 21.5,
       "y": -22,
       "variant": 0
     },
     {
-      "id": "fence_e_-21",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -21
-    },
-    {
-      "id": "tree_e_-20",
+      "id": "be_-20",
       "kind": "tree",
       "x": 21.5,
       "y": -20,
       "variant": 0
     },
     {
-      "id": "fence_e_-19",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -19
-    },
-    {
-      "id": "tree_e_-18",
+      "id": "be_-18",
       "kind": "tree",
       "x": 21.5,
       "y": -18,
       "variant": 0
     },
     {
-      "id": "fence_e_-17",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -17
-    },
-    {
-      "id": "tree_e_-16",
+      "id": "be_-16",
       "kind": "tree",
       "x": 21.5,
       "y": -16,
       "variant": 0
     },
     {
-      "id": "fence_e_-15",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -15
-    },
-    {
-      "id": "tree_e_-14",
+      "id": "be_-14",
       "kind": "tree",
       "x": 21.5,
       "y": -14,
       "variant": 0
     },
     {
-      "id": "fence_e_-13",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -13
-    },
-    {
-      "id": "tree_e_-12",
+      "id": "be_-12",
       "kind": "tree",
       "x": 21.5,
       "y": -12,
       "variant": 0
     },
     {
-      "id": "fence_e_-11",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -11
-    },
-    {
-      "id": "tree_e_-10",
+      "id": "be_-10",
       "kind": "tree",
       "x": 21.5,
       "y": -10,
       "variant": 0
     },
     {
-      "id": "fence_e_-9",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -9
-    },
-    {
-      "id": "tree_e_-8",
+      "id": "be_-8",
       "kind": "tree",
       "x": 21.5,
       "y": -8,
       "variant": 0
     },
     {
-      "id": "fence_e_-7",
-      "kind": "fence",
-      "x": 21.5,
-      "y": -7
-    },
-    {
-      "id": "tree_e_-6",
+      "id": "be_-6",
       "kind": "tree",
       "x": 21.5,
       "y": -6,
       "variant": 0
     },
     {
-      "id": "tree_e_6",
+      "id": "be_-4",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -4,
+      "variant": 0
+    },
+    {
+      "id": "be_4",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 4,
+      "variant": 0
+    },
+    {
+      "id": "be_6",
       "kind": "tree",
       "x": 21.5,
       "y": 6,
       "variant": 0
     },
     {
-      "id": "fence_e_7",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 7
-    },
-    {
-      "id": "tree_e_8",
+      "id": "be_8",
       "kind": "tree",
       "x": 21.5,
       "y": 8,
       "variant": 0
     },
     {
-      "id": "fence_e_9",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 9
-    },
-    {
-      "id": "tree_e_10",
+      "id": "be_10",
       "kind": "tree",
       "x": 21.5,
       "y": 10,
       "variant": 0
     },
     {
-      "id": "fence_e_11",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 11
-    },
-    {
-      "id": "tree_e_12",
+      "id": "be_12",
       "kind": "tree",
       "x": 21.5,
       "y": 12,
       "variant": 0
     },
     {
-      "id": "fence_e_13",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 13
-    },
-    {
-      "id": "tree_e_14",
+      "id": "be_14",
       "kind": "tree",
       "x": 21.5,
       "y": 14,
       "variant": 0
     },
     {
-      "id": "fence_e_15",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 15
-    },
-    {
-      "id": "tree_e_16",
+      "id": "be_16",
       "kind": "tree",
       "x": 21.5,
       "y": 16,
       "variant": 0
     },
     {
-      "id": "fence_e_17",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 17
-    },
-    {
-      "id": "tree_e_18",
+      "id": "be_18",
       "kind": "tree",
       "x": 21.5,
       "y": 18,
       "variant": 0
     },
     {
-      "id": "fence_e_19",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 19
-    },
-    {
-      "id": "tree_e_20",
+      "id": "be_20",
       "kind": "tree",
       "x": 21.5,
       "y": 20,
       "variant": 0
     },
     {
-      "id": "fence_e_21",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 21
-    },
-    {
-      "id": "tree_e_22",
+      "id": "be_22",
       "kind": "tree",
       "x": 21.5,
       "y": 22,
       "variant": 0
     },
     {
-      "id": "fence_e_23",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 23
-    },
-    {
-      "id": "tree_e_24",
+      "id": "be_24",
       "kind": "tree",
       "x": 21.5,
       "y": 24,
       "variant": 0
     },
     {
-      "id": "fence_e_25",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 25
-    },
-    {
-      "id": "tree_e_26",
+      "id": "be_26",
       "kind": "tree",
       "x": 21.5,
       "y": 26,
       "variant": 0
     },
     {
-      "id": "fence_e_27",
-      "kind": "fence",
-      "x": 21.5,
-      "y": 27
-    },
-    {
-      "id": "tree_e_28",
+      "id": "be_28",
       "kind": "tree",
       "x": 21.5,
       "y": 28,
       "variant": 0
     },
     {
-      "id": "fence_w_-28",
-      "kind": "fence",
+      "id": "bw_-28",
+      "kind": "tree",
       "x": -21.5,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "bw_-26",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -26,
+      "variant": 1
+    },
+    {
+      "id": "bw_-24",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -24,
+      "variant": 1
+    },
+    {
+      "id": "bw_-22",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -22,
+      "variant": 1
+    },
+    {
+      "id": "bw_-20",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -20,
+      "variant": 1
+    },
+    {
+      "id": "bw_-18",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -18,
+      "variant": 1
+    },
+    {
+      "id": "bw_-16",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -16,
+      "variant": 1
+    },
+    {
+      "id": "bw_-14",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -14,
+      "variant": 1
+    },
+    {
+      "id": "bw_-12",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -12,
+      "variant": 1
+    },
+    {
+      "id": "bw_-10",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -10,
+      "variant": 1
+    },
+    {
+      "id": "bw_-8",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -8,
+      "variant": 1
+    },
+    {
+      "id": "bw_-6",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -6,
+      "variant": 1
+    },
+    {
+      "id": "bw_-4",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -4,
+      "variant": 1
+    },
+    {
+      "id": "bw_4",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 4,
+      "variant": 1
+    },
+    {
+      "id": "bw_6",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 6,
+      "variant": 1
+    },
+    {
+      "id": "bw_8",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 8,
+      "variant": 1
+    },
+    {
+      "id": "bw_10",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 10,
+      "variant": 1
+    },
+    {
+      "id": "bw_12",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 12,
+      "variant": 1
+    },
+    {
+      "id": "bw_14",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 14,
+      "variant": 1
+    },
+    {
+      "id": "bw_16",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 16,
+      "variant": 1
+    },
+    {
+      "id": "bw_18",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 18,
+      "variant": 1
+    },
+    {
+      "id": "bw_20",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 20,
+      "variant": 1
+    },
+    {
+      "id": "bw_22",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 22,
+      "variant": 1
+    },
+    {
+      "id": "bw_24",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 24,
+      "variant": 1
+    },
+    {
+      "id": "bw_26",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 26,
+      "variant": 1
+    },
+    {
+      "id": "bw_28",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "exit_n_post_l_-2",
+      "kind": "fence",
+      "x": -2,
       "y": -28
     },
     {
-      "id": "tree_w_-27",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -27,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-26",
+      "id": "exit_n_post_r_2",
       "kind": "fence",
-      "x": -21.5,
-      "y": -26
+      "x": 2,
+      "y": -28
     },
     {
-      "id": "tree_w_-25",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -25,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-24",
+      "id": "exit_s_post_l_-2",
       "kind": "fence",
-      "x": -21.5,
-      "y": -24
-    },
-    {
-      "id": "tree_w_-23",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -23,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-22",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -22
-    },
-    {
-      "id": "tree_w_-21",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -21,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-20",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -20
-    },
-    {
-      "id": "tree_w_-19",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -19,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-18",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -18
-    },
-    {
-      "id": "tree_w_-17",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -17,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-16",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -16
-    },
-    {
-      "id": "tree_w_-15",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -15,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-14",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -14
-    },
-    {
-      "id": "tree_w_-13",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -13,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-12",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -12
-    },
-    {
-      "id": "tree_w_-11",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -11,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_-10",
-      "kind": "fence",
-      "x": -21.5,
-      "y": -10
-    },
-    {
-      "id": "tree_w_-9",
-      "kind": "tree",
-      "x": -21.5,
-      "y": -9,
-      "variant": 1
-    },
-    {
-      "id": "tree_w_3",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 3,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_4",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 4
-    },
-    {
-      "id": "tree_w_5",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 5,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_6",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 6
-    },
-    {
-      "id": "tree_w_7",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 7,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_8",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 8
-    },
-    {
-      "id": "tree_w_9",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 9,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_10",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 10
-    },
-    {
-      "id": "tree_w_11",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 11,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_12",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 12
-    },
-    {
-      "id": "tree_w_13",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 13,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_14",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 14
-    },
-    {
-      "id": "tree_w_15",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 15,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_16",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 16
-    },
-    {
-      "id": "tree_w_17",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 17,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_18",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 18
-    },
-    {
-      "id": "tree_w_19",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 19,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_20",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 20
-    },
-    {
-      "id": "tree_w_21",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 21,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_22",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 22
-    },
-    {
-      "id": "tree_w_23",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 23,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_24",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 24
-    },
-    {
-      "id": "tree_w_25",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 25,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_26",
-      "kind": "fence",
-      "x": -21.5,
-      "y": 26
-    },
-    {
-      "id": "tree_w_27",
-      "kind": "tree",
-      "x": -21.5,
-      "y": 27,
-      "variant": 1
-    },
-    {
-      "id": "fence_w_28",
-      "kind": "fence",
-      "x": -21.5,
+      "x": -2,
       "y": 28
+    },
+    {
+      "id": "exit_s_post_r_2",
+      "kind": "fence",
+      "x": 2,
+      "y": 28
+    },
+    {
+      "id": "exit_e_post_t",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -2
+    },
+    {
+      "id": "exit_e_post_b",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 2
+    },
+    {
+      "id": "exit_w_post_t",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -2
+    },
+    {
+      "id": "exit_w_post_b",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 2
     },
     {
       "id": "road_ns_-25",
@@ -1662,63 +1343,63 @@
       "id": "house_blacksmith",
       "kind": "building",
       "x": -12,
-      "y": -18,
+      "y": -16,
       "variant": 0
     },
     {
       "id": "forge",
       "kind": "furniture",
       "x": -12,
-      "y": -21,
+      "y": -20,
       "variant": 0
     },
     {
       "id": "house_shop",
       "kind": "building",
       "x": 12,
-      "y": -18,
+      "y": -16,
       "variant": 1
     },
     {
       "id": "counter",
       "kind": "furniture",
       "x": 12,
-      "y": -21,
+      "y": -20,
       "variant": 1
     },
     {
       "id": "house_elder",
       "kind": "building",
       "x": -12,
-      "y": 18,
+      "y": 16,
       "variant": 2
     },
     {
       "id": "carpet",
       "kind": "furniture",
       "x": -12,
-      "y": 15,
+      "y": 20,
       "variant": 2
     },
     {
       "id": "house_inn",
       "kind": "building",
       "x": 12,
-      "y": 18,
+      "y": 16,
       "variant": 3
     },
     {
       "id": "bed",
       "kind": "furniture",
       "x": 12,
-      "y": 15,
+      "y": 20,
       "variant": 3
     },
     {
       "id": "npc_blacksmith",
       "kind": "npc",
       "x": -8,
-      "y": -18,
+      "y": -16,
       "variant": 0,
       "name": "铁匠"
     },
@@ -1726,7 +1407,7 @@
       "id": "npc_merchant",
       "kind": "npc",
       "x": 8,
-      "y": -18,
+      "y": -16,
       "variant": 1,
       "name": "商人"
     },
@@ -1734,7 +1415,7 @@
       "id": "npc_elder",
       "kind": "npc",
       "x": -8,
-      "y": 18,
+      "y": 16,
       "variant": 2,
       "name": "长者"
     },
@@ -1742,123 +1423,92 @@
       "id": "npc_innkeeper",
       "kind": "npc",
       "x": 8,
-      "y": 18,
+      "y": 16,
       "variant": 3,
-      "name": "旅馆老板"
+      "name": "旅馆"
     },
     {
-      "id": "npc_guard_n",
+      "id": "npc_guard",
       "kind": "npc",
       "x": 0,
-      "y": -25,
-      "variant": 4,
-      "name": "守卫"
-    },
-    {
-      "id": "npc_guard_s",
-      "kind": "npc",
-      "x": 0,
-      "y": 25,
-      "variant": 4,
-      "name": "守卫"
-    },
-    {
-      "id": "npc_guard_e",
-      "kind": "npc",
-      "x": 19,
-      "y": 0,
-      "variant": 4,
-      "name": "守卫"
-    },
-    {
-      "id": "npc_guard_w",
-      "kind": "npc",
-      "x": -19,
-      "y": 0,
+      "y": 5,
       "variant": 4,
       "name": "守卫"
     },
     {
       "id": "farm_0_0",
       "kind": "farm",
-      "x": -16,
-      "y": 5
+      "x": -18,
+      "y": 6
     },
     {
       "id": "farm_0_1",
       "kind": "farm",
-      "x": -13,
-      "y": 5
+      "x": -16,
+      "y": 6
     },
     {
       "id": "farm_0_2",
       "kind": "farm",
-      "x": -10,
-      "y": 5
+      "x": -14,
+      "y": 6
     },
     {
       "id": "farm_1_0",
       "kind": "farm",
-      "x": -16,
+      "x": -18,
       "y": 8
     },
     {
       "id": "farm_1_1",
       "kind": "farm",
-      "x": -13,
+      "x": -16,
       "y": 8
     },
     {
       "id": "farm_1_2",
       "kind": "farm",
-      "x": -10,
+      "x": -14,
       "y": 8
     },
     {
       "id": "farm_2_0",
       "kind": "farm",
-      "x": -16,
-      "y": 11
+      "x": -18,
+      "y": 10
     },
     {
       "id": "farm_2_1",
       "kind": "farm",
-      "x": -13,
-      "y": 11
+      "x": -16,
+      "y": 10
     },
     {
       "id": "farm_2_2",
       "kind": "farm",
-      "x": -10,
-      "y": 11
+      "x": -14,
+      "y": 10
     },
     {
-      "id": "tree_corner_ne",
+      "id": "tree_in_1",
       "kind": "tree",
-      "x": 18,
-      "y": -23,
+      "x": -7,
+      "y": -8,
       "variant": 0
     },
     {
-      "id": "tree_corner_nw",
+      "id": "tree_in_2",
       "kind": "tree",
-      "x": -18,
-      "y": -23,
+      "x": 7,
+      "y": 8,
       "variant": 1
     },
     {
-      "id": "tree_corner_se",
-      "kind": "tree",
-      "x": 18,
-      "y": 23,
+      "id": "bush_in_1",
+      "kind": "bush",
+      "x": -7,
+      "y": -4,
       "variant": 0
-    },
-    {
-      "id": "tree_corner_sw",
-      "kind": "tree",
-      "x": -18,
-      "y": 23,
-      "variant": 1
     },
     {
       "id": "tree_wild_1",

@@ -5,3 +5,11 @@
 # android-h5 app 优化
 Toonflow-game-android-h5
 为什么插件 在android-h5 app 上运行会卡顿，pc web 安卓浏览器都不会卡顿
+
+# 地图设计
+地图数据可以进行独立安装
+没有的情况下使用[maps](../../../plugins/toonflow-field-survival/vue/public/maps)
+
+故事地图设计
+[map_design](../../../workshops/toonflow-field-survival/map_design)
+

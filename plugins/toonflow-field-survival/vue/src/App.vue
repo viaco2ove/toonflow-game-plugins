@@ -21,6 +21,7 @@ import {
   TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
+  TILE_DIRT_MAIN_ID,
   TILE_HOUSE_ROOF_LEFT_ID, TILE_HOUSE_ROOF_MID_ID, TILE_HOUSE_ROOF_RIGHT_ID,
   TILE_HOUSE_TOP_LEFT_ID, TILE_HOUSE_TOP_MID_ID, TILE_HOUSE_TOP_RIGHT_ID,
   TILE_HOUSE_BOTTOM_ID, TILE_HOUSE_DOOR_ID, TILE_HOUSE_WINDOW_ID, TILE_HOUSE_WINDOW_RIGHT_ID,
@@ -947,7 +948,12 @@ function spawnLocalMobsIfNeeded(): void {
   if (!me) return;
 
   const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
-  const currentZone = zones.find((z) => Math.hypot(z.x - me.x, z.y - me.y) <= z.r);
+  const currentZone = zones.find((z) => {
+    if (z.rx !== undefined && z.ry !== undefined) {
+      return Math.abs(z.x - me.x) <= z.rx && Math.abs(z.y - me.y) <= z.ry;
+    }
+    return Math.hypot(z.x - me.x, z.y - me.y) <= z.r;
+  });
 
   // 安全区不刷新
   if (currentZone?.kind === "safe" || currentZone?.refresh_rate === 0) return;
@@ -2011,7 +2017,7 @@ function groundTileAtFast(gx: number, gz: number): number {
 /** 小地图画布像素尺寸（CSS 同尺寸） */
 const MINIMAP_PX = 110;
 /** 小地图半径（米）：超出范围的目标钳制在边缘并描白边提示方位 */
-const MINIMAP_RANGE_M = 60;
+const MINIMAP_RANGE_M = 150;  // ★加大到 150 米，完整显示城镇矩形 + 外部区域
 const minimapEl = ref<HTMLCanvasElement | null>(null);
 
 /**
@@ -2099,13 +2105,17 @@ function drawMinimap() {
     { name: string; x: number; y: number; r: number; kind?: string }
   >;
   if (zoneList.length) {
-    const curZone = zoneList.find((z) => Math.hypot(z.x - px, z.y - py) <= z.r);
+    const curZone = zoneList.find((z) => {
+      if (z.rx !== undefined && z.ry !== undefined) {
+        return Math.abs(z.x - px) <= z.rx && Math.abs(z.y - py) <= z.ry;
+      }
+      return Math.hypot(z.x - px, z.y - py) <= z.r;
+    });
     g.save();
     // 绘制区域范围圆圈（边界）
     zoneList.forEach((z) => {
       const dxw = (z.x - px) * ppm;
       const dyw = (z.y - py) * ppm;
-      const rr = z.r * ppm;
       const lx = half + dxw;
       const ly = half + dyw;
       // 安全区=绿色半透明，危险区=红色半透明，普通=棕色半透明
@@ -2121,9 +2131,20 @@ function drawMinimap() {
         g.fillStyle = "rgba(226,216,186,0.10)";
       }
       g.lineWidth = 1;
-      g.arc(lx, ly, rr, 0, Math.PI * 2);
-      g.fill();
-      g.stroke();
+      // 矩形区域用矩形绘制
+      if (z.rx !== undefined && z.ry !== undefined) {
+        const rxw = z.rx * ppm;
+        const ryw = z.ry * ppm;
+        g.fillRect(lx - rxw, ly - ryw, rxw * 2, ryw * 2);
+        g.lineWidth = 2;
+        g.strokeRect(lx - rxw, ly - ryw, rxw * 2, ryw * 2);
+      } else {
+        const rr = z.r * ppm;
+        g.lineWidth = 1;
+        g.arc(lx, ly, rr, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+      }
     });
     g.font = "bold 9px 'Microsoft YaHei', sans-serif";
     g.textAlign = "center";
