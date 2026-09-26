@@ -186,7 +186,10 @@ function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y:
 }
 
 function push(): void {
-  window.postMessage({ type: "tf_plugin_state", state: JSON.parse(JSON.stringify(state)) }, "*");
+  // ★ 同 window postMessage 不会触发自己的 message 事件 —— 用 dispatchEvent 兜底
+  const payload = { type: "tf_plugin_state", state: JSON.parse(JSON.stringify(state)) };
+  window.postMessage(payload, "*");
+  window.dispatchEvent(new MessageEvent("message", { data: payload }));
 }
 
 /* ============================================================
@@ -363,10 +366,18 @@ function install(): void {
     }
 
     if (d.type === "tf_plugin_fullscreen") {
-      state.events.push(`[mock] setFullscreen(${!!d.fullscreen})`);
+      // ★ 关键修复：全屏切换是"宿主面板"的纯 UI 信令，真实宿主只切 CSS，不会回推 state。
+      //   此前 mock 在此无条件 push()，而 App 收到 select 状态的 state 后会再调
+      //   setFullscreen(false) → 与本次 push 形成消息死循环；又因 push() 同时走
+      //   postMessage + dispatchEvent 双通道（App 一次 push 会被触发两次），循环指数放大。
+      //   结果：select 状态被每秒上万次重推，App 在此分支清空 participants，
+      //   用户点中的角色卡片立即被重置 → 表现为"点击无反应、无法选人"。
+      //   此处只记录事件 + 更新可见 hash，不再回推 state。
+      if (state.events.length < 200) {
+        state.events.push(`[mock] setFullscreen(${!!d.fullscreen})`);
+      }
       // 在测试页面上用一个可见标志：写 hash 让开发者看到
       location.hash = d.fullscreen ? "fullscreen" : "";
-      push();
       return;
     }
 
@@ -484,6 +495,9 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
     }
   } catch { /* ignore */ }
   state = buildInitialState(roles, mapSpawn);
+  // ★ standalone：把初始 state 暴露到 window，App.vue 启动时一次性取走
+  //   （postMessage 在同 window 不触发自己的 message 事件）
+  (window as any).__initialState = JSON.parse(JSON.stringify(state));
   install();
   // 兜底：插件可能没发 loaded，直接推一次
   setTimeout(() => push(), 100);

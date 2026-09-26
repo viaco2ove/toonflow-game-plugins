@@ -11,7 +11,7 @@
  *   - 默认 zoom = 20，相机看到 ±15 米（30×30 米窗口）
  *   - zoom ∈ [10, 30]：zoom 越大 → 视野越小（放大看脚下）
  */
-import { ref, computed, onMounted, onBeforeUnmount, watch } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
@@ -81,9 +81,11 @@ const mapSourceLabel = computed(() => {
 });
 
 /* ---------------- 选人 ---------------- */
-const participants = ref<string[]>([]);
-const spectators = ref<string[]>([]);
-const enemies = ref<string[]>([]);
+// ★ v6：reactive 数组（不是 ref）—— template 自动 unwrap ref 经常让我们传错对象，
+//   改用 reactive 数组：template 拿到的就是数组本身，toggle 直接 push/splice 天然响应式
+const participants = reactive<string[]>([]);
+const spectators = reactive<string[]>([]);
+const enemies = reactive<string[]>([]);
 
 // 头像缓存（entityId -> HTMLImageElement）
 const avatarCache = new Map<string, HTMLImageElement>();
@@ -211,10 +213,11 @@ function avatarAnimFrame(avatarPath: string | undefined): any | null {
 const roles = computed<RoleOption[]>(() => state.value?.roles || []);
 const playerRole = computed(() => roles.value.find((r) => r.roleType === "player") || roles.value[0]);
 
-function toggle(list: string[], id: string) {
-  const i = list.indexOf(id);
-  if (i >= 0) list.splice(i, 1);
-  else list.push(id);
+// ★ v7：reactive 数组直接 push/splice 触发响应式（最简单可靠）
+function toggle(arr: string[], id: string) {
+  const i = arr.indexOf(id);
+  if (i >= 0) arr.splice(i, 1);
+  else arr.push(id);
 }
 
 function roleAvatar(r: RoleOption): string {
@@ -274,9 +277,9 @@ function startGame() {
   starting.value = true;
   sendTick("start", {
     selections: {
-      participants: [...participants.value],
-      spectators: [...spectators.value],
-      enemies: [...enemies.value],
+      participants: [...participants],
+      spectators: [...spectators],
+      enemies: [...enemies],
     },
   });
   // ★ fix③：原实现 2 秒后无条件重置按钮——宿主侧开始游戏要生成地图（较慢），
@@ -2521,6 +2524,11 @@ let stopHost: (() => void) | null = null;
 
 /** 应用启动：加载地图 → 初始化 chunk / 装饰 → 开启渲染循环 */
 onMounted(async () => {
+  // ★ standalone（mockHost）：先吃下初始 state（window.__initialState 由 mockHost 写入）
+  const initial = (window as any).__initialState;
+  if (initial && !state.value) {
+    state.value = initial;
+  }
   // ★ v3：先加载地图配置（mulberryTown.json），得到 scale / zoom / 装饰物 / chunk 数据
   try {
     const cfg = await loadMapConfig();
@@ -2576,12 +2584,15 @@ onMounted(async () => {
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态
     // 这样第二次进入游戏时能正确显示选人面板
-    if (newPhase === "select") {
-      participants.value = [];
-      spectators.value = [];
-      enemies.value = [];
+    // ★ 关键修复：仅在"阶段真正切换到 select"时重置（prevPhase !== "select"）。
+    //   此前每次收到 select 状态都重置，宿主/mock 的任意一次重推（如 loaded、全屏信令、
+    //   兜底定时 push）都会把用户刚点选的角色清空，导致"点角色卡片没反应、选不中人"。
+    if (newPhase === "select" && prevPhase !== "select") {
+      participants.splice(0, participants.length);
+      spectators.splice(0, spectators.length);
+      enemies.splice(0, enemies.length);
       const p = state.value.roles.find((r) => r.roleType === "player");
-      if (p) participants.value = [p.id];
+      if (p) participants.push(p.id);
       // 选人阶段：确保不是全屏（用户切回来好操作）
       toonflowJsApi.minigame.setFullscreen(false);
       // 重新初始化地图装饰物（每次进入都重新生成）
