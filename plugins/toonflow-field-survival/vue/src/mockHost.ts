@@ -115,13 +115,14 @@ function spawnWave(): void {
   state.events.push(...events);
 }
 
-function buildInitialState(roles: RoleOption[]): GameState {
+function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y: number }): GameState {
   const playerRole = roles.find((r) => r.roleType === "player") || roles[0];
   const entities: Entity[] = [];
-  // ★ v3：玩家出生在 origin (0, 0)
-  entities.push(makeEntity(playerRole, "player", 0, 0));
+  // ★ v3：玩家出生在 origin (0, 0)；如果地图数据自带 playerSpawn（mulberryTown），优先用它
+  const sp = mapPlayerSpawn ?? { x: 0, y: 0 };
+  entities.push(makeEntity(playerRole, "player", sp.x, sp.y));
   // 默认把第二个角色作为盟友上场（偏移 12 米，与 entry.ts 的 ALLY_FOLLOW_GAP_M 一致）
-  if (roles.length > 1) entities.push(makeEntity(roles[1], "ally", -12, 12));
+  if (roles.length > 1) entities.push(makeEntity(roles[1], "ally", sp.x - 12, sp.y + 12));
 
   return {
     phase: "select",
@@ -223,12 +224,42 @@ function install(): void {
         }
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
+        // ★ 安全区判定：玩家在 safe zone 内时，野怪不能进入/追击
+        const safeZones = ((state as any).map?.zones ?? []).filter((z: any) => z.kind === "safe");
+        const playerInSafe = !!target && safeZones.some((z: any) => {
+          if (z.rx !== undefined && z.ry !== undefined) {
+            return Math.abs(z.x - target.x) <= z.rx && Math.abs(z.y - target.y) <= z.ry;
+          }
+          return Math.hypot(z.x - target.x, z.y - target.y) <= (z.r ?? 0);
+        });
         state.entities.forEach((e) => {
           if (e.side !== "enemy" || !e.alive) return;
           if (!target || !target.alive) return;
           const dx = target.x - e.x;
           const dy = target.y - e.y;
           const d2 = Math.hypot(dx, dy);
+          // ★ 玩家在安全区 → 野怪停止追击并撤退到安全区外
+          if (playerInSafe) {
+            // 计算该野怪自身是否在某个安全区内，若是 → 立即推出
+            const meInSafe = safeZones.some((z: any) => {
+              if (z.rx !== undefined && z.ry !== undefined) {
+                return Math.abs(z.x - e.x) <= z.rx && Math.abs(z.y - e.y) <= z.ry;
+              }
+              return Math.hypot(z.x - e.x, z.y - e.y) <= (z.r ?? 0);
+            });
+            if (meInSafe) {
+              // 推到最近的 safe zone 边缘外 1 米
+              for (const z of safeZones) {
+                const odx = e.x - z.x, ody = e.y - z.y;
+                const od = Math.hypot(odx, ody) || 0.001;
+                const margin = (z.r ?? 30) + 1;
+                e.x = z.x + (odx / od) * margin;
+                e.y = z.y + (ody / od) * margin;
+                break;
+              }
+            }
+            return; // 不追、不攻
+          }
           // 看见玩家 80 米；追；2 米内攻击
           if (d2 < 80) {
             const sp = 2.0 * 0.1;  // 2.0 米/秒 × 0.1 秒/帧 = 0.2 米/帧（步行追赶，与 entry 对齐）
@@ -405,10 +436,33 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
   const isStandalone = !location.href.includes("getAsset") && window.parent === window;
   if (!isStandalone) return false;
   const roles = await loadRoles();
-  state = buildInitialState(roles);
+  // ★ v5：尝试读 overworld.json 拿 playerSpawn（mulberryTown 等 Tiled 格式地图）
+  let mapSpawn: { x: number; y: number } | undefined;
+  try {
+    const r = await fetch("./maps/overworld.json");
+    if (r.ok) {
+      const d = await r.json();
+      // 找 objectgroup 里 entity_type=PLAYER 的对象
+      for (const layer of d.layers ?? []) {
+        if (layer.type !== "objectgroup") continue;
+        for (const obj of layer.objects ?? []) {
+          const props = Object.fromEntries((obj.properties ?? []).map((p: any) => [p.name, p.value]));
+          if (props.entity_type === "PLAYER") {
+            mapSpawn = {
+              x: (obj.x / 32) - (d.width / 2),
+              y: (obj.y / 32 - 1) - (d.height / 2),
+            };
+            break;
+          }
+        }
+        if (mapSpawn) break;
+      }
+    }
+  } catch { /* ignore */ }
+  state = buildInitialState(roles, mapSpawn);
   install();
   // 兜底：插件可能没发 loaded，直接推一次
   setTimeout(() => push(), 100);
-  console.info("[mockHost] standalone mode active，roles=", roles.length);
+  console.info("[mockHost] standalone mode active，roles=", roles.length, "spawn=", mapSpawn);
   return true;
 }

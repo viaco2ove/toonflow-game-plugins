@@ -1,0 +1,255 @@
+/* ---------------- ★ fix⑤/⑥ 迷你小地图 + 玩家坐标 ---------------- */
+/** 小地图画布像素尺寸（CSS 同尺寸） */
+const MINIMAP_PX = 110;
+/** 小地图半径（米）：超出范围的目标钳制在边缘并描白边提示方位 */
+const MINIMAP_RANGE_M = 150;  // ★加大到 150 米，完整显示城镇矩形 + 外部区域
+const minimapEl = ref<HTMLCanvasElement | null>(null);
+
+/**
+ * 绘制迷你小地图：以玩家为中心，显示野怪/盟友/宝箱/血瓶的相对位置。
+ * 独立于主画布的 ctx，由 loop()/`watch(phase)` 以 10Hz 调用。
+ */
+function drawMinimap() {
+  const c = minimapEl.value;
+  const s = state.value;
+  if (!c || !s) return;
+  const g = c.getContext("2d");
+  if (!g) return;
+  const N = MINIMAP_PX;
+  const half = N / 2;
+  const ppm = half / MINIMAP_RANGE_M;        // 像素/米
+  const meE = s.entities.find((e) => e.side === "player");
+  const px = meE ? meE.x : 0;
+  const py = meE ? meE.y : 0;
+
+  g.save();
+  g.clearRect(0, 0, N, N);
+  // 底色 + 刻度网格（四等分）
+  g.fillStyle = "rgba(12,16,12,0.78)";
+  g.fillRect(0, 0, N, N);
+  g.strokeStyle = "rgba(190,205,170,0.16)";
+  g.lineWidth = 1;
+  for (let k = 1; k < 4; k++) {
+    const t = Math.round((N / 4) * k) + 0.5;
+    g.beginPath(); g.moveTo(t, 0); g.lineTo(t, N); g.stroke();
+    g.beginPath(); g.moveTo(0, t); g.lineTo(N, t); g.stroke();
+  }
+  // 视野圈
+  g.strokeStyle = "rgba(200,220,180,0.22)";
+  g.beginPath();
+  g.arc(half, half, half - 2, 0, Math.PI * 2);
+  g.stroke();
+
+  const dot = (x: number, y: number, color: string, r: number) => {
+    let dx = (x - px) * ppm;
+    let dy = (y - py) * ppm;
+    const d = Math.hypot(dx, dy);
+    const lim = half - 4;
+    let clamped = false;
+    if (d > lim) { const k = lim / d; dx *= k; dy *= k; clamped = true; }
+    g.beginPath();
+    g.fillStyle = color;
+    g.arc(half + dx, half + dy, r, 0, Math.PI * 2);
+    g.fill();
+    if (clamped) { g.strokeStyle = "rgba(255,255,255,0.7)"; g.lineWidth = 1; g.stroke(); }
+  };
+
+  // 宝箱 / 血瓶（宿主 state 有则画，没有则跳过）
+  const extra = s as unknown as { chests?: Array<{ x: number; y: number }>; potions?: Array<{ x: number; y: number }> };
+  if (Array.isArray(extra.chests)) extra.chests.forEach((o) => dot(o.x, o.y, "rgba(224,178,74,0.9)", 1.6));
+  if (Array.isArray(extra.potions)) extra.potions.forEach((o) => dot(o.x, o.y, "rgba(228,132,196,0.9)", 1.6));
+
+  // 野怪 / 盟友
+  s.entities.forEach((e) => {
+    if (e.alive === false) return;
+    if (e.side === "enemy") dot(e.x, e.y, "#ff5b5b", 3);
+    else if (e.side === "ally") dot(e.x, e.y, "#5b9bff", 2.4);
+    else if (e.side === "neutral") dot(e.x, e.y, "#e0c86a", 2.2);   // ★ v4：城镇中立角色
+  });
+
+  // 玩家：恒在正中，有 facing 则画朝向箭头
+  g.fillStyle = "#8ce07a";
+  const face = (meE as unknown as { facing?: { x?: number; y?: number } } | undefined)?.facing;
+  g.beginPath();
+  if (face && typeof face === "object") {
+    const ang = Math.atan2(face.y ?? 0, face.x ?? 1);
+    g.moveTo(half + Math.cos(ang) * 5.4, half + Math.sin(ang) * 5.4);
+    g.lineTo(half + Math.cos(ang + 2.4) * 4, half + Math.sin(ang + 2.4) * 4);
+    g.lineTo(half + Math.cos(ang - 2.4) * 4, half + Math.sin(ang - 2.4) * 4);
+    g.closePath();
+  } else {
+    g.arc(half, half, 3.2, 0, Math.PI * 2);
+  }
+  g.fill();
+  g.strokeStyle = "rgba(0,0,0,0.65)";
+  g.lineWidth = 1;
+  g.stroke();
+
+  // ★ v4：区域名称 —— 当前区域徽标（顶部）+ 邻近区域名称（按方位贴边指示）
+  const zoneList = ((s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || []) as Array<
+    { name: string; x: number; y: number; r: number; kind?: string }
+  >;
+  if (zoneList.length) {
+    const curZone = zoneList.find((z) => {
+      if (z.rx !== undefined && z.ry !== undefined) {
+        return Math.abs(z.x - px) <= z.rx && Math.abs(z.y - py) <= z.ry;
+      }
+      return Math.hypot(z.x - px, z.y - py) <= z.r;
+    });
+    g.save();
+    // 绘制区域范围圆圈（边界）
+    zoneList.forEach((z) => {
+      const dxw = (z.x - px) * ppm;
+      const dyw = (z.y - py) * ppm;
+      const lx = half + dxw;
+      const ly = half + dyw;
+      // 安全区=绿色半透明，危险区=红色半透明，普通=棕色半透明
+      g.beginPath();
+      if (z.kind === "safe") {
+        g.strokeStyle = "rgba(140,224,122,0.5)";
+        g.fillStyle = "rgba(140,224,122,0.12)";
+      } else if (z.kind === "danger") {
+        g.strokeStyle = "rgba(255,90,90,0.5)";
+        g.fillStyle = "rgba(255,90,90,0.12)";
+      } else {
+        g.strokeStyle = "rgba(226,216,186,0.5)";
+        g.fillStyle = "rgba(226,216,186,0.10)";
+      }
+      g.lineWidth = 1;
+      // 矩形区域用矩形绘制
+      if (z.rx !== undefined && z.ry !== undefined) {
+        const rxw = z.rx * ppm;
+        const ryw = z.ry * ppm;
+        g.fillRect(lx - rxw, ly - ryw, rxw * 2, ryw * 2);
+        g.lineWidth = 2;
+        g.strokeRect(lx - rxw, ly - ryw, rxw * 2, ryw * 2);
+      } else {
+        const rr = z.r * ppm;
+        g.lineWidth = 1;
+        g.arc(lx, ly, rr, 0, Math.PI * 2);
+        g.fill();
+        g.stroke();
+      }
+    });
+    g.font = "bold 9px 'Microsoft YaHei', sans-serif";
+    g.textAlign = "center";
+    // 邻近区域：沿玩家 → 区域中心方向贴边，显示区域名
+    zoneList.forEach((z) => {
+      if (curZone && z.name === curZone.name) return;
+      const dxw = z.x - px;
+      const dyw = z.y - py;
+      const dd = Math.hypot(dxw, dyw) || 1;
+      const lim = half - 12;
+      const lx = half + (dxw / dd) * lim;
+      const ly = half + (dyw / dd) * lim;
+      const txt = z.name.length > 4 ? z.name.slice(0, 4) : z.name;
+      const tw = g.measureText(txt).width;
+      g.fillStyle = "rgba(8,10,8,0.62)";
+      g.fillRect(lx - tw / 2 - 2, ly - 6, tw + 4, 11);
+      g.fillStyle = z.kind === "safe" ? "#8ce07a" : "rgba(226,216,186,0.82)";
+      g.fillText(txt, lx, ly + 3);
+    });
+    // 当前区域徽标（左上角）
+    const curName = curZone ? curZone.name : "荒野";
+    const isSafe = !!curZone && curZone.kind === "safe";
+    const badge = isSafe ? `${curName}（安全区）` : curName;
+    g.font = "bold 10px 'Microsoft YaHei', sans-serif";
+    g.textAlign = "left";
+    const bw2 = g.measureText(badge).width;
+    g.fillStyle = isSafe ? "rgba(24,60,34,0.82)" : "rgba(20,18,14,0.72)";
+    g.fillRect(2, 2, bw2 + 8, 14);
+    g.fillStyle = isSafe ? "#9df08a" : "#f0e2b4";
+    g.fillText(badge, 6, 12.5);
+    g.restore();
+  }
+  g.restore();
+}
+
+/* ---------------- 主循环 ---------------- */
+let raf = 0;
+let lastTickAt = 0;
+let lastSendAt = 0;
+let lastMinimapAt = 0;
+let lastFrameAt = 0;
+const TICK_MS = 100;
+
+function loop(ts: number) {
+  raf = requestAnimationFrame(loop);
+  _animTick++;
+  const s = state.value;
+  if (!s || s.phase !== "playing") return;
+  // ★ fix①（性能）：页面切到后台（锁屏 / 切走）时既不应渲染也不应上报 tick
+  if (typeof document !== "undefined" && document.hidden) return;
+  // ★ fix①（性能）：手机端把渲染帧率封顶 30fps（渲染内已按 dt 归一，速度不受影响）
+  // 注意：lastFrameAt 与 render() 内部的 lastRenderAt（显示位置插值时钟）是两个独立变量
+  if (!MIN_FRAME_MS || ts - lastFrameAt >= MIN_FRAME_MS) { lastFrameAt = ts; render(); }
+  // ★ fix⑤：迷你小地图独立低频刷新（10Hz 足够，避免与主画面抢 CPU）
+  if (ts - lastMinimapAt >= 100) {
+    lastMinimapAt = ts;
+    drawMinimap();
+  }
+  if (ts - lastTickAt >= TICK_MS) {
+    lastTickAt = ts;
+    // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）——本地仍保持 10Hz
+    localTick();
+    // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
+    if (ts - lastSendAt >= SEND_MS) {
+      lastSendAt = ts;
+      sendTick("tick", {
+        input: {
+          dx: input.value.dx,
+          dy: input.value.dy,
+          moveTo: input.value.moveTo,
+        },
+        // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
+        player: lastLocalPose ? { ...lastLocalPose } : undefined,
+      });
+    }
+  }
+}
+
+/* ---------------- 技能 / 物品 ---------------- */
+const skillPage = computed(() => state.value?.skills.slice((state.value.skillPage || 0) * 4, (state.value.skillPage || 0) * 4 + 4) || []);
+const itemPage = computed(() => state.value?.items.slice((state.value.itemPage || 0) * 4, (state.value.itemPage || 0) * 4 + 4) || []);
+const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / 4)));
+const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / 4)));
+
+function castSkill(i: number) { sendTick("skill", { index: i }); }
+function useItem(i: number) { sendTick("item", { index: i }); }
+function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
+function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
+function exitGame() { sendTick("exit", {}); }
+
+/**
+ * 结算页「退出」：回到选人阶段（主菜单）
+ */
+function exitOver() {
+  if (state.value) state.value.phase = 'select';
+}
+
+/**
+ * 结算页「复活」：原地复活 —— 位置不变，血量与状态恢复为可正常游玩。
+ *   主路径：sendTick("revive") → 宿主（entry.ts / entry.js）或本地模拟宿主（mockHost.ts）
+ *           把玩家 alive=true、hp=maxHp，phase 由 over 回到 playing，玩家坐标保持死亡处不变。
+ *   兜底：宿主未接入 revive 动作时（旧宿主 / 纯静态打开 game.html），前端本地自愈，
+ *         保证「复活」按钮在任何环境下都能继续游玩。
+ */
+function reviveGame() {
+  sendTick("revive", {});
+  window.setTimeout(localReviveIfStillOver, 300);
+}
+
+function localReviveIfStillOver() {
+  const s = state.value;
+  if (!s || s.phase !== "over") return;      // 宿主已完成复活，无需兜底
+  const me0 = s.entities.find((e) => e.side === "player");
+  if (!me0) return;
+  me0.alive = true;
+  me0.hp = me0.maxHp;                        // 满血
+  me0.vx = 0;
+  me0.vy = 0;
+  s.result = null;
+  s.phase = "playing";                       // 回到可正常游玩
+  lastLocalPose = { x: me0.x, y: me0.y, facing: me0.facing };   // 位置不变，并接管本地权威位姿
+}
+

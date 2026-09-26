@@ -128,6 +128,8 @@ export interface MapConfig {
   potions: MapPotion[];
   zones: MapZone[];
   chunks?: MapChunk[];
+  /** ★ Tiled 格式时玩家出生点（mulberryTown 自己的 PLAYER 对象） */
+  playerSpawn?: { x: number; y: number };
 }
 
 /* ============================================================
@@ -188,6 +190,97 @@ export function fallbackMapConfig(): MapConfig {
 }
 
 /* ============================================================
+   Tiled 格式 → MapConfig（mulberryTown / Forest / Lair 等）
+   与 Rotten-Soup 的 createMapFromJSON 等价：
+   - 遍历所有 tilelayer：非 0 tile → decoration（保留 tileId 渲染）
+   - 遍历所有 objectgroup：PLAYER → 玩家出生点；其他 → entities（NPC/CHEST/DOOR/LADDER）
+   - 自动生成 safe zone（mulberryTown = 城镇，全图 safe）
+   ============================================================ */
+function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
+  const f = fallbackMapConfig();
+  const W = num(obj.width, 43);
+  const H = num(obj.height, 56);
+  const decorations: MapDecoration[] = [];
+  let decIdx = 0;
+  let playerSpawn: { x: number; y: number } | null = null;
+
+  for (const layer of obj.layers as any[]) {
+    if (layer?.type === "tilelayer" && Array.isArray(layer.data)) {
+      // 每格 tile → decoration
+      for (let i = 0; i < layer.data.length; i++) {
+        const tid = layer.data[i];
+        if (tid === 0) continue;
+        const x = i % W;
+        const z = Math.floor(i / W);
+        const wx = x - W / 2 + 0.5;
+        const wz = z - H / 2 + 0.5;
+        decorations.push({
+          id: `t_${decIdx++}`,
+          kind: "ground",
+          x: wx,
+          y: wz,
+          tileId: tid,
+        });
+      }
+    } else if (layer?.type === "objectgroup" && Array.isArray(layer.objects)) {
+      // 每个 object → entity（只处理 PLAYER，其它作为 NPC 装饰）
+      for (const obj of layer.objects) {
+        const props = Array.isArray(obj.properties)
+          ? Object.fromEntries(obj.properties.map((p: any) => [p.name, p.value]))
+          : {};
+        if (props.entity_type === "PLAYER") {
+          // 玩家出生点：Tiled 对象 y 是 1-indexed，需要减 1
+          playerSpawn = {
+            x: obj.x / 32 - W / 2,
+            y: obj.y / 32 - 1 - H / 2,
+          };
+        } else if (props.entity_type === "NPC") {
+          // NPC → 装饰物（kind=npc），App.vue 已有 NPC 渲染逻辑
+          const npcName = String(props.name || obj.name || "NPC");
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          decorations.push({
+            id: `n_${decIdx++}`,
+            kind: "npc",
+            x: wx,
+            y: wz,
+            name: npcName,
+            variant: obj.gid ? obj.gid - 1 : 0,
+          });
+        }
+      }
+    }
+  }
+
+  // 默认玩家出生点：地图中心
+  if (!playerSpawn) playerSpawn = { x: 0, y: 0 };
+
+  // 城镇 zone（mulberryTown = safe，旋转 0..0 矩形）
+  const zones: MapZone[] = [
+    {
+      name: "城镇",
+      x: 0,
+      y: 0,
+      rx: W / 2,
+      ry: H / 2,
+      kind: "safe",
+      desc: "玩家出生点（mulberryTown）",
+      refresh_rate: 0,
+      mob_types: [],
+    },
+  ];
+
+  return {
+    ...f,
+    name: String(obj.name ?? "overworld"),
+    decorations,
+    zones,
+    chunks: [],
+    playerSpawn: playerSpawn ?? undefined,
+  };
+}
+
+/* ============================================================
    把 MapConfig 应用到 TerrainScaleConfig
    ============================================================ */
 
@@ -242,9 +335,9 @@ export async function loadMapConfig(): Promise<MapConfig> {
 export function normalizeMapConfig(raw: unknown): MapConfig | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
+  // ★ Tiled 格式（mulberryTown / mulberryForest 等）：把所有 tile 转成 decorations + 自动生成城镇 zone
   if (Array.isArray(obj.layers) && (obj.tilewidth || obj.tileheight)) {
-    console.warn("[mapConfig] overworld.json 似乎是旧 Tiled 格式，使用兜底数据");
-    return fallbackMapConfig();
+    return normalizeTiledMap(obj);
   }
   const f = fallbackMapConfig();
   return {
@@ -312,7 +405,9 @@ export function normalizeMapConfig(raw: unknown): MapConfig | null {
           name: str(z?.name, ""),
           x: num(z?.x, 0),
           y: num(z?.y, 0),
-          r: num(z?.r, 30),
+          r: z?.r != null ? num(z.r, 30) : undefined,
+          rx: z?.rx != null ? num(z.rx, undefined) : undefined,
+          ry: z?.ry != null ? num(z.ry, undefined) : undefined,
           kind: str(z?.kind, "safe"),
           desc: z?.desc != null ? String(z.desc) : undefined,
           refresh_rate: z?.refresh_rate != null ? num(z.refresh_rate, 0) : undefined,

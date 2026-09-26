@@ -1,0 +1,1689 @@
+{
+  "_comment": "野外生存 · 地图数据（overworld.json）— 等价于 25d_ai_game 的 map_config.json + 运行时实体。世界坐标单位：米。origin = (0, 0)，X/Z 范围 ±1500，比例尺 1 米 = 1 单位。",
+  "size": [
+    3000,
+    3000
+  ],
+  "origin": [
+    0,
+    0
+  ],
+  "scale_meter": 1,
+  "x_range": [
+    -1500,
+    1500
+  ],
+  "z_range": [
+    -1500,
+    1500
+  ],
+  "x_range_def_view": [
+    -15,
+    15
+  ],
+  "z_range_def_view": [
+    -15,
+    15
+  ],
+  "height_range": [
+    -1,
+    8
+  ],
+  "baseline": -10,
+  "depth_underground_land": 5,
+  "underground_x_range": [
+    -150,
+    150
+  ],
+  "underground_y_range": [
+    -150,
+    150
+  ],
+  "default_zoom": 20,
+  "min_zoom": 10,
+  "max_zoom": 100,
+  "name": "overworld",
+  "theme": "野外·清晨",
+  "narration": "薄雾笼罩着这片荒野，远处传来低沉的嘶吼。收拢心神，活下去。",
+  "notes": "3000m × 3000m 地图，origin (0,0)，玩家出生 (0,0)，zoom 20 默认显示 ±15 米窗口",
+  "zones": [
+    {
+      "name": "城镇",
+      "x": 0,
+      "y": 0,
+      "rx": 21.5,
+      "ry": 28,
+      "kind": "safe",
+      "desc": "玩家出生的安全区，无怪物刷新",
+      "refresh_rate": 0,
+      "mob_types": []
+    },
+    {
+      "name": "荒地",
+      "x": 300,
+      "y": 200,
+      "r": 80,
+      "kind": "danger",
+      "desc": "野兽出没，每45秒刷新",
+      "refresh_rate": 45,
+      "mob_types": [
+        "wolf",
+        "boar"
+      ]
+    },
+    {
+      "name": "废墟",
+      "x": -400,
+      "y": -300,
+      "r": 60,
+      "kind": "loot",
+      "desc": "可能残留物资，每60秒刷新",
+      "refresh_rate": 60,
+      "mob_types": [
+        "skeleton"
+      ]
+    },
+    {
+      "name": "清泉",
+      "x": 600,
+      "y": -500,
+      "r": 40,
+      "kind": "safe",
+      "desc": "补给点，无怪物刷新",
+      "refresh_rate": 0,
+      "mob_types": []
+    },
+    {
+      "name": "祭坛",
+      "x": -700,
+      "y": 500,
+      "r": 50,
+      "kind": "quest",
+      "desc": "可触发支线，每90秒刷新",
+      "refresh_rate": 90,
+      "mob_types": [
+        "spirit"
+      ]
+    }
+  ],
+  "decorations": [
+    {
+      "id": "bn_-21",
+      "kind": "tree",
+      "x": -21,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-19",
+      "kind": "tree",
+      "x": -19,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-17",
+      "kind": "tree",
+      "x": -17,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-15",
+      "kind": "tree",
+      "x": -15,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-13",
+      "kind": "tree",
+      "x": -13,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-11",
+      "kind": "tree",
+      "x": -11,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-9",
+      "kind": "tree",
+      "x": -9,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-7",
+      "kind": "tree",
+      "x": -7,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-5",
+      "kind": "tree",
+      "x": -5,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_-3",
+      "kind": "tree",
+      "x": -3,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_3",
+      "kind": "tree",
+      "x": 3,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_5",
+      "kind": "tree",
+      "x": 5,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_7",
+      "kind": "tree",
+      "x": 7,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_9",
+      "kind": "tree",
+      "x": 9,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_11",
+      "kind": "tree",
+      "x": 11,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_13",
+      "kind": "tree",
+      "x": 13,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_15",
+      "kind": "tree",
+      "x": 15,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_17",
+      "kind": "tree",
+      "x": 17,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_19",
+      "kind": "tree",
+      "x": 19,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bn_21",
+      "kind": "tree",
+      "x": 21,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "bs_-21",
+      "kind": "tree",
+      "x": -21,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-19",
+      "kind": "tree",
+      "x": -19,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-17",
+      "kind": "tree",
+      "x": -17,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-15",
+      "kind": "tree",
+      "x": -15,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-13",
+      "kind": "tree",
+      "x": -13,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-11",
+      "kind": "tree",
+      "x": -11,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-9",
+      "kind": "tree",
+      "x": -9,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-7",
+      "kind": "tree",
+      "x": -7,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-5",
+      "kind": "tree",
+      "x": -5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_-3",
+      "kind": "tree",
+      "x": -3,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_3",
+      "kind": "tree",
+      "x": 3,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_5",
+      "kind": "tree",
+      "x": 5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_7",
+      "kind": "tree",
+      "x": 7,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_9",
+      "kind": "tree",
+      "x": 9,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_11",
+      "kind": "tree",
+      "x": 11,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_13",
+      "kind": "tree",
+      "x": 13,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_15",
+      "kind": "tree",
+      "x": 15,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_17",
+      "kind": "tree",
+      "x": 17,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_19",
+      "kind": "tree",
+      "x": 19,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "bs_21",
+      "kind": "tree",
+      "x": 21,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "be_-28",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -28,
+      "variant": 0
+    },
+    {
+      "id": "be_-26",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -26,
+      "variant": 0
+    },
+    {
+      "id": "be_-24",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -24,
+      "variant": 0
+    },
+    {
+      "id": "be_-22",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -22,
+      "variant": 0
+    },
+    {
+      "id": "be_-20",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -20,
+      "variant": 0
+    },
+    {
+      "id": "be_-18",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -18,
+      "variant": 0
+    },
+    {
+      "id": "be_-16",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -16,
+      "variant": 0
+    },
+    {
+      "id": "be_-14",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -14,
+      "variant": 0
+    },
+    {
+      "id": "be_-12",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -12,
+      "variant": 0
+    },
+    {
+      "id": "be_-10",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -10,
+      "variant": 0
+    },
+    {
+      "id": "be_-8",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -8,
+      "variant": 0
+    },
+    {
+      "id": "be_-6",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -6,
+      "variant": 0
+    },
+    {
+      "id": "be_-4",
+      "kind": "tree",
+      "x": 21.5,
+      "y": -4,
+      "variant": 0
+    },
+    {
+      "id": "be_4",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 4,
+      "variant": 0
+    },
+    {
+      "id": "be_6",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 6,
+      "variant": 0
+    },
+    {
+      "id": "be_8",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 8,
+      "variant": 0
+    },
+    {
+      "id": "be_10",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 10,
+      "variant": 0
+    },
+    {
+      "id": "be_12",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 12,
+      "variant": 0
+    },
+    {
+      "id": "be_14",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 14,
+      "variant": 0
+    },
+    {
+      "id": "be_16",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 16,
+      "variant": 0
+    },
+    {
+      "id": "be_18",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 18,
+      "variant": 0
+    },
+    {
+      "id": "be_20",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 20,
+      "variant": 0
+    },
+    {
+      "id": "be_22",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 22,
+      "variant": 0
+    },
+    {
+      "id": "be_24",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 24,
+      "variant": 0
+    },
+    {
+      "id": "be_26",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 26,
+      "variant": 0
+    },
+    {
+      "id": "be_28",
+      "kind": "tree",
+      "x": 21.5,
+      "y": 28,
+      "variant": 0
+    },
+    {
+      "id": "bw_-28",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -28,
+      "variant": 1
+    },
+    {
+      "id": "bw_-26",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -26,
+      "variant": 1
+    },
+    {
+      "id": "bw_-24",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -24,
+      "variant": 1
+    },
+    {
+      "id": "bw_-22",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -22,
+      "variant": 1
+    },
+    {
+      "id": "bw_-20",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -20,
+      "variant": 1
+    },
+    {
+      "id": "bw_-18",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -18,
+      "variant": 1
+    },
+    {
+      "id": "bw_-16",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -16,
+      "variant": 1
+    },
+    {
+      "id": "bw_-14",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -14,
+      "variant": 1
+    },
+    {
+      "id": "bw_-12",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -12,
+      "variant": 1
+    },
+    {
+      "id": "bw_-10",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -10,
+      "variant": 1
+    },
+    {
+      "id": "bw_-8",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -8,
+      "variant": 1
+    },
+    {
+      "id": "bw_-6",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -6,
+      "variant": 1
+    },
+    {
+      "id": "bw_-4",
+      "kind": "tree",
+      "x": -21.5,
+      "y": -4,
+      "variant": 1
+    },
+    {
+      "id": "bw_4",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 4,
+      "variant": 1
+    },
+    {
+      "id": "bw_6",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 6,
+      "variant": 1
+    },
+    {
+      "id": "bw_8",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 8,
+      "variant": 1
+    },
+    {
+      "id": "bw_10",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 10,
+      "variant": 1
+    },
+    {
+      "id": "bw_12",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 12,
+      "variant": 1
+    },
+    {
+      "id": "bw_14",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 14,
+      "variant": 1
+    },
+    {
+      "id": "bw_16",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 16,
+      "variant": 1
+    },
+    {
+      "id": "bw_18",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 18,
+      "variant": 1
+    },
+    {
+      "id": "bw_20",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 20,
+      "variant": 1
+    },
+    {
+      "id": "bw_22",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 22,
+      "variant": 1
+    },
+    {
+      "id": "bw_24",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 24,
+      "variant": 1
+    },
+    {
+      "id": "bw_26",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 26,
+      "variant": 1
+    },
+    {
+      "id": "bw_28",
+      "kind": "tree",
+      "x": -21.5,
+      "y": 28,
+      "variant": 1
+    },
+    {
+      "id": "exit_n_post_l_-2",
+      "kind": "fence",
+      "x": -2,
+      "y": -28
+    },
+    {
+      "id": "exit_n_post_r_2",
+      "kind": "fence",
+      "x": 2,
+      "y": -28
+    },
+    {
+      "id": "exit_s_post_l_-2",
+      "kind": "fence",
+      "x": -2,
+      "y": 28
+    },
+    {
+      "id": "exit_s_post_r_2",
+      "kind": "fence",
+      "x": 2,
+      "y": 28
+    },
+    {
+      "id": "exit_e_post_t",
+      "kind": "fence",
+      "x": 21.5,
+      "y": -2
+    },
+    {
+      "id": "exit_e_post_b",
+      "kind": "fence",
+      "x": 21.5,
+      "y": 2
+    },
+    {
+      "id": "exit_w_post_t",
+      "kind": "fence",
+      "x": -21.5,
+      "y": -2
+    },
+    {
+      "id": "exit_w_post_b",
+      "kind": "fence",
+      "x": -21.5,
+      "y": 2
+    },
+    {
+      "id": "road_ns_-25",
+      "kind": "road",
+      "x": 0,
+      "y": -25
+    },
+    {
+      "id": "road_ns_-24",
+      "kind": "road",
+      "x": 0,
+      "y": -24
+    },
+    {
+      "id": "road_ns_-23",
+      "kind": "road",
+      "x": 0,
+      "y": -23
+    },
+    {
+      "id": "road_ns_-22",
+      "kind": "road",
+      "x": 0,
+      "y": -22
+    },
+    {
+      "id": "road_ns_-21",
+      "kind": "road",
+      "x": 0,
+      "y": -21
+    },
+    {
+      "id": "road_ns_-20",
+      "kind": "road",
+      "x": 0,
+      "y": -20
+    },
+    {
+      "id": "road_ns_-19",
+      "kind": "road",
+      "x": 0,
+      "y": -19
+    },
+    {
+      "id": "road_ns_-18",
+      "kind": "road",
+      "x": 0,
+      "y": -18
+    },
+    {
+      "id": "road_ns_-17",
+      "kind": "road",
+      "x": 0,
+      "y": -17
+    },
+    {
+      "id": "road_ns_-16",
+      "kind": "road",
+      "x": 0,
+      "y": -16
+    },
+    {
+      "id": "road_ns_-15",
+      "kind": "road",
+      "x": 0,
+      "y": -15
+    },
+    {
+      "id": "road_ns_-14",
+      "kind": "road",
+      "x": 0,
+      "y": -14
+    },
+    {
+      "id": "road_ns_-13",
+      "kind": "road",
+      "x": 0,
+      "y": -13
+    },
+    {
+      "id": "road_ns_-12",
+      "kind": "road",
+      "x": 0,
+      "y": -12
+    },
+    {
+      "id": "road_ns_-11",
+      "kind": "road",
+      "x": 0,
+      "y": -11
+    },
+    {
+      "id": "road_ns_-10",
+      "kind": "road",
+      "x": 0,
+      "y": -10
+    },
+    {
+      "id": "road_ns_-9",
+      "kind": "road",
+      "x": 0,
+      "y": -9
+    },
+    {
+      "id": "road_ns_-8",
+      "kind": "road",
+      "x": 0,
+      "y": -8
+    },
+    {
+      "id": "road_ns_-7",
+      "kind": "road",
+      "x": 0,
+      "y": -7
+    },
+    {
+      "id": "road_ns_-6",
+      "kind": "road",
+      "x": 0,
+      "y": -6
+    },
+    {
+      "id": "road_ns_-5",
+      "kind": "road",
+      "x": 0,
+      "y": -5
+    },
+    {
+      "id": "road_ns_-4",
+      "kind": "road",
+      "x": 0,
+      "y": -4
+    },
+    {
+      "id": "road_ns_-3",
+      "kind": "road",
+      "x": 0,
+      "y": -3
+    },
+    {
+      "id": "road_ns_-2",
+      "kind": "road",
+      "x": 0,
+      "y": -2
+    },
+    {
+      "id": "road_ns_-1",
+      "kind": "road",
+      "x": 0,
+      "y": -1
+    },
+    {
+      "id": "road_ns_0",
+      "kind": "road",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "road_ns_1",
+      "kind": "road",
+      "x": 0,
+      "y": 1
+    },
+    {
+      "id": "road_ns_2",
+      "kind": "road",
+      "x": 0,
+      "y": 2
+    },
+    {
+      "id": "road_ns_3",
+      "kind": "road",
+      "x": 0,
+      "y": 3
+    },
+    {
+      "id": "road_ns_4",
+      "kind": "road",
+      "x": 0,
+      "y": 4
+    },
+    {
+      "id": "road_ns_5",
+      "kind": "road",
+      "x": 0,
+      "y": 5
+    },
+    {
+      "id": "road_ns_6",
+      "kind": "road",
+      "x": 0,
+      "y": 6
+    },
+    {
+      "id": "road_ns_7",
+      "kind": "road",
+      "x": 0,
+      "y": 7
+    },
+    {
+      "id": "road_ns_8",
+      "kind": "road",
+      "x": 0,
+      "y": 8
+    },
+    {
+      "id": "road_ns_9",
+      "kind": "road",
+      "x": 0,
+      "y": 9
+    },
+    {
+      "id": "road_ns_10",
+      "kind": "road",
+      "x": 0,
+      "y": 10
+    },
+    {
+      "id": "road_ns_11",
+      "kind": "road",
+      "x": 0,
+      "y": 11
+    },
+    {
+      "id": "road_ns_12",
+      "kind": "road",
+      "x": 0,
+      "y": 12
+    },
+    {
+      "id": "road_ns_13",
+      "kind": "road",
+      "x": 0,
+      "y": 13
+    },
+    {
+      "id": "road_ns_14",
+      "kind": "road",
+      "x": 0,
+      "y": 14
+    },
+    {
+      "id": "road_ns_15",
+      "kind": "road",
+      "x": 0,
+      "y": 15
+    },
+    {
+      "id": "road_ns_16",
+      "kind": "road",
+      "x": 0,
+      "y": 16
+    },
+    {
+      "id": "road_ns_17",
+      "kind": "road",
+      "x": 0,
+      "y": 17
+    },
+    {
+      "id": "road_ns_18",
+      "kind": "road",
+      "x": 0,
+      "y": 18
+    },
+    {
+      "id": "road_ns_19",
+      "kind": "road",
+      "x": 0,
+      "y": 19
+    },
+    {
+      "id": "road_ns_20",
+      "kind": "road",
+      "x": 0,
+      "y": 20
+    },
+    {
+      "id": "road_ns_21",
+      "kind": "road",
+      "x": 0,
+      "y": 21
+    },
+    {
+      "id": "road_ns_22",
+      "kind": "road",
+      "x": 0,
+      "y": 22
+    },
+    {
+      "id": "road_ns_23",
+      "kind": "road",
+      "x": 0,
+      "y": 23
+    },
+    {
+      "id": "road_ns_24",
+      "kind": "road",
+      "x": 0,
+      "y": 24
+    },
+    {
+      "id": "road_ns_25",
+      "kind": "road",
+      "x": 0,
+      "y": 25
+    },
+    {
+      "id": "road_ew_-19",
+      "kind": "road",
+      "x": -19,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-18",
+      "kind": "road",
+      "x": -18,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-17",
+      "kind": "road",
+      "x": -17,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-16",
+      "kind": "road",
+      "x": -16,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-15",
+      "kind": "road",
+      "x": -15,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-14",
+      "kind": "road",
+      "x": -14,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-13",
+      "kind": "road",
+      "x": -13,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-12",
+      "kind": "road",
+      "x": -12,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-11",
+      "kind": "road",
+      "x": -11,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-10",
+      "kind": "road",
+      "x": -10,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-9",
+      "kind": "road",
+      "x": -9,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-8",
+      "kind": "road",
+      "x": -8,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-7",
+      "kind": "road",
+      "x": -7,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-6",
+      "kind": "road",
+      "x": -6,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-5",
+      "kind": "road",
+      "x": -5,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-4",
+      "kind": "road",
+      "x": -4,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-3",
+      "kind": "road",
+      "x": -3,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-2",
+      "kind": "road",
+      "x": -2,
+      "y": 0
+    },
+    {
+      "id": "road_ew_-1",
+      "kind": "road",
+      "x": -1,
+      "y": 0
+    },
+    {
+      "id": "road_ew_0",
+      "kind": "road",
+      "x": 0,
+      "y": 0
+    },
+    {
+      "id": "road_ew_1",
+      "kind": "road",
+      "x": 1,
+      "y": 0
+    },
+    {
+      "id": "road_ew_2",
+      "kind": "road",
+      "x": 2,
+      "y": 0
+    },
+    {
+      "id": "road_ew_3",
+      "kind": "road",
+      "x": 3,
+      "y": 0
+    },
+    {
+      "id": "road_ew_4",
+      "kind": "road",
+      "x": 4,
+      "y": 0
+    },
+    {
+      "id": "road_ew_5",
+      "kind": "road",
+      "x": 5,
+      "y": 0
+    },
+    {
+      "id": "road_ew_6",
+      "kind": "road",
+      "x": 6,
+      "y": 0
+    },
+    {
+      "id": "road_ew_7",
+      "kind": "road",
+      "x": 7,
+      "y": 0
+    },
+    {
+      "id": "road_ew_8",
+      "kind": "road",
+      "x": 8,
+      "y": 0
+    },
+    {
+      "id": "road_ew_9",
+      "kind": "road",
+      "x": 9,
+      "y": 0
+    },
+    {
+      "id": "road_ew_10",
+      "kind": "road",
+      "x": 10,
+      "y": 0
+    },
+    {
+      "id": "road_ew_11",
+      "kind": "road",
+      "x": 11,
+      "y": 0
+    },
+    {
+      "id": "road_ew_12",
+      "kind": "road",
+      "x": 12,
+      "y": 0
+    },
+    {
+      "id": "road_ew_13",
+      "kind": "road",
+      "x": 13,
+      "y": 0
+    },
+    {
+      "id": "road_ew_14",
+      "kind": "road",
+      "x": 14,
+      "y": 0
+    },
+    {
+      "id": "road_ew_15",
+      "kind": "road",
+      "x": 15,
+      "y": 0
+    },
+    {
+      "id": "road_ew_16",
+      "kind": "road",
+      "x": 16,
+      "y": 0
+    },
+    {
+      "id": "road_ew_17",
+      "kind": "road",
+      "x": 17,
+      "y": 0
+    },
+    {
+      "id": "road_ew_18",
+      "kind": "road",
+      "x": 18,
+      "y": 0
+    },
+    {
+      "id": "road_ew_19",
+      "kind": "road",
+      "x": 19,
+      "y": 0
+    },
+    {
+      "id": "house_blacksmith",
+      "kind": "building",
+      "x": -12,
+      "y": -16,
+      "variant": 0
+    },
+    {
+      "id": "forge",
+      "kind": "furniture",
+      "x": -12,
+      "y": -20,
+      "variant": 0
+    },
+    {
+      "id": "house_shop",
+      "kind": "building",
+      "x": 12,
+      "y": -16,
+      "variant": 1
+    },
+    {
+      "id": "counter",
+      "kind": "furniture",
+      "x": 12,
+      "y": -20,
+      "variant": 1
+    },
+    {
+      "id": "house_elder",
+      "kind": "building",
+      "x": -12,
+      "y": 16,
+      "variant": 2
+    },
+    {
+      "id": "carpet",
+      "kind": "furniture",
+      "x": -12,
+      "y": 20,
+      "variant": 2
+    },
+    {
+      "id": "house_inn",
+      "kind": "building",
+      "x": 12,
+      "y": 16,
+      "variant": 3
+    },
+    {
+      "id": "bed",
+      "kind": "furniture",
+      "x": 12,
+      "y": 20,
+      "variant": 3
+    },
+    {
+      "id": "npc_blacksmith",
+      "kind": "npc",
+      "x": -8,
+      "y": -16,
+      "variant": 0,
+      "name": "铁匠"
+    },
+    {
+      "id": "npc_merchant",
+      "kind": "npc",
+      "x": 8,
+      "y": -16,
+      "variant": 1,
+      "name": "商人"
+    },
+    {
+      "id": "npc_elder",
+      "kind": "npc",
+      "x": -8,
+      "y": 16,
+      "variant": 2,
+      "name": "长者"
+    },
+    {
+      "id": "npc_innkeeper",
+      "kind": "npc",
+      "x": 8,
+      "y": 16,
+      "variant": 3,
+      "name": "旅馆"
+    },
+    {
+      "id": "npc_guard",
+      "kind": "npc",
+      "x": 0,
+      "y": 5,
+      "variant": 4,
+      "name": "守卫"
+    },
+    {
+      "id": "farm_0_0",
+      "kind": "farm",
+      "x": -18,
+      "y": 6
+    },
+    {
+      "id": "farm_0_1",
+      "kind": "farm",
+      "x": -16,
+      "y": 6
+    },
+    {
+      "id": "farm_0_2",
+      "kind": "farm",
+      "x": -14,
+      "y": 6
+    },
+    {
+      "id": "farm_1_0",
+      "kind": "farm",
+      "x": -18,
+      "y": 8
+    },
+    {
+      "id": "farm_1_1",
+      "kind": "farm",
+      "x": -16,
+      "y": 8
+    },
+    {
+      "id": "farm_1_2",
+      "kind": "farm",
+      "x": -14,
+      "y": 8
+    },
+    {
+      "id": "farm_2_0",
+      "kind": "farm",
+      "x": -18,
+      "y": 10
+    },
+    {
+      "id": "farm_2_1",
+      "kind": "farm",
+      "x": -16,
+      "y": 10
+    },
+    {
+      "id": "farm_2_2",
+      "kind": "farm",
+      "x": -14,
+      "y": 10
+    },
+    {
+      "id": "tree_in_1",
+      "kind": "tree",
+      "x": -7,
+      "y": -8,
+      "variant": 0
+    },
+    {
+      "id": "tree_in_2",
+      "kind": "tree",
+      "x": 7,
+      "y": 8,
+      "variant": 1
+    },
+    {
+      "id": "bush_in_1",
+      "kind": "bush",
+      "x": -7,
+      "y": -4,
+      "variant": 0
+    },
+    {
+      "id": "tree_wild_1",
+      "kind": "tree",
+      "x": 120,
+      "y": -60,
+      "variant": 0
+    },
+    {
+      "id": "tree_wild_2",
+      "kind": "tree",
+      "x": -150,
+      "y": 100,
+      "variant": 1
+    },
+    {
+      "id": "water_wild_1",
+      "kind": "water",
+      "x": -200,
+      "y": -50
+    },
+    {
+      "id": "ruin1",
+      "kind": "building",
+      "x": -380,
+      "y": -280,
+      "variant": 4
+    },
+    {
+      "id": "ruin2",
+      "kind": "building",
+      "x": -420,
+      "y": -320,
+      "variant": 5
+    }
+  ],
+  "chests": [
+    {
+      "_note": "玩家 (0,0) 附近（开局就能看到一两个宝箱）"
+    },
+    {
+      "id": "ch_near_1",
+      "x": 22,
+      "y": -28,
+      "tier": 1,
+      "loot": {
+        "exp": 15,
+        "money": 12,
+        "item": "干粮"
+      }
+    },
+    {
+      "id": "ch_near_2",
+      "x": -35,
+      "y": 30,
+      "tier": 2,
+      "loot": {
+        "exp": 20,
+        "money": 18,
+        "item": "急救包"
+      }
+    },
+    {
+      "_note": "散场宝箱（玩家走动后才会看到）"
+    },
+    {
+      "id": "ch1",
+      "x": 100,
+      "y": 150,
+      "tier": 1,
+      "loot": {
+        "exp": 15,
+        "money": 12,
+        "item": "干粮"
+      }
+    },
+    {
+      "id": "ch2",
+      "x": -200,
+      "y": 100,
+      "tier": 2,
+      "loot": {
+        "exp": 20,
+        "money": 18,
+        "item": "急救包"
+      }
+    },
+    {
+      "id": "ch3",
+      "x": -500,
+      "y": -200,
+      "tier": 1,
+      "loot": {
+        "exp": 12,
+        "money": 9,
+        "item": "工具卷"
+      }
+    },
+    {
+      "id": "ch4",
+      "x": 450,
+      "y": 300,
+      "tier": 2,
+      "loot": {
+        "exp": 25,
+        "money": 20,
+        "item": "药剂"
+      }
+    }
+  ],
+  "potions": [
+    {
+      "_note": "玩家附近"
+    },
+    {
+      "id": "p_near_1",
+      "x": -16,
+      "y": 24,
+      "heal": 40
+    },
+    {
+      "id": "p_near_2",
+      "x": 28,
+      "y": 12,
+      "heal": 30
+    },
+    {
+      "_note": "散场"
+    },
+    {
+      "id": "p1",
+      "x": 70,
+      "y": -120,
+      "heal": 40
+    },
+    {
+      "id": "p2",
+      "x": -150,
+      "y": 50,
+      "heal": 40
+    },
+    {
+      "id": "p3",
+      "x": 300,
+      "y": -300,
+      "heal": 30
+    },
+    {
+      "id": "p4",
+      "x": -350,
+      "y": 150,
+      "heal": 30
+    }
+  ],
+  "chunks": [
+    {
+      "cx": 0,
+      "cz": 0,
+      "destroyed": [
+        {
+          "x": 30,
+          "y": 5,
+          "z": 0
+        },
+        {
+          "x": 32,
+          "y": 5,
+          "z": 0
+        },
+        {
+          "x": -8,
+          "y": 10,
+          "z": 1
+        }
+      ]
+    }
+  ]
+}

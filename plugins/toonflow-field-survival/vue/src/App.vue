@@ -21,6 +21,7 @@ import {
   TILE_WATER_ID, TILE_POTION_ID,
   TILE_TREE_ID, TILE_DEADTREE_ID, TILE_CHEST_ID, TILE_CHEST_OPEN_ID,
   TILE_SHRUB_ID, TILE_MUSHROOM_ID, TILE_FLOWER_ID,
+  TILE_GRASS_MAIN_ID,
   TILE_DIRT_MAIN_ID,
   TILE_HOUSE_ROOF_LEFT_ID, TILE_HOUSE_ROOF_MID_ID, TILE_HOUSE_ROOF_RIGHT_ID,
   TILE_HOUSE_TOP_LEFT_ID, TILE_HOUSE_TOP_MID_ID, TILE_HOUSE_TOP_RIGHT_ID,
@@ -853,8 +854,10 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
 }
 
 // 地图装饰物（树木、水体、花木）位置 —— 优先从 overworld.json 加载
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road"; id: string; variant?: number; name?: string }
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road"; id: string; variant?: number; name?: string; tileId?: number; layer?: number }
 const mapDecorations = ref<Decoration[]>([]);
+/** 装饰物按 chunk 索引（key = "cx,cz"）——按区域加载时只取当前 loaded_chunks 内的 */
+const decorationsByChunk = new Map<string, Decoration[]>();
 
 /** Chunk 系统（按玩家位置动态加载/卸载装饰物） */
 let chunkSystem: ChunkTerrainSystem | null = null;
@@ -862,7 +865,17 @@ let chunkSystem: ChunkTerrainSystem | null = null;
 // 初始化地图装饰物（从 mapCfg.decorations 读，fallback 用 §文件 hard-coded）
 function initDecorations() {
   if (mapCfg.value?.decorations?.length) {
-    mapDecorations.value = mapCfg.value.decorations as Decoration[];
+    // ★ 按 chunk 索引所有装饰（不一次性 push 到 mapDecorations.value）
+    decorationsByChunk.clear();
+    for (const d of mapCfg.value.decorations) {
+      const dec = d as Decoration;
+      const cx = Math.floor(dec.x / 16);  // CHUNK_SIZE_M = 16
+      const cz = Math.floor(dec.y / 16);
+      const key = `${cx},${cz}`;
+      if (!decorationsByChunk.has(key)) decorationsByChunk.set(key, []);
+      decorationsByChunk.get(key)!.push(dec);
+    }
+    mapDecorations.value = [];
     return;
   }
   const decs: Decoration[] = [];
@@ -1070,36 +1083,67 @@ function localTick(): void {
     // 限制玩家在世界范围内（±1490，与 entry.ts 一致）
     me.x = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.x));
     me.y = Math.max(-WORLD_LIMIT_M, Math.min(WORLD_LIMIT_M, me.y));
+
+    // —— 碰撞检测：树/枯树/木桩不可穿越 —— 玩家半径 0.4 米，障碍半径 0.5 米
+    const PLAYER_R = 0.4;
+    const OBSTACLE_R = 0.5;
+    const decos = mapCfg.value?.decorations || [];
+    for (const dec of decos) {
+      // mulberry 风格：9298 木桩作为边界围墙（与树同效）
+      if (dec.kind !== "tree" && dec.kind !== "dead_tree" && dec.kind !== "fence") continue;
+      const dx = me.x - dec.x;
+      const dy = me.y - dec.y;
+      const d = Math.hypot(dx, dy);
+      const minDist = PLAYER_R + OBSTACLE_R;
+      if (d < minDist && d > 0.001) {
+        // 推回到刚好不撞的位置
+        const push = (minDist - d);
+        me.x += (dx / d) * push;
+        me.y += (dy / d) * push;
+      } else if (d <= 0.001) {
+        // 玩家与障碍完全重合，极端情况，往上推 0.1 米
+        me.y += 0.1;
+      }
+    }
+
     // 记录本地权威位姿，供 onHostState 覆盖宿主回推值
     lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
+  }
 
-    // 区域刷新追踪（支持圆形和矩形区域）
-    const zones = (state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || [];
-    const zone = zones.find((z: any) => {
-      // 优先用矩形范围（rx/ry），否则用圆形（r）
-      if (z.rx !== undefined && z.ry !== undefined) {
-        return me.x >= z.x - z.rx && me.x <= z.x + z.rx &&
-               me.y >= z.y - z.ry && me.y <= z.y + z.ry;
-      }
-      return Math.hypot(z.x - me.x, z.y - me.y) <= z.r;
-    });
-    const zoneName = zone?.name ?? null;
-    if (zoneName !== currentZoneName) {
-      if (currentZoneName !== null && zoneRespawnReady === false) {
-        // 离开了区域，启动 45 秒计时器
-        zoneLeftTick = s.tick;
-        zoneRespawnReady = false;
-      }
-      currentZoneName = zoneName;
+  // 区域刷新追踪（支持圆形和矩形区域）
+  const meForZone = s.entities.find((e) => e.side === "player");
+  const zones = (state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || [];
+  const zone = zones.find((z: any) => {
+    if (!meForZone) return false;
+    // 优先用矩形范围（rx/ry），否则用圆形（r）
+    if (z.rx !== undefined && z.ry !== undefined) {
+      return meForZone.x >= z.x - z.rx && meForZone.x <= z.x + z.rx &&
+             meForZone.y >= z.y - z.ry && meForZone.y <= z.y + z.ry;
     }
-    // 检查是否 45 秒已过（每 tick = 100ms）
-    if (zoneLeftTick > 0 && !zoneRespawnReady) {
-      const elapsedSec = ((s.tick - zoneLeftTick) * TICK_DT);
-      if (elapsedSec >= ZONE_RESPAWN_SEC) {
-        zoneRespawnReady = true;
-        zoneLeftTick = 0;
-      }
+    return Math.hypot(z.x - meForZone.x, z.y - meForZone.y) <= z.r;
+  });
+  const zoneName = zone?.name ?? null;
+  if (zoneName !== currentZoneName) {
+    if (currentZoneName !== null && zoneRespawnReady === false) {
+      // 离开了区域，启动 45 秒计时器
+      zoneLeftTick = s.tick;
+      zoneRespawnReady = false;
     }
+    currentZoneName = zoneName;
+  }
+  // 检查是否 45 秒已过（每 tick = 100ms）
+  if (zoneLeftTick > 0 && !zoneRespawnReady) {
+    const elapsedSec = ((s.tick - zoneLeftTick) * TICK_DT);
+    if (elapsedSec >= ZONE_RESPAWN_SEC) {
+      zoneRespawnReady = true;
+      zoneLeftTick = 0;
+    }
+  }
+
+  // ★ chunk 系统：每 tick 推进一次（玩家移动后更新 loaded_chunks）
+  if (chunkSystem && lastLocalPose) {
+    chunkSystem.updateAroundPlayer(lastLocalPose.x, lastLocalPose.y, performance.now());
+    chunkSystem.tick();
   }
   // 2. 推进 tick 计数
   s.tick = (s.tick || 0) + 1;
@@ -1473,6 +1517,20 @@ function groundTileAt(wx: number, wz: number): number {
   return pickGroundTile(GROUND_GRASS_TILES, tone);
 }
 
+/* ---------------- ★ fix① 地面图块记忆化缓存 ---------------- */
+/** 缓存键 = (gx+32768)*65536 + (gz+32768)；世界格号 ±1500 ≪ 32768，无碰撞 */
+const groundTileCache = new Map<number, number>();
+const GROUND_TILE_CACHE_MAX = 20000;
+function groundTileAtFast(gx: number, gz: number): number {
+  const key = (gx + 32768) * 65536 + (gz + 32768);
+  const hit = groundTileCache.get(key);
+  if (hit !== undefined) return hit;
+  const v = groundTileAt(gx * GROUND_CELL_M, gz * GROUND_CELL_M);
+  if (groundTileCache.size >= GROUND_TILE_CACHE_MAX) groundTileCache.clear();
+  groundTileCache.set(key, v);
+  return v;
+}
+
 function render() {
   const c = canvasEl.value;
   const s = state.value;
@@ -1705,183 +1763,31 @@ function render() {
   }
 
   // —— 装饰物（树/枯树/灌木/蘑菇/花/水/石/药水，按像素尺寸）——
-  mapDecorations.value.forEach((dec) => {
-    const px = wx2px(dec.x);
-    const py = wz2py(dec.y);
-
-    if (dec.kind === "tree" && SHEET_TILESET.ready) {
-      // ★ fix①：树改走"米 × ppm"，与角色同一尺度基准（zoom=20 时 ≈60px，高于 1.6 米的小人）
-      const d = propDimPx("tree", sx);
-      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
-    } else if (dec.kind === "water" && SHEET_TILESET.ready) {
-      // ★ fix①：水面同样按米（2 米 ≈ 40px）
-      const d = propDimPx("water", sx);
-      ctx.save(); ctx.globalAlpha = 0.9;
-      drawTile(ctx, TILE_WATER_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
-      ctx.restore();
-    } else if (dec.kind === "bush" && SHEET_TILESET.ready) {
-      // ★ fix①：灌木按米（1.1 米 ≈ 22px，与原像素尺寸接近，仅补上 zoom 联动）
-      const d = propDimPx("bush", sx);
-      drawTile(ctx, TILE_SHRUB_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
-    } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
-      const dh = Math.round(0.90 * sx), dw = dh;
-      drawTile(ctx, TILE_MUSHROOM_ID, px - dw / 2, py - dh + 4, dw, dh);
-    } else if (dec.kind === "flower" && SHEET_TILESET.ready) {
-      const dh = Math.round(0.80 * sx), dw = dh;
-      drawTile(ctx, TILE_FLOWER_ID, px - dw / 2, py - dh + 4, dw, dh);
-    } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
-      const dh = Math.round(0.90 * sx), dw = Math.round(0.60 * sx);
-      drawTile(ctx, TILE_POTION_ID, px - dw / 2, py - dh + 4, dw, dh);
-    } else if (dec.kind === "road" && SHEET_TILESET.ready) {
-      // 土路 tile（用泥土 tile）
-      drawTile(ctx, TILE_DIRT_MAIN_ID, px - sx / 2, py - sx / 2, sx, sx);
-    } else if (dec.kind === "building" && SHEET_TILESET.ready) {
-      // 用 tileset 真实图块绘制房屋（与 Rotten-Soup 风格一致）
-      const v = dec.variant || 0;
-      const bw = sx * 3;  // 3 格宽
-      const bh = sx * 3;  // 3 格高
-      const x0 = px - bw / 2;
-      const y0 = py - bh + 4;
-      // 屋顶层（2 行 × 3 列）
-      drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0 - sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0 - sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0 - sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0, sx, sx);
-      drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0, sx, sx);
-      drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0, sx, sx);
-      // 墙体层（3 行 × 3 列）
-      drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_TOP_MID_ID, x0 + sx, y0 + sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx, sx, sx);
-      drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx * 2, sx, sx);
-      drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 2, sx, sx);
-      drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx * 2, sx, sx);
-      drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0, y0 + sx * 3, sx, sx);
-      drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 3, sx, sx);
-      drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0 + sx * 2, y0 + sx * 3, sx, sx);
-    } else if (dec.kind === "building") {
-      // Fallback: 纯色方块
-      const bw = sx * 3, bh = sx * 3;
-      const x0 = px - bw / 2, y0 = py - bh + 4;
-      ctx.save();
-      ctx.fillStyle = "#8a7a6a";
-      ctx.fillRect(x0, y0, bw, bh);
-      ctx.restore();
-    } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
-      // NPC 用 tileset 绘制（头顶对话框 + 身体）
-      const npcName = (dec as any).name || "NPC";
-      // 对话气泡
-      drawTile(ctx, TILE_DIALOG_BUBBLE_ID, px - sx * 0.5, py - sx * 2.2, sx, sx * 0.7);
-      // NPC 身体（用树 tile 作为占位，后续可替换为 NPC tile）
-      drawTile(ctx, TILE_SHRUB_ID, px - sx * 0.5, py - sx, sx, sx * 2);
-      // 名字
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.78)";
-      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(npcName, px, py + sx * 1.2);
-      ctx.restore();
-    } else if (dec.kind === "npc") {
-      // Fallback: 简化圆形
-      const sz = Math.round(0.8 * sx);
-      ctx.save();
-      ctx.fillStyle = "#d4a574";
-      ctx.beginPath();
-      ctx.arc(px, py - sz * 0.3, sz * 0.4, 0, Math.PI * 2);
-      ctx.fill();
-      const npcName = (dec as any).name || "NPC";
-      ctx.fillStyle = "rgba(0,0,0,0.78)";
-      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(npcName, px, py + sz * 0.4);
-      ctx.restore();
-    } else if (dec.kind === "fence" && SHEET_TILESET.ready) {
-      // 用 tileset 木桩绘制栅栏（连续多个桩）
-      const v = dec.variant || 0;
-      const gap = sx * 1.5;  // 1.5 米间距
-      const numPosts = 3;    // 画 3 个桩
-      for (let i = 0; i < numPosts; i++) {
-        drawTile(ctx, TILE_FENCE_POST_ID, px - sx / 2 + i * gap, py - sx, sx, sx);
+  // ★ 视野过滤：只渲染屏幕可见范围附近的装饰（mulberry 后总量 4369+，否则每帧遍历爆卡）
+  const viewRadiusX_m = vw / 2 + 4;  // 米
+  const viewRadiusY_m = vh / 2 + 4;
+  const pxCenter = pp?.x ?? 0;
+  const pyCenter = pp?.y ?? 0;
+  // ★ 按区域加载 + 视野渲染：只遍历当前 loaded_chunks 内的装饰（mulberry 4369 → 当前 ~几十）
+  //   双层循环：chunk × 装饰，每层都做距离粗筛
+  if (chunkSystem) {
+    for (const chunkKey of chunkSystem.loaded_chunks) {
+      const chunkDecs = decorationsByChunk.get(chunkKey);
+      if (!chunkDecs) continue;
+      for (const dec of chunkDecs) {
+        if (Math.abs(dec.x - pxCenter) > viewRadiusX_m) continue;
+        if (Math.abs(dec.y - pyCenter) > viewRadiusY_m) continue;
+        renderOneDecoration(ctx, dec, wx2px(dec.x), wz2py(dec.y), sx);
       }
-      // 横梁（用 rail tile）
-      drawTile(ctx, TILE_FENCE_RAIL_ID, px - sx / 2, py - sx * 0.7, sx * 3, sx * 0.3);
-    } else if (dec.kind === "fence") {
-      // Fallback: 棕色竖线
-      const dh = Math.round(0.8 * sx), dw = Math.round(0.22 * sx);
-      ctx.save();
-      ctx.fillStyle = "#7a5a3a";
-      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-      ctx.restore();
-    } else if (dec.kind === "furniture") {
-      // 家具：根据 variant 显示不同物品
-      const dh = Math.round(0.5 * sx), dw = Math.round(0.8 * sx);
-      ctx.save();
-      const variant = dec.variant || 0;
-      if (variant === 0) {
-        // 锻造台（铁匠）
-        ctx.fillStyle = "#3a3a3a";
-        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-        ctx.fillStyle = "#ff6b1a";
-        ctx.fillRect(px - dw / 4, py - dh + 4, dw / 2, dh / 2);
-      } else if (variant === 1) {
-        // 柜台（杂货）
-        ctx.fillStyle = "#8b6914";
-        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-        ctx.fillStyle = "#d4a13e";
-        ctx.fillRect(px - dw / 2 + 1, py - dh + 4, dw - 2, 1);
-      } else if (variant === 2) {
-        // 地毯（长者）
-        ctx.fillStyle = "#a02828";
-        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-        ctx.fillStyle = "#ffd700";
-        for (let i = 0; i < 3; i++) {
-          ctx.fillRect(px - dw / 2 + 1, py - dh + 5 + i * 2, dw - 2, 0.5);
-        }
-      } else {
-        // 床（旅馆）
-        ctx.fillStyle = "#a0826d";
-        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-        ctx.fillStyle = "#e0c8a8";
-        ctx.fillRect(px - dw / 2 + 2, py - dh + 6, dw - 4, dh - 4);
-      }
-      ctx.restore();
-    } else if (dec.kind === "farm" && SHEET_TILESET.ready) {
-      // 农田用 tileset 绘制（与 Rotten-Soup 风格一致）
-      const fw = sx * 3, fh = sx * 2;
-      const x0 = px - fw / 2, y0 = py - fh + 4;
-      // 3×2 农田格子
-      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0, sx, sx);
-      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0, sx, sx);
-      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0, sx, sx);
-      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0 + sx, sx, sx);
-      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0 + sx, sx, sx);
-      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0 + sx, sx, sx);
-    } else if (dec.kind === "farm") {
-      // Fallback: 棕色田地
-      const dh = Math.round(2 * sx), dw = dh;
-      ctx.save();
-      ctx.fillStyle = "#5c3a1e";
-      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
-      ctx.restore();
-    } else if (dec.kind === "rock" && SHEET_TILESET.ready) {
-      const dh = Math.round(0.9 * sx), dw = dh;
-      drawTile(ctx, TILE_ROCK_ID, px - dw / 2, py - dh + 4, dw, dh);
-    } else {
-      // 兜底形状（屏幕像素）
-      ctx.save(); ctx.globalAlpha = 0.5;
-      if (dec.kind === "tree") {
-        ctx.fillStyle = "#2d5a27";
-        ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2); ctx.fill();
-      } else if (dec.kind === "water") {
-        ctx.fillStyle = "#4a90d9";
-        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
-      } else {
-        ctx.fillStyle = "#8b7355";
-        ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
-      }
-      ctx.restore();
     }
-  });
+  } else {
+    // 兜底：chunkSystem 未初始化时退化为遍历全量
+    for (const dec of mapDecorations.value) {
+      if (Math.abs(dec.x - pxCenter) > viewRadiusX_m) continue;
+      if (Math.abs(dec.y - pyCenter) > viewRadiusY_m) continue;
+      renderOneDecoration(ctx, dec, wx2px(dec.x), wz2py(dec.y), sx);
+    }
+  }
 
   // —— 宝箱（像素尺寸 32×34）——
   s.chests.forEach((ch) => {
@@ -1934,9 +1840,6 @@ function render() {
 
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
   const roleIds = new Set(s.roles.map((r) => r.id));
-  // ★ fix③：除玩家外，实体一律用"显示位置"绘制（见 entityDisplayPos）。
-  //   宿主推送与渲染帧率不同步时，直接画权威坐标会出现"长时间不动 → 一帧跳一段"的瞬移；
-  //   排序也改用显示位置，保证前后遮挡与画面一致。
   const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const dtSec = Math.max(0.001, Math.min(0.1, lastRenderAt ? (_nowMs - lastRenderAt) / 1000 : 0.016));
   lastRenderAt = _nowMs;
@@ -1999,20 +1902,209 @@ function render() {
   }
 }
 
-/* ---------------- ★ fix① 地面图块记忆化缓存 ---------------- */
-/** 缓存键 = (gx+32768)*65536 + (gz+32768)；世界格号 ±1500 ≪ 32768，无碰撞 */
-const groundTileCache = new Map<number, number>();
-const GROUND_TILE_CACHE_MAX = 20000;
-function groundTileAtFast(gx: number, gz: number): number {
-  const key = (gx + 32768) * 65536 + (gz + 32768);
-  const hit = groundTileCache.get(key);
-  if (hit !== undefined) return hit;
-  const v = groundTileAt(gx * GROUND_CELL_M, gz * GROUND_CELL_M);
-  if (groundTileCache.size >= GROUND_TILE_CACHE_MAX) groundTileCache.clear();
-  groundTileCache.set(key, v);
-  return v;
+/** 单个装饰物的渲染（按区域加载后调用） */
+function renderOneDecoration(
+  ctx: CanvasRenderingContext2D,
+  dec: Decoration,
+  px: number,
+  py: number,
+  sx: number,
+): void {
+  {
+    if (dec.kind === "tree" && SHEET_TILESET.ready) {
+      // ★ fix①：树改走"米 × ppm"，与角色同一尺度基准（zoom=20 时 ≈60px，高于 1.6 米的小人）
+      const d = propDimPx("tree", sx);
+      drawTile(ctx, dec.variant === 0 ? TILE_TREE_ID : TILE_DEADTREE_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
+    } else if (dec.kind === "ground" && SHEET_TILESET.ready) {
+      // ★ mulberry 地表 tile（手工铺贴的特殊地块，比如路、广场、房屋地基）
+      const tid = (dec as any).tileId ?? TILE_GRASS_MAIN_ID;
+      const d = propDimPx("road", sx);
+      drawTile(ctx, tid, px - d.w / 2, py - d.h + 4, d.w, d.h);
+    } else if (dec.kind === "water" && SHEET_TILESET.ready) {
+      // ★ fix①：水面同样按米（2 米 ≈ 40px）
+      const d = propDimPx("water", sx);
+      ctx.save(); ctx.globalAlpha = 0.9;
+      drawTile(ctx, TILE_WATER_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
+      ctx.restore();
+    } else if (dec.kind === "bush" && SHEET_TILESET.ready) {
+      // ★ fix①：灌木按米（1.1 米 ≈ 22px，与原像素尺寸接近，仅补上 zoom 联动）
+      const d = propDimPx("bush", sx);
+      drawTile(ctx, TILE_SHRUB_ID, px - d.w / 2, py - d.h + 4, d.w, d.h);
+    } else if (dec.kind === "mushroom" && SHEET_TILESET.ready) {
+      const dh = Math.round(0.90 * sx), dw = dh;
+      drawTile(ctx, TILE_MUSHROOM_ID, px - dw / 2, py - dh + 4, dw, dh);
+    } else if (dec.kind === "flower" && SHEET_TILESET.ready) {
+      const dh = Math.round(0.80 * sx), dw = dh;
+      drawTile(ctx, TILE_FLOWER_ID, px - dw / 2, py - dh + 4, dw, dh);
+    } else if (dec.kind === "pot" && SHEET_TILESET.ready) {
+      const dh = Math.round(0.90 * sx), dw = Math.round(0.60 * sx);
+      drawTile(ctx, TILE_POTION_ID, px - dw / 2, py - dh + 4, dw, dh);
+    } else if (dec.kind === "road" && SHEET_TILESET.ready) {
+      // 土路 tile（用泥土 tile）
+      drawTile(ctx, TILE_DIRT_MAIN_ID, px - sx / 2, py - sx / 2, sx, sx);
+    } else if (dec.kind === "building" && SHEET_TILESET.ready) {
+      // ★ mulberry 风格：用每个 tile 的真实 tileId（不是固定 3x3 模板）
+      const tid = (dec as any).tileId;
+      if (tid) {
+        drawTile(ctx, tid, px - sx / 2, py - sx + 4, sx, sx);
+      } else {
+        // Fallback: 用模板（兼容旧的装饰物）
+        const v = dec.variant || 0;
+        const bw = sx * 3;
+        const bh = sx * 3;
+        const x0 = px - bw / 2;
+        const y0 = py - bh + 4;
+        drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0 - sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0 - sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0 - sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_ROOF_LEFT_ID, x0, y0, sx, sx);
+        drawTile(ctx, TILE_HOUSE_ROOF_MID_ID, x0 + sx, y0, sx, sx);
+        drawTile(ctx, TILE_HOUSE_ROOF_RIGHT_ID, x0 + sx * 2, y0, sx, sx);
+        drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_TOP_MID_ID, x0 + sx, y0 + sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx, sx, sx);
+        drawTile(ctx, TILE_HOUSE_TOP_LEFT_ID, x0, y0 + sx * 2, sx, sx);
+        drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 2, sx, sx);
+        drawTile(ctx, TILE_HOUSE_TOP_RIGHT_ID, x0 + sx * 2, y0 + sx * 2, sx, sx);
+        drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0, y0 + sx * 3, sx, sx);
+        drawTile(ctx, TILE_HOUSE_DOOR_ID, x0 + sx, y0 + sx * 3, sx, sx);
+        drawTile(ctx, TILE_HOUSE_BOTTOM_ID, x0 + sx * 2, y0 + sx * 3, sx, sx);
+      }
+    } else if (dec.kind === "building") {
+      // Fallback: 纯色方块
+      const bw = sx * 3, bh = sx * 3;
+      const x0 = px - bw / 2, y0 = py - bh + 4;
+      ctx.save();
+      ctx.fillStyle = "#8a7a6a";
+      ctx.fillRect(x0, y0, bw, bh);
+      ctx.restore();
+    } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
+      // NPC 用 tileset 绘制（头顶对话框 + 身体）
+      const npcName = (dec as any).name || "NPC";
+      // 对话气泡
+      drawTile(ctx, TILE_DIALOG_BUBBLE_ID, px - sx * 0.5, py - sx * 2.2, sx, sx * 0.7);
+      // NPC 身体（用树 tile 作为占位，后续可替换为 NPC tile）
+      drawTile(ctx, TILE_SHRUB_ID, px - sx * 0.5, py - sx, sx, sx * 2);
+      // 名字
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.78)";
+      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(npcName, px, py + sx * 1.2);
+      ctx.restore();
+    } else if (dec.kind === "npc") {
+      // Fallback: 简化圆形
+      const sz = Math.round(0.8 * sx);
+      ctx.save();
+      ctx.fillStyle = "#d4a574";
+      ctx.beginPath();
+      ctx.arc(px, py - sz * 0.3, sz * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      const npcName = (dec as any).name || "NPC";
+      ctx.fillStyle = "rgba(0,0,0,0.78)";
+      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(npcName, px, py + sz * 0.4);
+      ctx.restore();
+    } else if (dec.kind === "fence" && SHEET_TILESET.ready) {
+      // 用 tileset 木桩绘制栅栏（连续多个桩）
+      const v = dec.variant || 0;
+      // ★ mulberry 风格：有 tileId 用真实 tileId，否则用 3 桩模板
+      const tid = (dec as any).tileId;
+      if (tid) {
+        drawTile(ctx, tid, px - sx / 2, py - sx + 4, sx, sx);
+      } else {
+        const gap = sx * 1.5;
+        const numPosts = 3;
+        for (let i = 0; i < numPosts; i++) {
+          drawTile(ctx, TILE_FENCE_POST_ID, px - sx / 2 + i * gap, py - sx, sx, sx);
+        }
+        drawTile(ctx, TILE_FENCE_RAIL_ID, px - sx / 2, py - sx * 0.7, sx * 3, sx * 0.3);
+      }
+    } else if (dec.kind === "fence") {
+      // Fallback: 棕色竖线
+      const dh = Math.round(0.8 * sx), dw = Math.round(0.22 * sx);
+      ctx.save();
+      ctx.fillStyle = "#7a5a3a";
+      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+      ctx.restore();
+    } else if (dec.kind === "furniture") {
+      // 家具：根据 variant 显示不同物品
+      const dh = Math.round(0.5 * sx), dw = Math.round(0.8 * sx);
+      ctx.save();
+      const variant = dec.variant || 0;
+      if (variant === 0) {
+        // 锻造台（铁匠）
+        ctx.fillStyle = "#3a3a3a";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#ff6b1a";
+        ctx.fillRect(px - dw / 4, py - dh + 4, dw / 2, dh / 2);
+      } else if (variant === 1) {
+        // 柜台（杂货）
+        ctx.fillStyle = "#8b6914";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#d4a13e";
+        ctx.fillRect(px - dw / 2 + 1, py - dh + 4, dw - 2, 1);
+      } else if (variant === 2) {
+        // 地毯（长者）
+        ctx.fillStyle = "#a02828";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#ffd700";
+        for (let i = 0; i < 3; i++) {
+          ctx.fillRect(px - dw / 2 + 1, py - dh + 5 + i * 2, dw - 2, 0.5);
+        }
+      } else {
+        // 床（旅馆）
+        ctx.fillStyle = "#a0826d";
+        ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+        ctx.fillStyle = "#e0c8a8";
+        ctx.fillRect(px - dw / 2 + 2, py - dh + 6, dw - 4, dh - 4);
+      }
+      ctx.restore();
+    } else if (dec.kind === "farm" && SHEET_TILESET.ready) {
+      // 农田用 tileset 绘制（与 Rotten-Soup 风格一致）
+      // ★ mulberry 风格：每个 tile 用真实 tileId
+      const tid = (dec as any).tileId;
+      if (tid) {
+        drawTile(ctx, tid, px - sx / 2, py - sx + 4, sx, sx);
+      } else {
+      const fw = sx * 3, fh = sx * 2;
+      const x0 = px - fw / 2, y0 = py - fh + 4;
+      // 3×2 农田格子
+      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0, sx, sx);
+      drawTile(ctx, TILE_FARM_DIRT_ID, x0, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_FARM_GREEN_ID, x0 + sx, y0 + sx, sx, sx);
+      drawTile(ctx, TILE_FARM_TOP_ID, x0 + sx * 2, y0 + sx, sx, sx);
+      }
+    } else if (dec.kind === "farm") {
+      // Fallback: 棕色田地
+      const dh = Math.round(2 * sx), dw = dh;
+      ctx.save();
+      ctx.fillStyle = "#5c3a1e";
+      ctx.fillRect(px - dw / 2, py - dh + 4, dw, dh);
+      ctx.restore();
+    } else if (dec.kind === "rock" && SHEET_TILESET.ready) {
+      const dh = Math.round(0.9 * sx), dw = dh;
+      drawTile(ctx, TILE_ROCK_ID, px - dw / 2, py - dh + 4, dw, dh);
+    } else {
+      // 兜底形状（屏幕像素）
+      ctx.save(); ctx.globalAlpha = 0.5;
+      if (dec.kind === "tree") {
+        ctx.fillStyle = "#2d5a27";
+        ctx.beginPath(); ctx.arc(px, py, 14, 0, Math.PI * 2); ctx.fill();
+      } else if (dec.kind === "water") {
+        ctx.fillStyle = "#4a90d9";
+        ctx.beginPath(); ctx.arc(px, py, 12, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.fillStyle = "#8b7355";
+        ctx.beginPath(); ctx.arc(px, py, 10, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
 }
-
 /* ---------------- ★ fix⑤/⑥ 迷你小地图 + 玩家坐标 ---------------- */
 /** 小地图画布像素尺寸（CSS 同尺寸） */
 const MINIMAP_PX = 110;
@@ -2268,25 +2360,10 @@ function localReviveIfStillOver() {
   lastLocalPose = { x: me0.x, y: me0.y, facing: me0.facing };   // 位置不变，并接管本地权威位姿
 }
 
-/* ============================================================
-   缩放控制（zoom +/- 按钮，对应 25d_ai_game 的 camera zoom）
-   zoom 是整数倍，范围 [min_zoom, max_zoom]，来自 overworld.json
-   ============================================================ */
-function zoomIn() {
-  zoom.value = terrainScale.value.clampZoom(zoom.value + 1);
-}
-function zoomOut() {
-  zoom.value = terrainScale.value.clampZoom(zoom.value - 1);
-}
-
-const me = computed(() => state.value?.entities.find((e) => e.side === "player"));
-const hpPct = computed(() => (me.value ? Math.max(0, (me.value.hp / me.value.maxHp) * 100) : 0));
-const lastEvents = computed(() => (state.value?.events || []).slice(-4));
-
 /* ---------------- 生命周期 ---------------- */
 let stopHost: (() => void) | null = null;
 
-
+/** 应用启动：加载地图 → 初始化 chunk / 装饰 → 开启渲染循环 */
 onMounted(async () => {
   // ★ v3：先加载地图配置（overworld.json），得到 scale / zoom / 装饰物 / chunk 数据
   try {
@@ -2297,7 +2374,10 @@ onMounted(async () => {
     chunkSystem = new ChunkTerrainSystem(makeScaleFromMap(cfg));
     chunkSystem.init();
     if (cfg.chunks) chunkSystem.ingestMapData(cfg.chunks);
-    // 装饰物：直接读 cfg.decorations
+    // ★ 立即加载玩家初始 chunk（否则 updateAroundPlayer 因同 chunk 提前 return，loaded_chunks 一直为空）
+    chunkSystem.updateAroundPlayer(0, 0, performance.now());
+    for (let i = 0; i < 30; i++) chunkSystem.tick();  // 一次消费完 pending 队列
+    // 装饰物：按 chunk 索引
     initDecorations();
   } catch (err) {
     console.warn("[field-survival] loadMapConfig 失败，使用兜底数据：", err);

@@ -138,7 +138,7 @@ export class ChunkTerrainSystem {
     this._lastCheckAt = now;
 
     const newPos = this.scale.worldToChunk(playerMx, playerMz);
-    if (newPos.cx === this.player_chunk_pos.cx && newPos.cz === this.player_chunk_pos.cz) {
+    if (newPos.cx === this.player_chunk_pos.cx && newPos.cz === this.player_chunk_pos.cz && this.loaded_chunks.size > 0) {
       return;
     }
     this.player_chunk_pos = newPos;
