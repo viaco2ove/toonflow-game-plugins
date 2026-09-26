@@ -397,6 +397,14 @@ const viewSizeMeters = computed<[number, number]>(() =>
   terrainScale.value.viewSizeMeters(zoom.value),
 );
 
+/* 缩放控制（zoom +/- 按钮，对应 Rotten-Soup 的 stage 缩放 / 25d_ai_game 的 camera zoom） */
+function zoomIn() {
+  zoom.value = terrainScale.value.clampZoom(zoom.value + 1);
+}
+function zoomOut() {
+  zoom.value = terrainScale.value.clampZoom(zoom.value - 1);
+}
+
 let canvas_direction_def={
   horizontal_screen:{canvas_w:960, canvas_h:600},
   vertical_screen:{canvas_w:600, canvas_h:960}

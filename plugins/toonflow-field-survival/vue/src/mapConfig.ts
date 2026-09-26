@@ -149,7 +149,7 @@ export function fallbackMapConfig(): MapConfig {
     height_range: [-1, 8],
     default_zoom: 20,
     min_zoom: 10,
-    max_zoom: 30,
+    max_zoom: 100,
     baseline: -10,
     depth_underground_land: 5,
     underground_x_range: [-150, 150],
