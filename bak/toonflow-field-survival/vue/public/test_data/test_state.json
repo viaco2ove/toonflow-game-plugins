@@ -1,0 +1,21 @@
+{
+  "_说明": "本地调试用测试数据（npm run dev 或直接打开 game.html 时加载）。roles 缺失时 mockHost.ts 会自动用默认角色。",
+  "world": { "w": 960, "h": 600 },
+  "roles": [
+    { "id": "r01", "name": "陈彦", "roleType": "player", "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/player/avatar.webp", "description": "赦夜人主角" },
+    { "id": "r02", "name": "裴勇", "roleType": "npc", "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/裴勇/avatar.webp" },
+    { "id": "r03", "name": "夜见", "roleType": "npc", "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/夜见/avatar.webp" },
+    { "id": "r04", "name": "聂小可", "roleType": "npc" , "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/聂小可/avatar.webp" },
+    { "id": "r05", "name": "武飞", "roleType": "npc" },
+    { "id": "r06", "name": "黑狼", "roleType": "npc" },
+    { "id": "r07", "name": "朱果", "roleType": "npc" },
+    { "id": "r08", "name": "骑士", "roleType": "npc" },
+    { "id": "r09", "name": "郭奉凯", "roleType": "npc", "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/郭奉凯/avatar.webp" },
+    { "id": "r10", "name": "霍魁", "roleType": "npc" },
+    { "id": "r11", "name": "魏靖", "roleType": "npc" },
+    { "id": "r12", "name": "林佩雅", "roleType": "npc" },
+    { "id": "r13", "name": "暮光者", "roleType": "npc" },
+    { "id": "r14", "name": "某男子", "roleType": "npc" },
+    { "id": "r15", "name": "某女子", "roleType": "npc" , "avatarPath": "./images/player_sprites/4213.png" }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "id": "npc_2",
+  "roleType": "npc",
+  "name": "夜见",
+  "description": "寄生在用户体内的湮源，被用户命名为“夜见”。\n吸收“湮物”死亡后掉下的“暗核” 可以升级且增加宿主的能力。",
+  "avatarImagePrompt": "",
+  "attributes": {},
+  "voiceMode": "prompt_voice",
+  "voicePromptText": "",
+  "parameterCardJson": {
+    "name": "夜见",
+    "raw_setting": "寄生在用户体内的湮源，被用户命名为\"夜见\"。吸收\"湮物\"死亡后掉下的\"暗核\"可以升级且增加宿主的能力。",
+    "gender": "",
+    "age": 0,
+    "level": 1,
+    "level_desc": "初生湮源",
+    "personality": "",
+    "appearance": "寄生于宿主体内的无形湮源，外在形态不明。",
+    "voice": "",
+    "skills": [
+      "吞噬暗核",
+      "自我升级",
+      "强化宿主能力"
+    ],
+    "items": [],
+    "equipment": [],
+    "hp": 0,
+    "mp": 0,
+    "money": 0,
+    "other": [
+      "属于湮源类生物",
+      "与宿主共生",
+      "共生关系可能影响双方状态。"
+    ],
+    "roleType": "npc",
+    "information": "宿主自命名湮源；通过吸收暗核升级并增强宿主；存在于用户体内，属于近未来北丘世界观的特殊共生体。",
+    "role_key_information": "宿主自命名湮源；通过吸收暗核升级并增强宿主；存在于用户体内，属于近未来北丘世界观的特殊共生体。",
+    "exp": 0,
+    "next_level_exp": 100
+  },
+  "avatarPath": "/1/game/scene/3663f0d8-3ed5-484a-b497-e84c0400b32f.webp",
+  "avatarBgPath": "/1/game/scene/5a60f635-f542-459d-98b1-9984c47e98b2.png",
+  "avatarVideoPath": "/1/game/scene/54b6bff7-dac4-4aa4-8b08-0fa2d64b7e3e.mp4",
+  "avatarFirstFramePath": "/1/game/scene/a87075ec-d07a-4857-afa0-68d0df510e05.png",
+  "avatarDurationMs": 0,
+  "voiceMixVoices": []
+}

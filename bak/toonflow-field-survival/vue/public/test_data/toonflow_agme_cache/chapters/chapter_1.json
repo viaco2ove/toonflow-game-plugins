@@ -1,0 +1,311 @@
+{
+  "id": 85,
+  "worldId": 47,
+  "chapterKey": "黑夜",
+  "title": "黑夜",
+  "content": "## 黑夜\n### 夜采\n@旁白:这是你第一次夜采，你对此一无所知\n### 暮光者\n@霍魁: 小兄弟第一次？\n@暮光者：新人出列\n### 残忍\n@某女子: 请问有没有看见我的孩子\n@暮光者：废话真多（扣动扳机，如同杀死一只蚂蚁）\n\n### 用户发言\n\n## 命运\n### 暗流涌动\n@旁白: 你正在采集黑夜魔菌，突然出现幻象，遇到湮物，看见自己被吞入，然后下个瞬间，你发现自己依然正常采集黑夜魔菌\n@霍魁: 暮光者大人这小子只是打了个顿\n\n### 用户发言\n\n## 现在\n### 过场\n@旁白: 你以为这只是一次夜采，但是命运齿轮开始运作，你先后被霍魁拉拢进入工会，夜采的佣金被隔壁恶霸兄弟抢走，霍魁借暮光者之手帮你解决了一个，而你的弟弟因为害怕恶霸兄弟出卖了你，你的妹妹也不知所踪。\n\n### 湮源之力\n@旁白:你最终爆发湮源之力杀死了你的弟弟和湮物\n### 用户发言\n\n## 林佩雅被绑\n### 绑架\n@霍魁: 我帮了你，你得借我你的住处\n@旁白: 这实际是霍魁和夜客的合谋绑架了林佩雅。而你找你的妹妹回到了住处，被夜客留着，为了保密暂时不允许你离开。\n### 林佩雅\n@林佩雅：你们快放了我，帮了我为何不现在打电话给爸\n\n### 郭奉凯\n@郭奉凯: 找到你们了（眼里只有冷漠），林佩雅 你赶紧回去吧。  剩下的你们可以选两人活下去。\n@旁白: 郭奉凯杀死了发型店老板娘和冯青，他貌似看出了你身上的湮气。\n@郭奉凯: 两位可以走了（霍魁和用户）\n\n### 用户发言\n\n## 不流\n### 不流风波\n@旁白: 你加入了不流，遇到了梁超，梁超的被认为叛徒和后来你们一起在发型店对抗湮物后，你发现霍魁并没有那么可信。\n@霍魁: 你身上的伤不是跟梁超战斗时受的？这是湮物造成的吗？\n### 用户发言\n\n## 解释\n@霍魁: 你得好好解释你身上的伤（叫停了治疗）",
+  "entryCondition": null,
+  "completionCondition": "让霍魁相信你没有与梁超一起合伙作为叛徒，只是碰巧一起战斗",
+  "sort": 1,
+  "status": "published",
+  "createTime": 1789435448145,
+  "updateTime": 1789448019956,
+  "backgroundPath": "/1/game/scene/debd8725-7e95-42de-b19b-520d8b0e1dc3.png",
+  "openingRole": "旁白",
+  "openingText": "光源升价，黑夜怪物，你不得不考虑参加夜采。",
+  "bgmPath": "",
+  "showCompletionCondition": true,
+  "runtimeOutline": {
+    "openingMessages": [
+      {
+        "role": "旁白",
+        "roleType": "narrator",
+        "content": "光源升价，黑夜怪物，你不得不考虑参加夜采。"
+      }
+    ],
+    "phases": [
+      {
+        "id": "phase_1_黑夜",
+        "label": "黑夜",
+        "kind": "scene",
+        "targetSummary": "夜采 → 暮光者 → 残忍 → 用户发言",
+        "stages": [
+          {
+            "id": "phase_1_黑夜_stage_1_夜采",
+            "label": "夜采",
+            "kind": "scene",
+            "targetSummary": "@旁白：这是你第一次夜采，你对此一无所知",
+            "userNodeId": null,
+            "body": "@旁白:这是你第一次夜采，你对此一无所知"
+          },
+          {
+            "id": "phase_1_黑夜_stage_2_暮光者",
+            "label": "暮光者",
+            "kind": "scene",
+            "targetSummary": "@霍魁：小兄弟第一次？\n@暮光者：新人出列",
+            "userNodeId": null,
+            "body": "@霍魁: 小兄弟第一次？\n@暮光者：新人出列"
+          },
+          {
+            "id": "phase_1_黑夜_stage_3_残忍",
+            "label": "残忍",
+            "kind": "scene",
+            "targetSummary": "@某女子：请问有没有看见我的孩子\n@暮光者：废话真多（扣动扳机，如同杀死一只蚂蚁）",
+            "userNodeId": null,
+            "body": "@某女子: 请问有没有看见我的孩子\n@暮光者：废话真多（扣动扳机，如同杀死一只蚂蚁）"
+          },
+          {
+            "id": "phase_1_黑夜_stage_4_用户发言",
+            "label": "用户发言",
+            "kind": "user",
+            "targetSummary": "用户发言",
+            "userNodeId": null,
+            "body": ""
+          }
+        ],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [
+          "phase_2_命运"
+        ],
+        "defaultNextPhaseId": "phase_2_命运",
+        "requiredEventIds": [],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：黑夜",
+          "@旁白：这是你第一次夜采，你对此一无所知",
+          "@霍魁：小兄弟第一次？",
+          "@暮光者：新人出列",
+          "@某女子：请问有没有看见我的孩子",
+          "@暮光者：废话真多（扣动扳机，如同杀死一只蚂蚁）"
+        ],
+        "relatedFixedEventIds": []
+      },
+      {
+        "id": "phase_2_命运",
+        "label": "命运",
+        "kind": "scene",
+        "targetSummary": "暗流涌动 → 用户发言",
+        "stages": [
+          {
+            "id": "phase_2_命运_stage_1_暗流涌动",
+            "label": "暗流涌动",
+            "kind": "scene",
+            "targetSummary": "@旁白：你正在采集黑夜魔菌，突然出现幻象，遇到湮物，看见自己被吞入，然后下个瞬间，你发现自己依然正常采集黑夜魔菌\n@霍魁：暮光者大人这小子只是打了个顿",
+            "userNodeId": null,
+            "body": "@旁白: 你正在采集黑夜魔菌，突然出现幻象，遇到湮物，看见自己被吞入，然后下个瞬间，你发现自己依然正常采集黑夜魔菌\n@霍魁: 暮光者大人这小子只是打了个顿"
+          },
+          {
+            "id": "phase_2_命运_stage_2_用户发言",
+            "label": "用户发言",
+            "kind": "user",
+            "targetSummary": "用户发言",
+            "userNodeId": null,
+            "body": ""
+          }
+        ],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [
+          "phase_3_现在"
+        ],
+        "defaultNextPhaseId": "phase_3_现在",
+        "requiredEventIds": [
+          "phase:phase_1_黑夜"
+        ],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：命运",
+          "@旁白：你正在采集黑夜魔菌，突然出现幻象，遇到湮物，看见自己被吞入，然后下个瞬间，你发现自己依然正常采集黑夜魔菌",
+          "@霍魁：暮光者大人这小子只是打了个顿"
+        ],
+        "relatedFixedEventIds": []
+      },
+      {
+        "id": "phase_3_现在",
+        "label": "现在",
+        "kind": "scene",
+        "targetSummary": "过场 → 湮源之力 → 用户发言",
+        "stages": [
+          {
+            "id": "phase_3_现在_stage_1_过场",
+            "label": "过场",
+            "kind": "scene",
+            "targetSummary": "@旁白：你以为这只是一次夜采，但是命运齿轮开始运作，你先后被霍魁拉拢进入工会，夜采的佣金被隔壁恶霸兄弟抢走，霍魁借暮光者之手帮你解决了一个，而你的弟弟因为害怕恶霸兄弟出卖了你，你的妹妹也不知所踪。",
+            "userNodeId": null,
+            "body": "@旁白: 你以为这只是一次夜采，但是命运齿轮开始运作，你先后被霍魁拉拢进入工会，夜采的佣金被隔壁恶霸兄弟抢走，霍魁借暮光者之手帮你解决了一个，而你的弟弟因为害怕恶霸兄弟出卖了你，你的妹妹也不知所踪。"
+          },
+          {
+            "id": "phase_3_现在_stage_2_湮源之力",
+            "label": "湮源之力",
+            "kind": "scene",
+            "targetSummary": "@旁白：你最终爆发湮源之力杀死了你的弟弟和湮物",
+            "userNodeId": null,
+            "body": "@旁白:你最终爆发湮源之力杀死了你的弟弟和湮物"
+          },
+          {
+            "id": "phase_3_现在_stage_3_用户发言",
+            "label": "用户发言",
+            "kind": "user",
+            "targetSummary": "用户发言",
+            "userNodeId": null,
+            "body": ""
+          }
+        ],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [
+          "phase_4_林佩雅被绑"
+        ],
+        "defaultNextPhaseId": "phase_4_林佩雅被绑",
+        "requiredEventIds": [
+          "phase:phase_2_命运"
+        ],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：现在",
+          "@旁白：你以为这只是一次夜采，但是命运齿轮开始运作，你先后被霍魁拉拢进入工会，夜采的佣金被隔壁恶霸兄弟抢走，霍魁借暮光者之手帮你解决了一个，而你的弟弟因为害怕恶",
+          "@旁白：你最终爆发湮源之力杀死了你的弟弟和湮物"
+        ],
+        "relatedFixedEventIds": []
+      },
+      {
+        "id": "phase_4_林佩雅被绑",
+        "label": "林佩雅被绑",
+        "kind": "scene",
+        "targetSummary": "绑架 → 林佩雅 → 郭奉凯 → 用户发言",
+        "stages": [
+          {
+            "id": "phase_4_林佩雅被绑_stage_1_绑架",
+            "label": "绑架",
+            "kind": "scene",
+            "targetSummary": "@霍魁：我帮了你，你得借我你的住处\n@旁白：这实际是霍魁和夜客的合谋绑架了林佩雅。而你找你的妹妹回到了住处，被夜客留着，为了保密暂时不允许你离开。",
+            "userNodeId": null,
+            "body": "@霍魁: 我帮了你，你得借我你的住处\n@旁白: 这实际是霍魁和夜客的合谋绑架了林佩雅。而你找你的妹妹回到了住处，被夜客留着，为了保密暂时不允许你离开。"
+          },
+          {
+            "id": "phase_4_林佩雅被绑_stage_2_林佩雅",
+            "label": "林佩雅",
+            "kind": "scene",
+            "targetSummary": "@林佩雅：你们快放了我，帮了我为何不现在打电话给爸",
+            "userNodeId": null,
+            "body": "@林佩雅：你们快放了我，帮了我为何不现在打电话给爸"
+          },
+          {
+            "id": "phase_4_林佩雅被绑_stage_3_郭奉凯",
+            "label": "郭奉凯",
+            "kind": "scene",
+            "targetSummary": "@郭奉凯：找到你们了（眼里只有冷漠），林佩雅 你赶紧回去吧。  剩下的你们可以选两人活下去。\n@旁白：郭奉凯杀死了发型店老板娘和冯青，他貌似看出了你身上的湮气。\n@郭奉凯：两位可以走了（霍魁和用户）",
+            "userNodeId": null,
+            "body": "@郭奉凯: 找到你们了（眼里只有冷漠），林佩雅 你赶紧回去吧。  剩下的你们可以选两人活下去。\n@旁白: 郭奉凯杀死了发型店老板娘和冯青，他貌似看出了你身上的湮气。\n@郭奉凯: 两位可以走了（霍魁和用户）"
+          },
+          {
+            "id": "phase_4_林佩雅被绑_stage_4_用户发言",
+            "label": "用户发言",
+            "kind": "user",
+            "targetSummary": "用户发言",
+            "userNodeId": null,
+            "body": ""
+          }
+        ],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [
+          "phase_5_不流"
+        ],
+        "defaultNextPhaseId": "phase_5_不流",
+        "requiredEventIds": [
+          "phase:phase_3_现在"
+        ],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：林佩雅被绑",
+          "@霍魁：我帮了你，你得借我你的住处",
+          "@旁白：这实际是霍魁和夜客的合谋绑架了林佩雅。而你找你的妹妹回到了住处，被夜客留着，为了保密暂时不允许你离开。",
+          "@林佩雅：你们快放了我，帮了我为何不现在打电话给爸",
+          "@郭奉凯：找到你们了（眼里只有冷漠），林佩雅 你赶紧回去吧。  剩下的你们可以选两人活下去。",
+          "@旁白：郭奉凯杀死了发型店老板娘和冯青，他貌似看出了你身上的湮气。",
+          "@郭奉凯：两位可以走了（霍魁和用户）"
+        ],
+        "relatedFixedEventIds": []
+      },
+      {
+        "id": "phase_5_不流",
+        "label": "不流",
+        "kind": "scene",
+        "targetSummary": "不流风波 → 用户发言",
+        "stages": [
+          {
+            "id": "phase_5_不流_stage_1_不流风波",
+            "label": "不流风波",
+            "kind": "scene",
+            "targetSummary": "@旁白：你加入了不流，遇到了梁超，梁超的被认为叛徒和后来你们一起在发型店对抗湮物后，你发现霍魁并没有那么可信。\n@霍魁：你身上的伤不是跟梁超战斗时受的？这是湮物造成的吗？",
+            "userNodeId": null,
+            "body": "@旁白: 你加入了不流，遇到了梁超，梁超的被认为叛徒和后来你们一起在发型店对抗湮物后，你发现霍魁并没有那么可信。\n@霍魁: 你身上的伤不是跟梁超战斗时受的？这是湮物造成的吗？"
+          },
+          {
+            "id": "phase_5_不流_stage_2_用户发言",
+            "label": "用户发言",
+            "kind": "user",
+            "targetSummary": "用户发言",
+            "userNodeId": null,
+            "body": ""
+          }
+        ],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [
+          "phase_6_解释"
+        ],
+        "defaultNextPhaseId": "phase_6_解释",
+        "requiredEventIds": [
+          "phase:phase_4_林佩雅被绑"
+        ],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：不流",
+          "@旁白：你加入了不流，遇到了梁超，梁超的被认为叛徒和后来你们一起在发型店对抗湮物后，你发现霍魁并没有那么可信。",
+          "@霍魁：你身上的伤不是跟梁超战斗时受的？这是湮物造成的吗？"
+        ],
+        "relatedFixedEventIds": []
+      },
+      {
+        "id": "phase_6_解释",
+        "label": "解释",
+        "kind": "scene",
+        "targetSummary": "@霍魁：你得好好解释你身上的伤（叫停了治疗）",
+        "stages": [],
+        "userNodeId": null,
+        "allowedSpeakers": [],
+        "nextPhaseIds": [],
+        "defaultNextPhaseId": null,
+        "requiredEventIds": [
+          "phase:phase_5_不流"
+        ],
+        "completionEventIds": [],
+        "advanceSignals": [
+          "事件标题：解释",
+          "@霍魁：你得好好解释你身上的伤（叫停了治疗）"
+        ],
+        "relatedFixedEventIds": []
+      }
+    ],
+    "userNodes": [],
+    "fixedEvents": [
+      {
+        "id": "fixed_event_让霍魁相信你没有与梁超一起合伙作为叛徒_只是碰巧一起战斗",
+        "label": "让霍魁相信你没有与梁超一起合伙作为叛徒，只是碰巧一起战斗",
+        "requiredBeforeFinish": true,
+        "conditionExpr": null
+      }
+    ],
+    "endingRules": {
+      "success": [
+        "fixed_event_让霍魁相信你没有与梁超一起合伙作为叛徒_只是碰巧一起战斗"
+      ],
+      "failure": [],
+      "nextChapterId": null
+    }
+  },
+  "bgmAutoPlay": true
+}

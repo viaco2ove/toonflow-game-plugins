@@ -1,0 +1,25 @@
+{
+  "id": "com.toonflow.minigame-field-survival",
+  "name": "野外生存",
+  "version": "1.0.0",
+  "author": "Toonflow Team",
+  "description": "在荒野中生存，寻找食物和水源，抵御野兽袭击，挑战极限生存天数。",
+  "main": "entry.ts",
+  "entry": "entry.js",
+  "contributes": {
+    "minigame": {
+      "type": "field_survival",
+      "title": "野外生存",
+      "width": 480,
+      "height": 640,
+      "entry": "ui/game.html"
+    },
+    "sidebar": [
+      {
+        "id": "field-survival-cmd",
+        "label": "野外生存",
+        "command": "#野外生存"
+      }
+    ]
+  }
+}
