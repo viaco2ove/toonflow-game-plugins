@@ -2472,13 +2472,22 @@ function castSkill(i: number) { sendTick("skill", { index: i }); }
 function useItem(i: number) { sendTick("item", { index: i }); }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
-function exitGame() { sendTick("exit", {}); }
+function exitGame() {
+
+  toonflowJsApi.minigame.setFullscreen(false)
+  window.setTimeout(function (){
+      sendTick("exit", {});
+  }, 1000);
+}
 
 /**
  * 结算页「退出」：回到选人阶段（主菜单）
  */
 function exitOver() {
-  if (state.value) state.value.phase = 'select';
+   toonflowJsApi.minigame.setFullscreen(false)
+  window.setTimeout(function (){
+    if (state.value) state.value.phase = 'select';
+  }, 1000);
 }
 
 /**
