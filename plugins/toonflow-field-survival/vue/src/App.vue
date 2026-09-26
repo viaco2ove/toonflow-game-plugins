@@ -38,7 +38,8 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, makeScaleFromMap } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, makeScaleFromMap, getTiledRaw } from "./mapConfig";
+import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 
 const state = ref<GameState | null>(null);
@@ -1661,44 +1662,6 @@ function render() {
   const mapMinY = cfgMap ? -cfgMap.size[1] / 2 : -1500;
   const mapMaxY = cfgMap ? cfgMap.size[1] / 2 : 1500;
 
-  // 地面：dawnlike tileset 平铺（★ v4：1 格 = 1 米 = 1 张 32×32 图块，严格对齐世界格）
-  //   ★ v6：只画地图边界内的格子 —— 地图外保持纯黑（Rotten-Soup 的关卡外就是黑的）
-  if (SHEET_TILESET.ready) {
-    const cellPx = Math.max(4, Math.round(GROUND_CELL_M * sx));  // 1 格在屏幕上的像素（整数，无接缝）
-    const minWX = (pp?.x ?? 0) - W / (2 * sx);                   // 屏幕左边缘的世界 X（米）
-    const minWZ = (pp?.y ?? 0) - H / (2 * sx);                   // 屏幕上边缘的世界 Z（米）
-    const gx0 = Math.floor(minWX / GROUND_CELL_M);               // 起始世界格号
-    const gz0 = Math.floor(minWZ / GROUND_CELL_M);
-    // 起始格左上角的屏幕像素（取整后按整数像素步进 → 与世界格对齐且无累积误差）
-    const originX = Math.round((gx0 * GROUND_CELL_M - minWX) * sx);
-    const originZ = Math.round((gz0 * GROUND_CELL_M - minWZ) * sx);
-    const nx = Math.ceil(W / cellPx) + 2;
-    const nz = Math.ceil(H / cellPx) + 2;
-    // ★ fix①（性能）：地面图块走记忆化缓存。
-    //   groundTileAt 每格要做两次二维 value-noise（各 4 次哈希 + 双线性插值），
-    //   而同一格在静止/缓慢移动时会被反复求值（每帧 nx×nz ≈ 700~900 次），
-    //   手机上这是每帧最大的 CPU 开销之一。地貌是确定性的 → 同格只算一次。
-    for (let j = 0; j < nz; j++) {
-      const gzj = gz0 + j;
-      const ty = originZ + j * cellPx;
-      for (let i = 0; i < nx; i++) {
-        const gx = gx0 + i;
-        // 地图边界外不画（保持 clearRect 的黑色背景）
-        const wx = gx * GROUND_CELL_M;
-        const wz = gzj * GROUND_CELL_M;
-        if (wx < mapMinX - 1 || wx > mapMaxX || wz < mapMinY - 1 || wz > mapMaxY) continue;
-        drawTile(ctx, groundTileAtFast(gx, gzj), originX + i * cellPx, ty, cellPx, cellPx);
-      }
-    }
-  } else {
-    // 兜底渐变（暗泥土色，Rotten-Soup 风格）
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, "#3a2418");
-    g.addColorStop(1, "#1a1208");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-  }
-
   // ★ 地图 zones（map-gener agent 产出 + mulberryTown.json 静态数据）：
   // 不同 kind 不同色调椭圆区域。画在相机变换内。
   // ★ v4：新增区域 kind 配色（城镇安全区 + 6 个野区；旧 kind 保留兼容）
@@ -1724,6 +1687,54 @@ function render() {
   const wx2px = (mx: number) => (mx - pp.x) * sx + W / 2;       // 世界米 X → 屏幕像素 X
   const wz2py = (mz: number) => (mz - pp.y) * sx * DEPTH + H / 2; // 世界米 Z → 屏幕像素 Y（带 2.5D 压缩）
   const m2px = (m: number) => m * sx;                           // 任意米数 → 屏幕像素
+
+  /* ============ 地面渲染（两条路径）============
+     A) Tiled 城镇图（mulberryTown）：整图已烘焙（mapBake），每帧 1 次 drawImage —— 流畅的关键
+     B) 无 Tiled 原始数据（fallback 图）：噪声地表平铺（地图边界外纯黑） */
+  const tiledRaw = getTiledRaw();
+  const baked = (tiledRaw && SHEET_TILESET.ready)
+    ? bakeTiledMap(tiledRaw as any, currentLevelName.value, SHEET_TILESET.img)
+    : null;
+
+  if (baked) {
+    // A) 烘焙图贴屏：世界米 → 烘焙像素（地图中心 = 烘焙图中心）
+    const bakeScale = sx / baked.meterToBakePx;            // 屏幕px / 烘焙px
+    const bakeW = baked.canvas.width * bakeScale;
+    const bakeH = baked.canvas.height * bakeScale;
+    const mapOriginPx = wx2px(-baked.cols / 2);            // 地图左上角世界坐标 → 屏幕
+    const mapOriginPy = wz2py(-baked.rows / 2);
+    ctx.imageSmoothingEnabled = false;                      // 像素风禁插值
+    ctx.drawImage(baked.canvas, mapOriginPx, mapOriginPy, bakeW, bakeH);
+  } else if (SHEET_TILESET.ready) {
+    // B) 噪声地表平铺（fallback）
+    const cellPx = Math.max(4, Math.round(GROUND_CELL_M * sx));
+    const minWX = (pp?.x ?? 0) - W / (2 * sx);
+    const minWZ = (pp?.y ?? 0) - H / (2 * sx);
+    const gx0 = Math.floor(minWX / GROUND_CELL_M);
+    const gz0 = Math.floor(minWZ / GROUND_CELL_M);
+    const originX = Math.round((gx0 * GROUND_CELL_M - minWX) * sx);
+    const originZ = Math.round((gz0 * GROUND_CELL_M - minWZ) * sx);
+    const nx = Math.ceil(W / cellPx) + 2;
+    const nz = Math.ceil(H / cellPx) + 2;
+    for (let j = 0; j < nz; j++) {
+      const gzj = gz0 + j;
+      const ty = originZ + j * cellPx;
+      for (let i = 0; i < nx; i++) {
+        const gx = gx0 + i;
+        const wx = gx * GROUND_CELL_M;
+        const wz = gzj * GROUND_CELL_M;
+        if (wx < mapMinX - 1 || wx > mapMaxX || wz < mapMinY - 1 || wz > mapMaxY) continue;
+        drawTile(ctx, groundTileAtFast(gx, gzj), originX + i * cellPx, ty, cellPx, cellPx);
+      }
+    }
+  } else {
+    // 兜底渐变（暗泥土色，Rotten-Soup 风格）
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#3a2418");
+    g.addColorStop(1, "#1a1208");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
 
   // —— zones（米 → 像素）——
   allZones.forEach((z) => {

@@ -189,39 +189,33 @@ export function fallbackMapConfig(): MapConfig {
   };
 }
 
+/** ★ 最近一次 normalize 的 Tiled 原始 JSON（供 mapBake 烘焙用） */
+let tiledRawCache: Record<string, unknown> | null = null;
+export function getTiledRaw(): Record<string, unknown> | null {
+  return tiledRawCache;
+}
+
 /* ============================================================
    Tiled 格式 → MapConfig（mulberryTown / Forest / Lair 等）
    与 Rotten-Soup 的 createMapFromJSON 等价：
-   - 遍历所有 tilelayer：非 0 tile → decoration（保留 tileId 渲染）
-   - 遍历所有 objectgroup：PLAYER → 玩家出生点；其他 → entities（NPC/CHEST/DOOR/LADDER）
-   - 自动生成 safe zone（mulberryTown = 城镇，全图 safe）
+   - tilelayer → 保留原始数据（mapBake 一次性烘焙，逐格 decoration 已废弃）
+   - objectgroup：PLAYER → 玩家出生点；NPC/LEVEL_TRANSITION/LADDER → decorations
+   - 城镇中心 = safe zone
    ============================================================ */
 function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
-  const f = fallbackMapConfig();
-  const W = num(obj.width, 43);
+  const f = fallbackMapConfig();  const W = num(obj.width, 43);
   const H = num(obj.height, 56);
   const decorations: MapDecoration[] = [];
   let decIdx = 0;
   let playerSpawn: { x: number; y: number } | null = null;
 
+  // ★ 性能：tilelayer 不再逐格生成 decoration（上万 drawImage/帧 = 卡顿主因），
+  //   保留原始 JSON 供 mapBake 一次性烘焙（见 App.vue render()）
+  tiledRawCache = obj;
+
   for (const layer of obj.layers as any[]) {
     if (layer?.type === "tilelayer" && Array.isArray(layer.data)) {
-      // 每格 tile → decoration
-      for (let i = 0; i < layer.data.length; i++) {
-        const tid = layer.data[i];
-        if (tid === 0) continue;
-        const x = i % W;
-        const z = Math.floor(i / W);
-        const wx = x - W / 2 + 0.5;
-        const wz = z - H / 2 + 0.5;
-        decorations.push({
-          id: `t_${decIdx++}`,
-          kind: "ground",
-          x: wx,
-          y: wz,
-          tileId: tid,
-        });
-      }
+      // tilelayer → 全部走烘焙，不生成逐格 decoration
     } else if (layer?.type === "objectgroup" && Array.isArray(layer.objects)) {
       // 每个 object → entity（只处理 PLAYER，其它作为 NPC 装饰）
       for (const obj of layer.objects) {
