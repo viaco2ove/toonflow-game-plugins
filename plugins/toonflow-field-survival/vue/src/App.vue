@@ -38,7 +38,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, makeScaleFromMap } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, makeScaleFromMap } from "./mapConfig";
 import type { MapConfig } from "./mapConfig";
 
 const state = ref<GameState | null>(null);
@@ -854,10 +854,65 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
 }
 
 // 地图装饰物（树木、水体、花木）位置 —— 优先从 mulberryTown.json 加载
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road"; id: string; variant?: number; name?: string; tileId?: number; layer?: number }
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road" | "portal"; id: string; variant?: number; name?: string; tileId?: number; layer?: number }
 const mapDecorations = ref<Decoration[]>([]);
 /** 装饰物按 chunk 索引（key = "cx,cz"）——按区域加载时只取当前 loaded_chunks 内的 */
 const decorationsByChunk = new Map<string, Decoration[]>();
+
+/** ★ 当前关卡名 + 切图中标记（防止重复触发） */
+const currentLevelName = ref("Mulberry Town");
+const levelSwitching = ref(false);
+
+/**
+ * ★ 关卡切换（Rotten-Soup changeLevels 等价）：
+ *   加载目标地图 → 重建 chunk 索引 → 玩家挪到新图中心
+ */
+async function switchLevel(levelName: string): Promise<void> {
+  if (levelSwitching.value) return;
+  levelSwitching.value = true;
+  try {
+    const next = await loadLevelByName(levelName);
+    if (!next) {
+      console.warn("[field-survival] 关卡不存在：", levelName);
+      return;
+    }
+    mapCfg.value = next;
+    currentLevelName.value = levelName;
+    // 重建装饰 chunk 索引
+    decorationsByChunk.clear();
+    for (const d of next.decorations as Decoration[]) {
+      const cx = Math.floor(d.x / 16);
+      const cz = Math.floor(d.y / 16);
+      const key = `${cx},${cz}`;
+      if (!decorationsByChunk.has(key)) decorationsByChunk.set(key, []);
+      decorationsByChunk.get(key)!.push(d);
+    }
+    mapDecorations.value = [];
+    // 重建 chunk 系统（新地图尺寸）
+    chunkSystem = new ChunkTerrainSystem(makeScaleFromMap(next));
+    chunkSystem.init();
+    chunkSystem.updateAroundPlayer(0, 0, performance.now());
+    for (let i = 0; i < 30; i++) chunkSystem.tick();
+    groundTileCache.clear();
+    // 玩家挪到新地图中心
+    const s = state.value;
+    const me = s?.entities.find((e) => e.side === "player");
+    if (me) {
+      me.x = 0;
+      me.y = 0;
+      lastLocalPose = { x: 0, y: 0, facing: me.facing };
+    }
+    // 清掉本图野怪（旧图的怪不跟过来）
+    if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
+    state.value = s ? { ...s } : s;
+    currentZoneName = null;
+    zoneLeftTick = 0;
+    zoneRespawnReady = true;
+    console.info("[field-survival] 已切换到关卡：", levelName);
+  } finally {
+    levelSwitching.value = false;
+  }
+}
 
 /** Chunk 系统（按玩家位置动态加载/卸载装饰物） */
 let chunkSystem: ChunkTerrainSystem | null = null;
@@ -1119,6 +1174,18 @@ function localTick(): void {
 
     // 记录本地权威位姿，供 onHostState 覆盖宿主回推值
     lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
+  }
+
+  // ★ 关卡切换：走到出口箭头（portal）2 米内 → 加载目标地图（Rotten-Soup changeLevels 等价）
+  if (!levelSwitching.value) {
+    const meNow = s.entities.find((e) => e.side === "player");
+    const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");
+    for (const p of portals) {
+      if (Math.hypot(p.x - (meNow?.x ?? 0), p.y - (meNow?.y ?? 0)) < 2.5) {
+        void switchLevel((p as any).name);
+        break;
+      }
+    }
   }
 
   // 区域刷新追踪（支持圆形和矩形区域）
@@ -1587,10 +1654,15 @@ function render() {
 
   ctx.clearRect(0, 0, W, H);
 
+  // ★ 地图边界（米）：Tiled 城镇图按实际尺寸；老 fallback 图保持 ±1500
+  const cfgMap = mapCfg.value;
+  const mapMinX = cfgMap ? -cfgMap.size[0] / 2 : -1500;
+  const mapMaxX = cfgMap ? cfgMap.size[0] / 2 : 1500;
+  const mapMinY = cfgMap ? -cfgMap.size[1] / 2 : -1500;
+  const mapMaxY = cfgMap ? cfgMap.size[1] / 2 : 1500;
+
   // 地面：dawnlike tileset 平铺（★ v4：1 格 = 1 米 = 1 张 32×32 图块，严格对齐世界格）
-  //   与 Rotten-Soup 同构：地块恒定 1 格、格边固定在世界坐标上；
-  //   移动时整片地貌随世界滚动，不会出现贴图逐像素游动 / 摩尔纹；
-  //   配色见 groundTileAt：大尺度分草/泥/沙，同一地貌内部只换深浅 → 不再有棋盘格。
+  //   ★ v6：只画地图边界内的格子 —— 地图外保持纯黑（Rotten-Soup 的关卡外就是黑的）
   if (SHEET_TILESET.ready) {
     const cellPx = Math.max(4, Math.round(GROUND_CELL_M * sx));  // 1 格在屏幕上的像素（整数，无接缝）
     const minWX = (pp?.x ?? 0) - W / (2 * sx);                   // 屏幕左边缘的世界 X（米）
@@ -1610,7 +1682,12 @@ function render() {
       const gzj = gz0 + j;
       const ty = originZ + j * cellPx;
       for (let i = 0; i < nx; i++) {
-        drawTile(ctx, groundTileAtFast(gx0 + i, gzj), originX + i * cellPx, ty, cellPx, cellPx);
+        const gx = gx0 + i;
+        // 地图边界外不画（保持 clearRect 的黑色背景）
+        const wx = gx * GROUND_CELL_M;
+        const wz = gzj * GROUND_CELL_M;
+        if (wx < mapMinX - 1 || wx > mapMaxX || wz < mapMinY - 1 || wz > mapMaxY) continue;
+        drawTile(ctx, groundTileAtFast(gx, gzj), originX + i * cellPx, ty, cellPx, cellPx);
       }
     }
   } else {
@@ -1988,6 +2065,33 @@ function renderOneDecoration(
       ctx.save();
       ctx.fillStyle = "#8a7a6a";
       ctx.fillRect(x0, y0, bw, bh);
+      ctx.restore();
+    } else if ((dec as any).kind === "portal") {
+      // ★ 出口箭头（Rotten-Soup LEVEL_TRANSITION 的视觉提示）：黄色箭头 + 目的地名
+      ctx.save();
+      // 箭头本体（脉冲动画吸引注意）
+      const pulse = 0.75 + 0.25 * Math.sin(_animTick / 8);
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = "#ffd23e";
+      ctx.strokeStyle = "rgba(0,0,0,.8)";
+      ctx.lineWidth = 2;
+      const aw = sx * 0.9, ah = sx * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(px + aw / 2, py - sx * 0.5);          // 右尖
+      ctx.lineTo(px - aw / 2, py - sx * 0.5 - ah / 2); // 上角
+      ctx.lineTo(px - aw / 4, py - sx * 0.5);          // 上凹
+      ctx.lineTo(px - aw / 2, py - sx * 0.5 + ah / 2); // 下角
+      ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.globalAlpha = 1;
+      // 目的地文字
+      const dest = (dec as any).name || "出口";
+      ctx.fillStyle = "rgba(0,0,0,.85)";
+      ctx.font = "bold " + Math.max(8, Math.round(sx * 0.28)) + "px 'Microsoft YaHei', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(dest, px + 1, py - sx * 1.1 + 1);
+      ctx.fillStyle = "#ffe79e";
+      ctx.fillText(dest, px, py - sx * 1.1);
       ctx.restore();
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
       // NPC 用 tileset 绘制（头顶对话框 + 身体）

@@ -14,6 +14,9 @@
  */
 import type { GameState, Entity, RoleOption } from "./types";
 
+/** ★ 从 overworld.json 读出的 safe zone（mulberryTown 全图 = 安全区，野怪不得进入） */
+let mapSafeZones: Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> | null = null;
+
 // 默认角色（当 test_data/test_state.json 不存在时使用）
 const DEFAULT_ROLES: RoleOption[] = [
   { id: "r01", name: "陈彦", roleType: "player", avatarPath: "./images/player_sprites/4334.png", description: "赦夜人主角" },
@@ -92,6 +95,8 @@ function spawnWave(): void {
   const me = state.entities.find((x) => x.side === "player");
   const cx = me?.x ?? 0;
   const cy = me?.y ?? 0;
+  // ★ 城镇图（mulberryTown）全图都是安全区 → 城镇内根本不刷野怪
+  if (mapSafeZones && mapSafeZones.length > 0) return;
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
     const dist = 30 + Math.random() * 70;     // 离玩家 30-100 米环形分布
@@ -225,7 +230,8 @@ function install(): void {
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
         // ★ 安全区判定：玩家在 safe zone 内时，野怪不能进入/追击
-        const safeZones = ((state as any).map?.zones ?? []).filter((z: any) => z.kind === "safe");
+        //   来源优先级：地图加载时写入的 mapSafeZones（mulberryTown 全图 safe） > state.map.zones
+        const safeZones = (mapSafeZones ?? ((state as any).map?.zones ?? [])).filter((z: any) => z.kind === "safe");
         const playerInSafe = !!target && safeZones.some((z: any) => {
           if (z.rx !== undefined && z.ry !== undefined) {
             return Math.abs(z.x - target.x) <= z.rx && Math.abs(z.y - target.y) <= z.ry;
@@ -436,10 +442,10 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
   const isStandalone = !location.href.includes("getAsset") && window.parent === window;
   if (!isStandalone) return false;
   const roles = await loadRoles();
-  // ★ v5：尝试读 mulberryTown.json 拿 playerSpawn（mulberryTown 等 Tiled 格式地图）
+  // ★ v5：尝试读 overworld.json 拿 playerSpawn + safe zones（mulberryTown 等 Tiled 格式地图）
   let mapSpawn: { x: number; y: number } | undefined;
   try {
-    const r = await fetch("./maps/mulberryTown.json");
+    const r = await fetch("./maps/overworld.json");
     if (r.ok) {
       const d = await r.json();
       // 找 objectgroup 里 entity_type=PLAYER 的对象
@@ -457,6 +463,13 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
         }
         if (mapSpawn) break;
       }
+      // ★ Tiled 城镇图（mulberryTown）：全图都是 safe zone（野怪不得进入）
+      mapSafeZones = [{
+        name: "城镇",
+        x: 0, y: 0,
+        rx: d.width / 2, ry: d.height / 2,
+        kind: "safe",
+      }];
     }
   } catch { /* ignore */ }
   state = buildInitialState(roles, mapSpawn);

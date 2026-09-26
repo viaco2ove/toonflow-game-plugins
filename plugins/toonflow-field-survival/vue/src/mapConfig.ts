@@ -247,6 +247,17 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
             name: npcName,
             variant: obj.gid ? obj.gid - 1 : 0,
           });
+        } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
+          // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          decorations.push({
+            id: `p_${decIdx++}`,
+            kind: "portal" as any,
+            x: wx,
+            y: wz,
+            name: String(props.portalID || props.entity_type),
+          } as any);
         }
       }
     }
@@ -255,14 +266,15 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
   // 默认玩家出生点：地图中心
   if (!playerSpawn) playerSpawn = { x: 0, y: 0 };
 
-  // 城镇 zone（mulberryTown = safe，旋转 0..0 矩形）
+  // ★ 城镇 zone：只覆盖地图中央（民居区），边缘留出野外遇怪区
+  //   mulberryTown 43×56：城镇核心 30×34（中心），外围是野怪活动区
   const zones: MapZone[] = [
     {
       name: "城镇",
       x: 0,
-      y: 0,
-      rx: W / 2,
-      ry: H / 2,
+      y: -2,
+      rx: Math.min(W / 2, 15),
+      ry: Math.min(H / 2, 17),
       kind: "safe",
       desc: "玩家出生点（mulberryTown）",
       refresh_rate: 0,
@@ -333,6 +345,32 @@ export async function loadMapConfig(): Promise<MapConfig> {
     } catch { /* try next */ }
   }
   return fallbackMapConfig();
+}
+
+/**
+ * ★ 关卡切换：按名字加载对应 Tiled 地图（Rotten-Soup 的 changeLevels 等价）
+ *   mulberryTown → "Mulberry Forest" → public/maps/mulberryForest.json
+ */
+export async function loadLevelByName(levelName: string): Promise<MapConfig | null> {
+  // 关卡名 → 文件名（Rotten-Soup 命名规则）
+  const fileMap: Record<string, string> = {
+    "Mulberry Town": "mulberryTown",
+    "Mulberry Forest": "mulberryForest",
+    "Mulberry Graveyard": "mulberryGraveyard",
+    "Lich Lair": "lichLair",
+    "Loot Goblin Lair": "lootGoblinLair",
+  };
+  const file = fileMap[levelName];
+  if (!file) return null;
+  for (const prefix of [assetUrl("maps/"), "/maps/", "./maps/"]) {
+    try {
+      const r = await fetch(prefix + file + ".json");
+      if (!r.ok) continue;
+      const d = await r.json();
+      return normalizeMapConfig(d);
+    } catch { /* try next */ }
+  }
+  return null;
 }
 
 /**
