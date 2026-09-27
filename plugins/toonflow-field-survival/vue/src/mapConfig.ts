@@ -97,6 +97,54 @@ export interface MapMob {
   entity_type: string;
 }
 
+/**
+ * ★ 野怪档案表（战斗数值单一数据源）
+ *
+ * 这张表同时是 Tiled 地图解析的「野怪白名单」：
+ *   - 表内 type  → normalizeTiledMap 提取为 MapMob，进图后由 App 生成 mapmob_* 敌人；
+ *   - 表外 type  → 若也不在 NON_MOB_ENTITY_TYPES，解析时 console.warn（不静默丢弃）。
+ *
+ * 修复点：此前只认 GOBLIN，mulberryForest 里的 ORC / mulberryGraveyard 里的 LICH、
+ * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
+ */
+export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number }> = {
+  GOBLIN:      { name: "哥布林斥候", hp: 30,  atk: 6 },
+  LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8 },
+  ORC:         { name: "半兽人",     hp: 80,  atk: 12 },
+  ORC_BOSS:    { name: "兽人首领",   hp: 200, atk: 18 },
+  SKELETON:    { name: "骷髅兵",     hp: 50,  atk: 12 },
+  ZOMBIE:      { name: "僵尸",       hp: 60,  atk: 10 },
+  GHOST:       { name: "幽灵",       hp: 35,  atk: 9 },
+  LICH:        { name: "巫妖",       hp: 160, atk: 20 },
+  WOLF:        { name: "巨狼",       hp: 60,  atk: 10 },
+  BOAR:        { name: "野猪",       hp: 50,  atk: 8 },
+  SNAKE:       { name: "毒蛇",       hp: 25,  atk: 8 },
+  BAT:         { name: "蝙蝠",       hp: 20,  atk: 5 },
+};
+
+/** 野怪白名单（由 MOB_ARCHETYPES 派生，避免两处维护不一致） */
+export const MOB_ENTITY_TYPES: Set<string> = new Set(Object.keys(MOB_ARCHETYPES));
+
+/** 已知的非怪物类型（玩家/ NPC / 出口机关 / 掉落物 / 尸体等）：未进白名单也不告警 */
+export const NON_MOB_ENTITY_TYPES: Set<string> = new Set([
+  "PLAYER",
+  "NPC",
+  "LEVEL_TRANSITION",
+  "LADDER",
+  "DOOR",
+  "LOCKED_DOOR",
+  "CHEST",
+  "KEY",
+  "GOLD",
+  "ITEM",
+  "TREE",
+  "ROCK",
+  "WALL",
+  "ZOMBIE_CORPSE",
+  "SKELETON_CORPSE",
+  "CORPSE",
+]);
+
 /** 单个 chunk 的方块数据（可选，不存就视为默认全泥土块） */
 export interface MapChunk {
   cx: number;
@@ -216,8 +264,9 @@ export function getTiledRaw(): Record<string, unknown> | null {
    - objectgroup：PLAYER → 玩家出生点；NPC/LEVEL_TRANSITION/LADDER → decorations
    - 城镇中心 = safe zone
    ============================================================ */
-function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
-  const f = fallbackMapConfig();  const W = num(obj.width, 43);
+function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): MapConfig {
+  const f = fallbackMapConfig();
+  const W = num(obj.width, 43);
   const H = num(obj.height, 56);
   const decorations: MapDecoration[] = [];
   const mobs: MapMob[] = [];
@@ -259,11 +308,13 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
-        } else if (props.entity_type === "GOBLIN") {
-          // ★ 怪物（GOBLIN 等）→ 记录位置和类型，App.vue switchLevel 时加载到 entities
+        } else if (MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+          // ★ 怪物 → 记录位置和类型，App.vue switchLevel 时加载到 entities
+          //   白名单见 MOB_ENTITY_TYPES（含 ORC / LICH / GHOST / LOOT_GOBLIN），
+          //   此前只认 GOBLIN，ORC 等类型会被静默丢弃 → 进图后看不到对应野怪。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
-          const mobName = String(props.name || obj.name || "哥布林");
+          const mobName = String(props.name || obj.name || "野怪");
           mobs.push({
             id: obj.id,
             name: mobName,
@@ -283,6 +334,12 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
             y: wz,
             name: String(props.portalID || props.entity_type),
           } as any);
+        } else if (!NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+          // ★ 未识别类型不得静默丢弃：至少告警，便于新增地图时及时补进白名单
+          console.warn(
+            `[mapConfig] 未识别的 entity_type，已跳过：entity_type=${String(props.entity_type)}` +
+              ` name=${obj.name ?? ""} id=${obj.id}（如需作为野怪，请加入 MOB_ARCHETYPES）`,
+          );
         }
       }
     }
@@ -291,21 +348,25 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
   // 默认玩家出生点：地图中心
   if (!playerSpawn) playerSpawn = { x: 0, y: 0 };
 
-  // ★ 城镇 zone：只覆盖地图中央（民居区），边缘留出野外遇怪区
-  //   mulberryTown 43×56：城镇核心 30×34（中心），外围是野怪活动区
-  const zones: MapZone[] = [
-    {
-      name: "城镇",
-      x: 0,
-      y: -2,
-      rx: Math.min(W / 2, 15),
-      ry: Math.min(H / 2, 17),
-      kind: "safe",
-      desc: "玩家出生点（mulberryTown）",
-      refresh_rate: 0,
-      mob_types: [],
-    },
-  ];
+  // ★ 城镇 safe zone：只给「城镇类」关卡生成。
+  //   此前对每张 Tiled 图都无条件生成中央城镇 safe 区，导致森林/墓地/地牢里玩家
+  //   进图即落在 safe 区（→ 兜底刷怪被抑制、野怪不追人）。野外/地牢地图 zones 为空。
+  const isTownLevel = !levelName || /town|overworld/i.test(levelName);
+  const zones: MapZone[] = isTownLevel
+    ? [
+        {
+          name: "城镇",
+          x: 0,
+          y: -2,
+          rx: Math.min(W / 2, 15),
+          ry: Math.min(H / 2, 17),
+          kind: "safe",
+          desc: "玩家出生点（mulberryTown）",
+          refresh_rate: 0,
+          mob_types: [],
+        },
+      ]
+    : [];
 
   return {
     ...f,
@@ -366,7 +427,7 @@ export async function loadMapConfig(): Promise<MapConfig> {
       const r = await fetch(url);
       if (!r.ok) continue;
       const d = await r.json();
-      const n = normalizeMapConfig(d);
+      const n = normalizeMapConfig(d, "Mulberry Town");
       if (n) return n;
     } catch { /* try next */ }
   }
@@ -435,7 +496,7 @@ export async function loadLevelByName(levelName: string): Promise<MapConfig | nu
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;
       const d = await r.json();
-      const n = normalizeMapConfig(d);
+      const n = normalizeMapConfig(d, levelName);
       if (n) return n;
     } catch { /* try next */ }
   }
@@ -450,12 +511,13 @@ export async function loadLevelByName(levelName: string): Promise<MapConfig | nu
 /**
  * 把任意 JSON 归一化成 MapConfig（兼容旧 Tiled 格式：检测到 layers/tilewidth 就走兜底）
  */
-export function normalizeMapConfig(raw: unknown): MapConfig | null {
+export function normalizeMapConfig(raw: unknown, levelName?: string): MapConfig | null {
   if (!raw || typeof raw !== "object") return null;
   const obj = raw as Record<string, unknown>;
-  // ★ Tiled 格式（mulberryTown / mulberryForest 等）：把所有 tile 转成 decorations + 自动生成城镇 zone
+  // ★ Tiled 格式（mulberryTown / mulberryForest 等）：把所有 tile 转成 decorations；
+  //   levelName 决定是否生成城镇 safe zone（野外/地牢图不生成）
   if (Array.isArray(obj.layers) && (obj.tilewidth || obj.tileheight)) {
-    return normalizeTiledMap(obj);
+    return normalizeTiledMap(obj, levelName);
   }
   const f = fallbackMapConfig();
   return {

@@ -14,8 +14,77 @@
  */
 import type { GameState, Entity, RoleOption } from "./types";
 
-/** ★ 从 overworld.json 读出的 safe zone（mulberryTown 全图 = 安全区，野怪不得进入） */
+/** ★ 静态兜底 safe zone（overworld.json 对应的城镇范围，野怪不得进入城镇） */
 let mapSafeZones: Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> | null = null;
+
+/**
+ * ★ 当前生效的 safe zone：优先采用 App 发布的"当前关卡"safe zone（window.__mapSafeZones），
+ *   没有发布时才退回静态城镇兜底。
+ *   修复点：此前无论玩家走到哪张图都套用城镇 safe 区，进 Mulberry Forest 后玩家仍被判为
+ *   "在安全区"→ 波次不刷、野怪不追（森林里一只怪都没有）。
+ */
+function allowedSafeZones(): Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> {
+  const pub = (window as any).__mapSafeZones;
+  if (Array.isArray(pub)) return pub.filter((z: any) => z?.kind === "safe");
+  return mapSafeZones ?? [];
+}
+
+/** 当前关卡的半宽/半高（米）：由 App 通过 window.__mapHalfSize 发布，缺省 3000×3000 世界 */
+function allowedMapHalf(): { lx: number; ly: number } {
+  const b = (window as any).__mapHalfSize;
+  if (b && Number.isFinite(b.lx) && Number.isFinite(b.ly)) {
+    return { lx: Math.max(1, b.lx), ly: Math.max(1, b.ly) };
+  }
+  return { lx: 1490, ly: 1490 };
+}
+
+/** 把坐标推出所有 safe zone（安全区只保护玩家，不冻结世界刷新） */
+function pushOutOfSafeZones(x: number, y: number): { x: number; y: number } {
+  let px = x, py = y;
+  for (const z of allowedSafeZones()) {
+    if (z.rx !== undefined && z.ry !== undefined) {
+      if (Math.abs(z.x - px) > z.rx || Math.abs(z.y - py) > z.ry) continue;
+      const dx = px - z.x, dy = py - z.y;
+      if (z.rx + 2 - Math.abs(dx) < z.ry + 2 - Math.abs(dy)) px = z.x + Math.sign(dx || 1) * (z.rx + 2);
+      else py = z.y + Math.sign(dy || 1) * (z.ry + 2);
+    } else {
+      const r = (z.r ?? 30) + 2;
+      const dd = Math.hypot(px - z.x, py - z.y);
+      if (dd <= r) {
+        const k = (r + 0.01) / (dd || 0.01);
+        px = z.x + (px - z.x) * k;
+        py = z.y + (py - z.y) * k;
+      }
+    }
+  }
+  return { x: px, y: py };
+}
+
+/**
+ * ★ 合并 App 侧生成的地图怪物（mapmob_* / localmob_* / zone_*）。
+ *   mock 每 100ms 用自己那份 state 整份覆盖前端，而它并不知道 App 加载出来的森林野怪
+ *   → 会把它们当场抹掉。这里在推送前同步：App 侧新增的并入 mock（由 mock 统一驱动 AI/结算），
+ *   App 侧已消失的（被击杀 / 切图清理）从 mock 中移除，避免复活。
+ */
+function syncAppEntities(): void {
+  try {
+    const collect = (window as any).__collectLocalEnemies;
+    if (typeof collect !== "function") return;
+    const appList: Entity[] = collect() || [];
+    const appIds = new Set(
+      appList.map((e) => e?.id).filter((v): v is string => typeof v === "string"),
+    );
+    const isAppOwned = (id: any) =>
+      typeof id === "string" &&
+      (id.startsWith("mapmob_") || id.startsWith("localmob_") || id.startsWith("zone_"));
+    state.entities = state.entities.filter((e) => !(isAppOwned(e.id) && !appIds.has(e.id)));
+    for (const e of appList) {
+      if (e && typeof e.id === "string" && !state.entities.some((x) => x.id === e.id)) {
+        state.entities.push({ ...e });
+      }
+    }
+  } catch { /* ignore */ }
+}
 
 // 默认角色（当 test_data/test_state.json 不存在时使用）
 const DEFAULT_ROLES: RoleOption[] = [
@@ -95,17 +164,20 @@ function spawnWave(): void {
   const me = state.entities.find((x) => x.side === "player");
   const cx = me?.x ?? 0;
   const cy = me?.y ?? 0;
-  // ★ 城镇图（mulberryTown）全图都是安全区 → 城镇内根本不刷野怪
-  if (mapSafeZones && mapSafeZones.length > 0) return;
+  // ★ 修复（mock 根因①）：原先"只要存在 safe zone 就整波不刷"，而 overworld/城镇图恒有
+  //   一整块 safe 区 → standalone 下刷怪被永久禁用（森林里也一只不出）。
+  //   现改为：照常刷波，但把落点推出 safe 区（安全区只保护玩家，不冻结世界刷新）。
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
     const dist = 30 + Math.random() * 70;     // 离玩家 30-100 米环形分布
+    const spot = pushOutOfSafeZones(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
+    const half = allowedMapHalf();
     const e: Entity = {
       id: `m${mobIdSeq++}`,
       name: wave.name,
       side: "enemy",
-      x: cx + Math.cos(angle) * dist,
-      y: cy + Math.sin(angle) * dist,
+      x: Math.max(-half.lx, Math.min(half.lx, spot.x)),
+      y: Math.max(-half.ly, Math.min(half.ly, spot.y)),
       vx: 0, vy: 0,
       hp: wave.hp, maxHp: wave.hp,
       atk: wave.atk,
@@ -215,6 +287,9 @@ function install(): void {
       }
       if (action === "tick") {
         state.tick++;
+        // ★ 修复（mock 根因②）：把 App 加载出来的地图怪物并入 mock 的 state，
+        //   否则下一次 push() 整份覆盖会把它们当场抹掉（森林野怪"闪一下就消失"）。
+        syncAppEntities();
         const params2 = params || {};
         const me = state.entities.find((x) => x.side === "player");
         // ★ 修复：玩家位姿由 game.html 本地 tick 权威推进并随 tick 上报（params.player），
@@ -233,8 +308,9 @@ function install(): void {
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
         // ★ 安全区判定：玩家在 safe zone 内时，野怪不能进入/追击
-        //   来源优先级：地图加载时写入的 mapSafeZones（mulberryTown 全图 safe） > state.map.zones
-        const safeZones = (mapSafeZones ?? ((state as any).map?.zones ?? [])).filter((z: any) => z.kind === "safe");
+        //   来源：App 按"当前关卡"发布（window.__mapSafeZones，森林关卡为空数组）；
+        //   未发布时退回静态城镇兜底。此前恒用城镇 safe 区 → 森林里也被判为安全区。
+        const safeZones = allowedSafeZones();
         const playerInSafe = !!target && safeZones.some((z: any) => {
           if (z.rx !== undefined && z.ry !== undefined) {
             return Math.abs(z.x - target.x) <= z.rx && Math.abs(z.y - target.y) <= z.ry;
@@ -257,15 +333,11 @@ function install(): void {
               return Math.hypot(z.x - e.x, z.y - e.y) <= (z.r ?? 0);
             });
             if (meInSafe) {
-              // 推到最近的 safe zone 边缘外 1 米
-              for (const z of safeZones) {
-                const odx = e.x - z.x, ody = e.y - z.y;
-                const od = Math.hypot(odx, ody) || 0.001;
-                const margin = (z.r ?? 30) + 1;
-                e.x = z.x + (odx / od) * margin;
-                e.y = z.y + (ody / od) * margin;
-                break;
-              }
+              // ★ 统一安全区推出（矩形区按边长推、圆形区按半径推）：
+              //   此前只按圆形半径 z.r ?? 30 处理，矩形城镇区会把野怪推到错误位置
+              const out = pushOutOfSafeZones(e.x, e.y);
+              e.x = out.x;
+              e.y = out.y;
             }
             return; // 不追、不攻
           }
@@ -485,11 +557,14 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
         }
         if (mapSpawn) break;
       }
-      // ★ Tiled 城镇图（mulberryTown）：全图都是 safe zone（野怪不得进入）
+      // ★ 兜底 safe zone（仅在 App 还没发布 window.__mapSafeZones 时生效）。
+      //   此前直接把整张 overworld 图当作城镇 safe 区（=整图安全区），既失真又容易被
+      //   误用成"整图不刷怪"的依据。这里收敛为城镇中心的小范围安全区；
+      //   App 启动/切图后会用真实关卡的 zones 覆盖它。
       mapSafeZones = [{
         name: "城镇",
         x: 0, y: 0,
-        rx: d.width / 2, ry: d.height / 2,
+        rx: Math.min(d.width / 2, 15), ry: Math.min(d.height / 2, 17),
         kind: "safe",
       }];
     }

@@ -38,7 +38,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, makeScaleFromMap, getTiledRaw } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 
@@ -875,6 +875,96 @@ const decorationsByChunk = new Map<string, Decoration[]>();
 const currentLevelName = ref("Mulberry Town");
 const levelSwitching = ref(false);
 
+/* ============================================================
+   ★ 安全区 / 本地怪物信息发布（供 standalone mockHost 复用 App 侧判定）
+   ============================================================ */
+
+/** 当前关卡的 safe zone（无则空数组） */
+function activeSafeZones(): Array<any> {
+  const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
+  return zones.filter((z) => z?.kind === "safe");
+}
+
+/**
+ * ★ 把"当前关卡有哪些 safe zone"发布到 window，供同窗口的 mockHost 使用。
+ *   mockHost 此前把 overworld.json 的整图当成城镇 safe 区（整张地图都是安全区），
+ *   于是玩家在森林里也被判定为"在安全区"→ 波次不刷、野怪不追。
+ */
+function publishSafeZones(cfg: { zones?: any[] } | null | undefined): void {
+  try {
+    const zones = ((cfg?.zones || []) as Array<any>).filter((z) => z?.kind === "safe");
+    (window as any).__mapSafeZones = zones;
+  } catch { /* ignore */ }
+}
+
+/**
+ * ★ 发布"当前关卡半宽/半高"（米），供同窗口 mockHost 把刷怪落点夹进本图范围。
+ *   否则 mock 会按默认 3000×3000 世界刷怪，森林（60×40）里刷出来的怪在图外。
+ */
+function publishMapBounds(cfg: { size?: number[] } | null | undefined): void {
+  try {
+    const size = (cfg?.size as number[] | undefined) ?? [3000, 3000];
+    (window as any).__mapHalfSize = {
+      lx: Math.max(1, (size[0] ?? 3000) / 2 - 1),
+      ly: Math.max(1, (size[1] ?? 3000) / 2 - 1),
+    };
+  } catch { /* ignore */ }
+}
+
+/**
+ * ★ 把"App 侧本地敌怪"以拉取式钩子暴露给同窗口的 mockHost。
+ *   mockHost 每 100ms 会用自己那份 state 整份覆盖前端，而它并不知道 App 生成的
+ *   mapmob_* / localmob_* / zone_* 敌怪（森林野怪就是 mapmob_*）→ 会被整份覆盖抹掉。
+ *   钩子让 mock 在推送前把它们并入自己的 state，从而"刷得出 + 会追人 + 能击杀"。
+ *   真实宿主下该钩子无副作用（宿主进程读不到 window）。
+ */
+function publishLocalMapMobs(): void {
+  try {
+    (window as any).__collectLocalEnemies = () => {
+      const list = ((state.value?.entities || []) as Array<any>).filter(
+        (e) =>
+          e?.side === "enemy" &&
+          typeof e?.id === "string" &&
+          (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
+      );
+      return list.map((e) => ({ ...e }));
+    };
+  } catch { /* ignore */ }
+}
+
+/** 把刷新点推出 safe zone（安全区只保护玩家，不再冻结世界刷新） */
+function pushOutsideSafeZones(x: number, y: number): { x: number; y: number } {
+  let px = x, py = y;
+  for (const z of activeSafeZones()) {
+    if (z.rx !== undefined && z.ry !== undefined) {
+      const inside = Math.abs(z.x - px) <= z.rx && Math.abs(z.y - py) <= z.ry;
+      if (!inside) continue;
+      const dx = px - z.x, dy = py - z.y;
+      const outX = z.rx + 2 - Math.abs(dx);
+      const outY = z.ry + 2 - Math.abs(dy);
+      if (outX < outY) px = z.x + Math.sign(dx || 1) * (z.rx + 2);
+      else py = z.y + Math.sign(dy || 1) * (z.ry + 2);
+    } else {
+      const r = (z.r ?? 30) + 2;
+      const dd = Math.hypot(px - z.x, py - z.y);
+      if (dd <= r) {
+        const k = (r + 0.01) / (dd || 0.01);
+        px = z.x + (px - z.x) * k;
+        py = z.y + (py - z.y) * k;
+      }
+    }
+  }
+  return { x: px, y: py };
+}
+
+/** 把刷新点夹进当前地图边界（避免刷在地图外，玩家永远走不到） */
+function clampToMapBounds(x: number, y: number): { x: number; y: number } {
+  const size = (mapCfg.value?.size as number[] | undefined) ?? [3000, 3000];
+  const lx = Math.max(1, (size[0] ?? 3000) / 2 - 1);
+  const ly = Math.max(1, (size[1] ?? 3000) / 2 - 1);
+  return { x: Math.max(-lx, Math.min(lx, x)), y: Math.max(-ly, Math.min(ly, y)) };
+}
+
 /**
  * ★ 关卡切换（Rotten-Soup changeLevels 等价）：
  *   加载目标地图 → 重建 chunk 索引 → 玩家挪到新图中心
@@ -916,20 +1006,23 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     // 清掉本图野怪（旧图的怪不跟过来）
     if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
-    // ★ 从 Tiled 地图 Actors 层加载野怪（mulberryForest 的 GOBLIN 等）
+    // ★ 发布本关卡的 safe zone（standalone mockHost 据此判定"安全区"，
+    //   避免继续使用 overworld.json 的整图 safe 区把森林也当成城镇）
+    publishSafeZones(next);
+    publishMapBounds(next);
+    // ★ 从 Tiled 地图 Actors 层加载野怪（mulberryForest 的 GOBLIN / ORC 等）
     console.info("[field-survival] 加载关卡：", levelName, "mobs:", next.mobs?.length, next.mobs);
     if (s && next.mobs?.length) {
-      const mobTypeMap: Record<string, { name: string; hp: number; atk: number }> = {
-        GOBLIN:   { name: "哥布林斥候", hp: 30, atk: 6 },
-        ORC:      { name: "半兽人",     hp: 80, atk: 12 },
-        SKELETON: { name: "骷髅兵",     hp: 50, atk: 12 },
-        WOLF:     { name: "巨狼",       hp: 60, atk: 10 },
-        BOAR:     { name: "野猪",       hp: 50, atk: 8 },
-        SNAKE:    { name: "毒蛇",       hp: 25, atk: 8 },
-        BAT:      { name: "蝙蝠",       hp: 20, atk: 5 },
-      };
       for (const mob of next.mobs) {
-        const arch = mobTypeMap[mob.entity_type] ?? { name: mob.name || "野怪", hp: 30, atk: 6 };
+        // ★ 档案表统一取自 mapConfig.MOB_ARCHETYPES（与地图白名单同一份数据）：
+        //   未登记类型不再静默退化成 30/6 的"哥布林斥候"，而是告警 + 兜底
+        let arch = MOB_ARCHETYPES[mob.entity_type];
+        if (!arch) {
+          console.warn(
+            "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
+          );
+          arch = { name: mob.name || "野怪", hp: 30, atk: 6 };
+        }
         s.entities.push({
           id: `mapmob_${mob.id}_${Date.now()}`,
           name: arch.name,
@@ -947,6 +1040,8 @@ async function switchLevel(levelName: string): Promise<void> {
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
     }
     state.value = s ? { ...s } : s;
+    // ★ 把本图加载的地图怪物发布给 mockHost（standalone 下由 mock 接管 AI/结算）
+    publishLocalMapMobs();
     currentZoneName = null;
     zoneLeftTick = 0;
     zoneRespawnReady = true;
@@ -1065,8 +1160,17 @@ function spawnLocalMobsIfNeeded(): void {
     return Math.hypot(z.x - me.x, z.y - me.y) <= z.r;
   });
 
-  // 安全区不刷新
-  if (currentZone?.kind === "safe" || currentZone?.refresh_rate === 0) return;
+  // ★ 修复（根因③）：原先"玩家所在区域 kind === 'safe' 就直接 return"。
+  //   但 normalizeTiledMap 会为每张 Tiled 图生成中央城镇 safe 区，玩家进图即落在其中，
+  //   于是兜底刷怪永不产出（森林里也一只不刷）。
+  //   现改为按"视野半径内是否已有活着的敌怪"判定：安全区只保护玩家，不冻结世界刷新。
+  const SPAWN_CLEAR_RADIUS_M = 45;
+  const enemyInSight = state.value.entities.some(
+    (e) => e.side === "enemy" && e.alive && Math.hypot(e.x - me.x, e.y - me.y) <= SPAWN_CLEAR_RADIUS_M,
+  );
+  if (enemyInSight) return;
+  // 区域显式声明"不刷新"（refresh_rate=0）或是安全区：不在区内落怪，改到区外野地刷新
+  const zoneBlocksSpawn = !!currentZone && (currentZone.kind === "safe" || currentZone.refresh_rate === 0);
 
   // 检查该区域野怪是否已全死
   const zoneEnemies = state.value.entities.filter((e) => {
@@ -1080,16 +1184,16 @@ function spawnLocalMobsIfNeeded(): void {
   if (zoneEnemies.some((e) => e.alive)) return;
 
   // 根据区域配置决定是否刷新
-  if (currentZone) {
+  if (currentZone && !zoneBlocksSpawn) {
     // 有区域配置：检查刷新计时
     if (!zoneRespawnReady && !allDead) return;
     spawnZoneMobs(currentZone, me.x, me.y);
     zoneRespawnReady = false;
     state.value.events.push(`[${currentZone.name}] 野怪刷新！`);
   } else {
-    // 野外（无区域配置）：每 60 秒自动刷新
-    const hasEnemy = state.value.entities.some((e) => e.side === "enemy");
-    if (hasEnemy) return;
+    // 野外（无区域配置 / 安全区不落区内怪）：每 60 秒自动刷新
+    //   ★ 不再用"场上任意位置有敌人"整体停刷（远处有怪也会把兜底刷怪压死）；
+    //     是否刷新已由上方 45 米视野判定统一负责。
     const archetypes = [
       { name: "哥布林斥候", hp: 30, atk: 6 },
       { name: "巨狼",       hp: 60, atk: 10 },
@@ -1103,10 +1207,13 @@ function spawnLocalMobsIfNeeded(): void {
       const angle = Math.random() * Math.PI * 2;
       const dist = 30 + Math.random() * 70;
       const id = `localmob_${Date.now()}_${seq++}`;
+      // ★ 刷新点：推出 safe zone 并夹进当前地图边界（否则可能刷在区内/图外永远遇不到）
+      const rawSpot = pushOutsideSafeZones(me.x + Math.cos(angle) * dist, me.y + Math.sin(angle) * dist);
+      const spot = clampToMapBounds(rawSpot.x, rawSpot.y);
       state.value.entities.push({
         id, name: arch.name, side: "enemy",
-        x: me.x + Math.cos(angle) * dist,
-        y: me.y + Math.sin(angle) * dist,
+        x: spot.x,
+        y: spot.y,
         vx: 0, vy: 0,
         hp: arch.hp, maxHp: arch.hp,
         atk: arch.atk, level: 1,
@@ -2563,6 +2670,11 @@ onMounted(async () => {
   try {
     const cfg = await loadMapConfig();
     mapCfg.value = cfg;
+    // ★ 初始关卡（Mulberry Town）的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
+    //   并注册"本地敌怪拉取钩子"，避免 mock 整份覆盖把 App 侧生成的怪物抹掉
+    publishSafeZones(cfg);
+    publishMapBounds(cfg);
+    publishLocalMapMobs();
     zoom.value = cfg.default_zoom;
     // 初始化 chunk 系统（基于新 scale）
     chunkSystem = new ChunkTerrainSystem(makeScaleFromMap(cfg));
@@ -2593,6 +2705,8 @@ onMounted(async () => {
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
+    // ★ 宿主/ mock 推送前的本地实体快照：用于把 App 侧生成的地图怪物（mapmob_*）归并保留
+    const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;
     const newPhase = incoming?.phase;
     // ★ 关键修复：玩家位姿以本地 tick 为唯一数据源。
@@ -2608,6 +2722,22 @@ onMounted(async () => {
     } else if (newPhase !== "playing") {
       // 回到选人 / 结算：清空本地位姿缓存，下一局以宿主 spawn 为准
       lastLocalPose = null;
+    }
+    // ★ 关键修复：宿主推送的整份 state 里没有 App 侧生成的地图怪物（mapmob_*），
+    //   原样替换会把刚进图加载的森林野怪当场抹掉（表现为"看到一下，随即消失"）。
+    //   这里按 id 归并保留：incoming 中不存在的地图怪物补回，其余以宿主为准。
+    if (incoming && Array.isArray(incoming.entities)) {
+      const incomingIds = new Set(
+        incoming.entities.map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
+      );
+      const keptMapMobs = prevEntities.filter(
+        (e: any) =>
+          e?.side === "enemy" &&
+          typeof e?.id === "string" &&
+          (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")) &&
+          !incomingIds.has(e.id),
+      );
+      if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
     }
     state.value = incoming;
     ready.value = true;
@@ -2674,17 +2804,16 @@ onMounted(async () => {
         if (next?.mobs?.length && state.value) {
           // 过滤掉旧地图的怪物
           state.value.entities = state.value.entities.filter((e) => e.side !== "enemy");
-          const mobTypeMap: Record<string, { name: string; hp: number; atk: number }> = {
-            GOBLIN:   { name: "哥布林斥候", hp: 30, atk: 6 },
-            ORC:      { name: "半兽人",     hp: 80, atk: 12 },
-            SKELETON: { name: "骷髅兵",     hp: 50, atk: 12 },
-            WOLF:     { name: "巨狼",       hp: 60, atk: 10 },
-            BOAR:     { name: "野猪",       hp: 50, atk: 8 },
-            SNAKE:    { name: "毒蛇",       hp: 25, atk: 8 },
-            BAT:      { name: "蝙蝠",       hp: 20, atk: 5 },
-          };
+          const mobTypeMap = MOB_ARCHETYPES;
           for (const mob of next.mobs) {
-            const arch = mobTypeMap[mob.entity_type] ?? { name: mob.name || "野怪", hp: 30, atk: 6 };
+            // ★ 与 switchLevel 同一份档案表：未登记类型告警 + 兜底，不再静默退化
+            let arch = mobTypeMap[mob.entity_type];
+            if (!arch) {
+              console.warn(
+                "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
+              );
+              arch = { name: mob.name || "野怪", hp: 30, atk: 6 };
+            }
             state.value.entities.push({
               id: `mapmob_${mob.id}_${Date.now()}`,
               name: arch.name,
@@ -2700,6 +2829,7 @@ onMounted(async () => {
             });
           }
           state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
+          publishLocalMapMobs();
           console.info("[field-survival] 地图切换加载怪物：", next.mobs.length, "只", next.mobs);
         }
       });
