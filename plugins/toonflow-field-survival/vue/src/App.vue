@@ -916,6 +916,36 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     // 清掉本图野怪（旧图的怪不跟过来）
     if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
+    // ★ 从 Tiled 地图 Actors 层加载野怪（mulberryForest 的 GOBLIN 等）
+    console.info("[field-survival] 加载关卡：", levelName, "mobs:", next.mobs?.length, next.mobs);
+    if (s && next.mobs?.length) {
+      const mobTypeMap: Record<string, { name: string; hp: number; atk: number }> = {
+        GOBLIN:   { name: "哥布林斥候", hp: 30, atk: 6 },
+        ORC:      { name: "半兽人",     hp: 80, atk: 12 },
+        SKELETON: { name: "骷髅兵",     hp: 50, atk: 12 },
+        WOLF:     { name: "巨狼",       hp: 60, atk: 10 },
+        BOAR:     { name: "野猪",       hp: 50, atk: 8 },
+        SNAKE:    { name: "毒蛇",       hp: 25, atk: 8 },
+        BAT:      { name: "蝙蝠",       hp: 20, atk: 5 },
+      };
+      for (const mob of next.mobs) {
+        const arch = mobTypeMap[mob.entity_type] ?? { name: mob.name || "野怪", hp: 30, atk: 6 };
+        s.entities.push({
+          id: `mapmob_${mob.id}_${Date.now()}`,
+          name: arch.name,
+          side: "enemy",
+          x: mob.x,
+          y: mob.y,
+          vx: 0, vy: 0,
+          hp: arch.hp, maxHp: arch.hp,
+          atk: arch.atk, level: 1,
+          facing: 180, cooldown: 0, alive: true,
+          homeX: mob.x,
+          homeY: mob.y,
+        });
+      }
+      state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
+    }
     state.value = s ? { ...s } : s;
     currentZoneName = null;
     zoneLeftTick = 0;
@@ -2628,6 +2658,51 @@ onMounted(async () => {
     const m = (state.value as any)?.map as MapData | null | undefined;
     if (m?.theme) {
       mapTheme.value = m.theme;
+      console.info("[field-survival] 检测到 map theme:", m.theme, "currentLevelName:", currentLevelName.value);
+      // ★ 地图切换：检测到 mapTheme 变化 → 加载对应地图的怪物
+      // 注意：m.theme 是主题名（如"野外·清晨"），需要映射到关卡名
+      const themeToLevel: Record<string, string> = {
+        "野外·清晨": "Mulberry Forest",
+        "野外·黄昏": "Mulberry Forest",
+        "墓地": "Mulberry Graveyard",
+        "哥布林巢穴": "Loot Goblin Lair",
+        "亡灵洞窟": "Lich Lair",
+      };
+      const levelName = themeToLevel[m.theme] || m.theme;
+      console.info("[field-survival] 映射后 levelName:", levelName);
+      void loadLevelByName(levelName).then((next) => {
+        if (next?.mobs?.length && state.value) {
+          // 过滤掉旧地图的怪物
+          state.value.entities = state.value.entities.filter((e) => e.side !== "enemy");
+          const mobTypeMap: Record<string, { name: string; hp: number; atk: number }> = {
+            GOBLIN:   { name: "哥布林斥候", hp: 30, atk: 6 },
+            ORC:      { name: "半兽人",     hp: 80, atk: 12 },
+            SKELETON: { name: "骷髅兵",     hp: 50, atk: 12 },
+            WOLF:     { name: "巨狼",       hp: 60, atk: 10 },
+            BOAR:     { name: "野猪",       hp: 50, atk: 8 },
+            SNAKE:    { name: "毒蛇",       hp: 25, atk: 8 },
+            BAT:      { name: "蝙蝠",       hp: 20, atk: 5 },
+          };
+          for (const mob of next.mobs) {
+            const arch = mobTypeMap[mob.entity_type] ?? { name: mob.name || "野怪", hp: 30, atk: 6 };
+            state.value.entities.push({
+              id: `mapmob_${mob.id}_${Date.now()}`,
+              name: arch.name,
+              side: "enemy",
+              x: mob.x,
+              y: mob.y,
+              vx: 0, vy: 0,
+              hp: arch.hp, maxHp: arch.hp,
+              atk: arch.atk, level: 1,
+              facing: 180, cooldown: 0, alive: true,
+              homeX: mob.x,
+              homeY: mob.y,
+            });
+          }
+          state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
+          console.info("[field-survival] 地图切换加载怪物：", next.mobs.length, "只", next.mobs);
+        }
+      });
     } else if (state.value?.phase === "playing") {
       void toonflowJsApi.pluginData.get("map_data")
         .then((v) => {

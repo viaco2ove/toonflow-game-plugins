@@ -85,6 +85,18 @@ export interface MapZone {
   mob_types?: string[];
 }
 
+/** 地图上的怪物对象（从 Tiled Actors 层提取） */
+export interface MapMob {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  /** 瓦片 gid */
+  gid?: number;
+  /** 怪物类型（如 GOBLIN） */
+  entity_type: string;
+}
+
 /** 单个 chunk 的方块数据（可选，不存就视为默认全泥土块） */
 export interface MapChunk {
   cx: number;
@@ -130,6 +142,8 @@ export interface MapConfig {
   chunks?: MapChunk[];
   /** ★ Tiled 格式时玩家出生点（mulberryTown 自己的 PLAYER 对象） */
   playerSpawn?: { x: number; y: number };
+  /** ★ Tiled Actors 层的怪物列表（如 GOBLIN） */
+  mobs?: MapMob[];
 }
 
 /* ============================================================
@@ -206,6 +220,7 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
   const f = fallbackMapConfig();  const W = num(obj.width, 43);
   const H = num(obj.height, 56);
   const decorations: MapDecoration[] = [];
+  const mobs: MapMob[] = [];
   let decIdx = 0;
   let playerSpawn: { x: number; y: number } | null = null;
 
@@ -244,6 +259,19 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
+        } else if (props.entity_type === "GOBLIN") {
+          // ★ 怪物（GOBLIN 等）→ 记录位置和类型，App.vue switchLevel 时加载到 entities
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          const mobName = String(props.name || obj.name || "哥布林");
+          mobs.push({
+            id: obj.id,
+            name: mobName,
+            x: wx,
+            y: wz,
+            gid: obj.gid,
+            entity_type: props.entity_type,
+          });
         } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
           // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
           const wx = obj.x / 32 - W / 2;
@@ -292,6 +320,7 @@ function normalizeTiledMap(obj: Record<string, unknown>): MapConfig {
     zones,
     chunks: [],
     playerSpawn: playerSpawn ?? undefined,
+    mobs,
   };
 }
 
@@ -345,28 +374,76 @@ export async function loadMapConfig(): Promise<MapConfig> {
 }
 
 /**
+ * ★ 关卡表：portalID（地图 JSON 里出口对象的 portalID 属性）→ 文件名
+ *
+ * 维护须知：地图里每个出口的 portalID 都必须能在这里（或命名规则）解析出文件名，
+ * 否则走到该出口时 loadLevelByName 返回 null，switchLevel 只打一条 console.warn，
+ * 外部表现就是"走到出口不切图"。新增地图时请在此登记，或保证名字符合
+ * "Foo Bar 2" → "fooBar2" 的命名规则。
+ *
+ * Rotten-Soup 对照：src/assets/js/game/Game.js changeLevels() 用 levels[mapID] 取图；
+ * 地牢（LADDER + createDungeon=true）原版是 createDungeonFloors() 运行时随机生成 5 层，
+ * 本项目用预生成的静态 JSON 等价替代（mulberryDungeon1..5 / forestDungeon1..5）：
+ *   城镇/森林的下行梯 portalID = "Mulberry Dungeon" / "Forest Dungeon"（进第 1 层）
+ *   第 2..4 层的下行梯 portalID = "Mulberry Dungeon 2" .. "4"
+ *   第 5 层的 LEVEL_TRANSITION 回到起点地图（"Mulberry Town" / "Mulberry Forest"）
+ */
+const LEVEL_FILES: Record<string, string> = {
+  "Mulberry Town": "mulberryTown",
+  "Mulberry Forest": "mulberryForest",
+  "Mulberry Graveyard": "mulberryGraveyard",
+  "Lich Lair": "lichLair",
+  "Loot Goblin Lair": "lootGoblinLair",
+  "Mulberry Dungeon": "mulberryDungeon1",
+  "Mulberry Dungeon 2": "mulberryDungeon2",
+  "Mulberry Dungeon 3": "mulberryDungeon3",
+  "Mulberry Dungeon 4": "mulberryDungeon4",
+  "Mulberry Dungeon 5": "mulberryDungeon5",
+  "Forest Dungeon": "forestDungeon1",
+  "Forest Dungeon 2": "forestDungeon2",
+  "Forest Dungeon 3": "forestDungeon3",
+  "Forest Dungeon 4": "forestDungeon4",
+  "Forest Dungeon 5": "forestDungeon5",
+};
+
+/**
+ * 关卡名 → 文件名："Mulberry Graveyard" → "mulberryGraveyard"。
+ * 先查 LEVEL_FILES（权威表），查不到再按命名规则推导——保证新地图只要命名一致即可加载，
+ * 不再出现"表里没登记就静默不切图"的隐性失效。
+ */
+export function levelNameToFile(levelName: string): string {
+  const key = String(levelName ?? "").trim();
+  if (!key) return "";
+  const hit = LEVEL_FILES[key];
+  if (hit) return hit;
+  const slug = key
+    .replace(/[^0-9A-Za-z]+(.)/g, (_m, c: string) => c.toUpperCase())
+    .replace(/[^0-9A-Za-z]/g, "");
+  if (!slug) return "";
+  return slug.charAt(0).toLowerCase() + slug.slice(1);
+}
+
+/**
  * ★ 关卡切换：按名字加载对应 Tiled 地图（Rotten-Soup 的 changeLevels 等价）
- *   mulberryTown → "Mulberry Forest" → public/maps/mulberryForest.json
+ *   "Mulberry Forest" → maps/mulberryForest.json（顺带尝试 assetUrl/绝对/相对三个前缀）
  */
 export async function loadLevelByName(levelName: string): Promise<MapConfig | null> {
-  // 关卡名 → 文件名（Rotten-Soup 命名规则）
-  const fileMap: Record<string, string> = {
-    "Mulberry Town": "mulberryTown",
-    "Mulberry Forest": "mulberryForest",
-    "Mulberry Graveyard": "mulberryGraveyard",
-    "Lich Lair": "lichLair",
-    "Loot Goblin Lair": "lootGoblinLair",
-  };
-  const file = fileMap[levelName];
+  const file = levelNameToFile(levelName);
   if (!file) return null;
   for (const prefix of [assetUrl("maps/"), "/maps/", "./maps/"]) {
     try {
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;
       const d = await r.json();
-      return normalizeMapConfig(d);
+      const n = normalizeMapConfig(d);
+      if (n) return n;
     } catch { /* try next */ }
   }
+  // 走到这里说明关卡名无法映射到任何可用地图：明确报出期望文件名，避免无声失效
+  console.warn(
+    `[field-survival] 关卡地图缺失：portalID="${levelName}" → 期望 maps/${file}.json` +
+      `（请确认文件已放入 ui/maps 与 vue/public/maps）`,
+  );
   return null;
 }
 
