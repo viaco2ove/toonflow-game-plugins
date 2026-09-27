@@ -220,6 +220,9 @@ function avatarAnimFrame(avatarPath: string | undefined): any | null {
 const roles = computed<RoleOption[]>(() => state.value?.roles || []);
 const playerRole = computed(() => roles.value.find((r) => r.roleType === "player") || roles.value[0]);
 
+/** ★ 当前玩家实体（HUD 模板用）；undefined 时让模板 fallback 走 ?? 默认值 */
+const me = computed<Entity | undefined>(() => state.value?.entities.find((e) => e.side === "player"));
+
 // ★ v7：reactive 数组直接 push/splice 触发响应式（最简单可靠）
 function toggle(arr: string[], id: string) {
   const i = arr.indexOf(id);
@@ -1554,8 +1557,14 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const dim = fitDim(key, pixelsPerMeter);
   const dw = dim.w;
   const dh = dim.h;
+  // ★ VFX：动作小跳（释放技能/攻击/物品时，sprite y 偏移 0 → -4 → 0 弧线）
+  let bobOffset = 0;
+  if (e.actionBobMs && e.actionBobMs > 0) {
+    const t = e.actionBobMs / 300;          // 1 → 0（剩余时间比例）
+    bobOffset = -Math.sin(t * Math.PI) * 4; // 0 → -4 → 0
+  }
   const dx = px - dw / 2;
-  const dy = py - dh + 4; // 略微下沉，让脚站在地面上
+  const dy = py - dh + 4 + bobOffset;      // 略微下沉，让脚站在地面上
 
   // ★ 朝向：facing 在 135-315（朝左）时水平翻转 sprite
   const facingLeft = (e.facing >= 135 && e.facing < 315);
@@ -1586,6 +1595,17 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.beginPath();
     ctx.ellipse(px, py - 24, facingLeft ? -16 : 16, 24, 0, 0, Math.PI * 2);
     ctx.fill();
+    ctx.restore();
+  }
+
+  // ★ 受击红闪：sprite 区域用半透明红覆盖（source-atop：只覆盖已有像素）
+  if (e.hitFlashMs && e.hitFlashMs > 0) {
+    const alpha = Math.min(0.85, (e.hitFlashMs / 250) * 0.85);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = "#ff3a3a";
+    ctx.fillRect(dx, dy, dw, dh);
     ctx.restore();
   }
 
@@ -1622,15 +1642,25 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.restore();
   }
 
-  // 头顶名字：有头像时放头像下方，无头像时贴 sprite 上方
-  const headY = hasAvatar ? avatarY + avatarSize + 11 : dy - 6;
+  // 头顶名字 + 等级（敌人额外显示 Lv.X；头像上方居中）
+  const headY = hasAvatar ? avatarY - 4 : dy - 18;
   ctx.save();
   ctx.textAlign = "center";
+  // 名字
   ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
   ctx.fillStyle = "rgba(0,0,0,.85)";
   ctx.fillText(e.name.slice(0, 4), px + 1, headY + 1);
   ctx.fillStyle = e.side === "enemy" ? "#ffd4d4" : "#fff";
   ctx.fillText(e.name.slice(0, 4), px, headY);
+  // ★ 等级（仅敌人显示，红色字体放在名字右侧）
+  if (e.side === "enemy" && e.level) {
+    const lvlText = "Lv" + e.level;
+    ctx.font = "bold 10px 'Microsoft YaHei', sans-serif";
+    ctx.fillStyle = "rgba(0,0,0,.85)";
+    ctx.fillText(lvlText, px + 1, headY + 13);
+    ctx.fillStyle = "#ff5252";
+    ctx.fillText(lvlText, px, headY + 12);
+  }
   ctx.restore();
 
   // 血条 - 紧贴 sprite 下边缘（屏幕像素）
@@ -1671,8 +1701,14 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   const targetTiles = ENTITY_DIM_TILES[key] ?? 1.0;   // ★ v4：格数基准（与角色/树同尺度）
   const dw = Math.max(4, Math.round(targetTiles * pixelsPerMeter));
   const dh = Math.max(4, Math.round(targetTiles * pixelsPerMeter));
+  // ★ VFX：动作小跳（野怪发动攻击时也跳一下）
+  let bobOffset = 0;
+  if (e.actionBobMs && e.actionBobMs > 0) {
+    const t = e.actionBobMs / 300;
+    bobOffset = -Math.sin(t * Math.PI) * 4;
+  }
   const dx = px - dw / 2;
-  const dy = py - dh + 4;
+  const dy = py - dh + 4 + bobOffset;
 
   applyPixelPerfect(ctx);
 
@@ -1697,6 +1733,17 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
     ctx.restore();
   }
 
+  // ★ 受击红闪（与角色一致）
+  if (e.hitFlashMs && e.hitFlashMs > 0) {
+    const alpha = Math.min(0.85, (e.hitFlashMs / 250) * 0.85);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = "#ff3a3a";
+    ctx.fillRect(dx, dy, dw, dh);
+    ctx.restore();
+  }
+
   // 血条
   const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
   const barX = px - barW / 2;
@@ -1708,6 +1755,180 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   ctx.fillRect(barX, barY, barW, barH);
   ctx.fillStyle = "#d63b3b";
   ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
+  ctx.restore();
+}
+
+/* ============================================================
+   VFX 粒子层（战斗特效）
+   ============================================================ */
+
+/** 渲染所有 VFX 粒子（屏幕像素空间） */
+function drawVfxLayer(
+  ctx: CanvasRenderingContext2D,
+  vfx: any[] | undefined,
+  wx2px: (x: number) => number,
+  wz2py: (y: number) => number,
+): void {
+  if (!vfx || vfx.length === 0) return;
+  for (const p of vfx) {
+    const px = wx2px(p.x);
+    const py = wz2py(p.y);
+    const progress = 1 - (p.life / p.total); // 0 → 1
+    switch (p.kind) {
+      case "slash_arc":  drawSlashArc(ctx, px, py, progress); break;
+      case "fireball": {
+        // 弹体：把 target 世界米转成屏幕像素再插值
+        const tx = p.targetX != null ? wx2px(p.targetX) : px;
+        const ty = p.targetY != null ? wz2py(p.targetY) : py;
+        drawFireballPx(ctx, px, py, tx, ty, progress, p.color || "#ff8c3a");
+        break;
+      }
+      case "heal_ring":  drawHealRing(ctx, px, py, progress, p.color || "#5fe57a"); break;
+      case "buff_ring":  drawBuffRing(ctx, px, py, progress, p.color || "#f5c542"); break;
+      case "explosion":  drawExplosion(ctx, px, py, progress, p.color || "#ff8c3a"); break;
+      case "spark":      drawSpark(ctx, px, py, progress, p.color || "#fff"); break;
+    }
+  }
+}
+
+/** 弧形斩波：1/4 圆弧白刃，旋转消失 */
+function drawSlashArc(ctx: CanvasRenderingContext2D, px: number, py: number, p: number): void {
+  ctx.save();
+  const r = 26 + p * 12;     // 弧半径
+  const alpha = Math.max(0, 1 - p * 1.1);
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 6;
+  ctx.lineCap = "round";
+  ctx.shadowColor = "rgba(255,255,255,0.6)";
+  ctx.shadowBlur = 8;
+  // 弧从 -90° 扫到 0°，绕身体右侧
+  ctx.beginPath();
+  ctx.arc(px, py - 12, r, -Math.PI / 2, 0, false);
+  ctx.stroke();
+  // 次弧淡出（淡黄色拖尾）
+  ctx.strokeStyle = "rgba(255,220,120,0.5)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, r - 4, -Math.PI / 2 + 0.3, -0.3, false);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** 火球：橙→红弹体 + 3 个拖尾粒子（屏幕像素空间） */
+function drawFireballPx(ctx: CanvasRenderingContext2D, px: number, py: number, tx: number, ty: number, p: number, color: string): void {
+  ctx.save();
+  const dx = tx - px, dy = ty - py;
+  const e = p;
+  const ax = px + dx * e, ay = py + dy * e;
+  const alpha = Math.max(0, 1 - p * 0.9);
+  // 拖尾（3 个粒子）
+  for (let i = 1; i <= 3; i++) {
+    const t = Math.max(0, e - i * 0.06);
+    const tx2 = px + dx * t, ty2 = py + dy * t;
+    ctx.globalAlpha = alpha * (1 - i / 4) * 0.5;
+    ctx.fillStyle = "#ffaa55";
+    ctx.beginPath();
+    ctx.arc(tx2, ty2 - 8, 8 - i * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // 弹体
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 14;
+  const grad = ctx.createRadialGradient(ax, ay - 8, 2, ax, ay - 8, 12);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(0.4, color);
+  grad.addColorStop(1, "rgba(120,30,0,0.2)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(ax, ay - 8, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/** 治疗/补蓝环：向外扩张 + 淡出 */
+function drawHealRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
+  ctx.save();
+  const r = 8 + p * 32;
+  const alpha = Math.max(0, 1 - p * 1.1);
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, r, 0, Math.PI * 2);
+  ctx.stroke();
+  // 第二圈
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, r * 0.65, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Buff 环：六边形描边 */
+function drawBuffRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
+  ctx.save();
+  const r = 14 + p * 8;
+  const alpha = Math.max(0, 1 - p);
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = (Math.PI / 3) * i + p * 0.5; // 慢速旋转
+    const x = px + Math.cos(a) * r;
+    const y = (py - 12) + Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** 爆炸：3 圈扩散 */
+function drawExplosion(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
+  ctx.save();
+  const alpha = Math.max(0, 1 - p * 0.95);
+  for (let i = 0; i < 3; i++) {
+    const r = 10 + p * (40 + i * 14);
+    ctx.globalAlpha = alpha * (1 - i / 4);
+    ctx.strokeStyle = i === 0 ? "#ffffff" : color;
+    ctx.lineWidth = 4 - i;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 12 - i * 3;
+    ctx.beginPath();
+    ctx.arc(px, py - 12, r, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  // 中央填充
+  ctx.globalAlpha = alpha * 0.6;
+  const grad = ctx.createRadialGradient(px, py - 12, 2, px, py - 12, 22 + p * 16);
+  grad.addColorStop(0, "#ffffff");
+  grad.addColorStop(0.5, color);
+  grad.addColorStop(1, "rgba(120,30,0,0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, 24 + p * 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+/** 火花/小亮点 */
+function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
+  ctx.save();
+  const alpha = Math.max(0, 1 - p * 1.5);
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 6;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, 3, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 }
 /* ---------------- 地表噪声（多样化地表，模块级纯函数） ---------------- */
@@ -2125,13 +2346,18 @@ function render() {
       }
     });
 
+  // —— VFX 粒子层（在飘字之前、实体之后）——
+  drawVfxLayer(ctx, s.vfx, wx2px, wz2py);
+
   // —— 飘字（屏幕像素）——
   s.floaters.forEach((f) => {
     const fx = wx2px(f.x);
     const fy = wz2py(f.y);
     ctx.save();
+    // ★ 按 kind/color 决定颜色（飘字颜色不再是统一白字）
+    const fill = f.color || "#fff";
     ctx.globalAlpha = Math.min(1, f.life / 12);
-    ctx.fillStyle = "#fff";
+    ctx.fillStyle = fill;
     ctx.strokeStyle = "rgba(0,0,0,.6)";
     ctx.lineWidth = 3;
     ctx.font = "bold 14px sans-serif";

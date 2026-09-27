@@ -24,6 +24,9 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
   const msg = { type: "tf_plugin_action", action, params };
   try {
     window.parent.postMessage(msg, "*");
+    if (window.parent === window) {
+      window.dispatchEvent(new MessageEvent("message", { data: msg }));
+    }
   } catch {
     /* ignore */
   }
@@ -33,11 +36,17 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
  * 实时推进：iframe 与后端不同源（iframe 在 :60002，宿主页面在 :5173），
  * 且拿不到宿主 JWT，所以不能直接 fetch /plugin/tick，
  * 必须让宿主代发：iframe → postMessage → 宿主 → HTTP → 回推新状态。
+ *
+ * 兜底：standalone 模式（window.parent === window）下 postMessage 不会触发自己的
+ * message 事件；同时 dispatchEvent 把消息投递给同窗口的 mockHost，避免 start action 永远到不了。
  */
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
+  const msg = { type: "tf_plugin_tick", action, params };
   try {
-
-    window.parent.postMessage({ type: "tf_plugin_tick", action, params }, "*");
+    window.parent.postMessage(msg, "*");
+    if (window.parent === window) {
+      window.dispatchEvent(new MessageEvent("message", { data: msg }));
+    }
   } catch {
     /* ignore */
   }
@@ -45,7 +54,11 @@ export function sendTick(action: string, params: Record<string, unknown> = {}): 
 
 export function notifyLoaded(): void {
   try {
-    window.parent.postMessage({ type: "tf_plugin_loaded" }, "*");
+    const msg = { type: "tf_plugin_loaded" };
+    window.parent.postMessage(msg, "*");
+    if (window.parent === window) {
+      window.dispatchEvent(new MessageEvent("message", { data: msg }));
+    }
   } catch {
     /* ignore */
   }

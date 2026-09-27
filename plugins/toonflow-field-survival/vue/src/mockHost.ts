@@ -12,7 +12,14 @@
  *   - 模拟一个极简的 playing 引擎：玩家移动 + 自动生成野怪 + 攻击结算
  *   - 演示 setFullscreen：响应全屏请求修改自身 URL hash 让 App.vue 看到变化
  */
-import type { GameState, Entity, RoleOption } from "./types";
+import type { GameState, Entity, RoleOption, MonsterArchetype, MaterialItem, ItemSlot } from "./types";
+
+/** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
+interface TestDataBundle {
+  roles: RoleOption[];
+  monsters: MonsterArchetype[];
+  materials: MaterialItem[];
+}
 
 /** ★ 静态兜底 safe zone（overworld.json 对应的城镇范围，野怪不得进入城镇） */
 let mapSafeZones: Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> | null = null;
@@ -88,7 +95,7 @@ function syncAppEntities(): void {
 
 // 默认角色（当 test_data/test_state.json 不存在时使用）
 const DEFAULT_ROLES: RoleOption[] = [
-  { id: "r01", name: "陈彦", roleType: "player", avatarPath: "./images/player_sprites/4334.png", description: "赦夜人主角" },
+  { id: "r01", name: "陈彦", roleType: "player", avatarPath: "./images/player_sprites/4334.png", initial_level: 1 },
   { id: "r02", name: "裴勇", roleType: "npc", avatarPath: "./images/player_sprites/3858.png" },
   { id: "r03", name: "夜见", roleType: "npc", avatarPath: "./images/player_sprites/4213.png" },
   { id: "r04", name: "聂小可", roleType: "npc" },
@@ -105,8 +112,18 @@ const DEFAULT_ROLES: RoleOption[] = [
   { id: "r15", name: "某女子", roleType: "npc" },
 ];
 
-async function loadRoles(): Promise<RoleOption[]> {
-  // 尝试加载 test_data/test_state.json（位置由 vite/build 决定）
+/** 默认野怪（test_state.json 缺失时兜底） */
+const DEFAULT_MONSTERS: MonsterArchetype[] = [
+  { monsterId: "m001", name: "哥布林斥候", rank: "一阶", monsterType: "普通", description: "低阶怪物", recommendLevel: 1, dropItems: [], weakness: [], feature: "" },
+  { monsterId: "m002", name: "巨狼",       rank: "一阶", monsterType: "野兽", description: "凶猛野兽",   recommendLevel: 2, dropItems: [], weakness: [], feature: "" },
+  { monsterId: "m003", name: "骷髅兵",     rank: "二阶", monsterType: "亡灵", description: "骷髅兵",     recommendLevel: 4, dropItems: [], weakness: [], feature: "" },
+];
+
+/** 默认物资（test_state.json 缺失时兜底） */
+const DEFAULT_MATERIALS: MaterialItem[] = [];
+
+/** ★ 一次性加载 test_state.json（角色 + 野怪 + 物资），缺字段各自退回默认值 */
+async function loadTestData(): Promise<TestDataBundle> {
   const candidates = [
     "./test_data/test_state.json",
     "../test_data/test_state.json",
@@ -117,11 +134,57 @@ async function loadRoles(): Promise<RoleOption[]> {
       const r = await fetch(p);
       if (r.ok) {
         const d = await r.json();
-        if (Array.isArray(d?.roles) && d.roles.length > 0) return d.roles as RoleOption[];
+        return {
+          roles: Array.isArray(d?.roles) && d.roles.length > 0 ? d.roles : DEFAULT_ROLES,
+          monsters: Array.isArray(d?.monsters) && d.monsters.length > 0 ? d.monsters : DEFAULT_MONSTERS,
+          materials: Array.isArray(d?.materials) ? d.materials : DEFAULT_MATERIALS,
+        };
       }
     } catch { /* ignore */ }
   }
-  return DEFAULT_ROLES;
+  return { roles: DEFAULT_ROLES, monsters: DEFAULT_MONSTERS, materials: DEFAULT_MATERIALS };
+}
+
+/** 等级缩放公式（与 App.vue switchLevel 一致） */
+function lvScale(lv: number): number { return 1 + (Math.max(1, lv) - 1) * 0.3; }
+
+/** 推荐等级 → 战斗数值（HP/ATK/DEF 估算；recommendLevel=1 → 30/6/2） */
+function mobStatsForLevel(lv: number): { hp: number; atk: number; def: number } {
+  const s = lvScale(lv);
+  return {
+    hp: Math.floor(30 * s),
+    atk: Math.floor(6 * s),
+    def: Math.floor(2 * s),
+  };
+}
+
+/** 把 materials[] 转成开局物品栏（所有 materials 都装入） */
+function materialsToItems(materials: MaterialItem[]): ItemSlot[] {
+  const slots: ItemSlot[] = [];
+  for (const m of materials) {
+    // 把 effectType 映射到 ItemSlot.type
+    let slotType: ItemSlot["type"] = "utility";
+    if (m.effectType === "heal_hp") slotType = "hp";
+    else if (m.effectType === "heal_mp" || m.effectType === "heal_sp") slotType = "mp";
+    else if (m.effectType === "attack") slotType = "atk";
+    else if (m.effectType === "buff" || m.effectType === "defense") slotType = "buff";
+    const heal = typeof m.stats?.heal === "number" ? m.stats.heal : 0;
+    const mp = heal; // heal_sp/heal_mp 都用同一字段表达
+    slots.push({
+      name: m.name,
+      count: m.count ?? 1,
+      heal: m.effectType === "heal_mp" || m.effectType === "heal_sp" ? 0 : heal,
+      mp: m.effectType === "heal_mp" || m.effectType === "heal_sp" ? heal : (typeof m.stats?.lightRadius === "number" ? 0 : 0),
+      type: slotType,
+      matId: m.matId,
+      matType: m.type,
+      description: m.description,
+      priceBlack: m.priceBlack,
+      stats: m.stats,
+      singleUse: m.singleUse,
+    });
+  }
+  return slots;
 }
 
 /* ============================================================
@@ -148,20 +211,24 @@ function levelUpEntity(e: Entity): void {
 }
 
 function makeEntity(role: RoleOption, side: "player" | "ally" | "enemy", x: number, y: number): Entity {
-  const lv = role.level ?? 1;
+  // ★ 等级：优先 test_state.json 的 initial_level，其次旧字段 level，最后 1
+  const lv = role.initial_level ?? role.level ?? 1;
+  const s = lvScale(lv);
+  const maxHp = Math.floor(100 * s);
+  const maxMp = Math.floor(30 + lv * 5); // 每级 +5 MP
   return {
     id: role.id,
     name: role.name,
     side,
     x, y,
     vx: 0, vy: 0,
-    hp: 100, maxHp: 100,
-    mp: 30, maxMp: 30,
+    hp: maxHp, maxHp,
+    mp: maxMp, maxMp,
     exp: 0,
     expToNext: expForLevel(lv),
     level: lv,
-    atk: 12,
-    def: 5,
+    atk: Math.floor(12 + (lv - 1) * 2),
+    def: Math.floor(5 + (lv - 1) * 1),
     avatarPath: role.avatarPath,
     facing: 180,
     cooldown: 0,
@@ -189,49 +256,160 @@ function makeEnemy(name: string, x: number, y: number, baseHp: number, atk: numb
   };
 }
 
+// ★ 当前生效的野怪档案表（test_state.json monsters → 全局白名单）
+let activeMonsters: MonsterArchetype[] = DEFAULT_MONSTERS;
+
 function spawnWave(): void {
-  const archetypes = [
-    { name: "哥布林斥候", hp: 30, atk: 6 },
-    { name: "巨狼", hp: 60, atk: 10 },
-    { name: "毒蛇", hp: 25, atk: 8 },
-    { name: "蝙蝠", hp: 20, atk: 5 },
-    { name: "骷髅兵", hp: 50, atk: 12 },
+  // 优先用 test_state.json 的 monsters；缺省时回落到旧硬编码
+  const waveList = activeMonsters.length > 0 ? activeMonsters : [
+    { monsterId: "m001", name: "哥布林斥候", rank: "一阶", monsterType: "普通", description: "", recommendLevel: 1, dropItems: [], weakness: [], feature: "" },
+    { monsterId: "m002", name: "巨狼",       rank: "一阶", monsterType: "野兽", description: "", recommendLevel: 2, dropItems: [], weakness: [], feature: "" },
+    { monsterId: "m003", name: "骷髅兵",     rank: "二阶", monsterType: "亡灵", description: "", recommendLevel: 4, dropItems: [], weakness: [], feature: "" },
   ];
-  const wave = archetypes[Math.floor(Math.random() * archetypes.length)];
-  const count = 3 + Math.floor(state.tick / 600);
+  const wave = waveList[Math.floor(Math.random() * waveList.length)];
+  // ★ 数量：从 2 开始、随时间缓慢增加（每 1200 tick +1，最大 5）
+  const count = Math.min(5, 2 + Math.floor(state.tick / 1200));
   const me = state.entities.find((x) => x.side === "player");
   const cx = me?.x ?? 0;
   const cy = me?.y ?? 0;
   const half = allowedMapHalf();
+  // ★ 等级：基础随 tick 推进 + 野怪自身 recommendLevel
+  const baseLv = 1 + Math.floor(state.tick / 600);
+  const lv = Math.max(baseLv, wave.recommendLevel || 1);
+  const stats = mobStatsForLevel(lv);
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const dist = 30 + Math.random() * 70;
+    // ★ spawn 距离 50-100 米（在追踪视野 8 米之外，玩家不靠近不会触发）
+    const dist = 50 + Math.random() * 50;
     const spot = pushOutOfSafeZones(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
-    const lv = 1 + Math.floor(state.tick / 600);
-    state.entities.push(makeEnemy(
-      wave.name,
+    state.entities.push(makeEnemyWithArch(
+      wave,
       Math.max(-half.lx, Math.min(half.lx, spot.x)),
       Math.max(-half.ly, Math.min(half.ly, spot.y)),
-      wave.hp, wave.atk, lv,
+      lv, stats,
     ));
   }
-  state.events.push("[mock] 第 " + (Math.floor(state.tick / WAVE_INTERVAL) + 1) + " 波：" + wave.name + " x" + count);
+  state.events.push("[mock] 第 " + (Math.floor(state.tick / WAVE_INTERVAL) + 1) + " 波：" + wave.name + " (Lv." + lv + ") x" + count);
 }
 
-function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y: number }): GameState {
+/** 用完整 monster 档案生成 enemy（含 avatarPath/dropItems/isRanged 等元数据） */
+function makeEnemyWithArch(m: MonsterArchetype, x: number, y: number, lv: number, stats: { hp: number; atk: number; def: number }): Entity {
+  return {
+    id: "m" + mobIdSeq++,
+    name: m.name,
+    side: "enemy",
+    x, y,
+    vx: 0, vy: 0,
+    hp: stats.hp, maxHp: stats.hp,
+    mp: 0, maxMp: 0,
+    exp: Math.floor(stats.hp * 0.5), expToNext: 0,
+    level: lv,
+    atk: stats.atk,
+    def: stats.def,
+    facing: 180,
+    cooldown: 0,
+    alive: true,
+    avatarPath: m.avatarPath,
+    isRanged: m.isRanged === true,
+  } as any;
+}
+
+/* ============================================================
+   战斗特效（VFX）辅助
+   ============================================================ */
+
+/** 添加一个 VFX（屏幕像素空间，调用方已转换坐标） */
+function pushVfx(p: import("./types").VfxParticle): void {
+  if (!state.vfx) state.vfx = [];
+  state.vfx.push(p);
+  // ★ 防止累积超过 60 条（最长寿命 3 秒 × 2-3 个 VFX/帧 ≈ 100-200 帧上限）
+  if (state.vfx.length > 60) state.vfx = state.vfx.slice(-60);
+}
+
+/** 让实体"小跳一下"（释放技能/使用物品时） */
+function bobEntity(e: Entity): void {
+  e.actionBobMs = 300;
+}
+
+/** 让实体"挨打闪红"（受到伤害时） */
+function flashEntity(e: Entity, ms = 250): void {
+  e.hitFlashMs = ms;
+}
+
+/** 在两个实体之间生成 VFX（弹体类用 fireball） */
+function pushAttackVfx(from: Entity, to: Entity, ranged: boolean): void {
+  if (ranged) {
+    pushVfx({
+      id: "vfb" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
+      kind: "fireball",
+      x: from.x, y: from.y,
+      targetX: to.x, targetY: to.y,
+      life: 12, total: 12,
+      color: "#ff8c3a",
+    });
+  } else {
+    // 近战：在目标位置生成弧形斩波
+    pushVfx({
+      id: "vfb" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
+      kind: "slash_arc",
+      x: to.x, y: to.y,
+      life: 10, total: 10,
+      color: "#ffffff",
+    });
+  }
+}
+
+/** 治疗 / 补蓝 / buff 环（自身位置） */
+function pushRingVfx(e: Entity, kind: "heal_ring" | "buff_ring", color: string): void {
+  pushVfx({
+    id: "vring" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
+    kind,
+    x: e.x, y: e.y,
+    life: 18, total: 18,
+    color,
+  });
+}
+
+/** 范围爆炸（炸药） */
+function pushExplosion(x: number, y: number): void {
+  pushVfx({
+    id: "vexp" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
+    kind: "explosion",
+    x, y,
+    life: 14, total: 14,
+    color: "#ff8c3a",
+  });
+}
+
+/** tick 内每帧推进 VFX 寿命 */
+function tickVfx(): void {
+  if (!state.vfx || state.vfx.length === 0) return;
+  for (const p of state.vfx) p.life--;
+  state.vfx = state.vfx.filter((p) => p.life > 0);
+}
+
+function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], mapPlayerSpawn?: { x: number; y: number }): GameState {
   const playerRole = roles.find((r) => r.roleType === "player") || roles[0];
   const entities: Entity[] = [];
-  // ★ v3：玩家出生在 origin (0, 0)；如果地图数据自带 playerSpawn（mulberryTown），优先用它
   const sp = mapPlayerSpawn ?? { x: 0, y: 0 };
   entities.push(makeEntity(playerRole, "player", sp.x, sp.y));
-  // 默认把第二个角色作为盟友上场（偏移 12 米，与 entry.ts 的 ALLY_FOLLOW_GAP_M 一致）
   if (roles.length > 1) entities.push(makeEntity(roles[1], "ally", sp.x - 12, sp.y + 12));
+
+  // ★ 物品栏：test_state.json 的 materials[] 全部装入（resource/tool 也显示，
+  //   effectType=heal_hp/heal_mp/attack/buff 才有实际效果；其他只显示信息）
+  const itemSlots: ItemSlot[] = materials.length > 0
+    ? materialsToItems(materials)
+    : [
+        // 兜底（test_state.json 缺失时）
+        { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const },
+        { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const },
+        { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const },
+      ];
 
   return {
     phase: "select",
     version: 3,
     tick: 0,
-    // ★ v3：3000×3000 米世界（origin 0,0，坐标范围 ±1500）
     world: { w: 3000, h: 3000 },
     spawn: { x: 0, y: 0 },
     scale: {
@@ -248,7 +426,6 @@ function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y:
     selections: { participants: playerRole ? [playerRole.id] : [], spectators: [], enemies: [] },
     entities,
     chests: [
-      // ★ v3：坐标单位：米（±1500 范围）
       { id: "ch1", x:  100, y:  150, opened: false },
       { id: "ch2", x: -200, y:  100, opened: false },
     ],
@@ -258,18 +435,14 @@ function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y:
       { id: "p3", x:  300, y: -300, heal: 30 },
     ],
     floaters: [],
+    vfx: [],
     skills: [
-      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0, type: "atk" as const },
-      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0, type: "atk" as const },
-      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0, type: "heal" as const },
-      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const },
+      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0, type: "atk" as const, range: "melee" as const },
+      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0, type: "atk" as const, range: "ranged" as const },
+      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0, type: "heal" as const, range: "melee" as const },
+      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const, range: "melee" as const },
     ],
-    items: [
-      { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const },
-      { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const },
-      { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const },
-      { name: "钥匙", count: 1, heal: 0, mp: 0, type: "hp" as const },
-    ],
+    items: itemSlots,
     skillPage: 0,
     itemPage: 0,
     map: null,
@@ -282,6 +455,9 @@ function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y:
     result: null,
   };
 }
+
+/** 暴露给 App.vue 的 monsters 档案表（供 switchLevel 用） */
+const MONSTER_ARCHETYPES: Record<string, MonsterArchetype> = (window as any).__monsterArchetypes || {};
 
 function push(): void {
   // ★ 同 window postMessage 不会触发自己的 message 事件 —— 用 dispatchEvent 兜底
@@ -375,19 +551,43 @@ function install(): void {
             }
             return; // 不追、不攻
           }
-          // 看见玩家 80 米；追；2 米内攻击
-          if (d2 < 80) {
-            const sp = 2.0 * 0.1;  // 2.0 米/秒 × 0.1 秒/帧 = 0.2 米/帧（步行追赶，与 entry 对齐）
-            e.x += (dx / (d2 || 1)) * sp;
-            e.y += (dy / (d2 || 1)) * sp;
-            e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
+          // ★ 看见玩家 4 米；近战 0.5 米内攻击；远程 4 米内攻击
+          const isRanged = (e as any).isRanged === true;
+          if (d2 < 4) {
+            if (isRanged) {
+              // ★ 远程怪保持在 3-4 米的安全距离（不贴身，但保留锁定姿态）
+              const desiredDist = 3.5;
+              if (d2 > 4) {
+                // 太远：逼近
+                const sp = 2.0 * 0.1;
+                e.x += (dx / (d2 || 1)) * sp;
+                e.y += (dy / (d2 || 1)) * sp;
+              } else if (d2 < 2.5) {
+                // 太近：后退（保持距离）
+                const sp = 1.5 * 0.1;
+                e.x -= (dx / (d2 || 1)) * sp;
+                e.y -= (dy / (d2 || 1)) * sp;
+              }
+              e.facing = dx > 0 ? 0 : 180;
+            } else {
+              // 近战：冲过去
+              const sp = 2.0 * 0.1;  // 2.0 米/秒 × 0.1 秒/帧 = 0.2 米/帧（步行追赶，与 entry 对齐）
+              e.x += (dx / (d2 || 1)) * sp;
+              e.y += (dy / (d2 || 1)) * sp;
+              e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
+            }
           }
           e.cooldown--;
-          if (d2 < 2 && e.cooldown <= 0) {
+          // ★ 攻击判定：近战 0.5 米，远程 4 米
+          const attackRange = isRanged ? 4 : 0.5;
+          if (d2 < attackRange && e.cooldown <= 0) {
             // ★ 护盾 buff 减免：有护盾时 def 更高
             const damage = Math.max(1, e.atk - (target.def || 0));
             target.hp = Math.max(0, target.hp - damage);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + damage, x: target.x, y: target.y - 10, life: 12 });
+            // ★ VFX：远程怪打玩家 → 火球飞向玩家；近战怪打玩家 → 玩家位置斩波
+            pushAttackVfx(e, target, isRanged);
+            flashEntity(target);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + damage, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
             e.cooldown = 40;
             if (target.hp <= 0) {
               target.alive = false;
@@ -409,7 +609,11 @@ function install(): void {
           if (closest) {
             const dmg = Math.max(1, me.atk - (closest.def || 0));
             closest.hp = Math.max(0, closest.hp - dmg);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12 });
+            // ★ VFX：玩家打敌人 → 斩波在敌人位置 + 敌人闪红
+            pushAttackVfx(me, closest, false);
+            flashEntity(closest);
+            bobEntity(me);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
             state.events.push("[mock] 攻击 " + closest.name + " (-" + dmg + "HP)");
             if (closest.hp <= 0) {
               closest.alive = false;
@@ -423,6 +627,13 @@ function install(): void {
         }
         // 浮动文字生命衰减
         state.floaters = state.floaters.filter((f) => { f.life--; return f.life > 0; });
+        // VFX 粒子衰减
+        tickVfx();
+        // ★ 实体 hitFlashMs / actionBobMs 按 ms 衰减（tick 约 100ms）
+        state.entities.forEach((e) => {
+          if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
+          if (e.actionBobMs && e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
+        });
         // 波次生成
         waveTimer++;
         if (waveTimer >= WAVE_INTERVAL) {
@@ -455,7 +666,9 @@ function install(): void {
           const healAmt = Math.abs(slot.power);
           const actual = Math.min(healAmt, me.maxHp - me.hp);
           me.hp = Math.min(me.maxHp, me.hp + actual);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20 });
+          pushRingVfx(me, "heal_ring", "#5fe57a");
+          bobEntity(me);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "atk") {
           // 攻击技能：找最近的敌人，50 米内
@@ -469,7 +682,11 @@ function install(): void {
           if (target) {
             const dmg = Math.max(1, slot.power - (target.def || 0));
             target.hp = Math.max(0, target.hp - dmg);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: target.x, y: target.y - 10, life: 20 });
+            // ★ VFX：按技能的 range 选 fireball（远程）或 slash_arc（近战）
+            pushAttackVfx(me, target, slot.range === "ranged");
+            flashEntity(target);
+            bobEntity(me);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: target.x, y: target.y - 10, life: 20, kind: "damage", color: "#ff5a5a" });
             state.events.push("[mock] " + slot.name + " 对 " + target.name + " 造成 " + dmg + " 伤害");
             if (target.hp <= 0) {
               target.alive = false;
@@ -485,6 +702,9 @@ function install(): void {
           // 护盾：临时加 def（持续 60 tick ≈ 6 秒）
           me.def = (me.def || 0) + 10;
           setTimeout(() => { if (me) me.def = Math.max(0, (me.def || 0) - 10); }, 6000);
+          pushRingVfx(me, "buff_ring", "#f5c542");
+          bobEntity(me);
+          state.floaters.push({ id: "f" + state.tick, text: "+DEF", x: me.x, y: me.y - 10, life: 20, kind: "buff", color: "#f5c542" });
           state.events.push("[mock] " + slot.name + "，DEF+10（持续 6 秒）");
         }
         push();
@@ -500,15 +720,21 @@ function install(): void {
         if (slot.type === "hp") {
           const actual = Math.min(slot.heal, me.maxHp - me.hp);
           me.hp = Math.min(me.maxHp, me.hp + actual);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20 });
+          pushRingVfx(me, "heal_ring", "#5fe57a");
+          bobEntity(me);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "mp") {
           const actual = Math.min(slot.mp, me.maxMp - me.mp);
           me.mp = Math.min(me.maxMp, me.mp + actual);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "MP", x: me.x, y: me.y - 10, life: 20 });
+          pushRingVfx(me, "heal_ring", "#5eb5ff");
+          bobEntity(me);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "MP", x: me.x, y: me.y - 10, life: 20, kind: "heal_mp", color: "#5eb5ff" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "MP");
         } else if (slot.type === "atk") {
           // 炸药：5 米内所有敌人受到范围伤害
+          pushExplosion(me.x, me.y);
+          bobEntity(me);
           let hit = 0;
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
@@ -516,7 +742,8 @@ function install(): void {
             if (dd < 5) {
               const dmg = Math.max(1, 40 - (e.def || 0));
               e.hp = Math.max(0, e.hp - dmg);
-              state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 10, life: 20 });
+              flashEntity(e);
+              state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 10, life: 20, kind: "damage", color: "#ff8c3a" });
               if (e.hp <= 0) {
                 e.alive = false;
                 state.kills++;
@@ -663,7 +890,9 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
   // 仅在 game.html 直接以 file:// 打开时启用 mock
   const isStandalone = !location.href.includes("getAsset") && window.parent === window;
   if (!isStandalone) return false;
-  const roles = await loadRoles();
+  // ★ 一次性加载 test_state.json（roles + monsters + materials）
+  const { roles, monsters, materials } = await loadTestData();
+  activeMonsters = monsters;
   // ★ v5：尝试读 overworld.json 拿 playerSpawn + safe zones（mulberryTown 等 Tiled 格式地图）
   let mapSpawn: { x: number; y: number } | undefined;
   try {
@@ -697,13 +926,18 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
       }];
     }
   } catch { /* ignore */ }
-  state = buildInitialState(roles, mapSpawn);
+  state = buildInitialState(roles, materials, mapSpawn);
+  // ★ 把怪物档案表暴露给 App.vue，供 switchLevel 时按 monsterId 查数值
+  (window as any).__monsterArchetypes = monsters.reduce<Record<string, MonsterArchetype>>((acc, m) => {
+    acc[m.monsterId] = m;
+    return acc;
+  }, {});
   // ★ standalone：把初始 state 暴露到 window，App.vue 启动时一次性取走
   //   （postMessage 在同 window 不触发自己的 message 事件）
   (window as any).__initialState = JSON.parse(JSON.stringify(state));
   install();
   // 兜底：插件可能没发 loaded，直接推一次
   setTimeout(() => push(), 100);
-  console.info("[mockHost] standalone mode active，roles=", roles.length, "spawn=", mapSpawn);
+  console.info("[mockHost] standalone mode active，roles=", roles.length, "monsters=", monsters.length, "materials=", materials.length, "spawn=", mapSpawn);
   return true;
 }
