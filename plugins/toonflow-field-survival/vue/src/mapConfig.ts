@@ -95,6 +95,8 @@ export interface MapMob {
   gid?: number;
   /** 怪物类型（如 GOBLIN） */
   entity_type: string;
+  /** 野怪等级（从 Tiled 对象属性读取；地图未标注则为 1） */
+  level: number;
 }
 
 /**
@@ -107,19 +109,19 @@ export interface MapMob {
  * 修复点：此前只认 GOBLIN，mulberryForest 里的 ORC / mulberryGraveyard 里的 LICH、
  * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
  */
-export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number }> = {
-  GOBLIN:      { name: "哥布林斥候", hp: 30,  atk: 6 },
-  LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8 },
-  ORC:         { name: "半兽人",     hp: 80,  atk: 12 },
-  ORC_BOSS:    { name: "兽人首领",   hp: 200, atk: 18 },
-  SKELETON:    { name: "骷髅兵",     hp: 50,  atk: 12 },
-  ZOMBIE:      { name: "僵尸",       hp: 60,  atk: 10 },
-  GHOST:       { name: "幽灵",       hp: 35,  atk: 9 },
-  LICH:        { name: "巫妖",       hp: 160, atk: 20 },
-  WOLF:        { name: "巨狼",       hp: 60,  atk: 10 },
-  BOAR:        { name: "野猪",       hp: 50,  atk: 8 },
-  SNAKE:       { name: "毒蛇",       hp: 25,  atk: 8 },
-  BAT:         { name: "蝙蝠",       hp: 20,  atk: 5 },
+export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number; level: number }> = {
+  GOBLIN:      { name: "哥布林斥候", hp: 30,  atk: 6,  level: 1 },
+  LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8,  level: 2 },
+  ORC:         { name: "半兽人",     hp: 80,  atk: 12, level: 3 },
+  ORC_BOSS:    { name: "兽人首领",   hp: 200, atk: 18, level: 8 },
+  SKELETON:    { name: "骷髅兵",     hp: 50,  atk: 12, level: 2 },
+  ZOMBIE:      { name: "僵尸",       hp: 60,  atk: 10, level: 1 },
+  GHOST:       { name: "幽灵",       hp: 35,  atk: 9,  level: 3 },
+  LICH:        { name: "巫妖",       hp: 160, atk: 20, level: 7 },
+  WOLF:        { name: "巨狼",       hp: 60,  atk: 10, level: 2 },
+  BOAR:        { name: "野猪",       hp: 50,  atk: 8,  level: 1 },
+  SNAKE:       { name: "毒蛇",       hp: 25,  atk: 8,  level: 2 },
+  BAT:         { name: "蝙蝠",       hp: 20,  atk: 5,  level: 1 },
 };
 
 /** 野怪白名单（由 MOB_ARCHETYPES 派生，避免两处维护不一致） */
@@ -192,6 +194,8 @@ export interface MapConfig {
   playerSpawn?: { x: number; y: number };
   /** ★ Tiled Actors 层的怪物列表（如 GOBLIN） */
   mobs?: MapMob[];
+  /** ★ 该地图野怪等级范围（null = 无野怪，[min, max] = 等级区间） */
+  mobLevelRange?: [number, number] | null;
 }
 
 /* ============================================================
@@ -309,12 +313,14 @@ function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): Ma
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
         } else if (MOB_ENTITY_TYPES.has(String(props.entity_type))) {
-          // ★ 怪物 → 记录位置和类型，App.vue switchLevel 时加载到 entities
+          // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
           //   白名单见 MOB_ENTITY_TYPES（含 ORC / LICH / GHOST / LOOT_GOBLIN），
-          //   此前只认 GOBLIN，ORC 等类型会被静默丢弃 → 进图后看不到对应野怪。
+          //   等级优先取 Tiled 属性 props.level，未标注时用 MOB_ARCHETYPES 默认值。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
           const mobName = String(props.name || obj.name || "野怪");
+          const archLevel = MOB_ARCHETYPES[props.entity_type]?.level ?? 1;
+          const mobLevel = Number.isFinite(props.level) ? Number(props.level) : archLevel;
           mobs.push({
             id: obj.id,
             name: mobName,
@@ -322,6 +328,7 @@ function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): Ma
             y: wz,
             gid: obj.gid,
             entity_type: props.entity_type,
+            level: mobLevel,
           });
         } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
           // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
@@ -368,6 +375,15 @@ function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): Ma
       ]
     : [];
 
+  // ★ 计算野怪等级范围（标注有没有野怪、野怪分布的等级区间）
+  //   此前完全没有这个字段 → HUD 无法提示"该地图难度"。
+  const mobLevelRange: [number, number] | null = mobs.length > 0
+    ? mobs.reduce<[number, number]>(
+        (acc, m) => [Math.min(acc[0], m.level), Math.max(acc[1], m.level)],
+        [Infinity, -Infinity],
+      )
+    : null;
+
   return {
     ...f,
     name: String(obj.name ?? "overworld"),
@@ -382,6 +398,7 @@ function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): Ma
     chunks: [],
     playerSpawn: playerSpawn ?? undefined,
     mobs,
+    mobLevelRange,
   };
 }
 

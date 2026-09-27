@@ -79,6 +79,13 @@ const mapSourceLabel = computed(() => {
   const s = state.value?.mapSource;
   return s === "agent" ? "AI 地图" : s === "stored" ? "缓存地图" : s === "fallback" ? "默认地图" : "";
 });
+/** ★ 当前关卡野怪等级范围（null = 无野怪，[min, max] = 等级区间） */
+const mapMobLevelRange = computed<[number, number] | null>(() => {
+  const r = mapCfg.value?.mobLevelRange;
+  return r && r.length === 2 ? r : null;
+});
+/** ★ 当前关卡野怪数量 */
+const mapMobCount = computed(() => mapCfg.value?.mobs?.length ?? 0);
 
 /* ---------------- 选人 ---------------- */
 // ★ v6：reactive 数组（不是 ref）—— template 自动 unwrap ref 经常让我们传错对象，
@@ -1021,8 +1028,12 @@ async function switchLevel(levelName: string): Promise<void> {
           console.warn(
             "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
           );
-          arch = { name: mob.name || "野怪", hp: 30, atk: 6 };
+          arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
         }
+        // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级按比例缩放
+        const lv = mob.level ?? arch.level ?? 1;
+        const lvScale = 1 + (lv - 1) * 0.3; // 每级 +30%
+        const hpScaled = Math.floor(arch.hp * lvScale);
         s.entities.push({
           id: `mapmob_${mob.id}_${Date.now()}`,
           name: arch.name,
@@ -1030,8 +1041,12 @@ async function switchLevel(levelName: string): Promise<void> {
           x: mob.x,
           y: mob.y,
           vx: 0, vy: 0,
-          hp: arch.hp, maxHp: arch.hp,
-          atk: arch.atk, level: 1,
+          hp: hpScaled, maxHp: hpScaled,
+          mp: 0, maxMp: 0,
+          exp: Math.floor(hpScaled * 0.5), expToNext: 0,
+          level: lv,
+          atk: Math.floor(arch.atk * lvScale),
+          def: Math.floor((arch.atk * 0.3) * lvScale),
           facing: 180, cooldown: 0, alive: true,
           homeX: mob.x,
           homeY: mob.y,
@@ -2812,8 +2827,12 @@ onMounted(async () => {
               console.warn(
                 "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
               );
-              arch = { name: mob.name || "野怪", hp: 30, atk: 6 };
+              arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
             }
+            // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级缩放
+            const lv = mob.level ?? arch.level ?? 1;
+            const lvScale = 1 + (lv - 1) * 0.3;
+            const hpScaled = Math.floor(arch.hp * lvScale);
             state.value.entities.push({
               id: `mapmob_${mob.id}_${Date.now()}`,
               name: arch.name,
@@ -2821,8 +2840,12 @@ onMounted(async () => {
               x: mob.x,
               y: mob.y,
               vx: 0, vy: 0,
-              hp: arch.hp, maxHp: arch.hp,
-              atk: arch.atk, level: 1,
+              hp: hpScaled, maxHp: hpScaled,
+              mp: 0, maxMp: 0,
+              exp: Math.floor(hpScaled * 0.5), expToNext: 0,
+              level: lv,
+              atk: Math.floor(arch.atk * lvScale),
+              def: Math.floor((arch.atk * 0.3) * lvScale),
               facing: 180, cooldown: 0, alive: true,
               homeX: mob.x,
               homeY: mob.y,
@@ -2949,6 +2972,12 @@ watch(() => state.value?.phase, (p) => {
         </div>
         <div class="hud__mid">
           <span v-if="mapTheme" class="hud__map" :title="mapSourceLabel">🗺 {{ mapTheme }}</span>
+          <!-- ★ 该地图野怪信息：是否有怪 + 等级范围 -->
+          <span class="hud__diff" :title="mapMobCount > 0 ? `本图 ${mapMobCount} 只野怪，等级 ${mapMobLevelRange?.[0]}-${mapMobLevelRange?.[1]}` : '本图安全，无野怪'">
+            🐾 {{ mapMobCount > 0
+              ? `${mapMobCount}只 Lv.${mapMobLevelRange?.[0]}-${mapMobLevelRange?.[1]}`
+              : "无野怪" }}
+          </span>
           <span>击杀 {{ state.kills }}</span>
           <span>金钱 +{{ state.money }}</span>
         </div>
@@ -3497,6 +3526,12 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   border-color: #d4a13e !important;
+}
+
+.hud__diff {
+  color: #ff9e9e !important;
+  font-weight: 600;
+  border-color: #c0392b !important;
 }
 
 .btn--exit {
