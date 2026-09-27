@@ -604,7 +604,9 @@ function install(): void {
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
             const dd = Math.hypot(e.x - me.x, e.y - me.y);
-            if (dd < 30 && dd < minD) { minD = dd; closest = e; }
+            // ★ 近战 0.5 米范围；远程怪（isRanged）按 4 米
+            const reach = (e as any).isRanged === true ? 4 : 0.5;
+            if (dd < reach && dd < minD) { minD = dd; closest = e; }
           });
           if (closest) {
             const dmg = Math.max(1, me.atk - (closest.def || 0));
@@ -716,6 +718,18 @@ function install(): void {
         const me = state.entities.find((x) => x.side === "player");
         if (!slot || !me || !me.alive) { push(); return; }
         if (slot.count <= 0) { push(); return; }
+        // ★ 武器类（matType=weapon）/ 非消耗类（type=utility）点击不消耗、不执行
+        //   仅作为展示；防具/光源/工具也只是 equip-only，目前全部不消耗
+        const isWeapon = (slot as any).matType === "weapon";
+        const isArmor = (slot as any).matType === "armor";
+        const isLight = (slot as any).matType === "light";
+        const isTool = (slot as any).matType === "tool";
+        const isResource = (slot as any).matType === "resource";
+        if (isWeapon || isArmor || isLight || isTool || isResource || slot.type === "utility") {
+          state.events.push("[mock] " + slot.name + " 是装备/材料，点击不消耗（仅展示）");
+          push();
+          return;
+        }
         slot.count--;
         if (slot.type === "hp") {
           const actual = Math.min(slot.heal, me.maxHp - me.hp);
