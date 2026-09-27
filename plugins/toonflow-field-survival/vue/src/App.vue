@@ -3400,6 +3400,7 @@ body {
   border-bottom: 1px solid #1e1f1f0d;
   color: #ececec;
   font-size: 12px;
+  line-height: 11px;
 }
 
 .hud__left {
@@ -3422,10 +3423,10 @@ body {
 }
 
 .lv-hud {
-  font-size: 9px;
+  font-size: 12px;
   font-weight: 700;
   color: #f5c542;
-  margin-bottom: 4px;
+  margin-bottom: 1px;
   text-shadow: 1px 1px 2px #000;
 }
 
@@ -3436,7 +3437,7 @@ body {
   background: #0e0e1e;
   position: relative;
   overflow: hidden;
-  margin-top: 4px;
+  margin-top: 1px;
 }
 
 .mp__bar {
@@ -3452,7 +3453,7 @@ body {
   background: #1e1e0e;
   position: relative;
   overflow: hidden;
-  margin-top: 4px;
+  margin-top: 1px;
 }
 
 .exp__bar {
@@ -3464,7 +3465,7 @@ body {
 .hud__txt {
   font-size: 11px;
   color: #ececec;
-  margin-top: 4px;
+  margin-top: 1px;
   font-weight: 600;
 }
 
@@ -3640,7 +3641,7 @@ body {
 .events {
   position: absolute;
   left: 12px;
-  top: 78px;
+  top: 177px;
   z-index: 5;
   font-size: 8px;
   color: #ececec;
