@@ -3395,9 +3395,9 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 8px 12px;
-  background: #1e1f1f4d;
-  border-bottom: 3px solid #4f4f4f;
+  padding: 0px 2px;
+  background: #1e1f1f0d;
+  border-bottom: 1px solid #1e1f1f0d;
   color: #ececec;
   font-size: 12px;
 }
@@ -3408,7 +3408,7 @@ body {
 
 .hp {
   width: 180px;
-  height: 12px;
+  height: 9px;
   border: 2px solid #4f4f4f;
   background: #1e0e0e;
   position: relative;
@@ -3422,7 +3422,7 @@ body {
 }
 
 .lv-hud {
-  font-size: 13px;
+  font-size: 9px;
   font-weight: 700;
   color: #f5c542;
   margin-bottom: 4px;
@@ -3477,8 +3477,8 @@ body {
   align-items: center;
   flex-wrap: wrap;
   position: absolute;
-  top:42px;
-  left: 38px;
+  top:113px;
+  left: 0px;
 }
 
 .hud__mid > span {
@@ -3612,7 +3612,7 @@ body {
 .btn--rotate {
   position: absolute;
   left: 8px;
-  top: 50px; /* 避开 HUD */
+  top: 133px; /* 避开 HUD */
   z-index: 6;
   width: 36px;
   height: 36px;
