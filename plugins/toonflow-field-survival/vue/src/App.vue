@@ -2936,13 +2936,20 @@ watch(() => state.value?.phase, (p) => {
       </button>
       <div class="hud">
         <div class="hud__left">
-          <div class="hp"><div class="hp__bar" :style="{ width: hpPct + '%' }"></div></div>
-          <div class="hud__txt">{{ me?.name || '你' }} · {{ Math.round(me?.hp || 0) }}/{{ me?.maxHp || 0 }}</div>
+          <!-- 等级 + HP 条 -->
+          <div class="lv-hud">Lv.{{ me?.level ?? 1 }}</div>
+          <div class="hp"><div class="hp__bar" :style="{ width: (me?.hp ?? 0) / (me?.maxHp ?? 1) * 100 + '%' }"></div></div>
+          <div class="hud__txt">HP {{ Math.round(me?.hp ?? 0) }}/{{ me?.maxHp ?? 0 }}</div>
+          <!-- MP 条（蓝） -->
+          <div class="mp"><div class="mp__bar" :style="{ width: (me?.mp ?? 0) / (me?.maxMp ?? 1) * 100 + '%' }"></div></div>
+          <div class="hud__txt">MP {{ Math.round(me?.mp ?? 0) }}/{{ me?.maxMp ?? 0 }}</div>
+          <!-- EXP 条 -->
+          <div class="exp"><div class="exp__bar" :style="{ width: (me?.exp ?? 0) / (me?.expToNext ?? 1) * 100 + '%' }"></div></div>
+          <div class="hud__txt">EXP {{ me?.exp ?? 0 }}/{{ me?.expToNext ?? 0 }}</div>
         </div>
         <div class="hud__mid">
           <span v-if="mapTheme" class="hud__map" :title="mapSourceLabel">🗺 {{ mapTheme }}</span>
           <span>击杀 {{ state.kills }}</span>
-          <span>经验 +{{ state.exp }}</span>
           <span>金钱 +{{ state.money }}</span>
         </div>
         <button class="btn btn--exit" @click="exitGame">退出</button>
@@ -3411,6 +3418,46 @@ body {
 .hp__bar {
   height: 100%;
   background: linear-gradient(180deg, #6ee06e 0%, #2fa85a 100%);
+  transition: width 0.2s;
+}
+
+.lv-hud {
+  font-size: 13px;
+  font-weight: 700;
+  color: #f5c542;
+  margin-bottom: 4px;
+  text-shadow: 1px 1px 2px #000;
+}
+
+.mp {
+  width: 180px;
+  height: 8px;
+  border: 2px solid #4f4f4f;
+  background: #0e0e1e;
+  position: relative;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.mp__bar {
+  height: 100%;
+  background: linear-gradient(180deg, #5eb5ff 0%, #1a5fa8 100%);
+  transition: width 0.2s;
+}
+
+.exp {
+  width: 180px;
+  height: 6px;
+  border: 1px solid #4f4f4f;
+  background: #1e1e0e;
+  position: relative;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.exp__bar {
+  height: 100%;
+  background: linear-gradient(180deg, #f5c542 0%, #a87820 100%);
   transition: width 0.2s;
 }
 

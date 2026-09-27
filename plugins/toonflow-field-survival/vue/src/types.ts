@@ -1,4 +1,3 @@
-/** ★ v4：新增 neutral（城镇中立角色，不参与战斗） */
 export type Side = "player" | "ally" | "enemy" | "spectator" | "neutral";
 
 export interface Entity {
@@ -11,8 +10,13 @@ export interface Entity {
   vy: number;
   hp: number;
   maxHp: number;
-  atk: number;
+  mp: number;       // 蓝
+  maxMp: number;    // 最大蓝
+  exp: number;      // 当前经验
+  expToNext: number; // 升级所需经验
   level: number;
+  atk: number;
+  def: number;
   avatarPath?: string;
   facing: number;
   cooldown: number;
@@ -28,29 +32,25 @@ export interface Entity {
   wanderY?: number;
   wanderTimer?: number;
   bounty?: { exp?: number; money?: number };
-  def?: number;
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }
-export interface Potion { id: string; x: number; y: number; heal: number; }
+export interface Potion { id: string; x: number; y: number; heal: number; mp?: number; }
 export interface Floater { id: string; text: string; x: number; y: number; life: number; }
-export interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number; }
-export interface ItemSlot { name: string; count: number; heal: number; }
+export interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number; type: "atk" | "heal" | "buff"; }
+export interface ItemSlot { name: string; count: number; heal: number; mp: number; type: "hp" | "mp" | "atk"; }
 
 export interface RoleOption {
   id: string;
   name: string;
-  roleType: string;
+  roleType: "player" | "ally" | "enemy" | "spectator" | "neutral";
   avatarPath?: string;
-  avatarBgPath?: string;
-  description?: string;
-  hp?: number;
   level?: number;
   skills?: unknown[];
 }
 
 export interface GameResult {
-  reason: "exit" | "death";
+  reason: string;
   exp: number;
   money: number;
   drops: string[];
@@ -62,21 +62,19 @@ export interface MapZone {
   name: string;
   x: number;
   y: number;
-  r: number;
-  kind: string;
-  desc: string;
+  r?: number;
+  rx?: number;
+  ry?: number;
+  kind: "safe" | "danger" | "boss";
+  color?: string;
 }
 
-/** map-gener agent 产出的地图数据（存 t_plugin_session_data.map_data） */
 export interface MapData {
   theme: string;
-  narration: string;
   zones: MapZone[];
-  enemy_archetypes: Array<Record<string, unknown>>;
+  mobs?: Array<{ name: string; count: number; arch?: string }>;
   chests: Array<{ x: number; y: number; tier: number; loot: { exp: number; money: number; item: string } }>;
   potions: Array<{ x: number; y: number; heal: number }>;
-  waves: Array<{ archetype: string; count: number; interval: number }>;
-  notes: string;
 }
 
 export interface GameState {
@@ -111,9 +109,9 @@ export interface GameState {
   map: MapData | null;
   mapSource?: "agent" | "fallback" | "stored";
   /** ★ v4：区域运行时状态（城镇 + 6 野区，各自维护刷新计时） */
-  regions?: RegionState[];
+  regions?: unknown[];
   /** ★ v4：城镇（安全区）建筑与中立角色清单 */
-  town?: TownData | null;
+  town?: unknown | null;
   exp: number;
   money: number;
   drops: string[];

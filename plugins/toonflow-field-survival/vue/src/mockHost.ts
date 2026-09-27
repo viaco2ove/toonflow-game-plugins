@@ -132,7 +132,23 @@ let waveTimer = 0;
 let mobIdSeq = 1000;
 const WAVE_INTERVAL = 240; // 24 秒一波
 
+/** 经验值表：每升一级所需 EXP（Rotten-Soup 风格指数增长） */
+function expForLevel(lv: number): number {
+  return Math.floor(50 * Math.pow(1.5, lv - 1));
+}
+
+/** 升级后属性成长 */
+function levelUpEntity(e: Entity): void {
+  e.level++;
+  e.maxHp += 10; e.hp = e.maxHp; // 升级满血
+  e.maxMp += 5; e.mp = e.maxMp;  // 升级满蓝
+  e.atk += 2; e.def = (e.def || 0) + 1;
+  e.expToNext = expForLevel(e.level);
+  state.events.push("[mock] " + e.name + " 升级了！Lv." + e.level + "（HP+10 MP+5 ATK+2 DEF+1）");
+}
+
 function makeEntity(role: RoleOption, side: "player" | "ally" | "enemy", x: number, y: number): Entity {
+  const lv = role.level ?? 1;
   return {
     id: role.id,
     name: role.name,
@@ -140,9 +156,33 @@ function makeEntity(role: RoleOption, side: "player" | "ally" | "enemy", x: numb
     x, y,
     vx: 0, vy: 0,
     hp: 100, maxHp: 100,
+    mp: 30, maxMp: 30,
+    exp: 0,
+    expToNext: expForLevel(lv),
+    level: lv,
     atk: 12,
-    level: 1,
+    def: 5,
     avatarPath: role.avatarPath,
+    facing: 180,
+    cooldown: 0,
+    alive: true,
+  };
+}
+
+function makeEnemy(name: string, x: number, y: number, baseHp: number, atk: number, lv: number): Entity {
+  return {
+    id: "m" + mobIdSeq++,
+    name,
+    side: "enemy",
+    x, y,
+    vx: 0, vy: 0,
+    hp: baseHp, maxHp: baseHp,
+    mp: 0, maxMp: 0,
+    exp: Math.floor(baseHp * 0.5),
+    expToNext: 0,
+    level: lv,
+    atk,
+    def: Math.floor(atk * 0.3),
     facing: 180,
     cooldown: 0,
     alive: true,
@@ -159,37 +199,23 @@ function spawnWave(): void {
   ];
   const wave = archetypes[Math.floor(Math.random() * archetypes.length)];
   const count = 3 + Math.floor(state.tick / 600);
-  const events: string[] = [];
-  // ★ v3：怪物 spawn 在玩家 (0,0) 周围 ±100 米（开局就看得见）
   const me = state.entities.find((x) => x.side === "player");
   const cx = me?.x ?? 0;
   const cy = me?.y ?? 0;
-  // ★ 修复（mock 根因①）：原先"只要存在 safe zone 就整波不刷"，而 overworld/城镇图恒有
-  //   一整块 safe 区 → standalone 下刷怪被永久禁用（森林里也一只不出）。
-  //   现改为：照常刷波，但把落点推出 safe 区（安全区只保护玩家，不冻结世界刷新）。
+  const half = allowedMapHalf();
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const dist = 30 + Math.random() * 70;     // 离玩家 30-100 米环形分布
+    const dist = 30 + Math.random() * 70;
     const spot = pushOutOfSafeZones(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
-    const half = allowedMapHalf();
-    const e: Entity = {
-      id: `m${mobIdSeq++}`,
-      name: wave.name,
-      side: "enemy",
-      x: Math.max(-half.lx, Math.min(half.lx, spot.x)),
-      y: Math.max(-half.ly, Math.min(half.ly, spot.y)),
-      vx: 0, vy: 0,
-      hp: wave.hp, maxHp: wave.hp,
-      atk: wave.atk,
-      level: 1 + Math.floor(state.tick / 600),
-      facing: 180,
-      cooldown: 0,
-      alive: true,
-    };
-    state.entities.push(e);
+    const lv = 1 + Math.floor(state.tick / 600);
+    state.entities.push(makeEnemy(
+      wave.name,
+      Math.max(-half.lx, Math.min(half.lx, spot.x)),
+      Math.max(-half.ly, Math.min(half.ly, spot.y)),
+      wave.hp, wave.atk, lv,
+    ));
   }
-  events.push(`[mock] 第 ${Math.floor(state.tick / WAVE_INTERVAL) + 1} 波：${wave.name} ×${count}`);
-  state.events.push(...events);
+  state.events.push("[mock] 第 " + (Math.floor(state.tick / WAVE_INTERVAL) + 1) + " 波：" + wave.name + " x" + count);
 }
 
 function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y: number }): GameState {
@@ -233,16 +259,16 @@ function buildInitialState(roles: RoleOption[], mapPlayerSpawn?: { x: number; y:
     ],
     floaters: [],
     skills: [
-      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0 },
-      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0 },
-      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0 },
-      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0 },
+      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0, type: "atk" as const },
+      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0, type: "atk" as const },
+      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0, type: "heal" as const },
+      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const },
     ],
     items: [
-      { name: "血瓶", count: 3, heal: 30 },
-      { name: "蓝瓶", count: 2, heal: 0 },
-      { name: "炸药", count: 1, heal: 0 },
-      { name: "钥匙", count: 1, heal: 0 },
+      { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const },
+      { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const },
+      { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const },
+      { name: "钥匙", count: 1, heal: 0, mp: 0, type: "hp" as const },
     ],
     skillPage: 0,
     itemPage: 0,
@@ -304,7 +330,15 @@ function install(): void {
           }
           me.vx = 0;
           me.vy = 0;
+          // MP 自然回复：每 10 tick +3（Rotten-Soup: manaRecovery=2.5/10tick）
+          if (state.tick % 10 === 0) me.mp = Math.min(me.maxMp, me.mp + 3);
+          // HP 自然回复：每 30 tick +1
+          if (state.tick % 30 === 0) me.hp = Math.min(me.maxHp, me.hp + 1);
         }
+
+        // 全技能 CD 冷却（每 tick -1）
+        for (const s of state.skills) { if (s.cdLeft > 0) s.cdLeft--; }
+
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
         // ★ 安全区判定：玩家在 safe zone 内时，野怪不能进入/追击
@@ -350,12 +384,14 @@ function install(): void {
           }
           e.cooldown--;
           if (d2 < 2 && e.cooldown <= 0) {
-            target.hp = Math.max(0, target.hp - e.atk);
-            state.floaters.push({ id: "f" + state.tick, text: `-${e.atk}`, x: target.x, y: target.y - 10, life: 12 });
+            // ★ 护盾 buff 减免：有护盾时 def 更高
+            const damage = Math.max(1, e.atk - (target.def || 0));
+            target.hp = Math.max(0, target.hp - damage);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + damage, x: target.x, y: target.y - 10, life: 12 });
             e.cooldown = 40;
             if (target.hp <= 0) {
               target.alive = false;
-              state.events.push(`[mock] 玩家被 ${e.name} 击倒`);
+              state.events.push("[mock] 玩家被 " + e.name + " 击倒");
               state.phase = "over";
               state.result = { reason: "death", exp: state.exp, money: state.money, drops: state.drops, kills: state.kills, survivedTicks: state.tick };
             }
@@ -368,17 +404,20 @@ function install(): void {
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
             const dd = Math.hypot(e.x - me.x, e.y - me.y);
-            if (dd < minD && dd < 30) { minD = dd; closest = e; }
+            if (dd < 30 && dd < minD) { minD = dd; closest = e; }
           });
           if (closest) {
-            (closest as Entity).hp -= me.atk;
-            state.floaters.push({ id: "f" + state.tick, text: `-${me.atk}`, x: (closest as Entity).x, y: (closest as Entity).y - 10, life: 12 });
-            if ((closest as Entity).hp <= 0) {
-              (closest as Entity).alive = false;
+            const dmg = Math.max(1, me.atk - (closest.def || 0));
+            closest.hp = Math.max(0, closest.hp - dmg);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12 });
+            state.events.push("[mock] 攻击 " + closest.name + " (-" + dmg + "HP)");
+            if (closest.hp <= 0) {
+              closest.alive = false;
               state.kills++;
-              state.exp += 5;
               state.money += 3;
-              state.events.push(`[mock] 击杀 ${(closest as Entity).name} (+5exp +3money)`);
+              me.exp += closest.level * 5;
+              if (me.exp >= me.expToNext) levelUpEntity(me);
+              state.events.push("[mock] 击杀 " + closest.name + " (+" + (closest.level * 5) + "exp +3money)");
             }
           }
         }
@@ -395,12 +434,100 @@ function install(): void {
         return;
       }
       if (action === "skill") {
-        state.events.push(`[mock] 释放技能 #${params?.index}`);
+        const idx = params?.index;
+        const slot = state.skills[idx];
+        const me = state.entities.find((x) => x.side === "player");
+        if (!slot || !me || !me.alive) { push(); return; }
+        if (slot.cdLeft > 0) {
+          state.events.push("[mock] " + slot.name + " 冷却中（剩余 " + Math.ceil(slot.cdLeft / 10) + " 秒）");
+          push(); return;
+        }
+        if (me.mp < slot.cost) {
+          state.events.push("[mock] MP 不足！" + slot.name + " 需要 " + slot.cost + "，当前 " + Math.floor(me.mp));
+          push(); return;
+        }
+
+        me.mp -= slot.cost;
+        slot.cdLeft = slot.cd;
+
+        if (slot.type === "heal") {
+          // 治疗：恢复 HP（power 负数表示回血量）
+          const healAmt = Math.abs(slot.power);
+          const actual = Math.min(healAmt, me.maxHp - me.hp);
+          me.hp = Math.min(me.maxHp, me.hp + actual);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20 });
+          state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
+        } else if (slot.type === "atk") {
+          // 攻击技能：找最近的敌人，50 米内
+          let target: Entity | null = null;
+          let minD = Infinity;
+          state.entities.forEach((e) => {
+            if (e.side !== "enemy" || !e.alive) return;
+            const dd = Math.hypot(e.x - me.x, e.y - me.y);
+            if (dd < 50 && dd < minD) { minD = dd; target = e; }
+          });
+          if (target) {
+            const dmg = Math.max(1, slot.power - (target.def || 0));
+            target.hp = Math.max(0, target.hp - dmg);
+            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: target.x, y: target.y - 10, life: 20 });
+            state.events.push("[mock] " + slot.name + " 对 " + target.name + " 造成 " + dmg + " 伤害");
+            if (target.hp <= 0) {
+              target.alive = false;
+              state.kills++;
+              state.money += 3;
+              me.exp += target.level * 5;
+              if (me.exp >= me.expToNext) levelUpEntity(me);
+            }
+          } else {
+            state.events.push("[mock] " + slot.name + "，但周围没有敌人");
+          }
+        } else if (slot.type === "buff") {
+          // 护盾：临时加 def（持续 60 tick ≈ 6 秒）
+          me.def = (me.def || 0) + 10;
+          setTimeout(() => { if (me) me.def = Math.max(0, (me.def || 0) - 10); }, 6000);
+          state.events.push("[mock] " + slot.name + "，DEF+10（持续 6 秒）");
+        }
         push();
         return;
       }
       if (action === "item") {
-        state.events.push(`[mock] 使用物品 #${params?.index}`);
+        const idx = params?.index;
+        const slot = state.items[idx];
+        const me = state.entities.find((x) => x.side === "player");
+        if (!slot || !me || !me.alive) { push(); return; }
+        if (slot.count <= 0) { push(); return; }
+        slot.count--;
+        if (slot.type === "hp") {
+          const actual = Math.min(slot.heal, me.maxHp - me.hp);
+          me.hp = Math.min(me.maxHp, me.hp + actual);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20 });
+          state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
+        } else if (slot.type === "mp") {
+          const actual = Math.min(slot.mp, me.maxMp - me.mp);
+          me.mp = Math.min(me.maxMp, me.mp + actual);
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "MP", x: me.x, y: me.y - 10, life: 20 });
+          state.events.push("[mock] " + slot.name + "，恢复 " + actual + "MP");
+        } else if (slot.type === "atk") {
+          // 炸药：5 米内所有敌人受到范围伤害
+          let hit = 0;
+          state.entities.forEach((e) => {
+            if (e.side !== "enemy" || !e.alive) return;
+            const dd = Math.hypot(e.x - me.x, e.y - me.y);
+            if (dd < 5) {
+              const dmg = Math.max(1, 40 - (e.def || 0));
+              e.hp = Math.max(0, e.hp - dmg);
+              state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 10, life: 20 });
+              if (e.hp <= 0) {
+                e.alive = false;
+                state.kills++;
+                me.exp += e.level * 5;
+                if (me.exp >= me.expToNext) levelUpEntity(me);
+              }
+              hit++;
+            }
+          });
+          state.events.push("[mock] " + slot.name + "，炸到 " + hit + " 个敌人");
+        }
         push();
         return;
       }
@@ -453,12 +580,13 @@ function install(): void {
       return;
     }
 
-    // ★ 死亡弹窗「复活」：原地复活（玩家坐标不变、满血、over → playing）
+    // ★ 死亡弹窗「复活」：原地复活（玩家坐标不变、满血满蓝、over → playing）
     if (d.type === "tf_plugin_tick" && d.action === "revive" && state.phase === "over") {
       const me = state.entities.find((x) => x.side === "player");
       if (me) {
         me.alive = true;
         me.hp = me.maxHp;
+        me.mp = me.maxMp;
         me.vx = 0;
         me.vy = 0;
         // 复活保护：场上存活敌人进入 2 秒攻击冷却，避免复活即被秒
@@ -517,7 +645,7 @@ function install(): void {
         const angle = eCount > 1 ? (i / eCount) * Math.PI * 2 : 0;
         const dist = 50 + (i % 3) * 10;   // 50-70 米
         const e = makeEntity(r, "enemy", Math.cos(angle) * dist, Math.sin(angle) * dist);
-        e.hp = 80; e.maxHp = 80; e.atk = 10;
+        e.hp = 80; e.maxHp = 80; e.atk = 10; e.def = 3;
         state.entities.push(e);
       });
       // 如果没有敌对角色，会在 wave 中生成野兽
