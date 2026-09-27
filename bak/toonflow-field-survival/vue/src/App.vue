@@ -2513,11 +2513,11 @@ watch(() => state.value?.phase, (p) => {
     <section v-if="!state || state.phase === 'select'" class="select">
       <header class="select__head">
         <h2>🌲 野外生存</h2>
-        <p>选择参展 / 观战 / 敌对角色，然后点击开始游戏</p>
+        <p>选择友方 / 观战 / 敌对角色，然后点击开始游戏</p>
       </header>
 
       <div class="select__group">
-        <h3>参展角色（多选）</h3>
+        <h3>友方角色（多选）</h3>
         <div class="chips">
           <button
             v-for="r in roles" :key="r.id"

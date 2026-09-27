@@ -862,7 +862,7 @@ function install(): void {
         spectators: Array.isArray(sel.spectators) ? sel.spectators : [],
         enemies: Array.isArray(sel.enemies) ? sel.enemies : [],
       };
-      // 重置实体：只保留参展角色作为玩家/盟友
+      // 重置实体：只保留友方角色作为玩家/盟友
       state.entities = state.entities.filter((e) => e.side !== "player" && e.side !== "ally");
       const partR = state.selections.participants
         .map((id) => state.roles.find((r) => r.id === id))
@@ -893,7 +893,7 @@ function install(): void {
       state.phase = "playing";
       state.tick = 0;
       waveTimer = 0;
-      state.events.push(`[mock] 战斗开始：参展 ${partR.length}，敌对 ${enR.length || "自动生成"}`);
+      state.events.push(`[mock] 战斗开始：友方 ${partR.length}，敌对 ${enR.length || "自动生成"}`);
       push();
       return;
     }

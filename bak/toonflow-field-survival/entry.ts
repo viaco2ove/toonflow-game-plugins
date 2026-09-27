@@ -192,7 +192,7 @@ async function ensureMapData(ctx?: PluginGameContext): Promise<MapData> {
 interface Entity {
   id: string;
   name: string;
-  /** 阵营：player=用户 / ally=参展角色 / enemy=敌对角色 / spectator=观战 */
+  /** 阵营：player=用户 / ally=友方角色 / enemy=敌对角色 / spectator=观战 */
   side: "player" | "ally" | "enemy" | "spectator";
   x: number;
   y: number;
@@ -831,7 +831,7 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
   const allies = s.entities.filter((e) => e.side === "ally" && e.alive);
 
-  // 参展角色：跟随用户并自动攻击最近敌人
+  // 友方角色：跟随用户并自动攻击最近敌人
   allies.forEach((a, i) => {
     const target = enemies.reduce<Entity | null>((best, e) =>
       !best || dist(a, e) < dist(a, best) ? e : best, null);
@@ -975,7 +975,7 @@ export async function handle_action(
       // 无论之前是 playing/over，第二次进入都必须回到 select 阶段
       const fresh = emptyState(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
-      return { code: 0, message: "ok", state: fresh, response: "请选择参展 / 观战 / 敌对角色后开始" };
+      return { code: 0, message: "ok", state: fresh, response: "请选择友方 / 观战 / 敌对角色后开始" };
     }
 
     case "start": {

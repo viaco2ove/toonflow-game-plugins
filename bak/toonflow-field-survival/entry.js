@@ -675,7 +675,7 @@ export async function handle_action(action, params, state, context) {
     case "start_init": {
       const fresh = emptyState(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
-      return { code: 0, message: "ok", state: fresh, response: "请选择参展 / 观战 / 敌对角色后开始" };
+      return { code: 0, message: "ok", state: fresh, response: "请选择友方 / 观战 / 敌对角色后开始" };
     }
     case "start": {
       const sel = (params?.selections || params || {});
