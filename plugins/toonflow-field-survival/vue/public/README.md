@@ -105,5 +105,6 @@ Tile Layer 1/2/3 瓦片层只是地形、墙壁、装饰瓦片，瓦片 ID 只�
 优化：
 1.依然采取原来的“entity_type”来初步判断阵营，这样可以无需修改原来的地图依然可用。
 2.增加“camp” 代表阵营
+neutral/hostile/friendly
 3.增加"full_name" 代表姓名
 例如没有full_name 的哥布林头上只是显示"哥布林”， 有full_name的就是“哥布林(full_name)”
