@@ -56,6 +56,20 @@ const MOB_LEASH_R_M = 8;      // 离巢超过此距离 → 归位
 const MOB_WANDER_R_M = 8;     // 归位后游荡半径
 const TOWN_SPAWN_BUFFER_M = 20;  // 野怪落点距城镇边界的最小缓冲
 
+/* ---- ★ v5 等级系统（数值来源：game.md《等级系统》1~6 节）----
+   满血HP = 100 + 等级*10 + 道具加成 + 技能永久加成
+   满蓝MP = 100 + 等级*10 + 道具/技能加成
+   攻击   = 10  + 等级*10 + 加成
+   防御   = 1   + 等级*10 + 加成   （加成项取角色卡已有字段，缺失按 0）
+   经验   ：exp / next_level_exp 为纯数字，next_level_exp = 当前 level * 100，
+            exp ≥ 阈值触发升级且支持连续多级（溢出保留、称号映射、hp/mp 重算）
+*/
+const STAT_BASE = { hp: 100, mp: 100, atk: 10, def: 1 };
+const STAT_PER_LEVEL = { hp: 10, mp: 10, atk: 10, def: 10 };
+const EXP_PER_LEVEL = 100;                 // next_level_exp = level * EXP_PER_LEVEL
+const MOB_ATK_COOLDOWN_TICKS = 45;         // 野怪两次攻击之间的冷却（tick）
+const MAX_LEVEL_UPS_PER_GAIN = 200;        // 单次结算的连升保护上限
+
 /** 区域划分方案：城镇居中（安全区），6 个野区环绕（环半径 480 m，区域半径 240 m） */
 const WORLD_REGIONS = [
   { id: "town",  name: "晨曦镇",   short: "晨曦", kind: "safe",   x: 0,    y: 0,    r: 160, safe: true,  lv: 0, mobs: 0, desc: "玩家出生的城镇（安全区）：商铺、民居、水井与中立居民，不刷新野怪" },
@@ -167,6 +181,8 @@ function emptyState(ctx) {
     /** ★ fix⑤：前端 localEnemies 状态（开局未上报 bounds 时按世界边界处理） */
     mapBounds: null,
     localMobsEpoch: 0,
+    /** ★ v5：宿主已结算击杀的本地野怪（mapmob_/localmob_/zone_）死亡标记 id→tick，防前端旧载荷复活 */
+    localMobTombstones: {},
     entities: [],
     chests: [],
     potions: [],
@@ -290,27 +306,53 @@ function floater(s, text, x, y) {
   if (s.floaters.length > 30) s.floaters = s.floaters.slice(-30);
 }
 
+/**
+ * ★ v5 伤害结算（本地权威）
+ *   · 打到玩家 / 盟友：防御生效 → 实际伤害 = max(1, 攻击 − 防御)（game.md 公式）
+ *   · 打到野怪：按传入伤害结算（玩家技能伤害已在 skillDamage 里扣除目标防御）
+ *   · 野怪致死 → 击杀计数 + 经验走 gainExp（升级流程）+「死亡标记」防前端回推复活
+ *   返回本次实际伤害。
+ */
 function damage(s, target, amount) {
-  target.hp = clamp(target.hp - amount, 0, target.maxHp);
-  floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
-  if (target.hp <= 0 && target.alive) {
+  if (!target) return 0;
+  const raw = Math.round(num(amount, 0));
+  if (raw <= 0) return 0;                       // 0 伤害（占位/未命中）不结算，避免"扣 0 血"的噪声日志
+  // 防御：玩家/盟友按《等级系统》第 4 条生效（未显式给 def 的角色按 level 推导），野怪抗性由技能侧扣除
+  const isChar = target.side === "player" || target.side === "ally";
+  let def = 0;
+  if (isChar) {
+    const dv = num(target.def, NaN);
+    if (Number.isFinite(dv)) def = Math.max(0, Math.round(dv));
+    else def = Math.max(0, Math.round(STAT_BASE.def + Math.max(1, Math.round(num(target.level, 1) || 1)) * STAT_PER_LEVEL.def));
+  }
+  const deal = Math.max(1, raw - def);
+  target.hp = clamp(num(target.hp, 0) - deal, 0, num(target.maxHp, deal));
+  floater(s, `-${deal}`, target.x, target.y - 24);
+  if (target.hp <= 0 && target.alive !== false) {
     target.alive = false;
     if (target.side === "enemy") {
       s.kills += 1;
       const bounty = target.bounty;
       const expGain = bounty?.exp != null ? Math.round(num(bounty.exp, 10)) : 8 + target.level * 4;
       const moneyGain = bounty?.money != null ? Math.round(num(bounty.money, 8)) : 5 + target.level * 3;
-      s.exp += expGain;
       s.money += moneyGain;
+      // ★ v5：本地权威野怪（mapmob_/localmob_/zone_）记死亡标记 —— 前端旧载荷再上报同一 id 也不复活
+      if (isLocalEnemyId(target.id)) {
+        if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
+        s.localMobTombstones[str(target.id)] = num(s.tick, 0);
+      }
       if (Math.random() < 0.5) {
         const drop = ["野兽皮", "锋利的爪", "兽骨"][Math.floor(Math.random() * 3)];
         s.drops.push(drop);
       }
-      pushEvent(s, `击败 ${target.name}，获得 ${expGain} 经验、${moneyGain} 金钱`);
+      const ups = gainExp(s, null, expGain);     // ★ v5：经验累加 + 升级流程（含 hp/mp 重算）
+      pushEvent(s, `击败 ${target.name}，获得 ${expGain} 经验、${moneyGain} 金钱${ups > 0 ? `，连续提升 ${ups} 级` : ""}`);
     } else {
       pushEvent(s, `${target.name} 倒下了`);
+      floater(s, "DOWN", target.x, target.y - 40);
     }
   }
+  return deal;
 }
 
 function moveTowards(e, tx, ty, speed) {
@@ -320,6 +362,219 @@ function moveTowards(e, tx, ty, speed) {
   e.vx = (dx / d) * speed;
   e.vy = (dy / d) * speed;
   if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
+}
+
+/* ============================================================
+   ★ v5 等级系统（数值来源：game.md《等级系统》1~6 节）
+   ------------------------------------------------------------
+   · 属性公式：满血HP / 满蓝MP / 攻击 / 防御（加成取角色卡已有字段，缺失按 0）
+   · 经验流程：exp ≥ next_level_exp(= level*100) → 升级，支持连续多级：
+       level+1 → exp 扣减「升级前阈值」（溢出保留）→ 重算 next_level_exp
+       → 从「全局背景等级-称号映射」写 level_desc（无对应则空串）
+       → 按满血满蓝公式重算 hp / mp
+   · 结算权威：exp 以「玩家实体」为唯一数据源，s.exp 为同值镜像
+     （对外 result / 宿主角色卡回写仍读 s.exp，保证不丢经验）
+   ============================================================ */
+
+/** 「道具加成 / 技能永久加成」在角色卡里的结构化容器字段名 */
+const STAT_BONUS_CONTAINERS = [
+  "stat_bonus", "attribute_bonus", "bonus", "attr", "attributes",
+  "item_bonus", "equipment_bonus", "skill_bonus", "permanent_bonus",
+  "道具加成", "装备加成", "技能加成", "技能永久加成", "加成",
+];
+
+/** 属性加成在容器内的键名别名（中英文/驼峰/下划线） */
+const STAT_BONUS_KEYS = {
+  hp: ["hp", "max_hp", "maxHp", "hp_bonus", "max_hp_bonus", "生命", "血量", "生命值", "血量加成", "生命加成", "生命值加成", "血量上限加成"],
+  mp: ["mp", "max_mp", "maxMp", "mp_bonus", "max_mp_bonus", "法力", "蓝量", "魔力", "蓝量加成", "法力加成", "魔力加成", "蓝量上限加成"],
+  atk: ["atk", "attack", "atk_bonus", "attack_bonus", "攻击", "攻击力", "攻击加成", "攻击力加成"],
+  def: ["def", "defense", "def_bonus", "defense_bonus", "防御", "防御力", "防御加成", "防御力加成"],
+};
+
+/** 角色卡上「扁平加成」键名（如 hp_bonus / 血量加成） */
+const STAT_FLAT_KEYS = {
+  hp: ["hp_bonus", "max_hp_bonus", "血量加成", "生命加成", "生命值加成"],
+  mp: ["mp_bonus", "max_mp_bonus", "蓝量加成", "法力加成", "魔力加成"],
+  atk: ["atk_bonus", "attack_bonus", "攻击加成", "攻击力加成"],
+  def: ["def_bonus", "defense_bonus", "防御加成", "防御力加成"],
+};
+
+function pickBonus(obj, stat) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return 0;
+  for (const k of STAT_BONUS_KEYS[stat]) {
+    const v = num(obj[k], NaN);
+    if (Number.isFinite(v)) return v;
+  }
+  return 0;
+}
+
+/** 「道具加成 + 技能永久加成」点数：结构化容器 + 扁平「xx加成」键名两条来源，缺失按 0 */
+function bonusOf(card, stat) {
+  if (!card || typeof card !== "object") return 0;
+  let sum = 0;
+  for (const c of STAT_BONUS_CONTAINERS) sum += pickBonus(card[c], stat);
+  for (const k of STAT_FLAT_KEYS[stat]) sum += num(card[k], 0);
+  return sum;
+}
+
+/** 按《等级系统》1~4 节推导四项上限（level 至少 1） */
+function statsOf(card, level) {
+  const lv = Math.max(1, Math.round(num(level, 1) || 1));
+  return {
+    level: lv,
+    maxHp: Math.round(STAT_BASE.hp + lv * STAT_PER_LEVEL.hp + bonusOf(card, "hp")),
+    maxMp: Math.round(STAT_BASE.mp + lv * STAT_PER_LEVEL.mp + bonusOf(card, "mp")),
+    atk: Math.round(STAT_BASE.atk + lv * STAT_PER_LEVEL.atk + bonusOf(card, "atk")),
+    def: Math.round(STAT_BASE.def + lv * STAT_PER_LEVEL.def + bonusOf(card, "def")),
+  };
+}
+
+/** 「全局背景等级-称号映射」的字段名（结构化表 / 文本表两种形态） */
+const LEVEL_TITLE_FIELDS = [
+  "level_desc_map", "level_desc_table", "level_titles", "level_title_map", "level_descs",
+  "level_info", "level_title", "等级称号", "等级对照表", "等级对照表文本", "称号表",
+];
+
+/** 解析「等级:称号」文本（换行 / 分号 / 逗号分段） */
+function parseLevelDescText(text, add) {
+  let hit = 0;
+  str(text).split(/[\n\r;；,，|]+/).forEach((line) => {
+    const m = /^\s*(\d+)\s*[:：\-–—=]\s*(.+?)\s*$/.exec(line);
+    if (m) { add(m[1], m[2]); hit += 1; }
+  });
+  return hit > 0;
+}
+
+/**
+ * 汇总「全局背景等级-称号映射」：来源 = 玩家角色卡（含会话背景 roles）的结构化表 / 文本表，
+ * 以及各角色自身已登记的 level → level_desc（即"全局背景里该等级的称号"）。
+ */
+function levelTitleMap(s) {
+  const map = {};
+  const add = (lv, desc) => {
+    const n = Math.round(num(lv, NaN));
+    const d = str(desc).trim();
+    if (Number.isFinite(n) && n > 0 && d) map[n] = d;
+  };
+  const readOne = (holder) => {
+    if (!holder || typeof holder !== "object") return;
+    for (const f of LEVEL_TITLE_FIELDS) {
+      const raw = holder[f];
+      if (!raw) continue;
+      if (Array.isArray(raw)) {
+        raw.forEach((it) => add(it?.level ?? it?.lv ?? it?.lv_num ?? it?.grade, it?.desc ?? it?.level_desc ?? it?.title ?? it?.name));
+      } else if (typeof raw === "object") {
+        Object.keys(raw).forEach((k) => {
+          const v = raw[k];
+          if (typeof v === "string") { if (!parseLevelDescText(v, add)) add(k, v); }
+          else add(k, v?.desc ?? v?.level_desc ?? v?.title ?? v?.name);
+        });
+      } else if (typeof raw === "string") {
+        parseLevelDescText(raw, add);
+      }
+    }
+    add(holder.level, holder.level_desc);
+  };
+  readOne(s?.playerCard);
+  const roles = Array.isArray(s?.roles) ? s.roles : [];
+  roles.forEach(readOne);
+  return map;
+}
+
+/** 按等级取称号：无对应等级 → 空串（game.md） */
+function levelDescOf(map, level) {
+  const n = Math.round(num(level, 0));
+  return n > 0 && map && map[n] != null ? map[n] : "";
+}
+
+/**
+ * ★ v5：玩家实体数值 ← 角色卡（等级 / 经验 / 等级称号 + 道具·技能加成）按《等级系统》公式派生。
+ *   fromCard=true （对局开始）：等级 / exp / next_level_exp / 称号续接角色卡，hp / mp 满血满蓝开局；
+ *   fromCard=false（每帧校准）：只重算四项上限并把 hp / mp 夹进上限，绝不回复生命。
+ */
+function syncPlayerStats(s, me, fromCard) {
+  if (!me || !s) return null;
+  const card = (s.playerCard && typeof s.playerCard === "object") ? s.playerCard : {};
+  if (fromCard) {
+    me.level = Math.max(1, Math.round(num(card.level, num(me.level, 1) || 1) || 1));
+    me.exp = Math.max(0, Math.round(num(card.exp, num(s.exp, 0)) || 0));
+    const lvExp = me.level * EXP_PER_LEVEL;
+    const cardNext = Math.round(num(card.next_level_exp, 0));
+    me.next_level_exp = Math.max(1, cardNext > 0 ? cardNext : lvExp);
+    me.level_desc = str(card.level_desc) || levelDescOf(levelTitleMap(s), me.level);
+    me.name = str(card.name, me.name);
+    if (str(card.avatarPath)) me.avatarPath = str(card.avatarPath);
+  }
+  const st = statsOf(card, me.level);
+  me.maxHp = st.maxHp;
+  me.maxMp = st.maxMp;
+  me.atk = st.atk;
+  me.def = st.def;
+  me.expToNext = me.next_level_exp;
+  if (fromCard) {
+    me.hp = st.maxHp;                                   // 新一局：满血满蓝出发
+    me.mp = st.maxMp;
+    me.alive = true;
+  } else {
+    me.hp = clamp(num(me.hp, st.maxHp), 0, st.maxHp);
+    me.mp = clamp(num(me.mp, st.maxMp), 0, st.maxMp);
+  }
+  s.exp = Math.max(0, Math.round(num(me.exp, 0)));      // s.exp 恒为玩家经验的镜像
+  return st;
+}
+
+/** ★ v5：经验累加 + 升级流程（支持连续多级），返回本次升级次数 */
+function gainExp(s, player, amount) {
+  const gain = Math.round(num(amount, 0));
+  const me = player || s.entities.find((e) => e.side === "player");
+  if (!me || gain <= 0) return 0;
+  me.exp = Math.max(0, Math.round(num(me.exp, num(s.exp, 0))) + gain);
+  if (!(num(me.next_level_exp, 0) > 0)) {
+    me.next_level_exp = Math.max(1, Math.round(num(me.level, 1) || 1) * EXP_PER_LEVEL);
+  }
+  const titles = levelTitleMap(s);
+  let ups = 0;
+  while (num(me.exp, 0) >= num(me.next_level_exp, 1) && ups < MAX_LEVEL_UPS_PER_GAIN) {
+    const threshold = num(me.next_level_exp, 1);        // 升级前阈值
+    me.level = Math.round(num(me.level, 1) || 1) + 1;
+    me.exp = Math.max(0, Math.round(num(me.exp, 0) - threshold));   // 溢出保留
+    me.next_level_exp = me.level * EXP_PER_LEVEL;       // 重算阈值
+    me.level_desc = levelDescOf(titles, me.level);      // 无对应 → 空串
+    const st = statsOf(s.playerCard, me.level);
+    me.maxHp = st.maxHp;
+    me.maxMp = st.maxMp;
+    me.atk = st.atk;
+    me.def = st.def;
+    me.hp = st.maxHp;                                   // 按满血满蓝公式重算（升级回复）
+    me.mp = st.maxMp;
+    ups += 1;
+    pushEvent(s, `等级提升 Lv.${me.level}（生命 ${me.maxHp} / 法力 ${me.maxMp} / 攻击 ${me.atk} / 防御 ${me.def}，称号：${me.level_desc || "无"}）`);
+    floater(s, `LEVEL UP Lv.${me.level}`, me.x, me.y - 40);
+  }
+  me.expToNext = me.next_level_exp;
+  s.exp = Math.max(0, Math.round(num(me.exp, 0)));
+  return ups;
+}
+
+/** ★ v5：玩家技能命中伤害 = max(1, 玩家攻击 + 技能威力 − 目标防御) */
+function skillDamage(player, skill, target) {
+  const atk = Math.max(1, Math.round(num(player?.atk, STAT_BASE.atk)));
+  const power = Math.max(0, Math.round(num(skill?.power, 0)));
+  const def = Math.max(0, Math.round(num(target?.def, 0)));
+  return Math.max(1, atk + power - def);
+}
+
+/** ★ v5：旧存档（v4 state）就地补齐 v5 字段，避免 bump version 把进行中的对局重置 */
+function ensureV5(s) {
+  if (!s || typeof s !== "object") return;
+  if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) return;
+  if (!Number.isFinite(Number(me.exp))) me.exp = Math.max(0, Math.round(num(s.exp, 0)));
+  if (!(num(me.next_level_exp, 0) > 0)) {
+    me.next_level_exp = Math.max(1, Math.round(num(me.level, 1) || 1) * EXP_PER_LEVEL);
+  }
+  syncPlayerStats(s, me, false);
 }
 
 /* ------------------------------------------------------------
@@ -536,6 +791,18 @@ function applyLocalEnemies(s, payload) {
   const ly = num(b.ly, 0);
   if (lx > 0 && ly > 0) s.mapBounds = { lx: lx, ly: ly };
   const list = Array.isArray(payload.list) ? payload.list : [];
+  // ① 快照「宿主侧已知的同名本地敌怪」：重建时沿用位姿 / 血量 / AI 状态，
+  //    避免前端旧载荷（血量、位置停留在上报时刻）把宿主已结算的结果回滚
+  const prev = new Map();
+  for (const e of s.entities) {
+    if (e.side === "enemy" && isLocalEnemyId(e.id)) prev.set(str(e.id), e);
+  }
+  // ①b 死亡标记：宿主结算掉的本地野怪在「区域刷新周期（45s）」内不得被前端载荷复活
+  if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
+  const tombs = s.localMobTombstones;
+  Object.keys(tombs).forEach((k) => {
+    if (num(s.tick, 0) - num(tombs[k], 0) >= REGION_RESPAWN_TICKS) delete tombs[k];
+  });
   // ② 清旧（幂等：重建前先清，避免跨图 / 跨世代残留）
   s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
   // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」中已经落到本图界外的那些：
@@ -554,23 +821,42 @@ function applyLocalEnemies(s, payload) {
     if (raw.alive === false) continue;                               // 已阵亡的不重建
     const id = str(raw.id);
     if (!id) continue;
+    if (tombs[id] != null) continue;                                 // ★ v5：宿主已结算击杀（45s 内不复活）
     const lv = Math.max(1, Math.round(num(raw.level, 1)));
     const maxHp = Math.max(1, Math.round(num(raw.maxHp, num(raw.hp, 60)) || 60));
     const at = clampToBound(s, num(raw.x, 0), num(raw.y, 0));
     const e = makeEntity({ id: id, name: str(raw.name, "野怪"), hp: maxHp, level: lv }, "enemy", at.x, at.y, built);
-    e.hp = clamp(Math.round(num(raw.hp, maxHp)), 1, maxHp);          // 保留前端当前血量
     e.maxHp = maxHp;
     e.atk = Math.max(1, Math.round(num(raw.atk, e.atk)));
-    e.facing = num(raw.facing, e.facing);
-    e.cooldown = Math.max(0, Math.round(num(raw.cooldown, 0)));
-    const home = clampToBound(s, num(raw.homeX, at.x), num(raw.homeY, at.y));
+    e.alive = true;
+    const home = clampToBound(s, num(raw.homeX, num(raw.x, at.x)), num(raw.homeY, num(raw.y, at.y)));
     e.isLocal = true;                                               // 标记：AI 受 bounds 约束
     e.regionId = str(raw.regionId, "local");
     e.homeX = home.x;
     e.homeY = home.y;
-    e.aiState = "idle";
-    e.wanderTimer = 0;
-    if (raw.bounty && typeof raw.bounty === "object") e.bounty = { ...raw.bounty };
+    const old = prev.get(id);
+    if (old) {
+      // ★ v5：宿主侧状态优先 —— 血量为宿主结算后的真实值（不是前端上报时的旧值），
+      //        位姿 / AI 状态 / 冷却一律沿用，避免"打掉的血下一帧复活 / 位置回跳"
+      e.x = num(old.x, at.x);
+      e.y = num(old.y, at.y);
+      e.hp = clamp(num(old.hp, maxHp), 1, maxHp);
+      e.aiState = str(old.aiState, "idle");
+      e.cooldown = Math.max(0, num(old.cooldown, 0));
+      e.wanderTimer = num(old.wanderTimer, 0);
+      e.wanderX = num(old.wanderX, e.x);
+      e.wanderY = num(old.wanderY, e.y);
+      e.bounty = old.bounty ? { ...old.bounty } : e.bounty;
+    } else {
+      e.hp = clamp(Math.round(num(raw.hp, maxHp)), 1, maxHp);        // 新接入的怪：采用前端当前血量
+      e.facing = num(raw.facing, e.facing);
+      e.cooldown = Math.max(0, Math.round(num(raw.cooldown, 0)));
+      e.aiState = "idle";
+      e.wanderTimer = 0;
+      if (raw.bounty && typeof raw.bounty === "object") e.bounty = { ...raw.bounty };
+    }
+    e.vx = 0;
+    e.vy = 0;
     s.entities.push(e);
     built += 1;
   }
@@ -636,6 +922,8 @@ function step(s, input, poseHint) {
   const speed = MOVE_SPEED_M;   // 米/秒
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
+  // ★ v5：每帧按《等级系统》公式校准玩家四项上限（hp / mp 只夹进上限，绝不回复生命）
+  syncPlayerStats(s, player, false);
 
   // ★ 关键修复（坐标双写）：玩家位姿权威在客户端，宿主只镜像 tick 参数里的 player
   const pose = poseHint || input?.player;
@@ -697,7 +985,7 @@ function step(s, input, poseHint) {
       }
       if (preyIn > MOB_ATK_M) { const t = clampToBound(s, prey.x, prey.y); moveTowards(e, t.x, t.y, speed * 0.72); return; }
       e.vx = 0; e.vy = 0;
-      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
+      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = MOB_ATK_COOLDOWN_TICKS; }
       return;
     }
     // ② 巡逻态：探测半径内发现玩家/盟友 → 进入追击
@@ -705,7 +993,7 @@ function step(s, input, poseHint) {
       e.aiState = "chase";
       if (preyIn > MOB_ATK_M) { const t2 = clampToBound(s, prey.x, prey.y); moveTowards(e, t2.x, t2.y, speed * 0.72); return; }
       e.vx = 0; e.vy = 0;
-      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
+      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = MOB_ATK_COOLDOWN_TICKS; }
       return;
     }
     // ③ 脱战/巡逻：离巢超过 8 米 → 归位；否则在巢点周围小范围游荡（绝不全图直线追）
@@ -756,9 +1044,10 @@ function step(s, input, poseHint) {
       const expGain = loot?.exp != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
       const moneyGain = loot?.money != null ? Math.round(num(loot.money, 12)) : 15 + Math.floor(rnd(0, 20));
       const drop = loot?.item || ["生锈的钥匙", "干粮", "荧光石"][Math.floor(Math.random() * 3)];
-      s.exp += expGain; s.money += moneyGain; s.drops.push(drop);
+      s.money += moneyGain; s.drops.push(drop);
+      const chestUps = gainExp(s, player, expGain);   // ★ v5：宝箱经验同样走升级流程
       floater(s, `宝箱 +${expGain}exp`, c.x, c.y);
-      pushEvent(s, `打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱`);
+      pushEvent(s, `打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱${chestUps > 0 ? `，提升 ${chestUps} 级` : ""}`);
     }
   });
 
@@ -798,8 +1087,10 @@ function isPlayerRole(cand, playerRole) {
 }
 
 export async function handle_action(action, params, state, context) {
-  const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4)
+  const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4 || state.version === 5)
     ? state : emptyState(context);
+  // ★ v5：v4 存档就地对齐 v5 规则（等级 / 经验 / 四项上限 / 死亡标记），不 bump version → 不重置进行中的对局
+  if (s.phase === "playing") ensureV5(s);
 
   const okResp = (msg) => ({ code: 0, message: "ok", state: s, response: msg });
 
@@ -816,11 +1107,19 @@ export async function handle_action(action, params, state, context) {
       const spectators = Array.isArray(sel.spectators) ? sel.spectators.map(String) : [];
       const enemies = Array.isArray(sel.enemies) ? sel.enemies.map(String) : [];
       const roles = Array.isArray(context?.roles) ? context.roles : [];
+      // ★ v5：玩家角色卡（等级 / 经验 / 称号 / 加成）取本次调用上下文的最新值
+      if (context?.playerCard && typeof context.playerCard === "object" && Object.keys(context.playerCard).length) {
+        s.playerCard = context.playerCard;
+      }
+      if (roles.length) s.roles = roles;
       const byId = (id) => roles.find((r) => String(r.id) === id || String(r.name) === id);
       const playerRole = roles.find((r) => String(r.roleType) === "player") || roles[0];
       s.selections = { participants, spectators, enemies };
       s.entities = [];
-      s.entities.push(makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0));
+      const playerEnt = makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
+      s.entities.push(playerEnt);
+      // ★ v5：玩家等级 / 经验续接角色卡，四项上限按《等级系统》公式派生，满血满蓝开局
+      syncPlayerStats(s, playerEnt, true);
       participants.forEach((id, i) => {
         const r = byId(id);
         if (!r) return;
@@ -916,15 +1215,29 @@ export async function handle_action(action, params, state, context) {
       const player = s.entities.find((e) => e.side === "player");
       if (!skill || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
-      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
+      const cost = Math.max(0, Math.round(num(skill.cost, 0)));
+      if (cost > 0 && num(player.mp, 0) < cost) return okResp(`${skill.name} 法力不足`);
+      // ★ v5 本地命中判定：命中 30 米内「最近的至多 3 只」敌怪，
+      //   含 mapmob_ / localmob_ / zone_ 三类本地权威野怪（修复"玩家攻击不到野怪"）
+      const targets = s.entities
+        .filter((e) => e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0 && dist(player, e) < SKILL_RANGE_M)
+        .sort((a, b) => dist(player, a) - dist(player, b));
       if (!targets.length) {
-        damage(s, s.entities.filter((e) => e.side === "enemy" && e.alive)[0] || player, 0);
-        return okResp(`${skill.name} 未命中`);
+        floater(s, "MISS", player.x, player.y - 24);
+        return okResp(`${skill.name} 未命中（${SKILL_RANGE_M} 米内无敌怪）`);
       }
+      if (cost > 0) player.mp = clamp(num(player.mp, 0) - cost, 0, num(player.maxMp, 0));
       skill.cdLeft = skill.cd;
-      targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
-      pushEvent(s, `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标`);
-      return okResp(`${skill.name}`);
+      const hits = targets.slice(0, 3);
+      const lead = hits[0];
+      // 面向最近目标（角度制 0=右 90=下 180=左 270=上）
+      if (Math.abs(lead.x - player.x) > Math.abs(lead.y - player.y)) player.facing = lead.x > player.x ? 0 : 180;
+      else player.facing = lead.y > player.y ? 90 : 270;
+      let total = 0;
+      hits.forEach((t) => { total += damage(s, t, skillDamage(player, skill, t)); });   // 按攻击扣血 + 致死移除 + 给经验
+      const killed = hits.filter((t) => t.alive === false).length;
+      pushEvent(s, `施放 ${skill.name}：命中 ${hits.length} 只野怪，合计 ${total} 伤害${killed ? `，击杀 ${killed} 只` : ""}（经验 ${s.exp}/${player.next_level_exp}）`);
+      return okResp(`${skill.name}：命中 ${hits.length} 只，伤害 ${total}${killed ? `，击杀 ${killed} 只` : ""}`);
     }
     case "item": {
       if (s.phase !== "playing") return okResp("");

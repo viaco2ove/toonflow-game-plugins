@@ -71,6 +71,8 @@ const STORY = ${JSON.stringify(STORY)};
 const STORY_URL = ${JSON.stringify(storyUrl)};
 let lastState = null;
 let storyData = null;
+// ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
+let currentLevelName = null;
 const log = (m) => { const el = document.getElementById("log"); el.textContent = m + "\\n" + el.textContent.slice(0, 4000); };
 const post = (state) => { document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive"] }, "*"); };
 const showError = (msg) => {
@@ -199,27 +201,28 @@ window.addEventListener("message", async (e) => {
   if (!d || typeof d !== "object") return;
   log("iframe→ " + JSON.stringify(d).slice(0, 240));
   if (d.type === "tf_plugin_loaded") {
+    log("HOST: tf_plugin_loaded received, loading story...");
     const ok = await loadStoryData();
-    if (!ok) return;
+    if (!ok) { log("HOST: loadStoryData failed"); return; }
     await loadEntityTypes();
-    setTimeout(() => {
-      lastState = {
-        phase: "select", version: 5, tick: 0,
-        world: { w: 3000, h: 3000 },
-        roles: storyData.roles || [],
-        selections: { participants: [], spectators: [], enemies: [] },
-        entities: [], chests: [], potions: [], floaters: [],
-        skills: DEFAULT_SKILLS,
-        items: materialsToItems(storyData.materials || []),
-        skillPage: 0, itemPage: 0,
-        exp: 0, money: 0, drops: [], kills: 0,
-        events: ["dev-host 已推送 select 状态（" + STORY + "）"],
-        result: null,
-        map: null, mapSource: "fallback",
-      };
-      post(lastState);
-      log("host→ pushed select state (roles: " + lastState.roles.length + ", items: " + lastState.items.length + ")");
-    }, 200);
+    log("HOST: story+entityTypes loaded, pushing select state");
+    // ★ 直接同步推 select state（不用 setTimeout，background tab 上不可靠）
+    lastState = {
+      phase: "select", version: 5, tick: 0,
+      world: { w: 3000, h: 3000 },
+      roles: storyData.roles || [],
+      selections: { participants: [], spectators: [], enemies: [] },
+      entities: [], chests: [], potions: [], floaters: [],
+      skills: DEFAULT_SKILLS,
+      items: materialsToItems(storyData.materials || []),
+      skillPage: 0, itemPage: 0,
+      exp: 0, money: 0, drops: [], kills: 0,
+      events: ["dev-host 已推送 select 状态（" + STORY + "）"],
+      result: null,
+      map: null, mapSource: "fallback",
+    };
+    post(lastState);
+    log("host→ pushed select state (roles: " + lastState.roles.length + ", items: " + lastState.items.length + ")");
   }
   if (d.type === "tf_plugin_tick" && d.action === "start") {
     if (!storyData) { showError("storyData 未加载"); return; }
@@ -241,7 +244,8 @@ window.addEventListener("message", async (e) => {
       });
     }
     (sel.participants || []).forEach((id, i) => {
-      const r = roles.find((x) => x.id === id);
+      // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
+      const r = roles.find((x) => x.id === id) || roles.find((x) => x.name === id);
       if (r && (!playerRole || r.id !== playerRole.id)) {
         const lv = r.initial_level || 10;
         const s = 1 + (lv - 1) * 0.3;
@@ -255,43 +259,54 @@ window.addEventListener("message", async (e) => {
         });
       }
     });
-    setTimeout(() => {
-      lastState = {
-        phase: "playing", version: 5, tick: 0,
-        world: { w: 3000, h: 3000 },
-        roles: [],
-        selections: { participants: sel.participants || [], spectators: sel.spectators || [], enemies: sel.enemies || [] },
-        entities: ents, chests: [], potions: [], floaters: [],
-        skills: DEFAULT_SKILLS,
-        items: materialsToItems(storyData.materials || []),
-        skillPage: 0, itemPage: 0,
-        exp: 0, money: 0, drops: [], kills: 0,
-        events: ["dev-host: 游戏开始（" + STORY + "）"],
-        result: null,
-        map: null, mapSource: "fallback",
-      };
-      post(lastState);
-      log("host→ pushed playing state (ents: " + ents.length + ")");
-    }, 200);
+    // ★ 直接同步推 playing state（用 setTimeout(200) 在 background tab 上不可靠，
+    //   bsk 控制台时整个 setTimeout 队列被节流到 1Hz，start action 永远到不了）
+    lastState = {
+      phase: "playing", version: 5, tick: 0,
+      world: { w: 3000, h: 3000 },
+      roles: [],
+      selections: { participants: sel.participants || [], spectators: sel.spectators || [], enemies: sel.enemies || [] },
+      entities: ents, chests: [], potions: [], floaters: [],
+      skills: DEFAULT_SKILLS,
+      items: materialsToItems(storyData.materials || []),
+      skillPage: 0, itemPage: 0,
+      exp: 0, money: 0, drops: [], kills: 0,
+      events: ["dev-host: 游戏开始（" + STORY + "）"],
+      result: null,
+      map: null, mapSource: "fallback",
+    };
+    post(lastState);
+    log("host→ pushed playing state (ents: " + ents.length + ")");
   }
   if (d.type === "tf_plugin_tick" && d.action === "tick") {
     if (!lastState) return;
-    setTimeout(() => {
-      lastState.tick = (d.params?.tick || 0) + 1;
-      const ents = lastState.entities;
-      // 1. 镜像玩家位姿（前端权威）
-      const me = ents.find((e) => e.side === "player");
-      if (me) {
-        const p = d.params?.player || {};
-        if (Number.isFinite(p.x)) me.x = p.x;
-        if (Number.isFinite(p.y)) me.y = p.y;
-        if (Number.isFinite(p.facing)) me.facing = p.facing;
-        me.vx = 0; me.vy = 0;
-        // 自然回复
-        if (lastState.tick % 10 === 0) me.mp = Math.min(me.maxMp, (me.mp || 0) + 3);
-        if (lastState.tick % 30 === 0) me.hp = Math.min(me.maxHp, me.hp + 1);
-      }
-      // 2. 敌人 AI：追击 4m / 近战 0.5m 攻击 / 远程 4m 攻击
+    // ★ 用 50ms 间隔的"服务器 tick"——每次客户端发 tf_plugin_tick，
+    //   把请求参数合并到 lastPendingTick，由服务器定时器自己驱动 AI。
+    //   这避免了 background tab 上 setTimeout/RAF 被节流导致 AI 不跑。
+    if (!window._devHostInterval) {
+      window._devHostInterval = setInterval(() => {
+        const p = window._devHostPending || {};
+        window._devHostPending = null;
+        // ★ 客户端上报的当前关卡名（跨 frame 传值的唯一通道是 tick 消息）
+        if (p.levelName) currentLevelName = p.levelName;
+        // ★ 玩家已死（over）→ 结算画面，停跑战斗 AI / 刷怪（客户端 loop 也已停发）
+        if (lastState.phase === "over") return;
+        // ★ 自己计数 tick（p.tick 是客户端的，可能为 0）
+        lastState.tick = (lastState.tick || 0) + 1;
+        const ents = lastState.entities;
+        // 1. 镜像玩家位姿（前端权威）
+        const me = ents.find((e) => e.side === "player");
+        if (me) {
+          const playerInfo = p.player || {};
+          if (Number.isFinite(playerInfo.x)) me.x = playerInfo.x;
+          if (Number.isFinite(playerInfo.y)) me.y = playerInfo.y;
+          if (Number.isFinite(playerInfo.facing)) me.facing = playerInfo.facing;
+          me.vx = 0; me.vy = 0;
+          // 自然回复
+          if (lastState.tick % 10 === 0) me.mp = Math.min(me.maxMp, (me.mp || 0) + 3);
+          if (lastState.tick % 30 === 0) me.hp = Math.min(me.maxHp, me.hp + 1);
+        }
+      // 2. 敌人 AI：侦测 30m / 追击（近战贴近 0.5m，远程保持 2.5-4m）/ 攻击
       const target = me;
       for (const e of ents) {
         if (e.side !== "enemy" || !e.alive || !target || !target.alive) continue;
@@ -299,7 +314,8 @@ window.addEventListener("message", async (e) => {
         const dy = target.y - e.y;
         const d2 = Math.hypot(dx, dy) || 0.001;
         const isRanged = e.isRanged === true;
-        if (d2 < 4) {
+        // 侦测半径 30m（原 4m 太小，敌人永远追不到玩家）
+        if (d2 < 30) {
           if (isRanged) {
             if (d2 > 4) {
               const sp = 2.0 * 0.1;
@@ -315,7 +331,7 @@ window.addEventListener("message", async (e) => {
           e.facing = dx > 0 ? 0 : 180;
         }
         e.cooldown = (e.cooldown || 0) - 1;
-        const attackRange = isRanged ? 4 : 0.5;
+        const attackRange = isRanged ? 4 : 1.5;
         if (d2 < attackRange && e.cooldown <= 0) {
           const dmg = Math.max(1, (e.atk || 5) - (target.def || 0));
           target.hp = Math.max(0, target.hp - dmg);
@@ -330,13 +346,13 @@ window.addEventListener("message", async (e) => {
           }
         }
       }
-      // 3. 玩家自动攻击（每 30 tick）：找最近敌人
+      // 3. 玩家自动攻击（每 30 tick）：找最近敌人（reach = 4m，避免打不到贴身怪）
       if (me && me.alive && lastState.tick % 30 === 0) {
         let closest = null, minD = Infinity;
         for (const e of ents) {
           if (e.side !== "enemy" || !e.alive) continue;
           const dd = Math.hypot(e.x - me.x, e.y - me.y);
-          const reach = e.isRanged === true ? 4 : 0.5;
+          const reach = e.isRanged === true ? 8 : 2;
           if (dd < reach && dd < minD) { minD = dd; closest = e; }
         }
         if (closest) {
@@ -376,21 +392,32 @@ window.addEventListener("message", async (e) => {
           }
         }
       }
-      // 5. 野怪刷新：每 240 tick 在玩家周围 30-70m 生成一波（按 entity_types theme 权重）
-      if (!lastState._waveTimer) lastState._waveTimer = 0;
-      lastState._waveTimer++;
-      if (lastState._waveTimer >= 240) {
+      // 5. 野怪刷新：每 30 tick 在玩家周围 30-70m 生成一波（按 entity_types theme 权重）
+      //   立即在第一次 tick 就刷一波，避免开局等 24 秒
+      if (!lastState._waveTimer) {
         lastState._waveTimer = 0;
-        // 当前关卡 theme（默认 RUINS；玩家手动切关后由 window.__currentLevelName 提供）
-        const theme = currentTheme(window.__currentLevelName || null);
-        if (!theme) return; // 城镇/null theme 不刷怪
+        // 首次立即刷
+      }
+      lastState._waveTimer++;
+      if (lastState._waveTimer >= 30 || lastState._waveTimer === 1) {
+        lastState._waveTimer = 0;
+        // 当前关卡 theme：城镇（null）不刷怪；未知关卡保守回退 RUINS
+        const theme = currentTheme(currentLevelName);
+        // ★ 进入城镇/安全图：清掉所有 server 侧野怪（玩家不再被围砍）。
+        //   注意：不能提前 return —— 否则会跳过末尾 post(lastState)，客户端永远收不到清怪后的状态。
+        if (!theme) {
+          const dead = ents.filter((e) => e.side === "enemy" && e.alive).length;
+          for (const e of ents) { if (e.side === "enemy") e.alive = false; }
+          if (dead > 0) lastState.events.push("[mock] 进入安全区，野怪散去（" + dead + " 只）");
+        } else {
         const monster = pickMonsterByWeight(theme) || (storyData.monsters || [])[Math.floor(Math.random() * (storyData.monsters || []).length)];
-        if (!monster) return;
+        if (monster) {
         const lv = Math.max(1, monster.recommendLevel || (theme === "ICE" ? 16 : theme === "MINE" ? 11 : theme === "CATACOMBS" ? 6 : 1));
         const count = Math.min(3, 2 + Math.floor(lastState.tick / 1200));
         for (let i = 0; i < count; i++) {
           const angle = Math.random() * Math.PI * 2;
-          const dist = 30 + Math.random() * 40;
+          // ★ 刷在 15-25m（侦测 30m 内），否则敌人刷出来永远追不到玩家
+          const dist = 15 + Math.random() * 10;
           const id = "m" + Math.floor(Math.random() * 99999);
           // entity_types 来源（有 hp/maxhp 字段）走真实 stats
           if (typeof monster.hp === "number" || typeof monster.maxhp === "number") {
@@ -427,6 +454,8 @@ window.addEventListener("message", async (e) => {
           }
         }
         lastState.events.push("[mock] [" + theme + "] 刷新 " + count + " 只 " + (monster.name || monster.entity_type));
+        }
+        }
       }
       // 6. 飘字/vfx 衰减
       lastState.floaters = lastState.floaters.filter((f) => { f.life--; return f.life > 0; });
@@ -435,14 +464,35 @@ window.addEventListener("message", async (e) => {
         if (e.actionBobMs && e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
       }
       // 7. 回推
-      post(lastState);
-    }, 50);
+        post(lastState);
+      }, 100);
+      return;
+    }
+    // 客户端发来 tick：缓存到 pending，由服务器定时器自己取
+    window._devHostPending = d.params || {};
   }
   // 处理 skill / item 等其他 action
-  if (d.type === "tf_plugin_tick" && (d.action === "skill" || d.action === "item" || d.action === "page" || d.action === "revive" || d.action === "exit")) {
+  if (d.type === "tf_plugin_tick" && (d.action === "skill" || d.action === "item" || d.action === "page" || d.action === "exit")) {
     if (!lastState) return;
-    // 简化：skill/item 直接给个回包
-    setTimeout(() => post(lastState), 30);
+    // 简化：skill/item 直接给个回包（同步，不走 setTimeout）
+    post(lastState);
+  }
+  // ★ revive：复活玩家（半血回场），清空周围敌人给玩家喘息空间
+  if (d.type === "tf_plugin_tick" && d.action === "revive") {
+    if (!lastState) return;
+    const me2 = lastState.entities.find((e) => e.side === "player");
+    if (me2) {
+      me2.alive = true;
+      me2.hp = Math.max(1, Math.floor(me2.maxHp / 2));
+      me2.cooldown = 0;
+    }
+    lastState.entities = lastState.entities.filter((e) => e.side !== "enemy");
+    lastState.phase = "playing";
+    lastState.result = null;
+    lastState._waveTimer = 0;
+    lastState.events.push("[mock] 复活成功（半血回归）");
+    post(lastState);
+    log("host→ revive → phase=playing");
   }
 });
 </script>

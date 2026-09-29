@@ -1,0 +1,982 @@
+{
+  "meta": {
+    "game": "Rotten-Soup",
+    "generated_at": "2026-09-29 09:54:57",
+    "sources": {
+      "enemy_data": "src/assets/js/game/utils/data/data.xlsx#Enemies",
+      "registry": "src/assets/js/game/utils/EntityFactory.js#entityShop",
+      "textures": "src/assets/js/game/utils/EntityFactory.js#actorTextures",
+      "spawn_tables": "src/assets/js/game/map/generation/RandomDungeon.js#dungeonThemes",
+      "handmade_maps": "public/maps/*.json"
+    },
+    "note": "代码中不存在「野怪/敌人」两套分类，所有敌对生物统一为 hostile:true 的 StatelessAI 实例",
+    "description_zh_note": "description_zh 为对应英文 description 的中文翻译，专有名词（地精/巫妖等）按奇幻 RPG 惯例译法"
+  },
+  "summary": {
+    "entity_type_registered_total": 32,
+    "hostile_actor_types": 24,
+    "regular_enemy_types": 22,
+    "special_enemy_types": 2,
+    "non_hostile_entity_types": 6,
+    "corpse_entity_types": 2,
+    "item_types": 16,
+    "playable_now_regular_enemies": 5,
+    "spawnable_now_list": [
+      "RAT",
+      "BAT",
+      "SNAKE",
+      "GOBLIN",
+      "ORC"
+    ],
+    "playable_now_note": "createDungeonFloors 固定 5 层 -> level<=5 -> 恒为 RUINS 主题；另有 LOOT_GOBLIN 可遇",
+    "breakdown": "32 项 = 22 常规敌人 + LICH + LOOT_GOBLIN + 6 非敌对 actor(NPC/LEVEL_TRANSITION/CHEST/DOOR/LOCKED_DOOR/LADDER) + 2 尸体"
+  },
+  "enemies": [
+    {
+      "entity_type": "RAT",
+      "name": "rat",
+      "description": "A small, fat rat.",
+      "description_zh": "一只又小又肥的老鼠。",
+      "hp": 3,
+      "maxhp": 3,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 1,
+      "def": 1,
+      "range": 7,
+      "morale": 1,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2365
+      ],
+      "spawn": [
+        {
+          "theme": "RUINS",
+          "weight": 30,
+          "generatable": true
+        },
+        {
+          "theme": "HELL",
+          "weight": 10,
+          "generatable": false
+        }
+      ],
+      "playable_now": true
+    },
+    {
+      "entity_type": "BAT",
+      "name": "bat",
+      "description": "A creature of the night.",
+      "description_zh": "暗夜中的生物。",
+      "hp": 7,
+      "maxhp": 7,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 2,
+      "def": 1,
+      "range": 7,
+      "morale": 0.4,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        3704,
+        3706
+      ],
+      "spawn": [
+        {
+          "theme": "RUINS",
+          "weight": 20,
+          "generatable": true
+        },
+        {
+          "theme": "HELL",
+          "weight": 10,
+          "generatable": false
+        }
+      ],
+      "playable_now": true
+    },
+    {
+      "entity_type": "SNAKE",
+      "name": "snake",
+      "description": "A sneaky, slithering reptile.",
+      "description_zh": "鬼鬼祟祟、贴地滑行的爬虫。",
+      "hp": 7,
+      "maxhp": 7,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 4,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        4360,
+        4361,
+        4362,
+        4363,
+        4364,
+        4365,
+        4366,
+        4367
+      ],
+      "spawn": [
+        {
+          "theme": "RUINS",
+          "weight": 25,
+          "generatable": true
+        }
+      ],
+      "playable_now": true
+    },
+    {
+      "entity_type": "WILD_GOAT",
+      "name": "wild goat",
+      "description": "A really pissed off goat!",
+      "description_zh": "一只被彻底惹毛了的山羊！",
+      "hp": 8,
+      "maxhp": 8,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 2,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [],
+      "spawn": [],
+      "playable_now": false
+    },
+    {
+      "entity_type": "GOBLIN",
+      "name": "goblin",
+      "description": "A mean and green goblin.",
+      "description_zh": "卑劣的绿皮地精。",
+      "hp": 10,
+      "maxhp": 10,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 3,
+      "def": 1,
+      "range": 7,
+      "morale": 0.2,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        7440,
+        7441,
+        7442,
+        7443,
+        7444,
+        7445,
+        7446
+      ],
+      "spawn": [
+        {
+          "theme": "RUINS",
+          "weight": 30,
+          "generatable": true
+        },
+        {
+          "theme": "MINE",
+          "weight": 5,
+          "generatable": true
+        },
+        {
+          "theme": "HELL",
+          "weight": 7,
+          "generatable": false
+        }
+      ],
+      "playable_now": true
+    },
+    {
+      "entity_type": "ZOMBIE",
+      "name": "zombie",
+      "description": "A deadful, limping humanoid made of rotten flesh.",
+      "description_zh": "由腐肉拼凑而成、跛足蹒跚的人形亡者。",
+      "hp": 13,
+      "maxhp": 13,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 3,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2314,
+        2317
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 30,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "IMP",
+      "name": "imp",
+      "description": "A small, mischevous demon.",
+      "description_zh": "个头不大、专爱捣乱的小恶魔。",
+      "hp": 15,
+      "maxhp": 15,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 5,
+      "def": 1,
+      "range": 7,
+      "morale": 1,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        5412,
+        5413
+      ],
+      "spawn": [
+        {
+          "theme": "ICE",
+          "weight": 10,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "SKELETON",
+      "name": "skeleton",
+      "description": "An undead collection of bones!",
+      "description_zh": "一副被唤醒的白骨！",
+      "hp": 18,
+      "maxhp": 18,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 5,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2552,
+        2553,
+        2554,
+        2555
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 30,
+          "generatable": true
+        },
+        {
+          "theme": "ICE",
+          "weight": 20,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "KOBOLD",
+      "name": "kobold",
+      "description": "A sneaky and shrewd reptile.",
+      "description_zh": "既狡猾又精明的爬虫类。",
+      "hp": 20,
+      "maxhp": 20,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 7,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        5532,
+        5533,
+        5534,
+        5535,
+        5536,
+        5537,
+        5538,
+        5539
+      ],
+      "spawn": [
+        {
+          "theme": "MINE",
+          "weight": 2,
+          "generatable": true
+        },
+        {
+          "theme": "HELL",
+          "weight": 1,
+          "generatable": false
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "ICE_ELEMENTAL",
+      "name": "ice elemental",
+      "description": "A living icicle.",
+      "description_zh": "一根活着的冰锥。",
+      "hp": 25,
+      "maxhp": 25,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 15,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2460,
+        2461
+      ],
+      "spawn": [
+        {
+          "theme": "ICE",
+          "weight": 3,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "ORC",
+      "name": "orc",
+      "description": "A large, green-skinned brute.",
+      "description_zh": "体型庞大、绿皮獠牙的蛮兽。",
+      "hp": 30,
+      "maxhp": 30,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 7,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        5292,
+        5293,
+        5294,
+        5295,
+        5296,
+        5297,
+        5299
+      ],
+      "spawn": [
+        {
+          "theme": "RUINS",
+          "weight": 7,
+          "generatable": true
+        },
+        {
+          "theme": "MINE",
+          "weight": 5,
+          "generatable": true
+        },
+        {
+          "theme": "HELL",
+          "weight": 2,
+          "generatable": false
+        }
+      ],
+      "playable_now": true
+    },
+    {
+      "entity_type": "BONEMAN",
+      "name": "boneman",
+      "description": "A mysterious creature with a skull for a head.",
+      "description_zh": "头颅是一颗骷髅的神秘生物。",
+      "hp": 35,
+      "maxhp": 35,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 6,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        3392,
+        3393
+      ],
+      "spawn": [
+        {
+          "theme": "MINE",
+          "weight_key": "BONE_MAN",
+          "weight": 10,
+          "generatable": true,
+          "id_mismatch": "xlsx 为 BONEMAN，刷怪表写 BONE_MAN"
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "DEMON",
+      "name": "demon",
+      "description": "A being born out of demonic energy from another plane.",
+      "description_zh": "由异位面魔能孕育而生的存在。",
+      "hp": 35,
+      "maxhp": 35,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 6,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2409,
+        2410,
+        2411,
+        2412,
+        2413,
+        2414,
+        2415
+      ],
+      "spawn": [],
+      "playable_now": false
+    },
+    {
+      "entity_type": "GHOST",
+      "name": "ghost",
+      "description": "A dead soul trapped in this corporeal realm.",
+      "description_zh": "被困于物质位面的亡魂。",
+      "hp": 35,
+      "maxhp": 35,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 3,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2792,
+        2793,
+        2794
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 10,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "MUMMY",
+      "name": "mummy",
+      "description": "A member of the undead, wrapped in linen.",
+      "description_zh": "身缠亚麻布的不死族成员。",
+      "hp": 40,
+      "maxhp": 40,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 5,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2432,
+        2433,
+        2434,
+        2435,
+        2436,
+        2437,
+        2438,
+        2439
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 30,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "SIREN",
+      "name": "siren",
+      "description": "A beautiful woman…serpent with wings.",
+      "description_zh": "长着美女上半身、蛇身带翼的妖物。",
+      "hp": 40,
+      "maxhp": 40,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 8,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2289,
+        2295
+      ],
+      "spawn": [
+        {
+          "theme": "ICE",
+          "weight": 1,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "TROLL",
+      "name": "troll",
+      "description": "A large, strong and stupid creature.",
+      "description_zh": "巨大、强壮又愚蠢的生物。",
+      "hp": 45,
+      "maxhp": 45,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 12,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        9481,
+        9480
+      ],
+      "spawn": [
+        {
+          "theme": "ICE",
+          "weight": 3,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "BANSHEE",
+      "name": "banshee",
+      "description": "A cursed, screaming female spirit.",
+      "description_zh": "受诅咒、尖啸不止的女妖魂。",
+      "hp": 50,
+      "maxhp": 50,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 8,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        3154
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 5,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "GOLEM",
+      "name": "golem",
+      "description": "A being weaved together by magical elements.",
+      "description_zh": "以魔法元素编织而成的造物。",
+      "hp": 50,
+      "maxhp": 50,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 15,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2457
+      ],
+      "spawn": [
+        {
+          "theme": "MINE",
+          "weight": 1,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "CYCLOPS",
+      "name": "cyclops",
+      "description": "A towering giant humanoid with one eye.",
+      "description_zh": "高耸的独眼人形巨人。",
+      "hp": 55,
+      "maxhp": 55,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 14,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        7081
+      ],
+      "spawn": [
+        {
+          "theme": "ICE",
+          "weight": 1,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "MINOTAUR",
+      "name": "minotaur",
+      "description": "An enraged beast with the head of a bull and body of a man.",
+      "description_zh": "牛首人身、暴怒成性的凶兽。",
+      "hp": 60,
+      "maxhp": 60,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 16,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        7080
+      ],
+      "spawn": [
+        {
+          "theme": "MINE",
+          "weight": 1,
+          "generatable": true
+        },
+        {
+          "theme": "ICE",
+          "weight": 1,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    },
+    {
+      "entity_type": "VAMPIRE",
+      "name": "vampire",
+      "description": "A powerful magister of the undead.",
+      "description_zh": "不死族中强大的术法掌控者。",
+      "hp": 70,
+      "maxhp": 70,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 22,
+      "def": 1,
+      "range": 7,
+      "morale": 0,
+      "wanders": true,
+      "ai": "StatelessAI",
+      "textures": [
+        2672
+      ],
+      "spawn": [
+        {
+          "theme": "CATACOMBS",
+          "weight": 1,
+          "generatable": true
+        }
+      ],
+      "playable_now": false
+    }
+  ],
+  "special_enemies": [
+    {
+      "entity_type": "LICH",
+      "name": "Lich",
+      "description": "Once a powerful necromancer, now transformed into a lich.",
+      "description_zh": "曾是一名强大的死灵法师，如今已蜕变为巫妖。",
+      "hp": 40,
+      "maxhp": 40,
+      "mana": 25,
+      "maxmana": 25,
+      "str": 5,
+      "def": 2,
+      "kind": "boss",
+      "class": "entities/actors/enemies/boss/Lich.js",
+      "hostile": true,
+      "spells": [
+        "Regeneration",
+        "Pain",
+        "VampiricDraining",
+        "AnimateDead"
+      ],
+      "placed_in": [
+        "mulberryGraveyard.json"
+      ]
+    },
+    {
+      "entity_type": "LOOT_GOBLIN",
+      "name": "Loot Goblin",
+      "description": "A goblin with an unfulfillable desire for treasure & loot.",
+      "description_zh": "一只对财宝与战利品有着永不满足欲望的地精。",
+      "hp": 20,
+      "maxhp": 20,
+      "mana": 5,
+      "maxmana": 5,
+      "str": 4,
+      "def": 2,
+      "kind": "goal_based",
+      "class": "entities/actors/enemies/GoalBasedEnemy.js",
+      "weight_in_RUINS": 5,
+      "behavior": "逃跑型，掉落 GOLD",
+      "placed_in": [
+        "lootGoblinLair.json"
+      ]
+    }
+  ],
+  "non_hostile_entity_types": [
+    "NPC",
+    "LEVEL_TRANSITION",
+    "CHEST",
+    "DOOR",
+    "LOCKED_DOOR",
+    "LADDER",
+    "ZOMBIE_CORPSE",
+    "SKELETON_CORPSE"
+  ],
+  "corpse_entity_types": [
+    "ZOMBIE_CORPSE",
+    "SKELETON_CORPSE"
+  ],
+  "item_types": [
+    "GOLD",
+    "BEER",
+    "HEALTH_POTION",
+    "STRENGTH_POTION",
+    "MANA_POTION",
+    "SWORD",
+    "BATTLEAXE",
+    "HELMET",
+    "CHEST_ARMOR",
+    "LEG_ARMOR",
+    "BOOTS",
+    "BOW",
+    "STEEL_ARROW",
+    "KEY",
+    "NECROMANCY_SPELLBOOK",
+    "MAP_REVEALING_SCROLL"
+  ],
+  "dungeon_themes": {
+    "RUINS": {
+      "level_range": "level <= 5",
+      "referenced_in_randomDungeon": true,
+      "mob_distribution": {
+        "ORC": 7,
+        "GOBLIN": 30,
+        "BAT": 20,
+        "RAT": 30,
+        "SNAKE": 25,
+        "LOOT_GOBLIN": 5
+      },
+      "weight_total": 117,
+      "invalid_weight": 0,
+      "invalid_ratio": 0.0
+    },
+    "CATACOMBS": {
+      "level_range": "level <= 10",
+      "referenced_in_randomDungeon": true,
+      "mob_distribution": {
+        "ZOMBIE": 30,
+        "SKELETON": 30,
+        "MUMMY": 30,
+        "GHOST": 10,
+        "BANSHEE": 5,
+        "VAMPIRE": 1
+      },
+      "weight_total": 106,
+      "invalid_weight": 0,
+      "invalid_ratio": 0.0
+    },
+    "MINE": {
+      "level_range": "level <= 15",
+      "referenced_in_randomDungeon": true,
+      "mob_distribution": {
+        "KOBOLD": 2,
+        "MINOTAUR": 1,
+        "GOBLIN": 5,
+        "ORC": 5,
+        "EMPOWERED_ORC": 5,
+        "BONE_MAN": 10,
+        "GOLEM": 1
+      },
+      "weight_total": 29,
+      "invalid_weight": 15,
+      "invalid_ratio": 0.517
+    },
+    "ICE": {
+      "level_range": "level > 15",
+      "referenced_in_randomDungeon": true,
+      "mob_distribution": {
+        "CYCLOPS": 1,
+        "TROLL": 3,
+        "MINOTAUR": 1,
+        "ICE_ELEMENTAL": 3,
+        "SKELETON": 20,
+        "IMP": 10,
+        "SIREN": 1
+      },
+      "weight_total": 39,
+      "invalid_weight": 0,
+      "invalid_ratio": 0.0
+    },
+    "HELL": {
+      "level_range": "never",
+      "referenced_in_randomDungeon": false,
+      "mob_distribution": {
+        "ORC": 2,
+        "EMPOWERED_ORC": 1,
+        "KOBOLD": 1,
+        "GOBLIN": 7,
+        "BAT": 10,
+        "RAT": 10
+      },
+      "weight_total": 31,
+      "invalid_weight": 1,
+      "invalid_ratio": 0.032
+    }
+  },
+  "map_placements": {
+    "lichLair.json": {
+      "PLAYER": 1,
+      "LADDER": 1,
+      "CHEST": 1
+    },
+    "lootGoblinLair.json": {
+      "PLAYER": 1,
+      "CHEST": 7,
+      "DOOR": 2,
+      "GOLD": 8,
+      "LOOT_GOBLIN": 1
+    },
+    "mulberryForest.json": {
+      "GOBLIN": 9,
+      "NPC": 7,
+      "LOCKED_DOOR": 1,
+      "DOOR": 1,
+      "LADDER": 1,
+      "ORC": 2,
+      "CHEST": 1,
+      "KEY": 1,
+      "LEVEL_TRANSITION": 1,
+      "PLAYER": 1
+    },
+    "mulberryGraveyard.json": {
+      "LICH": 1,
+      "ZOMBIE_CORPSE": 2,
+      "SKELETON_CORPSE": 1,
+      "SKELETON": 2,
+      "LOCKED_DOOR": 1,
+      "LADDER": 1,
+      "PLAYER": 1,
+      "LEVEL_TRANSITION": 1,
+      "GHOST": 1
+    },
+    "mulberryTown.json": {
+      "DOOR": 20,
+      "CHEST": 3,
+      "NPC": 28,
+      "LADDER": 1,
+      "LEVEL_TRANSITION": 2,
+      "PLAYER": 1
+    }
+  },
+  "unused_assets": {
+    "entity_types_without_spawn_table": [
+      "WILD_GOAT",
+      "DEMON"
+    ],
+    "entity_types_only_in_commented_code": [
+      "WILD_GOAT"
+    ],
+    "dead_classes": [
+      "entities/actors/enemies/legendary/OrcPriest.js",
+      "entities/actors/enemies/SimpleEnemy.js"
+    ],
+    "dead_spawn_code": [
+      "RandomSimplex.js randomSimplexMap 敌人生成已注释",
+      "RandomCave.js createActor 已注释"
+    ],
+    "dead_theme": [
+      "HELL"
+    ]
+  },
+  "issues": [
+    {
+      "severity": "critical",
+      "file": "src/assets/js/game/map/generation/RandomDungeon.js",
+      "detail": "主题 MINE 的 mobDistribution 引用了未注册的 entity_type: {'EMPOWERED_ORC': 5, 'BONE_MAN': 10}",
+      "effect": "createActor 打印错误并返回 null，随后 tile.actors.push(null)",
+      "invalid_ratio": 0.517
+    },
+    {
+      "severity": "critical",
+      "file": "src/assets/js/game/map/generation/RandomDungeon.js",
+      "detail": "主题 HELL 的 mobDistribution 引用了未注册的 entity_type: {'EMPOWERED_ORC': 1}",
+      "effect": "createActor 打印错误并返回 null，随后 tile.actors.push(null)",
+      "invalid_ratio": 0.032
+    },
+    {
+      "severity": "critical",
+      "file": "src/assets/js/game/utils/EntityFactory.js:166 / RandomDungeon.js:116",
+      "detail": "命名不一致：xlsx id 为 BONEMAN，贴图表与 MINE 刷怪表写作 BONE_MAN",
+      "effect": "MINE 主题 10/29 权重失效"
+    },
+    {
+      "severity": "critical",
+      "file": "src/assets/js/game/utils/EntityFactory.js:146",
+      "detail": "EMPOWERED_ORC 仅有贴图、无 entityShop 条目（旧版为 Orc(x,y,id,true) 强化变体，重构后丢失）",
+      "effect": "MINE 5/29 + HELL 1/31 权重失效"
+    },
+    {
+      "severity": "warning",
+      "file": "src/assets/js/game/Game.js:208",
+      "detail": "createDungeonFloors(origin, dungeonName, 5) 固定 5 层，level 最大 5",
+      "effect": "CATACOMBS/MINE/ICE 主题永不生成，16 种敌人不可达"
+    },
+    {
+      "severity": "warning",
+      "file": "src/assets/js/game/map/generation/RandomDungeon.js:171",
+      "detail": "dungeonThemes.HELL 从未被 randomDungeon 引用",
+      "effect": "主题与掉落表为死代码"
+    },
+    {
+      "severity": "info",
+      "file": "EntityFactory.js#actorTextures",
+      "detail": "actorTextures 缺少 WILD_GOAT；以 id=null 调用 createActor(\"WILD_GOAT\") 会索引 undefined 抛 TypeError",
+      "effect": "潜在运行时错误"
+    }
+  ],
+  "non_hostile_note": "non_hostile_entity_types(6) 与 corpse_entity_types(2) 合起来是 entityShop 里除敌人外的 8 项"
+}

@@ -1001,8 +1001,9 @@ function install(): void {
       };
       // 重置实体：只保留友方角色作为玩家/盟友
       state.entities = state.entities.filter((e) => e.side !== "player" && e.side !== "ally");
+      // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
       const partR = state.selections.participants
-        .map((id) => state.roles.find((r) => r.id === id))
+        .map((id) => state.roles.find((r) => r.id === id) || state.roles.find((r) => r.name === id))
         .filter(Boolean) as RoleOption[];
       partR.forEach((r, i) => {
         // ★ v3：玩家出生 origin (0,0)，盟友环绕（半径 12 米 = ALLY_FOLLOW_GAP_M）
@@ -1015,8 +1016,9 @@ function install(): void {
         ));
       });
       // 敌对角色：作为敌人 NPC 上场（而不是野兽）— 玩家附近 ±80 米环形分布
+      // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
       const enR = state.selections.enemies
-        .map((id) => state.roles.find((r) => r.id === id))
+        .map((id) => state.roles.find((r) => r.id === id) || state.roles.find((r) => r.name === id))
         .filter(Boolean) as RoleOption[];
       const eCount = enR.length;
       enR.forEach((r, i) => {

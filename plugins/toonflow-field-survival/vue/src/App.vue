@@ -2918,6 +2918,10 @@ function loop(ts: number) {
         player: lastLocalPose ? { ...lastLocalPose } : undefined,
         // ★ 上报本地敌怪清单（仅在世代号变化的一次发送，避免每帧大数组）
         localEnemies: localEnemies || undefined,
+        // ★ 上报当前关卡名：宿主（dev-host）据此决定 dungeon theme / 城镇是否刷怪。
+        //   此前 dev-host 读不到 iframe 里的 window.__currentLevelName（跨 frame），
+        //   永远 fallback 到 RUINS → 城镇安全区也刷怪围杀玩家。
+        levelName: currentLevelName.value,
       });
     }
   }

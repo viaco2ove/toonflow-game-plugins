@@ -66,13 +66,32 @@ export function sendTick(action: string, params: Record<string, unknown> = {}): 
   }
 }
 
+let loadedNotifyTimer: number | null = null;
+
 export function notifyLoaded(): void {
   try {
     const msg = { type: "tf_plugin_loaded" };
-    window.parent.postMessage(msg, "*");
-    if (!isConnMode() && window.parent === window) {
-      window.dispatchEvent(new MessageEvent("message", { data: msg }));
-    }
+    // ★ 竞态兜底：dev-host / 宿主的 message listener 可能比 iframe 更晚注册，
+    //   首条 tf_plugin_loaded 会被静默丢弃（log 一直空、选人页永远不出现）。
+    //   在收到首条宿主回包（hostReady）之前，每 500ms 重发一次，最多 40 次（20 秒）。
+    if (loadedNotifyTimer !== null) return;
+    let attempts = 0;
+    const send = () => {
+      if (hostReady || attempts >= 40) {
+        if (loadedNotifyTimer !== null) {
+          window.clearInterval(loadedNotifyTimer);
+          loadedNotifyTimer = null;
+        }
+        return;
+      }
+      attempts++;
+      window.parent.postMessage(msg, "*");
+      if (!isConnMode() && window.parent === window) {
+        window.dispatchEvent(new MessageEvent("message", { data: msg }));
+      }
+    };
+    send();
+    loadedNotifyTimer = window.setInterval(send, 500);
   } catch {
     /* ignore */
   }

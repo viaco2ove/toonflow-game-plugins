@@ -116,6 +116,9 @@ export interface MonsterArchetype {
   /** 等级描述，如 "零阶｜碎屑湮体" */
   rank: string;
   monsterType: string;
+  /** ★ 绑定 Rotten-Soup 怪物类型（取值见 public/entity_types.json 的 enemies[].entity_type，如 RAT / ORC / GHOST）
+   *  用于把本故事怪物档案与 Rotten-Soup 权威数值/贴图表打通；缺省时按 name 兜底 */
+  entity_type?: string;
   description: string;
   avatarPath?: string;
   recommendLevel: number;
