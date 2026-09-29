@@ -14,6 +14,21 @@ Toonflow-game-android-h5
 故事地图设计
 [map_design](../../../workshops/toonflow-field-survival/map_design)
 
+## 地图上传
+``` vue
+      <button class="map_upload">
+        <span class="map_upload__loading" style="display: none">
+          <span class="map_upload__spinner"></span>上传并绑定插件&故事&用户 中…
+        </span>
+        <span >上传地图（tbg格式）</span>
+      </button>
+```
+上传并绑定插件&故事&用户. 到 t_plugin_session_data，sessionId=all.
+代表 不限会话。
+cli
+python -m toon_plugins plugin_session_data -i toonflow-field-survival  -story 赦夜人冥夜走廊-第二季
+
+
 # 等级系统
 满血HP计算标准
 满血HP = 基础血量100 + 等级*10 + 道具血量加成点数 + 技能永久血量加成点数

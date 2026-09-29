@@ -38,7 +38,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 
@@ -219,6 +219,19 @@ function avatarAnimFrame(avatarPath: string | undefined): any | null {
 
 const roles = computed<RoleOption[]>(() => state.value?.roles || []);
 const playerRole = computed(() => roles.value.find((r) => r.roleType === "player") || roles.value[0]);
+
+/**
+ * ★ 修复①：选人面板可选角色 = 全部角色 − 用户角色（roleType === "player"）。
+ *   宿主 buildMiniGameRoleOptions 会把"用户角色 root.player"以 roleType:"player"
+ *   注入 roles（宿主 MiniGameController.ts L5200 附近），而模板三组 chips 直接
+ *   v-for="roles"，于是"用户自己"也被列进友方/观战/敌对候选：
+ *     · 选中即被 entry.js 建成一个 ally（玩家身边多出一个与用户同名的角色）；
+ *     · 甚至把玩家自己选成敌对角色（AI 自己打自己）。
+ *   选人页应只展示"可被 AI 驱动的角色"，用户角色由宿主固定为玩家实体，不参与选择。
+ */
+const selectableRoles = computed<RoleOption[]>(() =>
+  roles.value.filter((r) => String(r?.roleType) !== "player"),
+);
 
 /** ★ 当前玩家实体（HUD 模板用）；undefined 时让模板 fallback 走 ?? 默认值 */
 const me = computed<Entity | undefined>(() => state.value?.entities.find((e) => e.side === "player"));
@@ -881,9 +894,33 @@ const mapDecorations = ref<Decoration[]>([]);
 /** 装饰物按 chunk 索引（key = "cx,cz"）——按区域加载时只取当前 loaded_chunks 内的 */
 const decorationsByChunk = new Map<string, Decoration[]>();
 
-/** ★ 当前关卡名 + 切图中标记（防止重复触发） */
-const currentLevelName = ref("Mulberry Town");
+/** ★ 当前关卡名 + 切图中标记（防止重复触发）
+ *  起始值仅为同步占位：onMounted 时会被 maps/first.map.json 的 start_map.value 覆盖
+ *  （缺失 / 读取失败 → 回退 DEFAULT_START_LEVEL，即 "Mulberry Town"）。
+ *  关卡切换的唯一入口是场景内 portal（LEVEL_TRANSITION）；宿主 theme 不参与切图。 */
+const currentLevelName = ref(DEFAULT_START_LEVEL);
 const levelSwitching = ref(false);
+
+/* ============================================================
+   ★ 修复③：本地敌怪「世代号」（刷怪权威统一的关键）
+   ------------------------------------------------------------
+   前端按地图数据生成的 mapmob_ / localmob_ / zone_ 敌怪是"前端权威集合"，
+   宿主进程看不到它们，只知道自己 WORLD_REGIONS（±1500 m）里那份实体表 ——
+   于是前端在森林（Tiled 60×40 m）里刷出的怪，宿主既不移动也不结算，
+   表现为"野怪不攻击 / 玩家打不到野怪"。
+
+   统一方案：前端在敌怪集合"结构性变化"时把整份清单上报宿主
+   （switchLevel 重建、波次补怪、兜底补怪），宿主据此重建敌怪表，
+   再由宿主统一跑 AI + 命中结算，最终位姿随 state 回流前端渲染。
+   ============================================================ */
+let localMobsEpoch = 1;        // 本地敌怪集合的版本号（每次重建 +1）
+let localMobsSentEpoch = 0;    // 已上报给宿主的版本号（避免每帧重复上报）
+/** 已在前端阵亡、等待宿主确认删除的本地敌怪（防止宿主整份推送把它们原地复活） */
+const deadLocalEnemyIds = new Set<string>();
+function bumpLocalMobsEpoch(): void {
+  localMobsEpoch += 1;
+  deadLocalEnemyIds.clear();
+}
 
 /* ============================================================
    ★ 安全区 / 本地怪物信息发布（供 standalone mockHost 复用 App 侧判定）
@@ -940,6 +977,28 @@ function publishLocalMapMobs(): void {
       return list.map((e) => ({ ...e }));
     };
   } catch { /* ignore */ }
+}
+
+/**
+ * ★ 修复③：把"本地敌怪清单 + 本地地图半宽半高"组装成 tick 上报载荷。
+ *   仅当世代号变化时返回非 null（结构性变化才上报，避免每帧重复发送大数组）。
+ *   bounds 用于让宿主把野怪 AI 的移动/归位/游荡夹进本图范围（森林只有 ±29 m），
+ *   否则宿主的 MOB_WANDER_R_M=8 / MOB_DISENGAGE_M=12 会把怪推出玩家可走区域。
+ */
+function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: number }; list: any[] } | null {
+  if (localMobsEpoch === localMobsSentEpoch) return null;
+  const list = ((state.value?.entities || []) as Array<any>).filter(
+    (e) =>
+      e?.side === "enemy" &&
+      typeof e?.id === "string" &&
+      (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
+  );
+  const b = clampToMapBounds(0, 0);
+  return {
+    epoch: localMobsEpoch,
+    bounds: { lx: Math.abs(b.x), ly: Math.abs(b.y) },
+    list: list.map((e) => ({ ...e })),
+  };
 }
 
 /** 把刷新点推出 safe zone（安全区只保护玩家，不再冻结世界刷新） */
@@ -1037,12 +1096,16 @@ async function switchLevel(levelName: string): Promise<void> {
         const lv = mob.level ?? arch.level ?? 1;
         const lvScale = 1 + (lv - 1) * 0.3; // 每级 +30%
         const hpScaled = Math.floor(arch.hp * lvScale);
+        // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
+        //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外/宿主世界外，
+        //   既进不了小地图视野，也进不了任何攻击射程。
+        const mobPos = clampToMapBounds(mob.x, mob.y);
         s.entities.push({
           id: `mapmob_${mob.id}_${Date.now()}`,
           name: arch.name,
           side: "enemy",
-          x: mob.x,
-          y: mob.y,
+          x: mobPos.x,
+          y: mobPos.y,
           vx: 0, vy: 0,
           hp: hpScaled, maxHp: hpScaled,
           mp: 0, maxMp: 0,
@@ -1051,15 +1114,17 @@ async function switchLevel(levelName: string): Promise<void> {
           atk: Math.floor(arch.atk * lvScale),
           def: Math.floor((arch.atk * 0.3) * lvScale),
           facing: 180, cooldown: 0, alive: true,
-          homeX: mob.x,
-          homeY: mob.y,
+          homeX: mobPos.x,
+          homeY: mobPos.y,
         });
       }
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
     }
     state.value = s ? { ...s } : s;
-    // ★ 把本图加载的地图怪物发布给 mockHost（standalone 下由 mock 接管 AI/结算）
+    // ★ 把本图加载的地图怪物发布给 mockHost（standalone 下由 mock 接管 AI/结算）；
+    //   同时 +1 世代号 → 下一次 tick 会把整份清单上报宿主（真实宿主下由宿主接管 AI/结算）
     publishLocalMapMobs();
+    bumpLocalMobsEpoch();
     currentZoneName = null;
     zoneLeftTick = 0;
     zoneRespawnReady = true;
@@ -1148,12 +1213,15 @@ function spawnZoneMobs(zoneData: any, cx: number, cy: number): void {
     const typeKey = types[i % types.length];
     const arch = mobTypeMap[typeKey] ?? mobTypeMap["wolf"];
     const angle = Math.random() * Math.PI * 2;
-    const dist = 20 + Math.random() * 40;   // 20-60 米环形
+    // ★ 修复③：环半径从 20-60 米收紧到 8-24 米（Tiled 小地图只有几十米见方，
+    //   20 米外的刷新点会被夹到地图角落，玩家永远遇不到）
+    const dist = 8 + Math.random() * 16;
     const id = `zone_${zoneData.name}_${Date.now()}_${seq++}`;
+    const spot = clampToMapBounds(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
     state.value.entities.push({
       id, name: arch.name, side: "enemy",
-      x: cx + Math.cos(angle) * dist,
-      y: cy + Math.sin(angle) * dist,
+      x: spot.x,
+      y: spot.y,
       vx: 0, vy: 0,
       hp: arch.hp, maxHp: arch.hp,
       atk: arch.atk, level: 1,
@@ -1169,6 +1237,11 @@ function spawnLocalMobsIfNeeded(): void {
   if (!state.value || state.value.phase !== "playing") return;
   const me = state.value.entities.find((e) => e.side === "player");
   if (!me) return;
+
+  // ★ 修复②（兜底补怪受地图校验约束）：兜底补怪只允许在"当前地图本身有野怪数据源"
+  //   的图上启用。城镇 / 安全图（mulberryTown、overworld 等 mobs 数量为 0）绝不允许
+  //   凭空补怪 —— 这是"所有地图都有野怪"的第二条来源。
+  if (!mapCfg.value || !(mapCfg.value.mobs?.length)) return;
 
   const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
   const currentZone = zones.find((z) => {
@@ -1207,6 +1280,7 @@ function spawnLocalMobsIfNeeded(): void {
     if (!zoneRespawnReady && !allDead) return;
     spawnZoneMobs(currentZone, me.x, me.y);
     zoneRespawnReady = false;
+    bumpLocalMobsEpoch();
     state.value.events.push(`[${currentZone.name}] 野怪刷新！`);
   } else {
     // 野外（无区域配置 / 安全区不落区内怪）：每 60 秒自动刷新
@@ -2830,6 +2904,10 @@ function loop(ts: number) {
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
+      // ★ 修复③：本地敌怪集合发生结构性变化时（切图 / 补怪 / 兜底补怪），
+      //   把整份清单随本帧 tick 上报宿主，由宿主重建敌怪表并统一跑 AI/结算。
+      const localEnemies = localEnemiesPayload();
+      if (localEnemies) localMobsSentEpoch = localEnemies.epoch;
       sendTick("tick", {
         input: {
           dx: input.value.dx,
@@ -2838,6 +2916,8 @@ function loop(ts: number) {
         },
         // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
         player: lastLocalPose ? { ...lastLocalPose } : undefined,
+        // ★ 上报本地敌怪清单（仅在世代号变化的一次发送，避免每帧大数组）
+        localEnemies: localEnemies || undefined,
       });
     }
   }
@@ -2907,11 +2987,17 @@ onMounted(async () => {
   if (initial && !state.value) {
     state.value = initial;
   }
-  // ★ v3：先加载地图配置（mulberryTown.json），得到 scale / zoom / 装饰物 / chunk 数据
+  // ★ 起始地图（回归修复）：起始关卡名来自 maps/first.map.json 的 start_map.value，
+  //   用它初始化 currentLevelName，并加载"开局首张地图"。
+  //   文件缺失 / 解析失败 / 字段为空 → 回退 DEFAULT_START_LEVEL（"Mulberry Town"），绝不抛错。
+  const startLevel = await loadStartLevelName();
+  currentLevelName.value = startLevel;
+  console.info("[field-survival] 起始关卡（maps/first.map.json start_map.value）：", startLevel);
+  // ★ v3：先加载地图配置（开局地图 = startLevel），得到 scale / zoom / 装饰物 / chunk 数据
   try {
-    const cfg = await loadMapConfig();
+    const cfg = await loadMapConfig(startLevel);
     mapCfg.value = cfg;
-    // ★ 初始关卡（Mulberry Town）的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
+    // ★ 初始关卡的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
     //   并注册"本地敌怪拉取钩子"，避免 mock 整份覆盖把 App 侧生成的怪物抹掉
     publishSafeZones(cfg);
     publishMapBounds(cfg);
@@ -2964,21 +3050,33 @@ onMounted(async () => {
       // 回到选人 / 结算：清空本地位姿缓存，下一局以宿主 spawn 为准
       lastLocalPose = null;
     }
-    // ★ 关键修复：宿主推送的整份 state 里没有 App 侧生成的地图怪物（mapmob_*），
-    //   原样替换会把刚进图加载的森林野怪当场抹掉（表现为"看到一下，随即消失"）。
-    //   这里按 id 归并保留：incoming 中不存在的地图怪物补回，其余以宿主为准。
+    // ★ 修复③（刷怪权威统一）：宿主要么已"采纳"前端上报的敌怪（其推送中带同名 id），
+    //   要么还没收到清单（未重启 / 旧宿主）。判定规则：
+    //     · 宿主已采纳 → 完全以宿主实体为准（含宿主结算的击杀），不回补、不记录阵亡；
+    //     · 宿主未采纳 → 保留原有的回补兜底，但用 deadLocalEnemyIds 记住本帧阵亡的本地
+    //       敌怪，避免"打死了又被整份推送原地复活"。
     if (incoming && Array.isArray(incoming.entities)) {
       const incomingIds = new Set(
         incoming.entities.map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
       );
-      const keptMapMobs = prevEntities.filter(
+      const localEnemies = prevEntities.filter(
         (e: any) =>
           e?.side === "enemy" &&
           typeof e?.id === "string" &&
-          (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")) &&
-          !incomingIds.has(e.id),
+          (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
       );
-      if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+      for (const e of localEnemies as any[]) {
+        if (e.alive === false && !deadLocalEnemyIds.has(e.id)) deadLocalEnemyIds.add(e.id);
+      }
+      const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
+      if (hostAdopted) {
+        deadLocalEnemyIds.clear();
+      } else {
+        const keptMapMobs = localEnemies.filter(
+          (e: any) => !incomingIds.has(e.id) && !deadLocalEnemyIds.has(e.id),
+        );
+        if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+      }
     }
     state.value = incoming;
     ready.value = true;
@@ -2992,8 +3090,11 @@ onMounted(async () => {
       participants.splice(0, participants.length);
       spectators.splice(0, spectators.length);
       enemies.splice(0, enemies.length);
-      const p = state.value.roles.find((r) => r.roleType === "player");
-      if (p) participants.push(p.id);
+      // ★ 修复②（未选择却出现同名友方角色）：
+      //   此前这里无条件把"用户角色"塞进 participants，于是 entry.js 的
+      //   `participants.forEach(...)` 为它建了一个 ally —— 玩家出生点旁凭空多出一个
+      //   与用户同名的"友方角色"。用户角色由宿主固定为玩家实体，必须留在候选之外。
+      //   （选人面板已用 selectableRoles 过滤掉它，这里同步去掉默认勾选）
       // 选人阶段：确保不是全屏（用户切回来好操作）
       toonflowJsApi.minigame.setFullscreen(false);
       // 重新初始化地图装饰物（每次进入都重新生成）
@@ -3027,61 +3128,16 @@ onMounted(async () => {
     }
     // ★ 开局后：优先 state.map；缺失时用 toonflowJsApi 从插件数据表拉 map_data 兜底
     const m = (state.value as any)?.map as MapData | null | undefined;
+    // ★ 回归修复：删除"宿主 theme → 关卡名"的自动切图整段逻辑（原 themeToLevel 映射 + switchLevel）。
+    //   宿主每约 100 ms 推送一次 state，map.theme 只是"氛围展示"字段（如"野外·清晨"）；
+    //   此前被硬编码 themeToLevel 映射成关卡名并强制 switchLevel，造成三类回归：
+    //     ① 开局被切到 Mulberry Forest（起始地图 "Mulberry Town" 丢失）；
+    //     ② 走回 Mulberry Town 又被反复切回森林（卡在森林、回不了城镇）；
+    //     ③ 城镇被套用森林的野怪数据 → "所有地图都有野怪"。
+    //   现在 theme 仅写入 mapTheme 供 HUD 氛围显示，绝不触发 switchLevel；
+    //   关卡切换的唯一入口是场景内 portal（LEVEL_TRANSITION，见 tick 内 portal 判定）。
     if (m?.theme) {
       mapTheme.value = m.theme;
-      console.info("[field-survival] 检测到 map theme:", m.theme, "currentLevelName:", currentLevelName.value);
-      // ★ 地图切换：检测到 mapTheme 变化 → 加载对应地图的怪物
-      // 注意：m.theme 是主题名（如"野外·清晨"），需要映射到关卡名
-      const themeToLevel: Record<string, string> = {
-        "野外·清晨": "Mulberry Forest",
-        "野外·黄昏": "Mulberry Forest",
-        "墓地": "Mulberry Graveyard",
-        "哥布林巢穴": "Loot Goblin Lair",
-        "亡灵洞窟": "Lich Lair",
-      };
-      const levelName = themeToLevel[m.theme] || m.theme;
-      console.info("[field-survival] 映射后 levelName:", levelName);
-      void loadLevelByName(levelName).then((next) => {
-        if (next?.mobs?.length && state.value) {
-          // 过滤掉旧地图的怪物
-          state.value.entities = state.value.entities.filter((e) => e.side !== "enemy");
-          const mobTypeMap = MOB_ARCHETYPES;
-          for (const mob of next.mobs) {
-            // ★ 与 switchLevel 同一份档案表：未登记类型告警 + 兜底，不再静默退化
-            let arch = mobTypeMap[mob.entity_type];
-            if (!arch) {
-              console.warn(
-                "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
-              );
-              arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
-            }
-            // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级缩放
-            const lv = mob.level ?? arch.level ?? 1;
-            const lvScale = 1 + (lv - 1) * 0.3;
-            const hpScaled = Math.floor(arch.hp * lvScale);
-            state.value.entities.push({
-              id: `mapmob_${mob.id}_${Date.now()}`,
-              name: arch.name,
-              side: "enemy",
-              x: mob.x,
-              y: mob.y,
-              vx: 0, vy: 0,
-              hp: hpScaled, maxHp: hpScaled,
-              mp: 0, maxMp: 0,
-              exp: Math.floor(hpScaled * 0.5), expToNext: 0,
-              level: lv,
-              atk: Math.floor(arch.atk * lvScale),
-              def: Math.floor((arch.atk * 0.3) * lvScale),
-              facing: 180, cooldown: 0, alive: true,
-              homeX: mob.x,
-              homeY: mob.y,
-            });
-          }
-          state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
-          publishLocalMapMobs();
-          console.info("[field-survival] 地图切换加载怪物：", next.mobs.length, "只", next.mobs);
-        }
-      });
     } else if (state.value?.phase === "playing") {
       void toonflowJsApi.pluginData.get("map_data")
         .then((v) => {
@@ -3130,7 +3186,7 @@ watch(() => state.value?.phase, (p) => {
         <h3>友方角色（多选）</h3>
         <div class="chips">
           <button
-            v-for="r in roles" :key="r.id"
+            v-for="r in selectableRoles" :key="r.id"
             class="chip" :class="{ 'chip--on': participants.includes(r.id) }"
             @click="toggle(participants, r.id)"
           >
@@ -3144,7 +3200,7 @@ watch(() => state.value?.phase, (p) => {
         <h3>观战角色（多选）</h3>
         <div class="chips">
           <button
-            v-for="r in roles" :key="r.id"
+            v-for="r in selectableRoles" :key="r.id"
             class="chip" :class="{ 'chip--on': spectators.includes(r.id) }"
             @click="toggle(spectators, r.id)"
           >
@@ -3157,7 +3213,7 @@ watch(() => state.value?.phase, (p) => {
         <h3>敌对角色（多选）</h3>
         <div class="chips">
           <button
-            v-for="r in roles" :key="r.id"
+            v-for="r in selectableRoles" :key="r.id"
             class="chip chip--danger" :class="{ 'chip--on': enemies.includes(r.id) }"
             @click="toggle(enemies, r.id)"
           >
@@ -3172,6 +3228,12 @@ watch(() => state.value?.phase, (p) => {
           <span class="start__spinner"></span>加载中…
         </span>
         <span v-else>开始游戏</span>
+      </button>
+      <button class="map_upload">
+        <span class="map_upload__loading" style="display: none">
+          <span class="map_upload__spinner"></span>上传并绑定插件&故事&用户 中…
+        </span>
+        <span >上传地图（tbg格式）</span>
       </button>
       <!-- ★ fix③：开始游戏的等待/超时提示（宿主 /plugin/tick 未回包时不再静默） -->
       <p v-if="startHint" class="start-hint">{{ startHint }}</p>

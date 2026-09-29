@@ -164,6 +164,9 @@ function emptyState(ctx) {
     },
     roles: Array.isArray(ctx?.roles) ? ctx.roles : [],
     selections: { participants: [], spectators: [], enemies: [] },
+    /** ★ fix⑤：前端 localEnemies 状态（开局未上报 bounds 时按世界边界处理） */
+    mapBounds: null,
+    localMobsEpoch: 0,
     entities: [],
     chests: [],
     potions: [],
@@ -397,8 +400,10 @@ function regionSpawnPoint(s, region) {
   for (let t = 0; t < 8; t++) {
     const a = rnd(0, Math.PI * 2);
     const d = region.r * (0.35 + rnd(0, 0.55));      // 0.35r ~ 0.9r：落点留在本区域内
-    const cx = clampX(region.x + Math.cos(a) * d);
-    const cy = clampY(region.y + Math.sin(a) * d);
+    // ★ fix⑤：落点同时夹进「当前关卡 bounds」（前端上报）与世界边界
+    const cb = clampToBound(s, region.x + Math.cos(a) * d, region.y + Math.sin(a) * d);
+    const cx = clampX(cb.x);
+    const cy = clampY(cb.y);
     if (Math.hypot(cx - town.x, cy - town.y) < town.r + TOWN_SPAWN_BUFFER_M) continue;   // 不进城镇
     if (player && player.alive && Math.hypot(cx - player.x, cy - player.y) < 12) continue;  // 不贴脸
     x = cx; y = cy;
@@ -448,6 +453,13 @@ function regionTick(s, player) {
     const wasInside = r.playerInside;
     r.playerInside = false;
     if (r.safe) continue;                              // 城镇（安全区）永不刷新野怪
+    // ★ fix⑤（缺口①）：区域圆心落在当前关卡之外 → 本图不存在该野区，不排刷
+    //   （否则任何一张小地图都会被宿主的世界级六野区持续补怪，表现为"每张图都有野怪"）
+    if (regionOutOfMap(s, r)) {
+      r.leftTick = -1;
+      r.nextSpawnTick = -1;
+      continue;
+    }
     if (wasInside || r.nextSpawnTick < 0) {
       // 玩家刚离开该区域（或从未排期）→ 从此刻起 45 秒后刷新一次
       r.leftTick = s.tick;
@@ -464,6 +476,106 @@ function regionTick(s, player) {
       r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;  // 持续驻留刷新（每 45s 一次）
     }
   }
+}
+
+/* ============================================================
+   ★ fix⑤（缺口①）前端 localEnemies 载荷接管
+   ------------------------------------------------------------
+   前端 App.vue 在「本地敌怪集合结构性变化」时，把整份清单随 tick 上报：
+     localEnemies = { epoch, bounds: { lx, ly }, list: [ 敌怪实体… ] }
+     - list  ：mapmob_* / localmob_* / zone_* 三前缀的敌怪（前端权威集合）
+     - bounds：当前关卡半宽/半高（米），如 Mulberry Forest 仅 ±29 m
+   此前宿主对本载荷无任何处理逻辑 → 宿主实体表里没有这批怪，
+   于是「玩家攻击不到野怪（恒未命中）」「野怪不攻击（宿主侧无此怪）」。
+   本段实现：按 epoch 幂等重建宿主敌怪表，使其进入既有「野怪 AI + skill 命中判定」，
+   并把野怪 AI 的游荡/追击/归位与生成落点夹进 bounds。
+   ============================================================ */
+
+/** 前端权威敌怪的 id 前缀（与 App.vue localEnemiesPayload 的过滤条件一致） */
+const LOCAL_ENEMY_PREFIXES = ["mapmob_", "localmob_", "zone_"];
+
+/** 是否「前端权威敌怪」的 id */
+function isLocalEnemyId(id) {
+  const v = str(id);
+  return LOCAL_ENEMY_PREFIXES.some((p) => v.startsWith(p));
+}
+
+/** 当前关卡 AI 边界（半宽/半高，米）：有前端 bounds 用 bounds，否则回退世界边界 ±1490 */
+function mapBound(s) {
+  const b = s.mapBounds;
+  if (b && num(b.lx, 0) > 0 && num(b.ly, 0) > 0) return { lx: num(b.lx, 0), ly: num(b.ly, 0) };
+  return { lx: WORLD_X_RANGE[1] - 10, ly: WORLD_Z_RANGE[1] - 10 };
+}
+
+/** 把坐标夹进当前关卡边界（仅用于野怪生成 / AI 落点，不改玩家位姿镜像） */
+function clampToBound(s, x, y) {
+  const b = mapBound(s);
+  return { x: clamp(x, -b.lx, b.lx), y: clamp(y, -b.ly, b.ly) };
+}
+
+/** 某野区是否完全落在当前关卡之外（是 → 本图不存在该野区，不排刷，避免"每张图都有野怪"） */
+function regionOutOfMap(s, r) {
+  const b = s.mapBounds;
+  if (!b || !(num(b.lx, 0) > 0) || !(num(b.ly, 0) > 0)) return false;
+  return Math.abs(r.x) - r.r >= num(b.lx, 0) || Math.abs(r.y) - r.r >= num(b.ly, 0);
+}
+
+/**
+ * 按前端上报重建「当前关卡敌怪表」：
+ *   ① epoch 未变（宿主状态回推）→ 幂等跳过；
+ *   ② 先移除旧的 mapmob_/localmob_/zone_ 敌怪（含死亡残留与上一张图的怪）；
+ *   ③ 按 list 逐个重建为宿主 Entity（homeX/homeY 取上报值或当前位，均夹进 bounds）。
+ * 返回实际重建数量。
+ */
+function applyLocalEnemies(s, payload) {
+  if (!payload || typeof payload !== "object") return 0;
+  const epoch = num(payload.epoch, 0);
+  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;      // 该世代已接管，忽略回推
+  const b = payload.bounds || {};
+  const lx = num(b.lx, 0);
+  const ly = num(b.ly, 0);
+  if (lx > 0 && ly > 0) s.mapBounds = { lx: lx, ly: ly };
+  const list = Array.isArray(payload.list) ? payload.list : [];
+  // ② 清旧（幂等：重建前先清，避免跨图 / 跨世代残留）
+  s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
+  // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」中已经落到本图界外的那些：
+  //     前端权威清单已代表当前关卡的敌怪，界外的宿主怪在小地图里既看不到也打不到
+  if (lx > 0 && ly > 0) {
+    s.entities = s.entities.filter(
+      (e) => !(e.side === "enemy" && !isLocalEnemyId(e.id) && (Math.abs(e.x) > lx || Math.abs(e.y) > ly)),
+    );
+  }
+  // ③ 重建
+  let built = 0;
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const side = str(raw.side);
+    if (side && side !== "enemy") continue;                          // 只接管敌怪
+    if (raw.alive === false) continue;                               // 已阵亡的不重建
+    const id = str(raw.id);
+    if (!id) continue;
+    const lv = Math.max(1, Math.round(num(raw.level, 1)));
+    const maxHp = Math.max(1, Math.round(num(raw.maxHp, num(raw.hp, 60)) || 60));
+    const at = clampToBound(s, num(raw.x, 0), num(raw.y, 0));
+    const e = makeEntity({ id: id, name: str(raw.name, "野怪"), hp: maxHp, level: lv }, "enemy", at.x, at.y, built);
+    e.hp = clamp(Math.round(num(raw.hp, maxHp)), 1, maxHp);          // 保留前端当前血量
+    e.maxHp = maxHp;
+    e.atk = Math.max(1, Math.round(num(raw.atk, e.atk)));
+    e.facing = num(raw.facing, e.facing);
+    e.cooldown = Math.max(0, Math.round(num(raw.cooldown, 0)));
+    const home = clampToBound(s, num(raw.homeX, at.x), num(raw.homeY, at.y));
+    e.isLocal = true;                                               // 标记：AI 受 bounds 约束
+    e.regionId = str(raw.regionId, "local");
+    e.homeX = home.x;
+    e.homeY = home.y;
+    e.aiState = "idle";
+    e.wanderTimer = 0;
+    if (raw.bounty && typeof raw.bounty === "object") e.bounty = { ...raw.bounty };
+    s.entities.push(e);
+    built += 1;
+  }
+  s.localMobsEpoch = epoch > 0 ? epoch : num(s.localMobsEpoch, 0);
+  return built;
 }
 
 /**
@@ -583,7 +695,7 @@ function step(s, input, poseHint) {
         e.vx = 0; e.vy = 0;
         return;
       }
-      if (preyIn > MOB_ATK_M) { moveTowards(e, prey.x, prey.y, speed * 0.72); return; }
+      if (preyIn > MOB_ATK_M) { const t = clampToBound(s, prey.x, prey.y); moveTowards(e, t.x, t.y, speed * 0.72); return; }
       e.vx = 0; e.vy = 0;
       if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
       return;
@@ -591,7 +703,7 @@ function step(s, input, poseHint) {
     // ② 巡逻态：探测半径内发现玩家/盟友 → 进入追击
     if (prey && preyIn <= MOB_DETECT_M) {
       e.aiState = "chase";
-      if (preyIn > MOB_ATK_M) { moveTowards(e, prey.x, prey.y, speed * 0.72); return; }
+      if (preyIn > MOB_ATK_M) { const t2 = clampToBound(s, prey.x, prey.y); moveTowards(e, t2.x, t2.y, speed * 0.72); return; }
       e.vx = 0; e.vy = 0;
       if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = 45; }
       return;
@@ -606,8 +718,10 @@ function step(s, input, poseHint) {
     if (!(num(e.wanderTimer, 0) > 0)) {
       const wa = rnd(0, Math.PI * 2);
       const wr = rnd(2, MOB_WANDER_R_M);
-      e.wanderX = clampX(home.x + Math.cos(wa) * wr);
-      e.wanderY = clampY(home.y + Math.sin(wa) * wr);
+      // ★ fix⑤：游荡点同样夹进当前关卡边界（森林 ±29 m 时不再飘到界外）
+      const w = clampToBound(s, home.x + Math.cos(wa) * wr, home.y + Math.sin(wa) * wr);
+      e.wanderX = w.x;
+      e.wanderY = w.y;
       e.wanderTimer = Math.round(rnd(30, 90));
     }
     e.wanderTimer = num(e.wanderTimer, 0) - 1;
@@ -618,10 +732,18 @@ function step(s, input, poseHint) {
   });
 
   // 速度 m/s × dt（修复：原先按『米/帧』直接加，10 倍误差）
+  // ★ fix⑤：前端权威敌怪（isLocal）改用「当前关卡 bounds」夹取，避免被推出本图可行走区
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
-    e.x = clampX(e.x + e.vx * TICK_DT_S);
-    e.y = clampY(e.y + e.vy * TICK_DT_S);
+    const nx = e.x + e.vx * TICK_DT_S;
+    const ny = e.y + e.vy * TICK_DT_S;
+    if (e.side === "enemy" && e.isLocal) {
+      const p = clampToBound(s, nx, ny);
+      e.x = p.x; e.y = p.y;
+    } else {
+      e.x = clampX(nx);
+      e.y = clampY(ny);
+    }
   });
   s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
@@ -664,6 +786,17 @@ function step(s, input, poseHint) {
   }
 }
 
+/** ★ fix④（缺口②）：候选角色是否就是玩家本人（宿主 roles 里混入了用户角色，按 id / name 双判） */
+function isPlayerRole(cand, playerRole) {
+  const cid = str(cand?.id);
+  const cname = str(cand?.name);
+  const pid = str(playerRole?.id);
+  const pname = str(playerRole?.name);
+  if (pid && cid && cid === pid) return true;
+  if (pname && cname && cname === pname) return true;
+  return false;
+}
+
 export async function handle_action(action, params, state, context) {
   const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4)
     ? state : emptyState(context);
@@ -691,6 +824,9 @@ export async function handle_action(action, params, state, context) {
       participants.forEach((id, i) => {
         const r = byId(id);
         if (!r) return;
+        // ★ fix④（缺口②）：参展列表里若混入玩家本人（宿主 roles 含用户角色、前端默认 push 玩家 id），
+        //   不再生成一份同名友方 —— 否则开局即出现"另一个我"跟着自己跑
+        if (isPlayerRole(r, playerRole)) return;
         const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
         s.entities.push(makeEntity(
           r, "ally",
@@ -704,6 +840,8 @@ export async function handle_action(action, params, state, context) {
       const startRegion = nearestWildRegion(PLAYER_SPAWN.x, PLAYER_SPAWN.y);
       enemies.forEach((id, i) => {
         const r = byId(id);
+        // ★ fix④（缺口②）：玩家本人不会被复制成"敌对角色"（同 id / 同名的 1:1 排除）
+        if (r && isPlayerRole(r, playerRole)) return;
         const at = regionSpawnPoint(s, startRegion);
         const e = r ? makeEntity(r, "enemy", at.x, at.y, i) : makeEntity({ id, name: id }, "enemy", at.x, at.y, i);
         e.regionId = startRegion.id;
@@ -764,7 +902,10 @@ export async function handle_action(action, params, state, context) {
     case "tick": {
       if (s.phase !== "playing") return okResp("");
       s.tick += 1;
+      // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
+      const localBuilt = applyLocalEnemies(s, params?.localEnemies);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
+      if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
       return okResp("");
     }
     case "skill": {

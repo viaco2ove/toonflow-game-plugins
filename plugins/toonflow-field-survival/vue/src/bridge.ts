@@ -20,11 +20,24 @@ interface HostState {
 
 let hostReady = false;
 
+/** 当前是否处于 --conn 拟真模式（true = 真实宿主模式，不走 dispatchEvent 兜底） */
+function isConnMode(): boolean {
+  try {
+    const v = (import.meta as any).env?.VITE_CONN;
+    if (v && v !== "0" && v !== "false" && v !== "") return true;
+  } catch { /* ignore */ }
+  try {
+    if (typeof __CONN__ !== "undefined" && __CONN__ && __CONN__ !== "0" && __CONN__ !== "false") return true;
+  } catch { /* ignore */ }
+  return false;
+}
+
 export function sendToHost(action: string, params: Record<string, unknown> = {}): void {
   const msg = { type: "tf_plugin_action", action, params };
   try {
     window.parent.postMessage(msg, "*");
-    if (window.parent === window) {
+    // 非 conn 模式（本地 standalone）+ 无父窗口 → 自己消费
+    if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
     }
   } catch {
@@ -37,14 +50,15 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
  * 且拿不到宿主 JWT，所以不能直接 fetch /plugin/tick，
  * 必须让宿主代发：iframe → postMessage → 宿主 → HTTP → 回推新状态。
  *
- * 兜底：standalone 模式（window.parent === window）下 postMessage 不会触发自己的
+ * 兜底：standalone 模式（window.parent === window 且非 --conn）下 postMessage 不会触发自己的
  * message 事件；同时 dispatchEvent 把消息投递给同窗口的 mockHost，避免 start action 永远到不了。
+ * --conn 模式：宿主必须在另一个窗口（iframe 包装），绝对不能 dispatchEvent 自消费（否则会和宿主竞争）。
  */
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
   const msg = { type: "tf_plugin_tick", action, params };
   try {
     window.parent.postMessage(msg, "*");
-    if (window.parent === window) {
+    if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
     }
   } catch {
@@ -56,7 +70,7 @@ export function notifyLoaded(): void {
   try {
     const msg = { type: "tf_plugin_loaded" };
     window.parent.postMessage(msg, "*");
-    if (window.parent === window) {
+    if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
     }
   } catch {

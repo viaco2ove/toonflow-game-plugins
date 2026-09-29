@@ -114,26 +114,40 @@ const DEFAULT_ROLES: RoleOption[] = [
 
 /** 默认野怪（test_state.json 缺失时兜底） */
 const DEFAULT_MONSTERS: MonsterArchetype[] = [
-  { monsterId: "m001", name: "哥布林斥候", rank: "一阶", monsterType: "普通", description: "低阶怪物", recommendLevel: 1, dropItems: [], weakness: [], feature: "" },
-  { monsterId: "m002", name: "巨狼",       rank: "一阶", monsterType: "野兽", description: "凶猛野兽",   recommendLevel: 2, dropItems: [], weakness: [], feature: "" },
-  { monsterId: "m003", name: "骷髅兵",     rank: "二阶", monsterType: "亡灵", description: "骷髅兵",     recommendLevel: 4, dropItems: [], weakness: [], feature: "" },
+  { monsterId: "m001", name: "哥布林斥候", rank: "一阶", monsterType: "普通", entity_type: "GOBLIN",  description: "低阶怪物", recommendLevel: 1, dropItems: [], weakness: [], feature: "" },
+  { monsterId: "m002", name: "巨狼",       rank: "一阶", monsterType: "野兽", entity_type: "WILD_GOAT", description: "凶猛野兽",   recommendLevel: 2, dropItems: [], weakness: [], feature: "" },
+  { monsterId: "m003", name: "骷髅兵",     rank: "二阶", monsterType: "亡灵", entity_type: "SKELETON", description: "骷髅兵",     recommendLevel: 4, dropItems: [], weakness: [], feature: "" },
 ];
 
 /** 默认物资（test_state.json 缺失时兜底） */
 const DEFAULT_MATERIALS: MaterialItem[] = [];
 
-/** ★ 一次性加载 test_state.json（角色 + 野怪 + 物资），缺字段各自退回默认值 */
+/** ★ 一次性加载 test_state.json（角色 + 野怪 + 物资），缺字段各自退回默认值
+ *  优先级：当前 story（cross-env STORY 注入）> public/test_data/test_state.json > 默认 */
 async function loadTestData(): Promise<TestDataBundle> {
-  const candidates = [
+  // ★ 故事目录专用 test_state.json 路径（dev/debug 模式下可用）
+  // vite.config.ts 提供了 /story-data/ 中间件 → 映射到 workshops/ 目录
+  const storyName = (import.meta as any).env?.VITE_STORY
+    || (typeof __STORY__ !== "undefined" && __STORY__)
+    || "";
+  const candidates: string[] = [];
+  if (storyName) {
+    const enc = encodeURIComponent(storyName);
+    candidates.push(
+      `/story-data/toonflow-field-survival/map_design/${enc}/test_data/test_state.json`,
+    );
+  }
+  candidates.push(
     "./test_data/test_state.json",
     "../test_data/test_state.json",
     "/test_data/test_state.json",
-  ];
+  );
   for (const p of candidates) {
     try {
       const r = await fetch(p);
       if (r.ok) {
         const d = await r.json();
+        console.log("[mockHost] loaded test_state from:", p, "(story:", storyName || "(default)", ")");
         return {
           roles: Array.isArray(d?.roles) && d.roles.length > 0 ? d.roles : DEFAULT_ROLES,
           monsters: Array.isArray(d?.monsters) && d.monsters.length > 0 ? d.monsters : DEFAULT_MONSTERS,
@@ -142,7 +156,126 @@ async function loadTestData(): Promise<TestDataBundle> {
       }
     } catch { /* ignore */ }
   }
+  console.warn("[mockHost] no test_state.json found, using defaults");
   return { roles: DEFAULT_ROLES, monsters: DEFAULT_MONSTERS, materials: DEFAULT_MATERIALS };
+}
+
+/* ============================================================
+   ★ entity_types.json 集成（Rotten-Soup 怪物数据源）
+   ------------------------------------------------------------
+   这个文件是野怪权威数据源（22 常规敌人 + 4 dungeon theme + 权重表），
+   替代硬编码的 MOB_ARCHETYPES 和 DEFAULT_MONSTERS。
+   数据流：entity_types.json → loadEntityTypes() → activeEntityTypes
+          → spawnWave() 按当前关卡 theme 权重挑怪 → makeEnemyFromEntityType()
+   ============================================================ */
+
+/** entity_types.json 顶层结构（节选我们用到的） */
+interface EntityTypesData {
+  enemies: any[];
+  special_enemies?: any[];
+  dungeon_themes?: Record<string, { mob_distribution?: Record<string, number>; _deprecated?: boolean }>;
+  summary?: any;
+}
+
+let activeEntityTypes: EntityTypesData | null = null;
+
+/** 加载 entity_types.json（兜底 ./test_data/test_state.json 里的 monsters → DEFAULT_MONSTERS） */
+async function loadEntityTypes(): Promise<EntityTypesData | null> {
+  const urls = ["/entity_types.json", "./entity_types.json", "../entity_types.json"];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u);
+      if (r.ok) {
+        const d = (await r.json()) as EntityTypesData;
+        console.log("[mockHost] loaded entity_types.json (enemies:", d?.enemies?.length || 0,
+          "themes:", Object.keys(d?.dungeon_themes || {}).length, ")");
+        return d;
+      }
+    } catch { /* try next */ }
+  }
+  console.warn("[mockHost] entity_types.json not found, falling back to test_state.json monsters");
+  return null;
+}
+
+/** 按当前关卡 theme 加权随机选一个敌人 entity_types.json 条目；theme 为 null 或总权重为 0 返回 null */
+function pickMonsterByWeight(theme: string | null, et: EntityTypesData | null): any | null {
+  if (!et || !theme || !et.dungeon_themes) return null;
+  const themeData = et.dungeon_themes[theme];
+  if (!themeData || themeData._deprecated) return null;
+  const dist = themeData.mob_distribution || {};
+  const total = Object.values(dist).reduce((a: number, b: any) => a + (typeof b === "number" ? b : 0), 0);
+  if (total <= 0) return null;
+  let r = Math.random() * total;
+  for (const [type, w] of Object.entries(dist)) {
+    r -= (w as number);
+    if (r <= 0) {
+      // 找匹配的 enemy（普通敌人优先，special 也兜底）
+      return et.enemies.find((e) => e.entity_type === type)
+          || et.special_enemies?.find((e) => e.entity_type === type)
+          || null;
+    }
+  }
+  return null;
+}
+
+/** 当前关卡名（由 App.vue 通过 window.__currentLevelName 发布） */
+function currentLevelName(): string | null {
+  const v = (window as any).__currentLevelName;
+  return typeof v === "string" ? v : null;
+}
+
+/** 当前关卡对应的 dungeon theme（mulberryTown=null 不刷怪） */
+function currentTheme(): "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null {
+  // 动态 import 避免循环依赖（mapConfig 引用本文件吗？不引用，但保险起见用静态查表）
+  const name = currentLevelName();
+  if (!name) return "RUINS";
+  // 直接查表（与 mapConfig.THEME_BY_MAPNAME 一致；避免运行时循环依赖）
+  const TABLE: Record<string, any> = {
+    "Mulberry Town": null,
+    "Mulberry Forest": "RUINS",
+    "Mulberry Graveyard": "CATACOMBS",
+    "Lich Lair": "CATACOMBS",
+    "Loot Goblin Lair": "RUINS",
+    "Mulberry Dungeon": "RUINS", "Mulberry Dungeon 2": "RUINS", "Mulberry Dungeon 3": "RUINS",
+    "Mulberry Dungeon 4": "RUINS", "Mulberry Dungeon 5": "RUINS",
+    "Forest Dungeon": "RUINS", "Forest Dungeon 2": "RUINS", "Forest Dungeon 3": "RUINS",
+    "Forest Dungeon 4": "RUINS", "Forest Dungeon 5": "RUINS",
+    "Kingdom": null,
+    "Lich Boss": "CATACOMBS",
+  };
+  if (TABLE[name] !== undefined) return TABLE[name];
+  if (/graveyard|lich|crypt|catacomb|tomb/i.test(name)) return "CATACOMBS";
+  if (/mine|cave/i.test(name)) return "MINE";
+  if (/ice|frost|snow/i.test(name)) return "ICE";
+  return "RUINS";
+}
+
+/** 把 entity_types.json 一条 enemy 转成我们 Entity 对象 */
+function makeEnemyFromEntityType(
+  rs: any, x: number, y: number, lv: number,
+): Entity {
+  const hp = num(rs.hp, num(rs.maxhp, 30));
+  const atk = num(rs.str, num(rs.def, 1));
+  const def = num(rs.def, 1);
+  const gid = Array.isArray(rs.textures) && rs.textures.length > 0 ? rs.textures[0] : null;
+  const avatarPath = gid ? `./images/player_sprites/${gid}.webp` : undefined;
+  const isRanged = typeof rs.range === "number" && rs.range > 5;
+  const id = "e_" + (++mobIdSeq);
+  const name = String(rs.name || rs.entity_type || "野怪");
+  return {
+    id, name, side: "enemy",
+    x, y, vx: 0, vy: 0,
+    hp, maxHp: hp,
+    mp: 0, maxMp: 0,
+    exp: 0, expToNext: 0,
+    level: lv,
+    atk, def,
+    facing: 180,
+    cooldown: 0,
+    alive: true,
+    avatarPath,
+    isRanged,
+  } as any;
 }
 
 /** 等级缩放公式（与 App.vue switchLevel 一致） */
@@ -260,36 +393,40 @@ function makeEnemy(name: string, x: number, y: number, baseHp: number, atk: numb
 let activeMonsters: MonsterArchetype[] = DEFAULT_MONSTERS;
 
 function spawnWave(): void {
-  // 优先用 test_state.json 的 monsters；缺省时回落到旧硬编码
-  const waveList = activeMonsters.length > 0 ? activeMonsters : [
-    { monsterId: "m001", name: "哥布林斥候", rank: "一阶", monsterType: "普通", description: "", recommendLevel: 1, dropItems: [], weakness: [], feature: "" },
-    { monsterId: "m002", name: "巨狼",       rank: "一阶", monsterType: "野兽", description: "", recommendLevel: 2, dropItems: [], weakness: [], feature: "" },
-    { monsterId: "m003", name: "骷髅兵",     rank: "二阶", monsterType: "亡灵", description: "", recommendLevel: 4, dropItems: [], weakness: [], feature: "" },
-  ];
-  const wave = waveList[Math.floor(Math.random() * waveList.length)];
-  // ★ 数量：从 2 开始、随时间缓慢增加（每 1200 tick +1，最大 5）
+  // ★ 优先 entity_types.json（按当前关卡 theme 权重）→ test_state.json monsters → 默认兜底
+  const theme = currentTheme();
+  const monster =
+    pickMonsterByWeight(theme, activeEntityTypes)
+    || activeMonsters[Math.floor(Math.random() * activeMonsters.length)]
+    || DEFAULT_MONSTERS[Math.floor(Math.random() * DEFAULT_MONSTERS.length)];
+  if (!monster) return;
+  // 主题从 entity_types 来时 monster 是 RS 格式（hp/maxhp/str/def）；其他来源是 MonsterArchetype 格式
+  const lv = Math.max(1, monster.recommendLevel || (theme === "ICE" ? 16 : theme === "MINE" ? 11 : theme === "CATACOMBS" ? 6 : 1));
+  // 数量：从 2 开始、随时间缓慢增加（每 1200 tick +1，最大 5）
   const count = Math.min(5, 2 + Math.floor(state.tick / 1200));
   const me = state.entities.find((x) => x.side === "player");
   const cx = me?.x ?? 0;
   const cy = me?.y ?? 0;
   const half = allowedMapHalf();
-  // ★ 等级：基础随 tick 推进 + 野怪自身 recommendLevel
-  const baseLv = 1 + Math.floor(state.tick / 600);
-  const lv = Math.max(baseLv, wave.recommendLevel || 1);
-  const stats = mobStatsForLevel(lv);
+  // ★ 城镇/null theme → 不刷怪（mulberryTown 等安全区）
+  if (!theme) return;
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    // ★ spawn 距离 50-100 米（在追踪视野 8 米之外，玩家不靠近不会触发）
+    // spawn 距离 50-100 米（追踪视野 4m 之外，玩家不靠近不会触发）
     const dist = 50 + Math.random() * 50;
     const spot = pushOutOfSafeZones(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
-    state.entities.push(makeEnemyWithArch(
-      wave,
-      Math.max(-half.lx, Math.min(half.lx, spot.x)),
-      Math.max(-half.ly, Math.min(half.ly, spot.y)),
-      lv, stats,
-    ));
+    const x = Math.max(-half.lx, Math.min(half.lx, spot.x));
+    const y = Math.max(-half.ly, Math.min(half.ly, spot.y));
+    // 来源判定：RS 格式（hp/maxhp 字段）走 entity_types 路径，否则走 MonsterArchetype 路径
+    if (typeof monster.hp === "number" || typeof monster.maxhp === "number") {
+      state.entities.push(makeEnemyFromEntityType(monster, x, y, lv));
+    } else {
+      const stats = mobStatsForLevel(lv);
+      state.entities.push(makeEnemyWithArch(monster, x, y, lv, stats));
+    }
   }
-  state.events.push("[mock] 第 " + (Math.floor(state.tick / WAVE_INTERVAL) + 1) + " 波：" + wave.name + " (Lv." + lv + ") x" + count);
+  const tag = theme ? "[" + theme + "] " : "";
+  state.events.push("[mock] 第 " + (Math.floor(state.tick / WAVE_INTERVAL) + 1) + " 波 " + tag + monster.name + " (Lv." + lv + ") x" + count);
 }
 
 /** 用完整 monster 档案生成 enemy（含 avatarPath/dropItems/isRanged 等元数据） */
@@ -907,6 +1044,8 @@ export async function startMockHostIfStandalone(): Promise<boolean> {
   // ★ 一次性加载 test_state.json（roles + monsters + materials）
   const { roles, monsters, materials } = await loadTestData();
   activeMonsters = monsters;
+  // ★ 加载 entity_types.json（Rotten-Soup 怪物权威数据源，用于按 theme 加权刷怪）
+  activeEntityTypes = await loadEntityTypes();
   // ★ v5：尝试读 overworld.json 拿 playerSpawn + safe zones（mulberryTown 等 Tiled 格式地图）
   let mapSpawn: { x: number; y: number } | undefined;
   try {

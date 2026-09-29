@@ -438,16 +438,104 @@ export const OVERWORLD_URLS = [
   "./maps/mulberryTown.json",
 ];
 
-export async function loadMapConfig(): Promise<MapConfig> {
-  for (const url of OVERWORLD_URLS) {
+/* ============================================================
+   ★ 起始地图声明（回归修复）
+   ------------------------------------------------------------
+   maps/first.map.json 只声明"开局进哪张图"：
+     { "start_map": { "name": "portalID", "type": "string", "value": "Mulberry Town" } }
+   起始关卡 = start_map.value（缺失 / 读取失败 / 字段为空 → DEFAULT_START_LEVEL）。
+   除此之外，运行期关卡切换只允许由场景内 portal（LEVEL_TRANSITION）触发；
+   宿主下发的氛围字段 map.theme 不再参与任何关卡决策（详见 App.vue）。
+   ============================================================ */
+export const FIRST_MAP_URLS = [
+  assetUrl("maps/first.map.json"),
+  "/maps/first.map.json",
+  "./maps/first.map.json",
+];
+
+/** 起始关卡回退值（first.map.json 不可用时的兜底） */
+export const DEFAULT_START_LEVEL = "Mulberry Town";
+
+/* ============================================================
+   ★ 关卡名 → Dungeon theme（用于按权重刷怪）
+   ------------------------------------------------------------
+   数据来源：public/entity_types.json 的 dungeon_themes
+     - RUINS      (≤5)   Rat/Bat/Snake/Goblin/Orc/LootGoblin
+     - CATACOMBS  (≤10)  Zombie/Skeleton/Mummy/Ghost/Banshee/Vampire
+     - MINE       (≤15)  Kobold/Minotaur/Goblin/Orc/EmpoweredOrc/Boneman/Golem
+     - ICE        (>15)  Cyclops/Troll/Minotaur/IceElemental/Skeleton/Imp/Siren
+   城镇 / 王国映射为 null → 不刷怪（保留 safe zone 行为）
+   ============================================================ */
+export const THEME_BY_MAPNAME: Record<string, "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null> = {
+  "Mulberry Town":          null,
+  "Mulberry Forest":        "RUINS",
+  "Mulberry Graveyard":     "CATACOMBS",
+  "Lich Lair":              "CATACOMBS",
+  "Loot Goblin Lair":       "RUINS",
+  "Mulberry Dungeon":       "RUINS",
+  "Mulberry Dungeon 2":     "RUINS",
+  "Mulberry Dungeon 3":     "RUINS",
+  "Mulberry Dungeon 4":     "RUINS",
+  "Mulberry Dungeon 5":     "RUINS",
+  "Forest Dungeon":         "RUINS",
+  "Forest Dungeon 2":       "RUINS",
+  "Forest Dungeon 3":       "RUINS",
+  "Forest Dungeon 4":       "RUINS",
+  "Forest Dungeon 5":       "RUINS",
+  "Kingdom":                null,
+  "Lich Boss":              "CATACOMBS",
+};
+
+/** 按关卡名查 theme，未登记则回退 RUINS（最弱怪） */
+export function getThemeForMapName(levelName: string | null | undefined): "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null {
+  if (!levelName) return "RUINS";
+  const hit = THEME_BY_MAPNAME[levelName];
+  if (hit !== undefined) return hit;
+  // 含 "graveyard"/"lich"/"crypt"/"catacomb" 关键字 → CATACOMBS
+  if (/graveyard|lich|crypt|catacomb|tomb/i.test(levelName)) return "CATACOMBS";
+  // 含 "mine"/"cave" 关键字 → MINE
+  if (/mine|cave/i.test(levelName)) return "MINE";
+  // 含 "ice"/"frost"/"snow" 关键字 → ICE
+  if (/ice|frost|snow/i.test(levelName)) return "ICE";
+  return "RUINS";
+}
+
+/** 读取 maps/first.map.json 的 start_map.value（永不抛错，最差返回 DEFAULT_START_LEVEL） */
+export async function loadStartLevelName(): Promise<string> {
+  for (const url of FIRST_MAP_URLS) {
     try {
       const r = await fetch(url);
       if (!r.ok) continue;
+      const d = (await r.json()) as any;
+      const raw = d?.start_map;
+      const v = typeof raw === "string" ? raw : raw?.value;
+      const name = String(v ?? "").trim();
+      if (name) return name;
+      console.warn(`[field-survival] first.map.json 未声明 start_map.value（${url}）→ 回退 ${DEFAULT_START_LEVEL}`);
+      return DEFAULT_START_LEVEL;
+    } catch { /* try next */ }
+  }
+  console.warn(`[field-survival] 起始地图声明缺失：maps/first.map.json 未取到 → 回退 ${DEFAULT_START_LEVEL}`);
+  return DEFAULT_START_LEVEL;
+}
+
+/**
+ * 加载"开局地图"（起点关卡）配置。
+ * @param levelName 起始关卡名，来自 loadStartLevelName()；缺省 Mulberry Town
+ * 关卡名 → 文件名复用 levelNameToFile（与 portal 切图同一条映射链，避免两套规则）。
+ */
+export async function loadMapConfig(levelName: string = DEFAULT_START_LEVEL): Promise<MapConfig> {
+  const file = levelNameToFile(levelName) || "mulberryTown";
+  for (const prefix of [assetUrl("maps/"), "/maps/", "./maps/"]) {
+    try {
+      const r = await fetch(prefix + file + ".json");
+      if (!r.ok) continue;
       const d = await r.json();
-      const n = normalizeMapConfig(d, "Mulberry Town");
+      const n = normalizeMapConfig(d, levelName);
       if (n) return n;
     } catch { /* try next */ }
   }
+  console.warn(`[field-survival] 起始关卡地图缺失：${levelName} → 期望 maps/${file}.json（回退 fallback）`);
   return fallbackMapConfig();
 }
 
