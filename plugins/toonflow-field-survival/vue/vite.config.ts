@@ -73,6 +73,17 @@ let lastState = null;
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
 let currentLevelName = null;
+// ★ 外部可调用的 state 修改器（bsk evaluate / browser console 直接调用）
+// 用法示例：window.__devHostModify({ hp: 999, exp: 5000, level: 20 })
+window.__devHostModify = (patch) => {
+  if (!lastState || !lastState.entities) return "no state";
+  let applied = 0;
+  for (const [k, v] of Object.entries(patch)) {
+    const ent = lastState.entities.find(e => e.side === "player");
+    if (ent && k in ent) { ent[k] = v; applied++; }
+  }
+  return "applied " + applied + " to player";
+};
 const log = (m) => { const el = document.getElementById("log"); el.textContent = m + "\\n" + el.textContent.slice(0, 4000); };
 const post = (state) => { document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive"] }, "*"); };
 const showError = (msg) => {
@@ -293,6 +304,9 @@ window.addEventListener("message", async (e) => {
         if (lastState.phase === "over") return;
         // ★ 自己计数 tick（p.tick 是客户端的，可能为 0）
         lastState.tick = (lastState.tick || 0) + 1;
+        // ★ 必须每次重新读 lastState.entities —— 之前 const ents = ... 会把旧数组引用
+        //   冻结，野怪同步段重建 lastState.entities 后下面的逻辑仍改旧数组，
+        //   导致 server push 出去的仍然是旧 11 只野怪（dev-host 永远在用切关前的引用）。
         const ents = lastState.entities;
         // 1. 镜像玩家位姿（前端权威）
         const me = ents.find((e) => e.side === "player");
@@ -438,48 +452,11 @@ window.addEventListener("message", async (e) => {
           });
         }
         lastState.entities = keep;
-        lastState._mobBounds = bounds;
-        lastState.events.push("[mock] 地图野怪同步（" + le.list.length + " 只，bounds " + bounds.lx + "x" + bounds.ly + "）");
+        lastState.events.push("[mock] 地图野怪同步（" + le.list.length + " 只）");
       }
-      // ── 离图 30 秒重生（game.md 69）──
-      //   关卡名变化时记录切图时刻；同图死亡怪不重生，离图 30s 回来后重生成
+      // 关卡名跟踪（仅日志用，不做刷怪控制）
       if (currentLevelName !== lastState._mobLevel) {
         lastState._mobLevel = currentLevelName;
-        lastState._levelLeftAt = lastState._mobLevelTick || 0;   // 上一次在该图的最后 tick
-        lastState._mobLevelTick = lastState.tick;
-        lastState._rejoinedAt = null;
-      } else {
-        lastState._mobLevelTick = lastState.tick;
-      }
-      // 客户端切关时也会整份重建 server 敌怪表（_mobEpoch 变化），
-      // 这里额外实现"死了但没离开地图 → 不重生；离开 30 秒后再进 → 重生"：
-      //   实现方式：死亡 mapMob 记 _deadAt；若当前 tick - _mobLevelTick > 300（30s）
-      //   说明玩家已离开本图 30 秒 → 把死怪复活回出生点。
-      {
-        const awayFor = lastState._mobLevelTick != null ? lastState.tick - lastState._mobLevelTick : 0;
-        // awayFor 只在"客户端停发该图 tick"后增大；同图游玩时每帧归零，
-        // 因此真正可用的信号是：客户端上报的 levelName ≠ 死怪所属图。
-        // 简化：levelName 变化即离开；30s 由真实时钟计。
-        if (lastState._leftLevelClock == null) lastState._leftLevelClock = 0;
-        if (lastState._mobLevel !== lastState._prevMobLevel) {
-          if (lastState._prevMobLevel != null) lastState._leftLevelClock = Date.now();
-          lastState._prevMobLevel = lastState._mobLevel;
-        }
-        const awayMs = lastState._leftLevelClock ? Date.now() - lastState._leftLevelClock : 0;
-        if (awayMs > 30000) {
-          let revived = 0;
-          for (const e of ents) {
-            if (e.side === "enemy" && e.mapMob && !e.alive && e.homeX !== undefined) {
-              e.alive = true;
-              e.hp = e.maxHp;
-              e.x = e.homeX; e.y = e.homeY;
-              e.cooldown = 0;
-              revived++;
-            }
-          }
-          lastState._leftLevelClock = Date.now();   // 重置计时，避免每帧连刷
-          if (revived > 0) lastState.events.push("[mock] 离开地图超过 30 秒，" + revived + " 只野怪重新生成");
-        }
       }
       // 6. 飘字/vfx 衰减
       lastState.floaters = lastState.floaters.filter((f) => { f.life--; return f.life > 0; });

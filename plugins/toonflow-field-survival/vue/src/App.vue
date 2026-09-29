@@ -922,6 +922,17 @@ function bumpLocalMobsEpoch(): void {
   deadLocalEnemyIds.clear();
 }
 
+/**
+ * ★ game.md 68-69（野怪刷新机制）：
+ *   不离开地图不会刷新；离开当前地图 30 秒后重新生成野怪。
+ *   levelLeaveState 记录每张图"上次离开时刻 + 离开时的死怪 id 集合"，
+ *   switchLevel 再进图时据此决定死怪是保持死亡（<30s）还是重生（≥30s）。
+ */
+interface LevelLeaveRecord { leftAt: number; deadIds: Set<string>; }
+const levelLeaveState = new Map<string, LevelLeaveRecord>();
+/** 重建本图野怪时应保持死亡的怪（Tiled object id），由 switchLevel 设置 */
+let pendingDeadMobIds: Set<string> = new Set();
+
 /* ============================================================
    ★ 安全区 / 本地怪物信息发布（供 standalone mockHost 复用 App 侧判定）
    ============================================================ */
@@ -985,8 +996,9 @@ function publishLocalMapMobs(): void {
  *   bounds 用于让宿主把野怪 AI 的移动/归位/游荡夹进本图范围（森林只有 ±29 m），
  *   否则宿主的 MOB_WANDER_R_M=8 / MOB_DISENGAGE_M=12 会把怪推出玩家可走区域。
  */
-function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: number }; list: any[] } | null {
-  if (localMobsEpoch === localMobsSentEpoch) return null;
+function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: number }; list: any[] } {
+  // ★ 每帧都发（宿主按 epoch 变化才重建敌怪表，不会重复刷）。
+  //   即使本帧 mapmob 数量为 0（城镇）也发空清单，dev-host 必须收到才清空 server 侧残留。
   const list = ((state.value?.entities || []) as Array<any>).filter(
     (e) =>
       e?.side === "enemy" &&
@@ -1075,6 +1087,36 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     // 清掉本图野怪（旧图的怪不跟过来）
     if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
+    // ★ game.md 68-69（刷新机制）：离开地图时记住"该图此刻的死怪"和离开时刻；
+    //   30 秒内回来 → 死怪仍死（不刷新）；满 30 秒回来 → 死怪在出生点满血重生。
+    //   同一张图内死亡怪永远不重生（"不离开地图不会刷新"）。
+    {
+      const now = Date.now();
+      const prevLevel = currentLevelName.value;
+      // 1) 旧图：本帧 entity 中所有已死的 mapmob_* 怪 → 记到 levelLeaveState
+      //    Tiled id 在 entity id 第 3 段（mapmob_<TiledId>_<ts>），与 switchLevel 写入时一致
+      const prevEnts = (s?.entities || []) as Array<any>;
+      const deadIds = new Set<string>();
+      for (const e of prevEnts) {
+        if (e?.side === "enemy" && e.alive === false && typeof e.id === "string" && e.id.startsWith("mapmob_")) {
+          const parts = e.id.split("_");
+          if (parts.length >= 2) deadIds.add(parts[1]);
+        }
+      }
+      levelLeaveState.set(prevLevel, { leftAt: now, deadIds });
+      // 2) 新图：取上次的"死怪名单"，看是否满 30s
+      const lastVisit = levelLeaveState.get(levelName);
+      if (lastVisit) {
+        const awayMs = now - lastVisit.leftAt;
+        if (awayMs >= 30000) {
+          // 满 30 秒 → 全活（清空）
+          lastVisit.deadIds.clear();
+        }
+        pendingDeadMobIds = new Set(lastVisit.deadIds);
+      } else {
+        pendingDeadMobIds = new Set();
+      }
+    }
     // ★ 发布本关卡的 safe zone（standalone mockHost 据此判定"安全区"，
     //   避免继续使用 overworld.json 的整图 safe 区把森林也当成城镇）
     publishSafeZones(next);
@@ -1100,8 +1142,13 @@ async function switchLevel(levelName: string): Promise<void> {
         //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外/宿主世界外，
         //   既进不了小地图视野，也进不了任何攻击射程。
         const mobPos = clampToMapBounds(mob.x, mob.y);
+        // ★ game.md 68：<30s 离图回来 → 该 Tiled 怪保持死亡（pendingDeadMobIds 由
+        //   switchLevel 上面的"记忆死亡怪"段写入）。这是按图记忆，不依赖 host。
+        const revived = pendingDeadMobIds.has(String(mob.id));
+        if (revived) pendingDeadMobIds.delete(String(mob.id));
+        const enemyId = `mapmob_${mob.id}_${Date.now()}`;
         s.entities.push({
-          id: `mapmob_${mob.id}_${Date.now()}`,
+          id: enemyId,
           name: arch.name,
           side: "enemy",
           x: mobPos.x,
@@ -1113,10 +1160,11 @@ async function switchLevel(levelName: string): Promise<void> {
           level: lv,
           atk: Math.floor(arch.atk * lvScale),
           def: Math.floor((arch.atk * 0.3) * lvScale),
-          facing: 180, cooldown: 0, alive: true,
+          facing: 180, cooldown: 0, alive: !revived,
           homeX: mobPos.x,
           homeY: mobPos.y,
         });
+        if (revived) deadLocalEnemyIds.add(enemyId);
       }
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
     }
@@ -3076,10 +3124,21 @@ onMounted(async () => {
       if (hostAdopted) {
         deadLocalEnemyIds.clear();
       } else {
-        const keptMapMobs = localEnemies.filter(
-          (e: any) => !incomingIds.has(e.id) && !deadLocalEnemyIds.has(e.id),
-        );
-        if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+        // ★ 兜底判断：只有当 server 推送的敌怪数量 == 本地地图怪数量（=0 兜底场景），
+        //   才回填本地未采纳的怪；切图场景 server 已重置为空数组，本地老怪的 id 不在
+        //   incomingIds 里，但 incoming.enemies.length===0 与 localEnemies.length>0 不等，
+        //   → 视为切图，本地兜底怪全部丢弃（防止森林怪跟着回 mulberryTown）。
+        const incomingEnemies = (incoming.entities||[]).filter((e:any) => e?.side === "enemy");
+        const isLevelSwitch = incomingEnemies.length === 0 && localEnemies.length > 0;
+        if (isLevelSwitch) {
+          deadLocalEnemyIds.clear();
+          // 不回填 → incoming 保留（玩家/盟友）
+        } else {
+          const keptMapMobs = localEnemies.filter(
+            (e: any) => !incomingIds.has(e.id) && !deadLocalEnemyIds.has(e.id),
+          );
+          if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+        }
       }
     }
     state.value = incoming;
