@@ -106,8 +106,8 @@ Tile Layer 1/2/3 瓦片层只是地形、墙壁、装饰瓦片，瓦片 ID 只�
 1.依然采取原来的“entity_type”来初步判断阵营，这样可以无需修改原来的地图依然可用。
 5 个 playable_now 怪物：
 RAT / BAT / SNAKE / GOBLIN /ORC
-RAT / BAT / SNAKE/WILD_GOAT / GOBLIN / ZOMBIE/IMP/ORC
-老鼠/暗夜生物/爬虫/山羊/绿皮地精（哥布林）/人形亡者/小恶魔/
+RAT / BAT / SNAKE/WILD_GOAT / GOBLIN / ZOMBIE/IMP/ORC etc
+老鼠/暗夜生物/爬虫/山羊/绿皮地精（哥布林）/人形亡者/小恶魔 等
 [entity_types.json](entity_types.json)
 2.增加“camp” 代表阵营
 neutral/hostile/friendly

@@ -306,32 +306,52 @@ window.addEventListener("message", async (e) => {
           if (lastState.tick % 10 === 0) me.mp = Math.min(me.maxMp, (me.mp || 0) + 3);
           if (lastState.tick % 30 === 0) me.hp = Math.min(me.maxHp, me.hp + 1);
         }
-      // 2. 敌人 AI：侦测 30m / 追击（近战贴近 0.5m，远程保持 2.5-4m）/ 攻击
+      // 2. 敌人 AI（game.md 62-69）：
+      //    ① 侦测/发起攻击距离 4m —— 4m 内才追击
+      //    ② 伤害判定：近战 0.5m / 远程 4m
+      //    ③ 玩家逃出 4m → 野怪停止追击、走回出生点（拴绳）
       const target = me;
       for (const e of ents) {
-        if (e.side !== "enemy" || !e.alive || !target || !target.alive) continue;
+        if (e.side !== "enemy" || !e.alive || !target || !target.alive) { continue; }
         const dx = target.x - e.x;
         const dy = target.y - e.y;
         const d2 = Math.hypot(dx, dy) || 0.001;
         const isRanged = e.isRanged === true;
-        // 侦测半径 30m（原 4m 太小，敌人永远追不到玩家）
-        if (d2 < 30) {
-          if (isRanged) {
-            if (d2 > 4) {
-              const sp = 2.0 * 0.1;
-              e.x += (dx / d2) * sp; e.y += (dy / d2) * sp;
-            } else if (d2 < 2.5) {
-              const sp = 1.5 * 0.1;
-              e.x -= (dx / d2) * sp; e.y -= (dy / d2) * sp;
-            }
-          } else {
+        const home = e.homeX !== undefined ? e : null;
+        // ── 拴绳：离开出生点 > 4m 且玩家不在 4m 攻击圈内 → 回出生点 ──
+        const homeD = home ? Math.hypot(e.x - e.homeX, e.y - e.homeY) : 0;
+        if (d2 > 4) {
+          // 脱战：走向出生点
+          if (home && homeD > 0.3) {
+            const hx = e.homeX - e.x;
+            const hy = e.homeY - e.y;
+            const hd = Math.hypot(hx, hy) || 0.001;
+            const sp = 2.0 * 0.1;
+            e.x += (hx / hd) * sp; e.y += (hy / hd) * sp;
+            e.facing = hx > 0 ? 0 : 180;
+          }
+          e.cooldown = (e.cooldown || 0) - 1;
+          continue;
+        }
+        // ── 4m 内：追击 + 攻击 ──
+        if (isRanged) {
+          if (d2 > 4) {
+            const sp = 2.0 * 0.1;
+            e.x += (dx / d2) * sp; e.y += (dy / d2) * sp;
+          } else if (d2 < 2.5) {
+            const sp = 1.5 * 0.1;
+            e.x -= (dx / d2) * sp; e.y -= (dy / d2) * sp;
+          }
+        } else {
+          if (d2 > 0.4) {
             const sp = 2.0 * 0.1;
             e.x += (dx / d2) * sp; e.y += (dy / d2) * sp;
           }
-          e.facing = dx > 0 ? 0 : 180;
         }
+        e.facing = dx > 0 ? 0 : 180;
         e.cooldown = (e.cooldown || 0) - 1;
-        const attackRange = isRanged ? 4 : 1.5;
+        // 伤害判定距离：近战 0.5m / 远程 4m（game.md 63-64）
+        const attackRange = isRanged ? 4 : 0.5;
         if (d2 < attackRange && e.cooldown <= 0) {
           const dmg = Math.max(1, (e.atk || 5) - (target.def || 0));
           target.hp = Math.max(0, target.hp - dmg);
@@ -346,13 +366,13 @@ window.addEventListener("message", async (e) => {
           }
         }
       }
-      // 3. 玩家自动攻击（每 30 tick）：找最近敌人（reach = 4m，避免打不到贴身怪）
+      // 3. 玩家自动攻击（每 30 tick）：近战 0.5m / 远程 4m（game.md 63）
       if (me && me.alive && lastState.tick % 30 === 0) {
         let closest = null, minD = Infinity;
         for (const e of ents) {
           if (e.side !== "enemy" || !e.alive) continue;
           const dd = Math.hypot(e.x - me.x, e.y - me.y);
-          const reach = e.isRanged === true ? 8 : 2;
+          const reach = 0.5;
           if (dd < reach && dd < minD) { minD = dd; closest = e; }
         }
         if (closest) {
@@ -392,69 +412,73 @@ window.addEventListener("message", async (e) => {
           }
         }
       }
-      // 5. 野怪刷新：每 30 tick 在玩家周围 30-70m 生成一波（按 entity_types theme 权重）
-      //   立即在第一次 tick 就刷一波，避免开局等 24 秒
-      if (!lastState._waveTimer) {
-        lastState._waveTimer = 0;
-        // 首次立即刷
+      // 5. 野怪生成（game.md 67-69）：出生点/等级/类型来自地图 json（mulberryForest.json
+      //    Actors 层），由客户端切关时生成 mapmob_* 并经 tick.localEnemies 上报。
+      //    dev-host 不随机刷怪！只做两件事：
+      //    ① 收到 localEnemies 清单（epoch 变化 = 切图/补怪）→ 以它为准重建 server 侧敌怪表
+      //    ② 死亡的地图怪记 respawnAt；玩家离开该地图 30 秒后重新生成（game.md：离开当前地图30秒后重新生成野怪）
+      const le = p.localEnemies;
+      if (le && Array.isArray(le.list) && le.epoch !== lastState._mobEpoch) {
+        lastState._mobEpoch = le.epoch;
+        // 保留玩家/盟友，删除 server 侧全部敌怪（客户端是权威）
+        const keep = ents.filter((e) => e.side !== "enemy");
+        const bounds = le.bounds || { lx: 29, ly: 19 };
+        for (const m of le.list) {
+          keep.push({
+            id: m.id, name: m.name, side: "enemy",
+            x: m.x, y: m.y, vx: 0, vy: 0,
+            hp: m.hp, maxHp: m.maxHp || m.hp,
+            mp: 0, maxMp: 0, exp: m.exp || 0, expToNext: 0,
+            level: m.level || 1, atk: m.atk, def: m.def,
+            facing: 180, cooldown: 0, alive: m.alive !== false,
+            avatarPath: m.avatarPath, isRanged: m.isRanged === true,
+            homeX: m.x, homeY: m.y,            // ★ 拴绳出生点 = 地图 json 的出生点
+            mapMob: true,                      // ★ 标记：地图怪（离开地图 30s 重生）
+            _deadAt: m.alive === false ? 0 : undefined,
+          });
+        }
+        lastState.entities = keep;
+        lastState._mobBounds = bounds;
+        lastState.events.push("[mock] 地图野怪同步（" + le.list.length + " 只，bounds " + bounds.lx + "x" + bounds.ly + "）");
       }
-      lastState._waveTimer++;
-      if (lastState._waveTimer >= 30 || lastState._waveTimer === 1) {
-        lastState._waveTimer = 0;
-        // 当前关卡 theme：城镇（null）不刷怪；未知关卡保守回退 RUINS
-        const theme = currentTheme(currentLevelName);
-        // ★ 进入城镇/安全图：清掉所有 server 侧野怪（玩家不再被围砍）。
-        //   注意：不能提前 return —— 否则会跳过末尾 post(lastState)，客户端永远收不到清怪后的状态。
-        if (!theme) {
-          const dead = ents.filter((e) => e.side === "enemy" && e.alive).length;
-          for (const e of ents) { if (e.side === "enemy") e.alive = false; }
-          if (dead > 0) lastState.events.push("[mock] 进入安全区，野怪散去（" + dead + " 只）");
-        } else {
-        const monster = pickMonsterByWeight(theme) || (storyData.monsters || [])[Math.floor(Math.random() * (storyData.monsters || []).length)];
-        if (monster) {
-        const lv = Math.max(1, monster.recommendLevel || (theme === "ICE" ? 16 : theme === "MINE" ? 11 : theme === "CATACOMBS" ? 6 : 1));
-        const count = Math.min(3, 2 + Math.floor(lastState.tick / 1200));
-        for (let i = 0; i < count; i++) {
-          const angle = Math.random() * Math.PI * 2;
-          // ★ 刷在 15-25m（侦测 30m 内），否则敌人刷出来永远追不到玩家
-          const dist = 15 + Math.random() * 10;
-          const id = "m" + Math.floor(Math.random() * 99999);
-          // entity_types 来源（有 hp/maxhp 字段）走真实 stats
-          if (typeof monster.hp === "number" || typeof monster.maxhp === "number") {
-            const hp = monster.hp || monster.maxhp || 30;
-            const atk = monster.str || monster.def || 1;
-            const def = monster.def || 1;
-            const gid = Array.isArray(monster.textures) && monster.textures.length > 0 ? monster.textures[0] : null;
-            ents.push({
-              id, name: monster.name || monster.entity_type, side: "enemy",
-              x: (me?.x || 0) + Math.cos(angle) * dist,
-              y: (me?.y || 0) + Math.sin(angle) * dist,
-              vx: 0, vy: 0, hp, maxHp: hp,
-              mp: 0, maxMp: 0, exp: 0, expToNext: 0,
-              level: lv, atk, def,
-              facing: 180, cooldown: 0, alive: true,
-              avatarPath: gid ? "./images/player_sprites/" + gid + ".webp" : monster.avatarPath,
-              isRanged: typeof monster.range === "number" && monster.range > 5,
-            });
-          } else {
-            const s = 1 + (lv - 1) * 0.3;
-            ents.push({
-              id, name: monster.name, side: "enemy",
-              x: (me?.x || 0) + Math.cos(angle) * dist,
-              y: (me?.y || 0) + Math.sin(angle) * dist,
-              vx: 0, vy: 0,
-              hp: Math.floor(30 * s), maxHp: Math.floor(30 * s),
-              mp: 0, maxMp: 0, exp: 0, expToNext: 0,
-              level: lv,
-              atk: Math.floor(6 * s), def: Math.floor(2 * s),
-              facing: 180, cooldown: 0, alive: true,
-              avatarPath: monster.avatarPath,
-              isRanged: monster.isRanged === true,
-            });
+      // ── 离图 30 秒重生（game.md 69）──
+      //   关卡名变化时记录切图时刻；同图死亡怪不重生，离图 30s 回来后重生成
+      if (currentLevelName !== lastState._mobLevel) {
+        lastState._mobLevel = currentLevelName;
+        lastState._levelLeftAt = lastState._mobLevelTick || 0;   // 上一次在该图的最后 tick
+        lastState._mobLevelTick = lastState.tick;
+        lastState._rejoinedAt = null;
+      } else {
+        lastState._mobLevelTick = lastState.tick;
+      }
+      // 客户端切关时也会整份重建 server 敌怪表（_mobEpoch 变化），
+      // 这里额外实现"死了但没离开地图 → 不重生；离开 30 秒后再进 → 重生"：
+      //   实现方式：死亡 mapMob 记 _deadAt；若当前 tick - _mobLevelTick > 300（30s）
+      //   说明玩家已离开本图 30 秒 → 把死怪复活回出生点。
+      {
+        const awayFor = lastState._mobLevelTick != null ? lastState.tick - lastState._mobLevelTick : 0;
+        // awayFor 只在"客户端停发该图 tick"后增大；同图游玩时每帧归零，
+        // 因此真正可用的信号是：客户端上报的 levelName ≠ 死怪所属图。
+        // 简化：levelName 变化即离开；30s 由真实时钟计。
+        if (lastState._leftLevelClock == null) lastState._leftLevelClock = 0;
+        if (lastState._mobLevel !== lastState._prevMobLevel) {
+          if (lastState._prevMobLevel != null) lastState._leftLevelClock = Date.now();
+          lastState._prevMobLevel = lastState._mobLevel;
+        }
+        const awayMs = lastState._leftLevelClock ? Date.now() - lastState._leftLevelClock : 0;
+        if (awayMs > 30000) {
+          let revived = 0;
+          for (const e of ents) {
+            if (e.side === "enemy" && e.mapMob && !e.alive && e.homeX !== undefined) {
+              e.alive = true;
+              e.hp = e.maxHp;
+              e.x = e.homeX; e.y = e.homeY;
+              e.cooldown = 0;
+              revived++;
+            }
           }
-        }
-        lastState.events.push("[mock] [" + theme + "] 刷新 " + count + " 只 " + (monster.name || monster.entity_type));
-        }
+          lastState._leftLevelClock = Date.now();   // 重置计时，避免每帧连刷
+          if (revived > 0) lastState.events.push("[mock] 离开地图超过 30 秒，" + revived + " 只野怪重新生成");
         }
       }
       // 6. 飘字/vfx 衰减
