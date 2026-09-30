@@ -41,7 +41,9 @@ user_prompts 参考：
 插件的运行时数据。
 那个插件，那个故事会话，那个用户的数据。
 t_plugin_session_data
-(id,sessionId,pluginName,pluginId,dataKey,dataValue)
+(id,userId,sessionId,pluginName,pluginId,dataKey,dataValue)
+
+sessionId=all 跨会话共享
 
 例如生成的地图数据。  
 

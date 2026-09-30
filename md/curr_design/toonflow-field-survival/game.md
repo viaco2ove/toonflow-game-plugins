@@ -25,10 +25,9 @@ Toonflow-game-android-h5
 ```
 上传并绑定插件&故事&用户. 到 t_plugin_session_data，sessionId=all.
 代表 不限会话。
-cli
-python -m toon_plugins plugin_session_data -i toonflow-field-survival  -story 赦夜人冥夜走廊-第二季
-
-
+cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文件 知道那个userid 和故事id）
+`python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -u "D:/Users/viaco/tools/Toonflow-game/toonflow-game-plugins/workshops/toonflow-field-survival/map_design/赦夜人冥夜走廊-第二季"
+`
 # 等级系统
 满血HP计算标准
 满血HP = 基础血量100 + 等级*10 + 道具血量加成点数 + 技能永久血量加成点数

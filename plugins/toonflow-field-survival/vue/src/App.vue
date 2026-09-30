@@ -38,7 +38,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, normalizeTiledMap } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 
@@ -255,6 +255,53 @@ function roleAvatar(r: RoleOption): string {
 }
 
 const starting = ref(false);
+/** ★ 上传地图：file input 引用与状态 */
+const mapFileInput = ref<HTMLInputElement | null>(null);
+const mapUploading = ref(false);
+
+/**
+ * 最小 zip 解析器（0/store + 8/deflate）。返回 [{name, bytes}]。
+ * 不依赖第三方库，用浏览器原生 DecompressionStream（deflate-raw）。
+ * 仅用于解析我们打包出来的 .tbg（zip deflate），够用。
+ */
+async function readZipEntries(buf: Uint8Array): Promise<{ name: string; bytes: Uint8Array }[]> {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  if (dv.getUint32(0, true) !== 0x04034b50) throw new Error("不是 zip 文件（magic mismatch）");
+  const entries: { name: string; bytes: Uint8Array }[] = [];
+  let off = 0;
+  while (off + 4 <= buf.length) {
+    const sig = dv.getUint32(off, true);
+    if (sig !== 0x04034b50) break;
+    const method = dv.getUint16(off + 8, true);
+    const compSize = dv.getUint32(off + 18, true);
+    const uncompSize = dv.getUint32(off + 22, true);
+    const nameLen = dv.getUint16(off + 26, true);
+    const extraLen = dv.getUint16(off + 28, true);
+    const nameBytes = buf.slice(off + 30, off + 30 + nameLen);
+    const name = new TextDecoder().decode(nameBytes);
+    const dataStart = off + 30 + nameLen + extraLen;
+    const data = buf.slice(dataStart, dataStart + compSize);
+    let bytes: Uint8Array;
+    if (method === 0) {
+      bytes = data;
+    } else if (method === 8) {
+      // deflate raw
+      const stream = new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+      bytes = new Uint8Array(await stream);
+    } else {
+      throw new Error(`不支持的 zip method=${method}（仅 store/deflate）`);
+    }
+    if (uncompSize !== 0 && name && !name.endsWith("/")) entries.push({ name, bytes });
+    off = dataStart + compSize;
+  }
+  return entries;
+}
+/** 上传成功短闪一下"已绑定"提示（3 秒后回到默认态） */
+const mapUploadDone = ref(false);
+let mapUploadDoneTimer = 0;
+/** ★ ★ 防抖：玩家实体/物品/技能变更后写入 t_plugin_session_data，
+ *   关掉小游戏 → AI 聊天窗口继续看得到最新值。 */
+let saveDebounce = 0;
 /** ★ fix③：开始游戏后的状态提示（宿主 /plugin/tick 响应慢时给出可解释的反馈） */
 const startHint = ref("");
 let startTimerSlow = 0;
@@ -1014,6 +1061,12 @@ function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: numbe
 }
 
 /** 把刷新点推出 safe zone（安全区只保护玩家，不再冻结世界刷新） */
+function safeReadJson(entry: { bytes: Uint8Array } | undefined, label: string): any {
+  if (!entry) return null;
+  try { return JSON.parse(new TextDecoder().decode(entry.bytes)); }
+  catch (e) { console.warn("[field-survival] 读 " + label + " 失败：", e); return null; }
+}
+
 function pushOutsideSafeZones(x: number, y: number): { x: number; y: number } {
   let px = x, py = y;
   for (const z of activeSafeZones()) {
@@ -2986,8 +3039,12 @@ function useItem(i: number) { sendTick("item", { index: i }); }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() {
-
-  toonflowJsApi.minigame.setFullscreen(false)
+  console.log("btn--exit->exitGame");
+  try {
+    toonflowJsApi.minigame.setFullscreen(false)
+  } catch (e) {
+    console.log("btn--exit->exitGame ：e",e);
+  }
   window.setTimeout(function (){
       sendTick("exit", {});
   }, 1000);
@@ -3001,6 +3058,170 @@ function exitOver() {
   window.setTimeout(function (){
     if (state.value) state.value.phase = 'select';
   }, 1000);
+}
+
+/* ---------------- 上传地图（写 t_plugin_session_data.map_data） ---------------- */
+function triggerUploadMap() {
+  if (mapUploading.value) return;
+  mapFileInput.value?.click();
+}
+
+/**
+ * 读取 .tbg / .json 地图 → 写到 pluginData("map_data")，并立刻切到新地图。
+ * 支持三种格式：
+ *   1) 纯 JSON 地图（顶层有 theme/zones/mobs/...）—— 直接归一化
+ *   2) .tbg（zip 包）—— 解 zip，从 maps/*.json 读出第一张地图归一化
+ *   3) 单 .json（mulberryTown.json / mulberryForest.json 等 Tiled 导出）—— 走 Tiled 解析路径
+ */
+async function onUploadMap(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  // 允许选同一个文件再次触发
+  input.value = "";
+  mapUploading.value = true;
+  try {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    // 嗅探 zip 魔数（PK\003\004）
+    const isZip = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
+    let mapData: MapData | null = null;
+
+    if (isZip) {
+      // ★ .tbg：解 zip → 找 maps/*.json 第一张作为主地图
+      const entries = await readZipEntries(buf);
+      // ★ 排除非 Tiled 格式的 json（first.map.json / story.json / entity_types.json / test_state.json 等 metadata）
+      //   优先 Tiled 格式（有 layers + width + tilewidth）
+      const isTiledJson = (raw: Uint8Array): boolean => {
+        try {
+          const o = JSON.parse(new TextDecoder().decode(raw));
+          return Array.isArray(o?.layers) && (o?.tilewidth || o?.tileheight) && o?.width;
+        } catch { return false; }
+      };
+      // 优先 mulberryForest.json / mulberryTown.json 等（真有野怪/城镇的关卡），
+      // 其次任意 maps/ 下的 Tiled json
+      const mapEntry =
+        entries.find((e) => /^maps\/mulberry[A-Za-z_]+\.json$/i.test(e.name) && !/maps\/bak\//i.test(e.name) && isTiledJson(e.bytes)) ||
+        entries.find((e) => /^maps\/.*\.json$/i.test(e.name) && !/maps\/bak\//i.test(e.name) && isTiledJson(e.bytes)) ||
+        entries.find((e) => e.name.endsWith(".json") && !/story\.json|entity_types\.json|test_state\.json|test_data\.json|map_config\.json|first\.map\.json/i.test(e.name) && isTiledJson(e.bytes));
+      if (!mapEntry) {
+        alert("tbg 包里没找到 Tiled 格式的 maps/*.json 地图文件");
+        return;
+      }
+      // 把 maps/*.json 喂给 Tiled 解析路径（normalizeTiledMap）
+      const tiled = JSON.parse(new TextDecoder().decode(mapEntry.bytes));
+      const tiledCfg = normalizeTiledMap(tiled, file.name.replace(/\.tbg$/i, ""));
+      // tbg 里也要看 story.json / compiled_dawnlike.json 之类的主题/装饰
+      const storyEntry = entries.find((e) => /story\.json$/i.test(e.name));
+      const compiledEntry = entries.find((e) => /compiled_dawnlike\.json$/i.test(e.name));
+      mapData = {
+        theme: tiledCfg?.theme || (storyEntry ? safeReadJson(storyEntry, "story.json")?.title : null) || "野外",
+        zones: tiledCfg?.zones || [],
+        mobs: [],
+        chests: [],
+        potions: [],
+      };
+    } else {
+      // 纯文本：先试 JSON 解析
+      const text = new TextDecoder().decode(buf);
+      let json: any;
+      try { json = JSON.parse(text); } catch (e) {
+        alert("地图文件解析失败：既不是 JSON 也不是 zip。");
+        return;
+      }
+      // ★ Tiled 导出格式（layers/width/height）→ 走 normalizeTiledMap
+      if (Array.isArray(json?.layers) && (json?.tilewidth || json?.tileheight)) {
+        const tiledCfg = normalizeTiledMap(json, file.name.replace(/\.json$/i, ""));
+        mapData = {
+          theme: tiledCfg?.theme || "野外",
+          zones: tiledCfg?.zones || [],
+          mobs: [],
+          chests: [],
+          potions: [],
+        };
+      } else {
+        // 顶层 MapData 描述
+        mapData = {
+          theme: String(json.theme ?? "野外"),
+          zones: Array.isArray(json.zones) ? json.zones : [],
+          mobs: Array.isArray(json.mobs) ? json.mobs : [],
+          chests: Array.isArray(json.chests) ? json.chests : [],
+          potions: Array.isArray(json.potions) ? json.potions : [],
+        };
+      }
+    }
+    if (!mapData) return;
+    // 写宿主插件数据表（t_plugin_session_data，dataKey=map_data）
+    await toonflowJsApi.pluginData.set("map_data", mapData);
+    // 立刻应用：写入 state.map，并刷新 HUD
+    if (state.value) {
+      state.value = { ...state.value, map: mapData, mapSource: "stored" } as GameState;
+    }
+    mapTheme.value = mapData.theme;
+    console.info("[field-survival] 地图已上传并绑定：", file.name, "size=", file.size);
+    if (state.value?.phase === "playing") {
+      void switchLevel(currentLevelName.value);
+    }
+  } catch (err) {
+    console.error("[field-survival] 上传地图失败：", err);
+    alert("上传失败：" + (err as Error).message);
+  } finally {
+    mapUploading.value = false;
+    mapUploadDone.value = true;
+    if (mapUploadDoneTimer) window.clearTimeout(mapUploadDoneTimer);
+    mapUploadDoneTimer = window.setTimeout(() => {
+      mapUploadDone.value = false;
+      mapUploadDoneTimer = 0;
+    }, 3000);
+  }
+}
+
+/* ---------------- 玩家/物品/技能 → pluginData 持久化 ---------------- */
+/**
+ * 把当前玩家实体（hp/mp/level/exp/...）+ items + skills 写到
+ * t_plugin_session_data.dataKey=player_card，AI 聊天窗口后续可读到。
+ */
+function savePlayerCardToSession() {
+  const s = state.value;
+  if (!s) return;
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) return;
+  const card = {
+    name: me.name,
+    level: me.level,
+    exp: me.exp,
+    expToNext: me.expToNext,
+    hp: me.hp,
+    maxHp: me.maxHp,
+    mp: me.mp,
+    maxMp: me.maxMp,
+    atk: me.atk,
+    def: me.def,
+    money: s.money ?? 0,
+    kills: s.kills ?? 0,
+    drops: Array.isArray(s.drops) ? [...s.drops] : [],
+    items: Array.isArray(s.items) ? s.items.map((it) => ({ ...it })) : [],
+    skills: Array.isArray(s.skills) ? s.skills.map((sk) => ({ ...sk })) : [],
+    savedAt: Date.now(),
+  };
+  toonflowJsApi.pluginData
+    .set("player_card", card)
+    .then(() => console.info("[field-survival] 玩家数据已存 pluginData:player_card"))
+    .catch((e) => console.warn("[field-survival] 存 player_card 失败（宿主未接入？）:", e));
+}
+
+/** 防抖：500ms 内连续变更只发一次 */
+function schedulePlayerCardSave() {
+  if (saveDebounce) window.clearTimeout(saveDebounce);
+  saveDebounce = window.setTimeout(() => {
+    saveDebounce = 0;
+    savePlayerCardToSession();
+  }, 500);
+}
+
+/** 玩家阵亡或结算时立刻同步一次（不等防抖） */
+function savePlayerCardNow() {
+  if (saveDebounce) { window.clearTimeout(saveDebounce); saveDebounce = 0; }
+  savePlayerCardToSession();
 }
 
 /**
@@ -3233,6 +3454,28 @@ onBeforeUnmount(() => {
 
 watch(() => state.value?.phase, (p) => {
   if (p === "playing") requestAnimationFrame(() => { fitCanvas(); applyCanvasSmoothing(); render(); drawMinimap(); });
+  // ★ 进入 over 立刻同步一次（玩家最终态要落库）
+  if (p === "over") savePlayerCardNow();
+});
+
+/* ★ ★ 玩家实体/物品/技能变化 → 防抖写 pluginData.player_card（关掉小游戏后 AI 聊天能看到）。
+ *   watch 不能一次写多个值且会跑多次（每帧 hp 都变），统一用 me 计算属性触发一次。 */
+const playerSnapshot = computed(() => {
+  const s = state.value;
+  if (!s) return "";
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) return "";
+  return [
+    me.name, me.level, me.exp, me.hp, me.maxHp, me.mp, me.maxMp,
+    me.atk, me.def,
+    s.money, s.kills,
+    s.items?.length ?? 0,
+    s.items?.reduce((a, it) => a + (it.count || 0), 0) ?? 0,
+    s.skills?.map((sk) => sk.cdLeft).join(","),
+  ].join("|");
+});
+watch(playerSnapshot, () => {
+  if (state.value?.phase === "playing") schedulePlayerCardSave();
 });
 </script>
 
@@ -3292,11 +3535,28 @@ watch(() => state.value?.phase, (p) => {
         </span>
         <span v-else>开始游戏</span>
       </button>
-      <button class="map_upload">
-        <span class="map_upload__loading" style="display: none">
-          <span class="map_upload__spinner"></span>上传并绑定插件&故事&用户 中…
+      <input ref="mapFileInput" type="file" accept=".tbg,.json" hidden @change="onUploadMap" />
+      <button
+        class="map_upload"
+        :class="{ 'map_upload--ok': mapUploadDone && !mapUploading }"
+        @click="triggerUploadMap"
+        :disabled="mapUploading"
+        :title="mapUploading ? '正在上传并绑定到 t_plugin_session_data…' : '点击选择 .tbg 地图文件，自动打包写入插件数据表'"
+      >
+        <span class="map_upload__icon" aria-hidden="true">🗺</span>
+        <span class="map_upload__text">
+          <span v-if="mapUploading" class="map_upload__loading">
+            <span class="map_upload__spinner"></span>上传并绑定插件&amp;故事&amp;用户 中…
+          </span>
+          <span v-else-if="mapUploadDone" class="map_upload__success">
+            <strong>地图已绑定</strong>
+            <small>再次点击可替换</small>
+          </span>
+          <span v-else class="map_upload__idle">
+            <strong>上传地图（tbg 格式）</strong>
+            <small>写入 t_plugin_session_data · 跨会话共享</small>
+          </span>
         </span>
-        <span >上传地图（tbg格式）</span>
       </button>
       <!-- ★ fix③：开始游戏的等待/超时提示（宿主 /plugin/tick 未回包时不再静默） -->
       <p v-if="startHint" class="start-hint">{{ startHint }}</p>
@@ -3619,6 +3879,91 @@ body {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ============== 上传地图按钮 ============== */
+.map_upload {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 2px solid #4a3a1f;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #2d2a24 0%, #1f1d18 100%);
+  color: #f0e6c8;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  box-shadow: 0 2px 0 #4a3a1f, inset 0 1px 0 rgba(255, 230, 180, 0.08);
+}
+.map_upload:hover:not(:disabled) {
+  background: linear-gradient(180deg, #3a362c 0%, #26221c 100%);
+  border-color: #6a5530;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 0 #4a3a1f, inset 0 1px 0 rgba(255, 230, 180, 0.12);
+}
+.map_upload:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: 0 1px 0 #4a3a1f;
+}
+.map_upload:disabled {
+  cursor: progress;
+  opacity: 0.85;
+}
+.map_upload--ok {
+  border-color: #4f8a3e;
+  background: linear-gradient(180deg, #2c3a25 0%, #1e2a18 100%);
+  box-shadow: 0 2px 0 #2d5220, inset 0 1px 0 rgba(180, 230, 160, 0.12);
+}
+.map_upload--ok:hover:not(:disabled) {
+  border-color: #6aaa52;
+  background: linear-gradient(180deg, #354a2c 0%, #243520 100%);
+  box-shadow: 0 3px 0 #2d5220, inset 0 1px 0 rgba(180, 230, 160, 0.18);
+}
+.map_upload__icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.5));
+}
+.map_upload__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.map_upload__text strong {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #f5e9c4;
+}
+.map_upload__text small {
+  font-size: 11px;
+  color: #b8a87a;
+  letter-spacing: 0.2px;
+}
+.map_upload__idle strong { color: #f5e9c4; }
+.map_upload__success strong { color: #aee089; }
+.map_upload__loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #f5e9c4;
+}
+.map_upload__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(245, 233, 196, 0.3);
+  border-top-color: #f5e9c4;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 /* ============== 战斗阶段 ============== */

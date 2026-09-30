@@ -389,5 +389,206 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
         click.secho("[ERR] Install failed: " + str(result), fg="red")
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# 把地图目录打包成 .tbg 文件（zip 压缩、跳过 test_data/）
+#   - -build：只产出 .tbg 文件
+#   - -u：产出 .tbg 后再 base64 写 t_plugin_session_data.map_data
+# ─────────────────────────────────────────────────────────────────────────
+def build_tbg_file(source_path: str) -> dict:
+    """把目录（或单个 .tbg/.json 文件）打包成 .tbg 写到 source_path 同级。
+
+    返回 {"tbg_path", "tbg_bytes", "files", "size"}。
+    """
+    import base64, zipfile, io
+    SKIP_DIRS = {"test_data", "__pycache__", "node_modules", ".git"}
+
+    if os.path.isdir(source_path):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(source_path):
+                dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+                for fn in files:
+                    fp = os.path.join(root, fn)
+                    arc = os.path.relpath(fp, source_path).replace(os.sep, "/")
+                    zf.write(fp, arc)
+        tbg_bytes = buf.getvalue()
+        tbg_path = source_path.rstrip("/\\") + ".tbg"
+        with open(tbg_path, "wb") as f:
+            f.write(tbg_bytes)
+        with zipfile.ZipFile(io.BytesIO(tbg_bytes)) as zf:
+            names = zf.namelist()
+        return {"tbg_path": tbg_path, "tbg_bytes": tbg_bytes, "files": names, "size": len(tbg_bytes)}
+    elif os.path.isfile(source_path) and source_path.lower().endswith((".tbg", ".zip")):
+        # 已经是 .tbg / .zip 直接拷贝到同级（覆盖）
+        with open(source_path, "rb") as f:
+            tbg_bytes = f.read()
+        tbg_path = source_path  # 已存在路径
+        return {"tbg_path": tbg_path, "tbg_bytes": tbg_bytes, "files": [], "size": len(tbg_bytes)}
+    elif os.path.isfile(source_path) and source_path.lower().endswith(".json"):
+        # 单 json 文件 → 包成 zip（一个 entry）
+        import zipfile, io as _io
+        buf = _io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(source_path, os.path.basename(source_path))
+        tbg_bytes = buf.getvalue()
+        tbg_path = source_path[:-5] + ".tbg"
+        with open(tbg_path, "wb") as f:
+            f.write(tbg_bytes)
+        return {"tbg_path": tbg_path, "tbg_bytes": tbg_bytes, "files": [os.path.basename(source_path)], "size": len(tbg_bytes)}
+    else:
+        raise RuntimeError(f"不支持的 source_path: {source_path}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 插件会话数据（t_plugin_session_data）—  对应后端 POST /plugin/data
+# 用法：
+#   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
+#       -story 赦夜人冥夜走廊-第二季 --list
+#   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
+#       -story 赦夜人冥夜走廊-第二季 -k map_data --get
+#   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
+#       -story 赦夜人冥夜走廊-第二季 -k map_data --set --value-file map.json
+#   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
+#       -story 赦夜人冥夜走廊-第二季 -k map_data --remove
+# sessionId 默认为 "all"（跨会话共享，与 req.md 约定一致）；
+# 传 --session 切换到具体会话。
+# ─────────────────────────────────────────────────────────────────────────
+@main.command(name="plugin_session_data")
+@click.option("-i", "plugin_id", required=True, help="插件 id（如 toonflow-field-survival）")
+@click.option("-story", "story", default="", help="故事标识（可读字段，写入 t_plugin_session_data.pluginName 不持久，仅日志用）")
+@click.option("--session", "session_id", default="all", show_default=True, help="会话 id（默认 all 跨会话共享）")
+@click.option("-k", "--key", "data_key", default=None, help="dataKey（get/set/remove 必填）")
+@click.option("--get", "op_get", is_flag=True, help="读取一个 dataKey")
+@click.option("--set", "op_set", is_flag=True, help="写入一个 dataKey（配 --value 或 --value-file）")
+@click.option("--list", "op_list", is_flag=True, help="列出该插件在 sessionId 下的全部 dataKey")
+@click.option("--remove", "op_remove", is_flag=True, help="删除一个 dataKey")
+@click.option("--value", "value_inline", default=None, help="--set 时直接给值（JSON 字符串）")
+@click.option("--value-file", "value_file", default=None, type=click.Path(exists=True), help="--set 时从文件读值（自动 JSON.parse）")
+@click.option("-u", "--upload-tbg", "upload_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
+              help="上传地图：传 .tbg/.json 文件（直接写 map_data）或地图目录（自动 zip 打包成 .tbg 写 map_data）。等价 --set -k map_data --value-file <file>")
+@click.option("-build", "build_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
+              help="只构建 .tbg 文件到目录同级（不写 t_plugin_session_data），等价把 -u 的打包步骤单独跑。")
+@click.pass_context
+def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
+                       op_get, op_set, op_list, op_remove,
+                       value_inline, value_file, upload_tbg, build_tbg):
+    """Read / write / list / remove a plugin's session data (t_plugin_session_data).
+
+    The backend endpoint is POST /plugin/data; sessionId="all" is treated as
+    cross-session and bypasses t_gameSession existence check.
+    """
+    client = resolve_client(ctx.obj["env_path"])
+
+    # ★ -u/--upload-tbg 走「上传地图」快捷路径：dataKey=map_data，op=set，从文件读
+    #   先于 ops 推断：用户传 -u 时不必再传 --set / -k / --value-file
+    if upload_tbg:
+        if op_get or op_list or op_remove:
+            click.secho("[ERR] --upload-tbg 与 --get/--list/--remove 互斥", fg="red"); return
+        if value_inline or value_file:
+            click.secho("[ERR] --upload-tbg 与 --value/--value-file 互斥", fg="red"); return
+        # ★ -build 只打包不写 server；-u 打包并上传
+        if build_tbg:
+            click.secho("[ERR] --upload-tbg 与 -build 互斥", fg="red"); return
+        # ★ 按 story 命名空间隔离：map_data:赦夜人冥夜走廊-第二季
+        #   避免故事 A 的地图覆盖故事 B 的（同一 userId/sessionId="all" 下）
+        data_key = "map_data:" + (story or "default")
+        value_file = upload_tbg
+        op = "set"
+    # ★ -build 只构建 .tbg 文件到目录同级（不写 t_plugin_session_data）
+    if build_tbg:
+        if upload_tbg:
+            click.secho("[ERR] -build 与 -u/--upload-tbg 互斥", fg="red"); return
+        try:
+            info = build_tbg_file(build_tbg)
+        except Exception as e:
+            click.secho("[ERR] 构建 .tbg 失败：" + str(e), fg="red"); return
+        click.secho(f"[OK] {info['tbg_path']}  ({info['size']} bytes, {len(info['files'])} files)", fg="green")
+        return
+    else:
+        # 选 op（显式 flag 优先；否则按 dataKey 推断：传 key 默认 get，未传默认 list）
+        ops = [n for n, v in [("get", op_get), ("set", op_set), ("list", op_list), ("remove", op_remove)] if v]
+        if len(ops) > 1:
+            click.secho("[ERR] 一次只能选一个 op：get/set/list/remove", fg="red"); return
+        if not ops:
+            ops = ["list"] if not data_key else ["get"]
+        op = ops[0]
+
+    if op in ("get", "set", "remove") and not data_key:
+        click.secho("[ERR] " + op + " 必须传 -k/--key", fg="red"); return
+
+    if op == "set":
+        if value_inline is None and value_file is None:
+            click.secho("[ERR] --set 必须传 --value 或 --value-file", fg="red"); return
+        if value_file:
+            if os.path.isdir(value_file) or value_file.lower().endswith((".tbg", ".zip", ".json")):
+                # 走 build_tbg_file 统一打包（目录 / 已是 .tbg / 单 .json）
+                import base64
+                try:
+                    info = build_tbg_file(value_file)
+                except Exception as e:
+                    click.secho("[ERR] 构建 .tbg 失败：" + str(e), fg="red"); return
+                tbg_b64 = base64.b64encode(info["tbg_bytes"]).decode("ascii")
+                value = {
+                    "format": "tbg",
+                    "encoding": "base64+zip",
+                    "data": tbg_b64,
+                    "size": info["size"],
+                    "files": info["files"],
+                    "source": value_file,
+                    "tbg_path": info["tbg_path"],
+                }
+                click.echo(f"[tbg] 打包 {len(info['files'])} 个文件 → {info['tbg_path']} ({info['size']} bytes)")
+            else:
+                with open(value_file, "r", encoding="utf-8") as f:
+                    txt = f.read()
+                try:
+                    value = _json.loads(txt)
+                except Exception as e:
+                    click.secho("[ERR] --value-file 不是合法 JSON: " + str(e), fg="red"); return
+        else:
+            try:
+                value = _json.loads(value_inline)
+            except Exception as e:
+                # 不是 JSON 也允许（按字符串原样存）
+                value = value_inline
+
+    click.echo(
+        f"[plugin_data] pluginId={plugin_id} sessionId={session_id!r} "
+        f"story={story!r} op={op} dataKey={data_key or '(n/a)'}"
+    )
+
+    if op == "get":
+        r = client.get_plugin_data(plugin_id, data_key, session_id=session_id, story=story)
+        # r 可能是 {value, dataKey, updatedAt}（toonflow 后端，由 _parse_response 剥过 data）
+        # 或 {data: {value,...}}（旧版 / 直返）。兼容两者。
+        if isinstance(r, dict) and isinstance(r.get("data"), dict) and "value" in r["data"]:
+            value = r["data"].get("value")
+        else:
+            value = r.get("value") if isinstance(r, dict) else None
+        click.echo(_json.dumps(value, ensure_ascii=False, indent=2))
+    elif op == "set":
+        r = client.set_plugin_data(plugin_id, data_key, value, session_id=session_id, story=story)
+        # 兼容 r 是 {ok: true, dataKey, value:null} 或 {data:{...}} 两种形态
+        summary = (r or {}).get("data") if isinstance(r, dict) and isinstance(r.get("data"), dict) else r
+        click.secho("[OK] " + _json.dumps(summary or {}, ensure_ascii=False), fg="green")
+    elif op == "list":
+        r = client.list_plugin_data(plugin_id, session_id=session_id, story=story)
+        # ToonClient._parse_response 已经把外层 data 字段剥掉了；r 本身就是
+        # {keys: [...], dataKey, value} 形式。但为兼容未来 server 直返 {data:{keys}}，
+        # 双向取值。
+        if isinstance(r, dict) and isinstance(r.get("data"), dict) and "keys" in r["data"]:
+            keys = r["data"].get("keys") or []
+        else:
+            keys = (r or {}).get("keys") or []
+        if not keys:
+            click.echo("(no dataKeys)")
+        else:
+            for k in keys:
+                click.echo("- " + k)
+    elif op == "remove":
+        r = client.remove_plugin_data(plugin_id, data_key, session_id=session_id, story=story)
+        click.secho("[OK] removed " + data_key, fg="green")
+
+
 if __name__ == "__main__":
     main()

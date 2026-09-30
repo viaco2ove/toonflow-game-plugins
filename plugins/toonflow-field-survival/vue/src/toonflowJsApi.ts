@@ -72,13 +72,25 @@ export const toonflowJsApi = {
    */
   minigame: {
     done(result?: unknown): void {
-      window.parent.postMessage({ type: "tf_plugin_action", kind: "done", result }, "*");
+      try {
+        window.parent.postMessage({type: "tf_plugin_action", kind: "done", result}, "*");
+      } catch (e) {
+        console.log("minigame ：e",e)
+      }
     },
     abort(): void {
-      window.parent.postMessage({ type: "tf_plugin_action", kind: "abort" }, "*");
+      try {
+        window.parent.postMessage({type: "tf_plugin_action", kind: "abort"}, "*");
+      } catch (e) {
+         console.log("minigame ：e",e)
+      }
     },
     setFullscreen(enabled: boolean): void {
-      window.parent.postMessage({ type: "tf_plugin_fullscreen", fullscreen: !!enabled }, "*");
+      try {
+        window.parent.postMessage({type: "tf_plugin_fullscreen", fullscreen: !!enabled}, "*");
+      } catch (e) {
+        console.log("setFullscreen ：e",e);
+      }
     },
   },
 };

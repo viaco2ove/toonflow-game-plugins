@@ -177,3 +177,56 @@ class ToonClient:
         if b64:
             return base64.b64decode(b64)
         return b64
+
+    # ── Plugin Session Data（t_plugin_session_data）────────────────────────────
+    # 插件运行时数据：例如 field-survival 的 map_data / player_card。
+    # 后端路由 POST /plugin/data { sessionId, pluginId, op, dataKey?, value? }
+    # 特殊值 sessionId="all" 跨会话共享（后端跳过 t_gameSession 校验）。
+
+    def get_plugin_data(self, plugin_id, data_key, session_id="all", story=""):
+        """读取一个 dataKey。返回 {"value": ..., "updatedAt": ...}。"""
+        body = {
+            "pluginId": plugin_id,
+            "sessionId": session_id,
+            "dataKey": data_key,
+            "op": "get",
+        }
+        if story:
+            body["story"] = story
+        return self._post("/plugin/data", body)
+
+    def set_plugin_data(self, plugin_id, data_key, value, session_id="all", story=""):
+        """upsert 一个 dataKey。value 必须是 JSON 可序列化对象/字符串/数字。"""
+        body = {
+            "pluginId": plugin_id,
+            "sessionId": session_id,
+            "dataKey": data_key,
+            "op": "set",
+            "value": value,
+        }
+        if story:
+            body["story"] = story
+        return self._post("/plugin/data", body)
+
+    def list_plugin_data(self, plugin_id, session_id="all", story=""):
+        """列出该插件在 (userId, sessionId) 下的全部 dataKey。"""
+        body = {
+            "pluginId": plugin_id,
+            "sessionId": session_id,
+            "op": "list",
+        }
+        if story:
+            body["story"] = story
+        return self._post("/plugin/data", body)
+
+    def remove_plugin_data(self, plugin_id, data_key, session_id="all", story=""):
+        """删除一个 dataKey。"""
+        body = {
+            "pluginId": plugin_id,
+            "sessionId": session_id,
+            "dataKey": data_key,
+            "op": "remove",
+        }
+        if story:
+            body["story"] = story
+        return self._post("/plugin/data", body)

@@ -268,7 +268,14 @@ export function getTiledRaw(): Record<string, unknown> | null {
    - objectgroup：PLAYER → 玩家出生点；NPC/LEVEL_TRANSITION/LADDER → decorations
    - 城镇中心 = safe zone
    ============================================================ */
-function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): MapConfig {
+export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: string): MapConfig {
+  // ★ 防御：非 Tiled 格式（缺 layers / width / tilewidth）直接走 fallback 而不是 throw
+  if (!obj || typeof obj !== "object" || !Array.isArray((obj as any).layers)
+      || (!((obj as any).tilewidth || (obj as any).tilewidth === 0)
+          && !((obj as any).tileheight || (obj as any).tileheight === 0))) {
+    console.warn("[mapConfig] normalizeTiledMap 收到非 Tiled 格式（缺 layers/tilewidth），走 fallback：", levelName);
+    return fallbackMapConfig();
+  }
   const f = fallbackMapConfig();
   const W = num(obj.width, 43);
   const H = num(obj.height, 56);

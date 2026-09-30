@@ -84,6 +84,46 @@ window.__devHostModify = (patch) => {
   }
   return "applied " + applied + " to player";
 };
+// ★ dev-host 模式下，模拟 t_plugin_session_data（real host 不在，standalone 必须自己应答）
+//   数据存 window.__devHostPluginData，跨用户/跨会话共享 (sessionId="all")
+window.__devHostPluginData = new Map();
+window.__devHostPluginListeners = new Set();
+window.__devHostPluginEmit = (key) => {
+  for (const cb of window.__devHostPluginListeners) {
+    try { cb(key); } catch (e) { console.warn("[devHost] listener err", e); }
+  }
+};
+window.addEventListener("message", (e) => {
+  const d = e?.data;
+  if (!d || d.type !== "tf_plugin_data") return;
+  const { reqId, op, dataKey, value, pluginId, sessionId, story } = d;
+  const k = JSON.stringify({ p: pluginId, s: sessionId || "all", k: dataKey || "" });
+  let result = null;
+  if (op === "get") {
+    const v = window.__devHostPluginData.get(k);
+    result = { dataKey, value: v ? v.value : null, updatedAt: v ? v.updatedAt : 0 };
+  } else if (op === "set") {
+    window.__devHostPluginData.set(k, { value, updatedAt: Date.now() });
+    window.__devHostPluginEmit(dataKey);
+    result = { dataKey, value: null, ok: true };
+  } else if (op === "list") {
+    const keys = [];
+    for (const key of window.__devHostPluginData.keys()) {
+      const parsed = JSON.parse(key);
+      if (parsed.p === pluginId && parsed.s === (sessionId || "all")) keys.push(parsed.k);
+    }
+    result = { keys, dataKey: "", value: null };
+  } else if (op === "remove") {
+    window.__devHostPluginData.delete(k);
+    window.__devHostPluginEmit(dataKey);
+    result = { dataKey, value: null, ok: true };
+  }
+  if (result) {
+    // ★ 回包要发到 game iframe（不是 dev-host 顶层本身的 parent）
+    const gameWin = document.getElementById("game")?.contentWindow;
+    (gameWin || window.parent).postMessage({ type: "tf_plugin_data_result", reqId, ok: true, ...result }, "*");
+  }
+});
 const log = (m) => { const el = document.getElementById("log"); el.textContent = m + "\\n" + el.textContent.slice(0, 4000); };
 const post = (state) => { document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive"] }, "*"); };
 const showError = (msg) => {
@@ -275,7 +315,8 @@ window.addEventListener("message", async (e) => {
     lastState = {
       phase: "playing", version: 5, tick: 0,
       world: { w: 3000, h: 3000 },
-      roles: [],
+      // ★ 保留 roles：playing 推空 roles → onHostState 整份替换 → 选人阶段无角色可选
+      roles: storyData.roles || [],
       selections: { participants: sel.participants || [], spectators: sel.spectators || [], enemies: sel.enemies || [] },
       entities: ents, chests: [], potions: [], floaters: [],
       skills: DEFAULT_SKILLS,
@@ -475,6 +516,20 @@ window.addEventListener("message", async (e) => {
   // 处理 skill / item 等其他 action
   if (d.type === "tf_plugin_tick" && (d.action === "skill" || d.action === "item" || d.action === "page" || d.action === "exit")) {
     if (!lastState) return;
+    // ★ exit：模拟 entry.js handle_action("exit") 的结算：
+    //   phase=over，result={reason:"exit", exp, money, drops, kills, survivedTicks}
+    if (d.action === "exit" && lastState.phase === "playing") {
+      lastState.phase = "over";
+      lastState.result = {
+        reason: "exit",
+        exp: lastState.exp || 0,
+        money: lastState.money || 0,
+        drops: [...(lastState.drops || [])],
+        kills: lastState.kills || 0,
+        survivedTicks: lastState.tick || 0,
+      };
+      lastState.events.push("[mock] 玩家主动退出（野外生存结束）");
+    }
     // 简化：skill/item 直接给个回包（同步，不走 setTimeout）
     post(lastState);
   }
