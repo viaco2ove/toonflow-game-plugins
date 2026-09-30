@@ -716,14 +716,15 @@ interface SpriteSheet {
 /** 通用 PNG 精灵（单图或多帧横排，frameH=单帧高度） */
 function loadSheet(src: string, fw: number, fh: number, cols = 1): SpriteSheet {
   const img = new Image();
-  // ★ 不设置 crossOrigin（base64 data URL 在 iframe 中不需要 CORS）
-  img.onload = () => { (sheet as any).ready = true; };
+  // ★ 必须先声明 sheet，再注册 onload 闭包（data URL 同步触发 onload，闭包若捕获未声明的 const 会 TDZ 抛错）
+  const sheet: SpriteSheet = { img, fw, fh, cols, ready: !!(img.complete && img.naturalWidth > 0) };
+  img.onload = () => { sheet.ready = true; };
   img.onerror = () => {
     console.warn('[field-survival] sprite load failed', src.substring(0, 30));
   };
   img.src = src;
-  // ★ 同步检查：如果图片已经缓存（complete=true），立即标记 ready
-  const sheet: SpriteSheet = { img, fw, fh, cols, ready: !!(img.complete && img.naturalWidth > 0) };
+  // ★ 兜底：onload 因任何原因没触发时，再做一次同步检查（缓存命中 / 极快解码）
+  if (!sheet.ready && img.complete && img.naturalWidth > 0) sheet.ready = true;
   return sheet;
 }
 
@@ -947,6 +948,10 @@ const decorationsByChunk = new Map<string, Decoration[]>();
  *  关卡切换的唯一入口是场景内 portal（LEVEL_TRANSITION）；宿主 theme 不参与切图。 */
 const currentLevelName = ref(DEFAULT_START_LEVEL);
 const levelSwitching = ref(false);
+/** ★ 最近一次切图完成时刻（ms）。onHostState 的 isLevelSwitch 兜底用它区分
+ *   「切图后宿主还没采纳新怪的过渡帧」（不能丢刚 push 的新图怪）和
+ *   「真·回老图场景」（老怪不能跟人）。 */
+let lastLevelSwitchAt = 0;
 
 /* ============================================================
    ★ 修复③：本地敌怪「世代号」（刷怪权威统一的关键）
@@ -1226,6 +1231,8 @@ async function switchLevel(levelName: string): Promise<void> {
     //   同时 +1 世代号 → 下一次 tick 会把整份清单上报宿主（真实宿主下由宿主接管 AI/结算）
     publishLocalMapMobs();
     bumpLocalMobsEpoch();
+    // ★ 记录切图完成时刻：接下来 ~1.5s 内宿主推送若还没采纳新怪，不能当"老图怪"丢弃
+    lastLevelSwitchAt = Date.now();
     currentZoneName = null;
     zoneLeftTick = 0;
     zoneRespawnReady = true;
@@ -3034,7 +3041,28 @@ const itemPage = computed(() => state.value?.items.slice((state.value.itemPage |
 const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / 4)));
 const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / 4)));
 
-function castSkill(i: number) { sendTick("skill", { index: i }); }
+/** ★ 技能目标（本地权威）：由前端按自己那份坐标系选出「30 米内最近的至多 3 只」，
+ *   随 skill 请求一并下发；宿主优先按这份 id 清单结算，避免宿主侧野怪/玩家坐标
+ *   不同源时"明明贴脸却打空、反而打中远处野怪"。 */
+function pickSkillTargets(): string[] {
+  const s = state.value;
+  const me = (s?.entities || []).find((e: any) => e.side === "player") as any;
+  if (!s || !me) return [];
+  return ((s.entities || []) as any[])
+    .filter((e) => e?.side === "enemy" && e.alive !== false && (e.hp ?? 0) > 0)
+    .map((e) => ({ id: String(e.id), d: Math.hypot((e.x ?? 0) - me.x, (e.y ?? 0) - me.y) }))
+    .filter((r) => r.d < 30)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, 3)
+    .map((r) => r.id);
+}
+function castSkill(i: number) {
+  sendTick("skill", {
+    index: i,
+    targets: pickSkillTargets(),
+    player: lastLocalPose ? { ...lastLocalPose } : undefined,
+  });
+}
 function useItem(i: number) { sendTick("item", { index: i }); }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
@@ -3344,13 +3372,25 @@ onMounted(async () => {
       const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
       if (hostAdopted) {
         deadLocalEnemyIds.clear();
+        // ★ 回补「宿主还没同步的新怪」：本帧客户端刚 spawn 的怪（zone_* 兜底 / 切图后
+        //   刚 push 的 mapmob_*）要等下一帧 tick 才会出现在宿主推送里。hostAdopted 只说明
+        //   "宿主已采纳部分老怪"，不代表"宿主有全部本地怪"——缺的那些若不回补，
+        //   就会被本帧整份替换抹掉（表现：野怪出现一闪即逝）。
+        const missing = localEnemies.filter(
+          (e: any) => !incomingIds.has(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
+        );
+        if (missing.length) incoming.entities = [...incoming.entities, ...missing];
       } else {
         // ★ 兜底判断：只有当 server 推送的敌怪数量 == 本地地图怪数量（=0 兜底场景），
         //   才回填本地未采纳的怪；切图场景 server 已重置为空数组，本地老怪的 id 不在
         //   incomingIds 里，但 incoming.enemies.length===0 与 localEnemies.length>0 不等，
         //   → 视为切图，本地兜底怪全部丢弃（防止森林怪跟着回 mulberryTown）。
+        //   ★ 宽限期：切图刚完成（<1.5s）时本地的 mapmob 是「新图刚 push 的怪」，
+        //     宿主那帧还没收到新清单（epoch 变化后宿主才重建），此时绝不能丢弃——
+        //     否则新图野怪被宿主的过渡帧整份覆盖 → 野怪永远刷不出来（epoch 停在切图值）。
         const incomingEnemies = (incoming.entities||[]).filter((e:any) => e?.side === "enemy");
-        const isLevelSwitch = incomingEnemies.length === 0 && localEnemies.length > 0;
+        const inSwitchGrace = Date.now() - lastLevelSwitchAt < 1500;
+        const isLevelSwitch = incomingEnemies.length === 0 && localEnemies.length > 0 && !inSwitchGrace;
         if (isLevelSwitch) {
           deadLocalEnemyIds.clear();
           // 不回填 → incoming 保留（玩家/盟友）

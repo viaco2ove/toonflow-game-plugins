@@ -84,6 +84,20 @@ window.__devHostModify = (patch) => {
   }
   return "applied " + applied + " to player";
 };
+// ★ 外部可调用的 state 探针：返回玩家/敌怪摘要（bsk evaluate 用）
+window.__devHostState = () => {
+  if (!lastState) return { error: "no state" };
+  const enemies = (lastState.entities || []).filter(e => e.side === "enemy");
+  return {
+    phase: lastState.phase,
+    tick: lastState.tick,
+    mobLevel: lastState._mobLevel,
+    mobEpoch: lastState._mobEpoch,
+    totalEntities: (lastState.entities || []).length,
+    enemyCount: enemies.length,
+    enemies: enemies.slice(0, 20).map(e => ({ id: e.id, name: e.name, level: e.level, hp: e.hp, alive: e.alive, x: e.x, y: e.y })),
+  };
+};
 // ★ dev-host 模式下，模拟 t_plugin_session_data（real host 不在，standalone 必须自己应答）
 //   数据存 window.__devHostPluginData，跨用户/跨会话共享 (sessionId="all")
 window.__devHostPluginData = new Map();

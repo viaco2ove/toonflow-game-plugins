@@ -1219,9 +1219,19 @@ export async function handle_action(action, params, state, context) {
       if (cost > 0 && num(player.mp, 0) < cost) return okResp(`${skill.name} 法力不足`);
       // ★ v5 本地命中判定：命中 30 米内「最近的至多 3 只」敌怪，
       //   含 mapmob_ / localmob_ / zone_ 三类本地权威野怪（修复"玩家攻击不到野怪"）
-      const targets = s.entities
-        .filter((e) => e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0 && dist(player, e) < SKILL_RANGE_M)
-        .sort((a, b) => dist(player, a) - dist(player, b));
+      // ★ 客户端权威目标优先：前端已按自己那份坐标系挑好"30 米内最近的至多 3 只"，
+      //   宿主直接按 id 结算，避免两侧坐标系不一致时"贴脸打空、误中远处野怪"。
+      const hinted = Array.isArray(params?.targets)
+        ? params.targets
+            .map((id) => s.entities.find((e) => e.id === id))
+            .filter((e) => e && e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0)
+            .slice(0, 3)
+        : [];
+      const targets = hinted.length
+        ? hinted
+        : s.entities
+            .filter((e) => e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0 && dist(player, e) < SKILL_RANGE_M)
+            .sort((a, b) => dist(player, a) - dist(player, b));
       if (!targets.length) {
         floater(s, "MISS", player.x, player.y - 24);
         return okResp(`${skill.name} 未命中（${SKILL_RANGE_M} 米内无敌怪）`);
