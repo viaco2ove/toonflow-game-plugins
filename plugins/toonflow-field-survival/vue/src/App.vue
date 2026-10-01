@@ -3398,20 +3398,8 @@ onMounted(async () => {
         if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
       }
     }
-    // ★ 保留客户端本地产生的 vfx/飘字：客户端施法时往 s.vfx/s.floaters push，
-    //   宿主推送的 incoming 没有这些 → 整份替换会清掉客户端产生的特效。
-    //   规则：保留 prevEntities 的 vfx/floaters id 不在 incoming 里的（避免和宿主重复）；
-    //   角色特效（client-authored）短期不会冲突，因为 client 立即触发。
-    if (state.value && incoming) {
-      const prevVfx = (state.value as any).vfx || [];
-      const prevFloaters = (state.value as any).floaters || [];
-      const incomingVfxIds = new Set(((incoming as any).vfx || []).map((v: any) => v?.id).filter(Boolean));
-      const incomingFloaterIds = new Set(((incoming as any).floaters || []).map((f: any) => f?.id).filter(Boolean));
-      const keptVfx = prevVfx.filter((v: any) => v?.id && !incomingVfxIds.has(v.id));
-      const keptFloaters = prevFloaters.filter((f: any) => f?.id && !incomingFloaterIds.has(f.id));
-      if (keptVfx.length) (incoming as any).vfx = [...((incoming as any).vfx || []), ...keptVfx];
-      if (keptFloaters.length) (incoming as any).floaters = [...((incoming as any).floaters || []), ...keptFloaters];
-    }
+    // ★  vfx/floaters 衰减由 dev-host tick 负责（vite.config.ts 每 tick life--）。
+    //    客户端不要保留 prevEntities 的 vfx，否则 prevEntities 里的 vfx 不衰减、永远显示。
     state.value = incoming;
     ready.value = true;
 

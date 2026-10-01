@@ -518,9 +518,13 @@ window.addEventListener("message", async (e) => {
       if (currentLevelName !== lastState._mobLevel) {
         lastState._mobLevel = currentLevelName;
       }
-      // 6. 飘字/vfx 衰减
+      // 6. 飘字/vfx/cd 衰减
       lastState.floaters = lastState.floaters.filter((f) => { f.life--; return f.life > 0; });
       if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life--; return v.life > 0; });
+      // ★ 技能 cd 每 tick -1（castSkill 时 dev-host 已设 cdLeft=cd）
+      for (const sk of lastState.skills || []) {
+        if (sk.cdLeft && sk.cdLeft > 0) sk.cdLeft = Math.max(0, sk.cdLeft - 1);
+      }
       for (const e of ents) {
         if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
         if (e.actionBobMs && e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
@@ -565,14 +569,31 @@ window.addEventListener("message", async (e) => {
             color: "#fff", size: 1.6,
           });
         } else if (sk.name === "火球") {
+          // ★ 火球目标 = 范围内最近的敌人；打过去产生 dmg/飘字/命中特效
+          let target = null, minD = Infinity;
+          for (const e2 of lastState.entities) {
+            if (e2.side !== "enemy" || !e2.alive) continue;
+            const dd = Math.hypot(e2.x - me2.x, e2.y - me2.y);
+            if (dd < minD && dd < 12) { minD = dd; target = e2; }
+          }
+          const tx = target ? target.x : me2.x + Math.cos((me2.facing || 0) * Math.PI / 180) * 10;
+          const ty = target ? target.y : me2.y - Math.sin((me2.facing || 0) * Math.PI / 180) * 10;
           lastState.vfx.push({
             id, kind: "fireball", entityId: me2.id,
-            targetEntityId: me2.id,
+            targetEntityId: target?.id,
             x: me2.x, y: me2.y,
-            targetX: me2.x, targetY: me2.y,
-            facing: me2.facing, life: 20, total: 20,
+            targetX: tx, targetY: ty,
+            facing: me2.facing, life: 16, total: 16,
             color: "#ff6a00", size: 1.0,
           });
+          // ★ 命中伤害（弹体到达后）
+          if (target) {
+            const dmg = Math.max(1, (sk.power || 20) + Math.floor((me2.atk || 30) * 0.5) - (target.def || 0));
+            target.hp = Math.max(0, target.hp - dmg);
+            target.hitFlashMs = 250;
+            lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
+          }
         } else if (sk.name === "治疗") {
           lastState.vfx.push({
             id, kind: "heal_ring", entityId: me2.id,
@@ -592,6 +613,22 @@ window.addEventListener("message", async (e) => {
       }
     }
     post(lastState);
+  }
+  // ★ item：磨刀石/开山刀/暮光佩剑/仪式长剑 → buff 给玩家（命中+atk），配 buff_ring vfx
+  if (d.type === "tf_plugin_tick" && d.action === "item") {
+    if (!lastState) return;
+    const me3 = lastState.entities.find((e) => e.side === "player");
+    const it = lastState.items?.[d.params?.index];
+    if (me3 && it) {
+      if (!lastState.vfx) lastState.vfx = [];
+      const id = "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6);
+      lastState.vfx.push({ id, kind: "buff_ring", entityId: me3.id, x: me3.x, y: me3.y, facing: 0, life: 24, total: 24, color: "#FFCC55", size: 1.0 });
+      // ★ buff：临时增加 atk（30 tick），叠加在 me3.atk
+      if (!me3._atkBuffLeftMs) me3._atkBuffLeftMs = 0;
+      me3._atkBuffLeftMs = 30;
+    }
+    post(lastState);
+    return;
   }
   // ★ revive：复活玩家（半血回场），清空周围敌人给玩家喘息空间
   if (d.type === "tf_plugin_tick" && d.action === "revive") {
