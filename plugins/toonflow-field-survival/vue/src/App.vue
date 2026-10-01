@@ -95,8 +95,9 @@ const spectators = reactive<string[]>([]);
 const enemies = reactive<string[]>([]);
 /**
  * 切图 grace 时间（ms）
+ * switchGraceTime 为 1500 野怪出现1.5 秒就消失？
  */
-const switchGraceTime = 61500;
+const switchGraceTime = 1500;
 
 // 头像缓存（entityId -> HTMLImageElement）
 const avatarCache = new Map<string, HTMLImageElement>();
