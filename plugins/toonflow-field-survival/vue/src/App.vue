@@ -93,6 +93,10 @@ const mapMobCount = computed(() => mapCfg.value?.mobs?.length ?? 0);
 const participants = reactive<string[]>([]);
 const spectators = reactive<string[]>([]);
 const enemies = reactive<string[]>([]);
+/**
+ * 切图 grace 时间（ms）
+ */
+const switchGraceTime = 61500;
 
 // 头像缓存（entityId -> HTMLImageElement）
 const avatarCache = new Map<string, HTMLImageElement>();
@@ -3337,6 +3341,7 @@ onMounted(async () => {
     const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;
     const newPhase = incoming?.phase;
+    const inSwitchGrace = Date.now() - lastLevelSwitchAt < switchGraceTime;
     // ★ 关键修复：玩家位姿以本地 tick 为唯一数据源。
     //   宿主推送的 state 中玩家 x/y/facing 是宿主侧镜像值（宿主已不再积分玩家输入），
     //   若整份替换会把本地刚推进的位移回退 → 表现为"走一小步被拖回 / 松手瞬移"。
@@ -3389,7 +3394,6 @@ onMounted(async () => {
         //     宿主那帧还没收到新清单（epoch 变化后宿主才重建），此时绝不能丢弃——
         //     否则新图野怪被宿主的过渡帧整份覆盖 → 野怪永远刷不出来（epoch 停在切图值）。
         const incomingEnemies = (incoming.entities||[]).filter((e:any) => e?.side === "enemy");
-        const inSwitchGrace = Date.now() - lastLevelSwitchAt < 1500;
         const isLevelSwitch = incomingEnemies.length === 0 && localEnemies.length > 0 && !inSwitchGrace;
         if (isLevelSwitch) {
           deadLocalEnemyIds.clear();
@@ -3402,7 +3406,32 @@ onMounted(async () => {
         }
       }
     }
-    state.value = incoming;
+// ★ 切图宽限期（1.5s）内：合并 prevEntities（保留本地刚 push 的新图怪）。
+    //   dev-host 推来那帧的 incoming.entities 还没含新怪（要等下一帧 tick 同步）。
+    //   整份替换会把新怪全抹掉。合并规则：
+    //     - incoming 已含的实体（玩家/盟友/已被 dev-host 采纳的怪）直接用 incoming
+    //     - incoming 不含、但 prevEntities 有且还活着的本地怪，保留
+    //     - incoming 不含、但 prevEntities 里有死亡的本地怪，丢弃
+    if (incoming) {
+      if (inSwitchGrace && state.value) {
+        const incomingIds2 = new Set(
+          (incoming.entities || []).map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
+        );
+        const keepLocal = prevEntities.filter((e: any) => {
+          if (!e?.id || typeof e.id !== "string") return false;
+          if (e.alive === false) return false;       // 死亡怪不保留
+          if (incomingIds2.has(e.id)) return false;   // 已被 dev-host 采纳
+          // 只保留客户端权威怪（mapmob_/localmob_/zone_）
+          if (typeof e.id === "string"
+              && (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_"))) {
+            return true;
+          }
+          return false;
+        });
+        (incoming as any).entities = [...(incoming.entities || []), ...keepLocal];
+      }
+      state.value = incoming;
+    }
     ready.value = true;
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态
@@ -4373,7 +4402,7 @@ body {
   color: #ffe79e;
 }
 .scale-ruler__lbl {
-  font-size: 6x;
+  font-size: 6px;
   color: #9aa0a6;
   margin-top: 1px;
   text-align: right;

@@ -488,6 +488,7 @@ window.addEventListener("message", async (e) => {
       //    ② 死亡的地图怪记 respawnAt；玩家离开该地图 30 秒后重新生成（game.md：离开当前地图30秒后重新生成野怪）
       const le = p.localEnemies;
       if (le && Array.isArray(le.list) && le.epoch !== lastState._mobEpoch) {
+        console.log("[devHost] 收到新清单 epoch=" + le.epoch + " list=" + le.list.length + " (之前=" + lastState._mobEpoch + ")");
         lastState._mobEpoch = le.epoch;
         // 保留玩家/盟友，删除 server 侧全部敌怪（客户端是权威）
         const keep = ents.filter((e) => e.side !== "enemy");
