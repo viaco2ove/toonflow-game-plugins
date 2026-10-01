@@ -1,9 +1,41 @@
 import { defineConfig, loadEnv, Plugin } from "vite";
 import { resolve } from "path";
 import { readFileSync, existsSync } from "fs";
+import http from "http";
 // @ts-ignore
 import vue from "@vitejs/plugin-vue";
 import { viteSingleFile } from "vite-plugin-singlefile";
+
+// 解析 ../.env（不在 vue/ 子目录）里的 game_app_service_url / auth_token / sessionId
+// 不引入 dotenv 依赖（vue/package.json 没有），手写一个轻量解析
+function loadDotenvLight(envPath: string): void {
+  if (!existsSync(envPath)) return;
+  try {
+    const content = readFileSync(envPath, "utf-8");
+    for (const raw of content.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 0) continue;
+      const k = line.slice(0, eq).trim();
+      let v = line.slice(eq + 1).trim();
+      // 去引号
+      if ((v.startsWith("\"") && v.endsWith("\"")) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      if (!(k in process.env)) process.env[k] = v;
+    }
+  } catch {}
+}
+// ★ ESM 模式下 __dirname 不可用，用 import.meta.url 算
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
+// .env 在 toonflow-game-plugins/ 根目录（vue → toonflow-field-survival → plugins → toonflow-game-plugins）
+{
+  const envPath = resolve(__dirname, "../../../.env");
+  loadDotenvLight(envPath);
+}
 
 /** 故事目录读取中间件：/story-data/<storyName>/... → 读取对应文件 */
 function storyDataPlugin(workshopsRoot: string): Plugin {
@@ -44,9 +76,83 @@ function devHostPlugin(conn: string, story: string): Plugin {
     configureServer(server) {
       if (!conn || conn === "0" || conn === "false") return;
       const STORY = story || "";
+      const STORY_ROOT = resolve(__dirname, "../workshops/toonflow-field-survival/map_design");
       const storyUrl = STORY
         ? `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(STORY)}/test_data/test_state.json`
         : "";
+      // ★ 服务器代理：/toon-api/* → {SERVICE_URL}/*（避免浏览器跨域）
+      //   并把 auth_token 注入到 Authorization header
+      const SERVICE_URL = process.env.game_app_service_url || "http://localhost:60002";
+      const AUTH_TOKEN = process.env.auth_token || "";
+      // 通用代理：/toon-asset/<path> → {SERVICE_URL}/<path>（图片/音频等静态资源）
+      server.middlewares.use("/toon-asset", (req, res, next) => {
+        try {
+          const targetPath = (req.url || "/").replace(/^\//, "");
+          const headers: Record<string, string> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            if (typeof v === "string") headers[k] = v;
+            else if (Array.isArray(v)) headers[k] = v.join(", ");
+          }
+          if (AUTH_TOKEN) headers["authorization"] = "Bearer " + AUTH_TOKEN;
+          const proxyReq = http.request(
+            {
+              hostname: new URL(SERVICE_URL).hostname,
+              port: new URL(SERVICE_URL).port || 80,
+              method: req.method,
+              path: "/" + targetPath,
+              headers,
+            },
+            (proxyRes) => {
+              res.statusCode = proxyRes.statusCode || 502;
+              for (const [k, v] of Object.entries(proxyRes.headers)) {
+                if (v) res.setHeader(k, v as any);
+              }
+              proxyRes.pipe(res);
+            },
+          );
+          proxyReq.on("error", (err) => { res.statusCode = 502; res.end("proxy error: " + err.message); });
+          req.pipe(proxyReq);
+        } catch (e) { next(e as any); }
+      });
+      server.middlewares.use("/toon-api", (req, res, next) => {
+        try {
+          const u = new URL(req.url || "/", SERVICE_URL);
+          const targetPath = u.pathname + u.search;
+          const headers: Record<string, string> = {};
+          for (const [k, v] of Object.entries(req.headers)) {
+            if (typeof v === "string") headers[k] = v;
+            else if (Array.isArray(v)) headers[k] = v.join(", ");
+          }
+          // 注入 auth token
+          if (AUTH_TOKEN) {
+            headers["authorization"] = "Bearer " + AUTH_TOKEN;
+          }
+          // node fetch in vite middleware: 用 http module
+          const proxyReq = http.request(
+            {
+              hostname: new URL(SERVICE_URL).hostname,
+              port: new URL(SERVICE_URL).port || 80,
+              method: req.method,
+              path: targetPath,
+              headers,
+            },
+            (proxyRes) => {
+              res.statusCode = proxyRes.statusCode || 502;
+              for (const [k, v] of Object.entries(proxyRes.headers)) {
+                if (v) res.setHeader(k, v as any);
+              }
+              proxyRes.pipe(res);
+            },
+          );
+          proxyReq.on("error", (err) => {
+            res.statusCode = 502;
+            res.end("proxy error: " + err.message);
+          });
+          req.pipe(proxyReq);
+        } catch (e) {
+          next(e as any);
+        }
+      });
       const PAGE = `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -69,6 +175,11 @@ function devHostPlugin(conn: string, story: string): Plugin {
 <script>
 const STORY = ${JSON.stringify(STORY)};
 const STORY_URL = ${JSON.stringify(storyUrl)};
+const SERVICE_URL = ${JSON.stringify(SERVICE_URL)};
+// ★ 注入 auth token（从 ../.env 读），浏览器 fetch /toon-api 时自动带上
+const AUTH_TOKEN = ${JSON.stringify(AUTH_TOKEN)};
+window.__AUTH_TOKEN__ = AUTH_TOKEN;
+window.__SERVICE_URL__ = SERVICE_URL;
 let lastState = null;
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
@@ -148,12 +259,111 @@ const showError = (msg) => {
   log("ERROR: " + msg);
 };
 
-// 启动时先拉真实 story 数据（和插件 mockHost 同一份 test_state.json）
+// 启动时拉服务器 story runtime state。流程：
+//   1) 从本地 workshops/.../${STORY}/story.json 读 sessionId/worldId（4 字段，不经常变）
+//   2) 用 sessionId 调 POST {SERVICE_URL}/game/storyInfo（通过 /toon-api 走 vite 代理，避免 CORS）
+//   3) 把 server response.state.player + .npcs 转为 test_state.json 的 roles 数组格式
+//   4) 失败回退到本地 test_state.json（不打断开发）
 async function loadStoryData() {
   if (!STORY) {
     showError("未指定 STORY：\\nnpm run debug -- --story=你的故事名 --conn");
     return false;
   }
+  // 1) 读本地 story.json 拿 sessionId/worldId
+  let sessionId = "";
+  let worldId = 0;
+  try {
+    // 浏览器里没 node 的 resolve/existsSync/readFileSync，用 fetch 走 vite 静态服务
+    const storyMetaUrl = "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/story.json";
+    const metaR = await fetch(storyMetaUrl);
+    if (metaR.ok) {
+      const meta = await metaR.json();
+      sessionId = String(meta.sessionId || "");
+      worldId = Number(meta.worldId || 0);
+    } else {
+      log("! story.json HTTP " + metaR.status + " → fallback local");
+      return await loadStoryFromLocal();
+    }
+  } catch (e) {
+    log("! read story.json failed: " + e.message + " → fallback local");
+    return await loadStoryFromLocal();
+  }
+  if (!sessionId) {
+    log("! story.json 缺 sessionId → fallback local");
+    return await loadStoryFromLocal();
+  }
+// 2) 调服务器（通过 /toon-api 代理）
+  try {
+    const headers = { "Content-Type": "application/json" };
+    // dev-host 页面 fetch 时直接带 token（vite.config.ts 注入了 window.__AUTH_TOKEN__）
+    if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+      headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+    }
+    const r = await fetch("/toon-api/game/storyInfo", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sessionId }),
+    });
+    if (!r.ok) {
+      log("! server storyInfo HTTP " + r.status + " → fallback local");
+      return await loadStoryFromLocal();
+    }
+    const resp = await r.json();
+    if (resp?.code !== 200 || !resp?.data) {
+      log("! server response invalid (code=" + resp?.code + ") → fallback local");
+      return await loadStoryFromLocal();
+    }
+    const srvData = resp.data;
+    const srvState = srvData.state || {};
+    // 3) 转换：state.player + state.npcs → roles[]
+    const roles = [];
+    if (srvState.player) {
+      const p = srvState.player;
+      roles.push({
+        id: p.id || "player",
+        name: p.name || "玩家",
+        roleType: p.roleType || "player",
+        // ★ server avatarPath "/1/..." 改写到 /toon-asset/1/... 走 vite 代理
+        avatarPath: (p.avatarPath && p.avatarPath.startsWith("/")) ? "/toon-asset" + p.avatarPath : (p.avatarPath || ""),
+        description: p.description || "",
+        initial_level: p.parameterCardJson?.level || p.attributes?.cultivationInsight || 1,
+      });
+    }
+    for (const [npcId, npc] of Object.entries(srvState.npcs || {})) {
+      const n = npc;
+      roles.push({
+        id: n.id || npcId,
+        name: n.name || npcId,
+        roleType: n.roleType || "npc",
+        avatarPath: (n.avatarPath && n.avatarPath.startsWith("/")) ? "/toon-asset" + n.avatarPath : (n.avatarPath || ""),
+        description: n.description || "",
+        initial_level: n.parameterCardJson?.level || 1,
+      });
+    }
+    // materials 占位：用 server inventory 转成 materials 格式（dev-host 后续转 items）
+    const materials = (srvState.inventory || []).map((it, idx) => ({
+      name: it.name || ("物品" + (idx + 1)),
+      count: 1,
+      effectType: "heal_hp",
+      stats: { heal: 0 },
+    }));
+    storyData = {
+      description: srvData.chapterTitle || STORY,
+      world: { name: srvData.world?.name || STORY },
+      roles,
+      monsters: [],
+      materials,
+    };
+    log("✓ loaded story from server: " + STORY + " (roles: " + roles.length + ", materials: " + materials.length + ", session: " + sessionId + ")");
+    return true;
+  } catch (e) {
+    log("! server fetch failed: " + e.message + " → fallback local");
+    return await loadStoryFromLocal();
+  }
+}
+
+// 回退：读本地 test_state.json
+async function loadStoryFromLocal() {
   try {
     const r = await fetch(STORY_URL);
     if (!r.ok) {
@@ -161,7 +371,7 @@ async function loadStoryData() {
       return false;
     }
     storyData = await r.json();
-    log("✓ loaded story: " + STORY + " (roles: " + (storyData.roles?.length || 0) + ", monsters: " + (storyData.monsters?.length || 0) + ", materials: " + (storyData.materials?.length || 0) + ")");
+    log("✓ loaded story (local fallback): " + STORY + " (roles: " + (storyData.roles?.length || 0) + ", monsters: " + (storyData.monsters?.length || 0) + ", materials: " + (storyData.materials?.length || 0) + ")");
     return true;
   } catch (e) {
     showError("读取 story 失败：" + e.message + "\\n" + STORY_URL);
