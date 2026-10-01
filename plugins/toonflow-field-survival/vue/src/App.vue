@@ -93,11 +93,6 @@ const mapMobCount = computed(() => mapCfg.value?.mobs?.length ?? 0);
 const participants = reactive<string[]>([]);
 const spectators = reactive<string[]>([]);
 const enemies = reactive<string[]>([]);
-/**
- * 切图 grace 时间（ms）
- * switchGraceTime 为 1500 野怪出现1.5 秒就消失？
- */
-const switchGraceTime = 1500;
 
 // 头像缓存（entityId -> HTMLImageElement）
 const avatarCache = new Map<string, HTMLImageElement>();
@@ -956,7 +951,6 @@ const levelSwitching = ref(false);
 /** ★ 最近一次切图完成时刻（ms）。onHostState 的 isLevelSwitch 兜底用它区分
  *   「切图后宿主还没采纳新怪的过渡帧」（不能丢刚 push 的新图怪）和
  *   「真·回老图场景」（老怪不能跟人）。 */
-let lastLevelSwitchAt = 0;
 
 /* ============================================================
    ★ 修复③：本地敌怪「世代号」（刷怪权威统一的关键）
@@ -1236,8 +1230,6 @@ async function switchLevel(levelName: string): Promise<void> {
     //   同时 +1 世代号 → 下一次 tick 会把整份清单上报宿主（真实宿主下由宿主接管 AI/结算）
     publishLocalMapMobs();
     bumpLocalMobsEpoch();
-    // ★ 记录切图完成时刻：接下来 ~1.5s 内宿主推送若还没采纳新怪，不能当"老图怪"丢弃
-    lastLevelSwitchAt = Date.now();
     currentZoneName = null;
     zoneLeftTick = 0;
     zoneRespawnReady = true;
@@ -3342,7 +3334,6 @@ onMounted(async () => {
     const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;
     const newPhase = incoming?.phase;
-    const inSwitchGrace = Date.now() - lastLevelSwitchAt < switchGraceTime;
     // ★ 关键修复：玩家位姿以本地 tick 为唯一数据源。
     //   宿主推送的 state 中玩家 x/y/facing 是宿主侧镜像值（宿主已不再积分玩家输入），
     //   若整份替换会把本地刚推进的位移回退 → 表现为"走一小步被拖回 / 松手瞬移"。
@@ -3357,11 +3348,12 @@ onMounted(async () => {
       // 回到选人 / 结算：清空本地位姿缓存，下一局以宿主 spawn 为准
       lastLocalPose = null;
     }
-    // ★ 修复③（刷怪权威统一）：宿主要么已"采纳"前端上报的敌怪（其推送中带同名 id），
-    //   要么还没收到清单（未重启 / 旧宿主）。判定规则：
-    //     · 宿主已采纳 → 完全以宿主实体为准（含宿主结算的击杀），不回补、不记录阵亡；
-    //     · 宿主未采纳 → 保留原有的回补兜底，但用 deadLocalEnemyIds 记住本帧阵亡的本地
-    //       敌怪，避免"打死了又被整份推送原地复活"。
+    // ★ 刷怪权威统一：客户端权威怪（mapmob_/localmob_/zone_）始终在 prevEntities 里。
+    //   宿主推送的 incoming.entities 不含客户端怪（宿主没看到 mapmob_*），所以整份
+    //   替换会把刚 push 的新图怪全抹掉。规则：
+    //     - 玩家/盟友/宿主敌怪（他用 side=ai 或 zone_/localmob_ 之外）→ 用 incoming
+    //     - 客户端权威怪（mapmob_/localmob_/zone_）→ 用 prevEntities 的（带 alive 状态）
+    //     - 切图后，prevEntities 里的旧图怪 id 不在新图 prevEntities 里 → 自动丢弃
     if (incoming && Array.isArray(incoming.entities)) {
       const incomingIds = new Set(
         incoming.entities.map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
@@ -3378,61 +3370,24 @@ onMounted(async () => {
       const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
       if (hostAdopted) {
         deadLocalEnemyIds.clear();
-        // ★ 回补「宿主还没同步的新怪」：本帧客户端刚 spawn 的怪（zone_* 兜底 / 切图后
-        //   刚 push 的 mapmob_*）要等下一帧 tick 才会出现在宿主推送里。hostAdopted 只说明
-        //   "宿主已采纳部分老怪"，不代表"宿主有全部本地怪"——缺的那些若不回补，
-        //   就会被本帧整份替换抹掉（表现：野怪出现一闪即逝）。
+        // 回补宿主还没同步的新怪
         const missing = localEnemies.filter(
           (e: any) => !incomingIds.has(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
         );
         if (missing.length) incoming.entities = [...incoming.entities, ...missing];
       } else {
-        // ★ 兜底判断：只有当 server 推送的敌怪数量 == 本地地图怪数量（=0 兜底场景），
-        //   才回填本地未采纳的怪；切图场景 server 已重置为空数组，本地老怪的 id 不在
-        //   incomingIds 里，但 incoming.enemies.length===0 与 localEnemies.length>0 不等，
-        //   → 视为切图，本地兜底怪全部丢弃（防止森林怪跟着回 mulberryTown）。
-        //   ★ 宽限期：切图刚完成（<1.5s）时本地的 mapmob 是「新图刚 push 的怪」，
-        //     宿主那帧还没收到新清单（epoch 变化后宿主才重建），此时绝不能丢弃——
-        //     否则新图野怪被宿主的过渡帧整份覆盖 → 野怪永远刷不出来（epoch 停在切图值）。
-        const incomingEnemies = (incoming.entities||[]).filter((e:any) => e?.side === "enemy");
-        const isLevelSwitch = incomingEnemies.length === 0 && localEnemies.length > 0 && !inSwitchGrace;
-        if (isLevelSwitch) {
-          deadLocalEnemyIds.clear();
-          // 不回填 → incoming 保留（玩家/盟友）
-        } else {
-          const keptMapMobs = localEnemies.filter(
-            (e: any) => !incomingIds.has(e.id) && !deadLocalEnemyIds.has(e.id),
-          );
-          if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
-        }
-      }
-    }
-// ★ 切图宽限期（1.5s）内：合并 prevEntities（保留本地刚 push 的新图怪）。
-    //   dev-host 推来那帧的 incoming.entities 还没含新怪（要等下一帧 tick 同步）。
-    //   整份替换会把新怪全抹掉。合并规则：
-    //     - incoming 已含的实体（玩家/盟友/已被 dev-host 采纳的怪）直接用 incoming
-    //     - incoming 不含、但 prevEntities 有且还活着的本地怪，保留
-    //     - incoming 不含、但 prevEntities 里有死亡的本地怪，丢弃
-    if (incoming) {
-      if (inSwitchGrace && state.value) {
-        const incomingIds2 = new Set(
-          (incoming.entities || []).map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
+        // ★ 切图场景：宿主没回新怪（incoming.enemies.length===0），但 prevEntities
+        //   里的客户端权威怪（mapmob_/localmob_/zone_）就是新图刚 push 的怪——
+        //   必须回填，否则新图野怪一帧就消失。
+        //   旧图怪自动丢弃：switchLevel() 把新怪 push 后旧怪的 id 就不在 prevEntities 里了。
+        const keptMapMobs = localEnemies.filter(
+          (e: any) => !deadLocalEnemyIds.has(e.id),
         );
-        const keepLocal = prevEntities.filter((e: any) => {
-          if (!e?.id || typeof e.id !== "string") return false;
-          if (e.alive === false) return false;       // 死亡怪不保留
-          if (incomingIds2.has(e.id)) return false;   // 已被 dev-host 采纳
-          // 只保留客户端权威怪（mapmob_/localmob_/zone_）
-          if (typeof e.id === "string"
-              && (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_"))) {
-            return true;
-          }
-          return false;
-        });
-        (incoming as any).entities = [...(incoming.entities || []), ...keepLocal];
+        if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
       }
-      state.value = incoming;
     }
+    state.value = incoming;
+    state.value = incoming;
     ready.value = true;
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态
