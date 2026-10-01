@@ -948,6 +948,8 @@ const decorationsByChunk = new Map<string, Decoration[]>();
  *  关卡切换的唯一入口是场景内 portal（LEVEL_TRANSITION）；宿主 theme 不参与切图。 */
 const currentLevelName = ref(DEFAULT_START_LEVEL);
 const levelSwitching = ref(false);
+/** 切图过渡期标记（true = 本帧正在切图，丢弃所有旧图怪） */
+const switchingLevel = ref(false);
 /** ★ 最近一次切图完成时刻（ms）。onHostState 的 isLevelSwitch 兜底用它区分
  *   「切图后宿主还没采纳新怪的过渡帧」（不能丢刚 push 的新图怪）和
  *   「真·回老图场景」（老怪不能跟人）。 */
@@ -1110,6 +1112,7 @@ function clampToMapBounds(x: number, y: number): { x: number; y: number } {
 async function switchLevel(levelName: string): Promise<void> {
   if (levelSwitching.value) return;
   levelSwitching.value = true;
+  switchingLevel.value = true;
   try {
     const next = await loadLevelByName(levelName);
     if (!next) {
@@ -1236,6 +1239,7 @@ async function switchLevel(levelName: string): Promise<void> {
     console.info("[field-survival] 已切换到关卡：", levelName);
   } finally {
     levelSwitching.value = false;
+    switchingLevel.value = false;
   }
 }
 
@@ -3379,23 +3383,33 @@ onMounted(async () => {
       for (const e of localEnemies as any[]) {
         if (e.alive === false && !deadLocalEnemyIds.has(e.id)) deadLocalEnemyIds.add(e.id);
       }
-      const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
-      if (hostAdopted) {
-        deadLocalEnemyIds.clear();
-        // 回补宿主还没同步的新怪
-        const missing = localEnemies.filter(
-          (e: any) => !incomingIds.has(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
+      // ★ 切图过渡期：丢弃所有旧图怪（zone_/localmob_），只保留新图的 mapmob_ 怪。
+      //   否则从森林/墓地切进 mulberryTown 时，上张图的 zone_ 怪会跟进来追玩家。
+      if (switchingLevel.value) {
+        // 只允许 mapmob_（新图刚加载的 Tiled 怪）通过；zone_/localmob_ 一律过滤掉
+        const validMapMobs = localEnemies.filter(
+          (e: any) => e.id.startsWith("mapmob_") && e.alive !== false && !deadLocalEnemyIds.has(e.id),
         );
-        if (missing.length) incoming.entities = [...incoming.entities, ...missing];
+        if (validMapMobs.length) incoming.entities = [...incoming.entities, ...validMapMobs];
       } else {
-        // ★ 切图场景：宿主没回新怪（incoming.enemies.length===0），但 prevEntities
-        //   里的客户端权威怪（mapmob_/localmob_/zone_）就是新图刚 push 的怪——
-        //   必须回填，否则新图野怪一帧就消失。
-        //   旧图怪自动丢弃：switchLevel() 把新怪 push 后旧怪的 id 就不在 prevEntities 里了。
-        const keptMapMobs = localEnemies.filter(
-          (e: any) => !deadLocalEnemyIds.has(e.id),
-        );
-        if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+        const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
+        if (hostAdopted) {
+          deadLocalEnemyIds.clear();
+          // 回补宿主还没同步的新怪
+          const missing = localEnemies.filter(
+            (e: any) => !incomingIds.has(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
+          );
+          if (missing.length) incoming.entities = [...incoming.entities, ...missing];
+        } else {
+          // ★ 切图场景：宿主没回新怪（incoming.enemies.length===0），但 prevEntities
+          //   里的客户端权威怪（mapmob_/localmob_/zone_）就是新图刚 push 的怪——
+          //   必须回填，否则新图野怪一帧就消失。
+          //   旧图怪自动丢弃：switchLevel() 把新怪 push 后旧怪的 id 就不在 prevEntities 里了。
+          const keptMapMobs = localEnemies.filter(
+            (e: any) => !deadLocalEnemyIds.has(e.id),
+          );
+          if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
+        }
       }
     }
     // ★  vfx/floaters 衰减由 dev-host tick 负责（vite.config.ts 每 tick life--）。
