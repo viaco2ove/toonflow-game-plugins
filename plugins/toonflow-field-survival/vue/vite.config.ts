@@ -450,6 +450,10 @@ window.addEventListener("message", async (e) => {
           closest.hitFlashMs = 250;
           me.actionBobMs = 300;
           lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+          // ★ 默认攻击特效：红色火花 + 命中爆炸
+          if (!lastState.vfx) lastState.vfx = [];
+          lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "spark", entityId: closest.id, x: closest.x, y: closest.y, life: 8, total: 8, color: "#ff5a5a" });
+          lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "explosion", entityId: closest.id, x: closest.x, y: closest.y, life: 6, total: 6, color: "#ff8c3a" });
           if (closest.hp <= 0) {
             closest.alive = false;
             lastState.kills++;
