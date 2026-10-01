@@ -18,3 +18,9 @@ story.json 包含了sessionId 和 worldId
 [public](../../../plugins/toonflow-field-survival/vue/public)
 
 简洁版：npm run debug:conn
+
+
+# 数据互通
+与服务器进行拟真测试。动态修改服务器的当前用户正在游玩的这个故事的这个会话的角色卡信息。经验，级别，血量，蓝量，物品，技能等。 保存到会话的动态数据里。也就是关闭这个小游戏
+  继续ai 聊天 看见的是变化后的。
+  上传地图到服务器 [@md/curr_design/toonflow-field-survival/game.md:10-29]
