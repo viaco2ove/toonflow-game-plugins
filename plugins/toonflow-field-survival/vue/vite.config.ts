@@ -516,6 +516,7 @@ window.addEventListener("message", async (e) => {
       }
       // 6. 飘字/vfx 衰减
       lastState.floaters = lastState.floaters.filter((f) => { f.life--; return f.life > 0; });
+      if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life--; return v.life > 0; });
       for (const e of ents) {
         if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
         if (e.actionBobMs && e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
@@ -546,6 +547,46 @@ window.addEventListener("message", async (e) => {
       lastState.events.push("[mock] 玩家主动退出（野外生存结束）");
     }
     // 简化：skill/item 直接给个回包（同步，不走 setTimeout）
+    if (d.action === "skill" && d.params) {
+      const me2 = lastState.entities.find((e) => e.side === "player");
+      const sk = lastState.skills?.[d.params.index];
+      if (me2 && sk) {
+        if (!lastState.vfx) lastState.vfx = [];
+        const id = "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6);
+        if (sk.name === "冲斩") {
+          lastState.vfx.push({
+            id, kind: "slash_arc", entityId: me2.id,
+            x: me2.x, y: me2.y,
+            facing: me2.facing, life: 12, total: 12,
+            color: "#fff", size: 1.6,
+          });
+        } else if (sk.name === "火球") {
+          lastState.vfx.push({
+            id, kind: "fireball", entityId: me2.id,
+            targetEntityId: me2.id,
+            x: me2.x, y: me2.y,
+            targetX: me2.x, targetY: me2.y,
+            facing: me2.facing, life: 20, total: 20,
+            color: "#ff6a00", size: 1.0,
+          });
+        } else if (sk.name === "治疗") {
+          lastState.vfx.push({
+            id, kind: "heal_ring", entityId: me2.id,
+            x: me2.x, y: me2.y,
+            facing: 0, life: 18, total: 18,
+            color: "#7CFFB2", size: 1.0,
+          });
+        } else if (sk.name === "护盾") {
+          lastState.vfx.push({
+            id, kind: "buff_ring", entityId: me2.id,
+            x: me2.x, y: me2.y,
+            facing: 0, life: 30, total: 30,
+            color: "#9CCFFF", size: 1.0,
+          });
+        }
+        sk.cdLeft = sk.cd || 0;
+      }
+    }
     post(lastState);
   }
   // ★ revive：复活玩家（半血回场），清空周围敌人给玩家喘息空间

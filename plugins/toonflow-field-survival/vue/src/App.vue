@@ -1950,15 +1950,27 @@ function drawVfxLayer(
 ): void {
   if (!vfx || vfx.length === 0) return;
   for (const p of vfx) {
-    const px = wx2px(p.x);
-    const py = wz2py(p.y);
+    // ★ 跟随移动：vfx 存了 entityId（通常是玩家）→ 每帧用玩家当前 x/y 渲染，
+    //   否则特效永远留在创建时的位置，玩家走了就脱离身体。
+    let baseX = p.x, baseY = p.y;
+    if (p.entityId) {
+      const ent = (state as any)?.entities?.find?.((e: any) => e.id === p.entityId);
+      if (ent) { baseX = ent.x; baseY = ent.y; }
+    }
+    const px = wx2px(baseX);
+    const py = wz2py(baseY);
     const progress = 1 - (p.life / p.total); // 0 → 1
     switch (p.kind) {
       case "slash_arc":  drawSlashArc(ctx, px, py, progress); break;
       case "fireball": {
         // 弹体：把 target 世界米转成屏幕像素再插值
-        const tx = p.targetX != null ? wx2px(p.targetX) : px;
-        const ty = p.targetY != null ? wz2py(p.targetY) : py;
+        let baseTx = p.targetX, baseTy = p.targetY;
+        if (p.targetEntityId) {
+          const ent2 = (state as any)?.entities?.find?.((e: any) => e.id === p.targetEntityId);
+          if (ent2) { baseTx = ent2.x; baseTy = ent2.y; }
+        }
+        const tx = baseTx != null ? wx2px(baseTx) : px;
+        const ty = baseTy != null ? wz2py(baseTy) : py;
         drawFireballPx(ctx, px, py, tx, ty, progress, p.color || "#ff8c3a");
         break;
       }
@@ -3386,7 +3398,20 @@ onMounted(async () => {
         if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
       }
     }
-    state.value = incoming;
+    // ★ 保留客户端本地产生的 vfx/飘字：客户端施法时往 s.vfx/s.floaters push，
+    //   宿主推送的 incoming 没有这些 → 整份替换会清掉客户端产生的特效。
+    //   规则：保留 prevEntities 的 vfx/floaters id 不在 incoming 里的（避免和宿主重复）；
+    //   角色特效（client-authored）短期不会冲突，因为 client 立即触发。
+    if (state.value && incoming) {
+      const prevVfx = (state.value as any).vfx || [];
+      const prevFloaters = (state.value as any).floaters || [];
+      const incomingVfxIds = new Set(((incoming as any).vfx || []).map((v: any) => v?.id).filter(Boolean));
+      const incomingFloaterIds = new Set(((incoming as any).floaters || []).map((f: any) => f?.id).filter(Boolean));
+      const keptVfx = prevVfx.filter((v: any) => v?.id && !incomingVfxIds.has(v.id));
+      const keptFloaters = prevFloaters.filter((f: any) => f?.id && !incomingFloaterIds.has(f.id));
+      if (keptVfx.length) (incoming as any).vfx = [...((incoming as any).vfx || []), ...keptVfx];
+      if (keptFloaters.length) (incoming as any).floaters = [...((incoming as any).floaters || []), ...keptFloaters];
+    }
     state.value = incoming;
     ready.value = true;
 
