@@ -2191,7 +2191,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 
   // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
   // 布局自上而下：头像(30) → 名字 → sprite
-  const avatarSize = Math.max(14, Math.min(40, Math.round(dw * avatarScaleFactor)));  // ★ v4：随角色尺寸（≈0.8 格）
+  const avatarSize = Math.max(14, Math.min(100, Math.round(dw * avatarScaleFactor)));  // ★ v4：随角色尺寸（≈0.8 格）
   const avatarX = px - avatarSize / 2;
   const avatarY = dy - avatarSize - 16;
   // ★ fix⑥：动图头像优先取「当前动画帧」，静态图仍走 HTMLImageElement
