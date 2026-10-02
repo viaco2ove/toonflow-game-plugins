@@ -579,6 +579,11 @@ const LEVEL_FILES: Record<string, string> = {
   "Forest Dungeon 5": "forestDungeon5",
 };
 
+/** 全部已登记关卡名（用于上报插件，生成大地图节点）。 */
+export function listLevelNames(): string[] {
+  return Object.keys(LEVEL_FILES);
+}
+
 /**
  * 关卡名 → 文件名："Mulberry Graveyard" → "mulberryGraveyard"。
  * 先查 LEVEL_FILES（权威表），查不到再按命名规则推导——保证新地图只要命名一致即可加载，

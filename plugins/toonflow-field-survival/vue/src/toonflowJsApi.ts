@@ -25,6 +25,22 @@ window.addEventListener("message", (event: MessageEvent) => {
   else p.reject(new Error(String(d.error || "pluginData 失败")));
 });
 
+/**
+ * postMessage 只能投递「可结构化克隆」的值；Vue 的响应式对象是 Proxy，
+ * 直接投递会抛 DataCloneError（Failed to execute 'postMessage' ... could not be cloned），
+ * 导致写回宿主的 player_card 永远为空。
+ * 插件会话数据（t_plugin_session_data）本身要求是 JSON 可序列化结构，
+ * 因此这里统一先做一次 JSON 深拷贝（顺带剥离 Proxy / 不可克隆字段）。
+ */
+function cloneForPost<T>(v: T): T {
+  if (v === null || v === undefined || typeof v !== "object") return v;
+  try {
+    return JSON.parse(JSON.stringify(v)) as T;
+  } catch {
+    return v;
+  }
+}
+
 function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 10000): Promise<any> {
   const reqId = `jsapi_${Date.now()}_${++reqSeq}`;
   return new Promise((resolve, reject) => {
@@ -34,7 +50,7 @@ function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 1000
     }, timeoutMs);
     pending.set(reqId, { resolve, reject, timer });
     try {
-      window.parent.postMessage({ type: "tf_plugin_data", reqId, op, dataKey, value }, "*");
+      window.parent.postMessage({ type: "tf_plugin_data", reqId, op, dataKey, value: cloneForPost(value) }, "*");
     } catch (err) {
       pending.delete(reqId);
       window.clearTimeout(timer);

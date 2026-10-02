@@ -35,11 +35,14 @@ function isConnMode(): boolean {
 export function sendToHost(action: string, params: Record<string, unknown> = {}): void {
   const msg = { type: "tf_plugin_action", action, params };
   try {
-    window.parent.postMessage(msg, "*");
-    // 非 conn 模式（本地 standalone）+ 无父窗口 → 自己消费
+    // ★ standalone（无父窗口且非 --conn）：postMessage 只会投递给当前窗口，
+    //   与 dispatchEvent 兜底重复投递同一条消息（mockHost/宿主收到两份，
+    //   有状态命令如卖出/排序可能被重复执行）——此处二者取其一，只走 dispatchEvent。
     if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
+      return;
     }
+    window.parent.postMessage(msg, "*");
   } catch {
     /* ignore */
   }
@@ -57,10 +60,12 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
   const msg = { type: "tf_plugin_tick", action, params };
   try {
-    window.parent.postMessage(msg, "*");
+    // ★ 同 sendToHost：standalone 只 dispatchEvent 一次，避免宿主/mockHost 双重消费
     if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
+      return;
     }
+    window.parent.postMessage(msg, "*");
   } catch {
     /* ignore */
   }
@@ -85,10 +90,11 @@ export function notifyLoaded(): void {
         return;
       }
       attempts++;
-      window.parent.postMessage(msg, "*");
       if (!isConnMode() && window.parent === window) {
         window.dispatchEvent(new MessageEvent("message", { data: msg }));
+        return;
       }
+      window.parent.postMessage(msg, "*");
     };
     send();
     loadedNotifyTimer = window.setInterval(send, 500);

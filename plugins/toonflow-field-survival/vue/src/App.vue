@@ -16,6 +16,7 @@ import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
+import SystemPanel from "./SystemPanel.vue";
 import {
   TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
   TILE_WATER_ID, TILE_POTION_ID,
@@ -38,7 +39,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, normalizeTiledMap } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, normalizeTiledMap, listLevelNames } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 
@@ -56,6 +57,395 @@ const debugMode = ref(
   (import.meta.env.DEV || import.meta.env.MODE === "debug") &&
   new URLSearchParams(location.search).get("debug") !== "0",
 );
+
+/* ----------------- 系统按钮（与 DebugPanel 拖拽一致） ----------------- */
+const showSystemPanel = ref(false);
+const sysBtnPos = ref({ x: 16, y: 16 });
+const sysPanelPos = ref({ x: 70, y: 16 });
+const SYS_DRAG_THRESHOLD = 6;
+let sysDragStart: { x: number; y: number; px: number; py: number } | null = null;
+let sysDragMoved = false;
+let sysDragTarget: "btn" | "panel" | null = null;
+
+function onSysBtnDragStart(e: PointerEvent) {
+  sysDragStart = { x: e.clientX, y: e.clientY, px: sysBtnPos.value.x, py: sysBtnPos.value.y };
+  sysDragMoved = false;
+  sysDragTarget = "btn";
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  window.addEventListener("pointermove", onSysDragMove);
+  window.addEventListener("pointerup", onSysDragEnd);
+}
+
+function onSysPanelDragStart(e: PointerEvent) {
+  // 仅在面板头部按下时允许拖动（@pointerdown 头部）
+  sysDragStart = { x: e.clientX, y: e.clientY, px: sysPanelPos.value.x, py: sysPanelPos.value.y };
+  sysDragMoved = false;
+  sysDragTarget = "panel";
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  window.addEventListener("pointermove", onSysDragMove);
+  window.addEventListener("pointerup", onSysDragEnd);
+}
+
+function onSysDragMove(e: PointerEvent) {
+  if (!sysDragStart || !sysDragTarget) return;
+  const dx = e.clientX - sysDragStart.x;
+  const dy = e.clientY - sysDragStart.y;
+  if (!sysDragMoved && Math.hypot(dx, dy) > SYS_DRAG_THRESHOLD) sysDragMoved = true;
+  if (!sysDragMoved) return;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  if (sysDragTarget === "btn") {
+    sysBtnPos.value.x = Math.max(0, Math.min(W - 44, sysDragStart.px + dx));
+    sysBtnPos.value.y = Math.max(0, Math.min(H - 44, sysDragStart.py + dy));
+  } else {
+    sysPanelPos.value.x = Math.max(0, Math.min(W - 420, sysDragStart.px + dx));
+    sysPanelPos.value.y = Math.max(0, Math.min(H - 560, sysDragStart.py + dy));
+  }
+}
+
+function onSysDragEnd() {
+  sysDragStart = null;
+  sysDragTarget = null;
+  window.removeEventListener("pointermove", onSysDragMove);
+  window.removeEventListener("pointerup", onSysDragEnd);
+}
+
+function onSysBtnClick(e: MouseEvent) {
+  if (sysDragMoved) {
+    e.stopPropagation();
+    e.preventDefault();
+    return;
+  }
+  showSystemPanel.value = !showSystemPanel.value;
+}
+
+/* ----------------- 系统面板数据（v6：全部来自插件 state / 参数卡） ----------------- */
+interface SysItem { id?: string; name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string; }
+interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; }
+interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; }
+interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
+
+const RARITY_DEFAULT_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
+/** 面板底部提示（由插件 response 或本地动作文案驱动） */
+const sysNotice = ref("");
+
+/** 插件下发的用户参数卡（宿主每 tick 注入 ctx.playerCard → state.playerCard） */
+const sysCard = computed<Record<string, any>>(() => ((state.value as any)?.playerCard || {}) as Record<string, any>);
+const sysGold = computed(() => Math.round(Number(sysCard.value?.money ?? 0)));
+
+function guessKindLocal(name: string): string {
+  const n = String(name || "");
+  if (/技能|秘籍|心得|卷轴|心法|功法/.test(n)) return "skill_book";
+  if (/剑|刀|枪|弓|甲|盾|护符|戒指|铠|斧|杖|靴|袍/.test(n)) return "equipment";
+  if (/丹|散|药|水|包|粮|汤|肉|鱼|果|酒|茶|露/.test(n)) return "consumable";
+  return "material";
+}
+
+function defaultHealLocal(name: string, kind: string): number {
+  if (kind !== "consumable") return 0;
+  const n = String(name || "");
+  if (/急救|大补|灵药|仙丹|回天/.test(n)) return 60;
+  if (/回气|伤药|灵泉|清心|愈合/.test(n)) return 30;
+  if (/干粮|粮|肉|果|汤|鱼/.test(n)) return 14;
+  return 20;
+}
+
+/** 解析参数卡里的字符串物品："银鲤×3" / "短刀（商城购入，8 金）" */
+function parseItemStringLocal(raw: string): { name: string; count: number; price: number } {
+  const s = String(raw).trim();
+  const pm = s.match(/[（(][^）)]*?(\d+)\s*金[）)]/);
+  const price = pm ? Number(pm[1]) : 0;
+  const m = s.match(/^(.+?)\s*[×x*]\s*(\d+)\s*$/);
+  if (m) return { name: m[1].trim(), count: Math.max(1, Number(m[2])), price };
+  return { name: s.replace(/[（(].*$/, "").trim() || s, count: 1, price };
+}
+
+/** 卖出单价（与插件 entry 的 sellPrice 同口径：有原价按 40%，否则按稀有度基价×品类系数） */
+function sellPriceLocal(rarity: string, kind: string, rawPrice: number): number {
+  if (rawPrice > 0) return Math.max(1, Math.round(rawPrice * 0.4));
+  const base = RARITY_DEFAULT_PRICE[rarity] || RARITY_DEFAULT_PRICE.common;
+  const k = kind === "equipment" ? 1.5 : kind === "skill_book" ? 2 : 1;
+  return Math.max(1, Math.round(base * k));
+}
+
+/** 背包：parameterCardJson.items（string/object 混排）+ bagMeta 元数据 + bagOrder 排列顺序 */
+const sysBagItems = computed<SysItem[]>(() => {
+  const card = sysCard.value || {};
+  const meta = (((state.value as any)?.bagMeta || {}) as Record<string, any>);
+  const raw = Array.isArray(card.items) ? card.items : [];
+  const merged = new Map<string, SysItem>();
+  for (const it of raw) {
+    let name = "";
+    let count = 1;
+    let rawPrice = 0;
+    if (typeof it === "string") {
+      const p = parseItemStringLocal(it);
+      name = p.name;
+      count = p.count;
+      rawPrice = p.price;
+    } else if (it && typeof it === "object") {
+      name = String(it.name || "物品");
+      count = Math.max(1, Number(it.count || 1));
+      rawPrice = Number((it as any).price || 0);
+    } else {
+      continue;
+    }
+    if (!name) continue;
+    const prev = merged.get(name);
+    if (prev) {
+      prev.count += count;
+      continue;
+    }
+    const objKind = it && typeof it === "object" ? String((it as any).kind || "") : "";
+    const objRarity = it && typeof it === "object" ? String((it as any).rarity || "") : "";
+    const m = meta[name] || {};
+    const kind = String(objKind || m.kind || guessKindLocal(name));
+    const rarity = String(objRarity || m.rarity || "common");
+    const heal = Number((it && typeof it === "object" ? (it as any).heal : 0) || m.heal || defaultHealLocal(name, kind));
+    const price = sellPriceLocal(rarity, kind, rawPrice || Number(m.price || 0));
+    merged.set(name, { id: name, name, count, kind, rarity, heal, price, desc: m.desc });
+  }
+  const list = Array.from(merged.values());
+  const order = (((state.value as any)?.bagOrder || []) as string[]);
+  list.sort((a, b) => {
+    const ia = order.indexOf(a.name);
+    const ib = order.indexOf(b.name);
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    if (ia >= 0) return -1;
+    if (ib >= 0) return 1;
+    return 0;
+  });
+  return list;
+});
+
+/** 技能栏：插件下发的 skills（第 i 项对应快捷栏第 i 格） */
+const sysSkills = computed<SysSkill[]>(() => {
+  const arr = ((state.value as any)?.skills || []) as any[];
+  return arr.map((s, i) => ({
+    id: String(s.name || "skill") + "_" + i,
+    name: String(s.name || "技能"),
+    power: Number(s.power || 0),
+    cost: Number(s.cost || 0),
+    cd: Number(s.cd || 0),
+    cdLeft: Number(s.cdLeft || 0),
+    index: i,
+  }));
+});
+
+/** 纳戒（插件落盘在 t_plugin_session_data） */
+const sysRing = computed<{ items: SysItem[]; skills: string[] }>(() => {
+  const r = (((state.value as any)?.ring || {}) as any);
+  const items = (Array.isArray(r.items) ? r.items : []).map((it: any) => ({
+    id: String(it.name || ""),
+    name: String(it.name || "物品"),
+    count: Math.max(1, Number(it.count || 1)),
+    kind: String(it.kind || "material"),
+    rarity: String(it.rarity || "common"),
+    heal: Number(it.heal || 0),
+    price: Number(it.price || 0),
+    desc: it.desc,
+  }));
+  const skills = (Array.isArray(r.skills) ? r.skills : []).map((n: any) => String(n));
+  return { items, skills };
+});
+
+const sysGoods = computed<SysGood[]>(() => (((state.value as any)?.shopGoods || []) as SysGood[]));
+const sysGoodsSource = computed(() => String((state.value as any)?.shopSource || "builtin"));
+
+function cardToRole(c: any, i: number): SysRole {
+  const side = String(c?.side || "npc");
+  return {
+    id: String(c?.id || side + "_" + i),
+    name: String(c?.name || "角色"),
+    side,
+    enemy: side === "enemy" || !!c?.enemy,
+    level: Number(c?.level || 1),
+    hp: Math.round(Number(c?.hp || 0)),
+    maxHp: Math.round(Number(c?.maxHp || 0)),
+    exp: Number(c?.exp || 0),
+    alive: c?.alive !== false,
+    mapName: String(c?.mapName || ""),
+    x: Number(c?.x || 0),
+    y: Number(c?.y || 0),
+    inParty: !!c?.inParty,
+    avatarPath: c?.avatarPath,
+  };
+}
+
+const sysPlayerRole = computed<SysRole | null>(() => {
+  const cards = (((state.value as any)?.npcCards || []) as any[]);
+  const idx = cards.findIndex(c => String(c?.side) === "player");
+  if (idx >= 0) return cardToRole(cards[idx], idx);
+  const me = state.value?.entities.find(e => e.side === "player");
+  if (!me) return null;
+  return {
+    id: me.id,
+    name: me.name || "玩家",
+    side: "player",
+    enemy: false,
+    level: Number((me as any).level || 1),
+    hp: Math.round(Number(me.hp || 0)),
+    maxHp: Math.round(Number(me.maxHp || 0)),
+    exp: 0,
+    alive: me.alive !== false,
+    mapName: currentLevelName.value,
+    x: Number(me.x || 0),
+    y: Number(me.y || 0),
+    inParty: false,
+    avatarPath: (me as any).avatarPath,
+  };
+});
+
+const sysNpcCards = computed<SysRole[]>(() => {
+  const cards = (((state.value as any)?.npcCards || []) as any[]).filter(c => String(c?.side) !== "player");
+  if (cards.length) return cards.map((c, i) => cardToRole(c, i));
+  const ents = (state.value?.entities || []).filter(e => e.side !== "player");
+  return ents.map((e, i) => cardToRole({ ...e, side: e.side === "enemy" ? "enemy" : "ally", mapName: currentLevelName.value }, i));
+});
+
+const sysMapNodes = computed<any[]>(() => (((state.value as any)?.mapNodes || []) as any[]));
+
+const sysCurrentMp = computed(() => state.value?.entities.find(e => e.side === "player")?.mp ?? 0);
+const sysCurrentMaxMp = computed(() => state.value?.entities.find(e => e.side === "player")?.maxMp ?? 0);
+const sysPlayerX = computed(() => state.value?.entities.find(e => e.side === "player")?.x ?? 0);
+const sysPlayerY = computed(() => state.value?.entities.find(e => e.side === "player")?.y ?? 0);
+
+/* ----------------- 系统面板命令通道（前端 → 插件 → state 回推） ----------------- */
+/** 已上报过的关卡名列表（避免重复上报） */
+let sysLevelsReported = "";
+
+function reportLevels(): void {
+  let names: string[] = [];
+  try {
+    names = listLevelNames();
+  } catch {
+    names = [];
+  }
+  if (!names.length) {
+    names = Array.from(new Set([currentLevelName.value, ...sysMapNodes.value.map((n: any) => String(n?.name || ""))].filter(Boolean)));
+  }
+  const key = names.join("|");
+  if (!names.length || key === sysLevelsReported) return;
+  sysLevelsReported = key;
+  sendTick("sys", { levels: names });
+}
+
+const pendingSys = ref("");
+let sysCmdTimer = 0;
+
+function runSysCmd(action: string, params: Record<string, any> = {}): void {
+  pendingSys.value = action;
+  sendTick(action, params);
+  window.clearTimeout(sysCmdTimer);
+  sysCmdTimer = window.setTimeout(() => { pendingSys.value = ""; }, 3000);
+}
+
+/** 插件回推 response → 显示到面板底栏（仅系统命令触发时才提示） */
+watch(
+  () => String(((state.value as any)?.response) || ""),
+  (resp) => {
+    if (!resp || !pendingSys.value) return;
+    pendingSys.value = "";
+    sysNotice.value = resp;
+  }
+);
+
+/** 插件下发的传送目标 → 先切图（若目标不在本图），再落点 */
+watch(
+  () => ((state.value as any)?.teleportTarget || null),
+  (tp) => {
+    if (!tp) return;
+    (state.value as any).teleportTarget = null;
+    void applyTeleport(tp);
+  },
+  { deep: true }
+);
+
+/** 传送：先切图（若目标不在本图），再落点 */
+async function applyTeleport(tp: any): Promise<void> {
+  if (tp?.mapName && tp.mapName !== currentLevelName.value) {
+    await switchLevel(String(tp.mapName));
+  }
+  const me = state.value?.entities.find(e => e.side === "player");
+  if (me) {
+    me.x = Number(tp?.x) || 0;
+    me.y = Number(tp?.y) || 0;
+    if (state.value?.events) state.value.events.push(`[传送] 已传送到 ${tp?.name || "目标位置"}`);
+  }
+}
+
+/* ----------------- 系统面板事件处理 ----------------- */
+function onSysSellItem(item: SysItem, count = 1) {
+  sysNotice.value = `卖出 ${item.name} ×${count}`;
+  runSysCmd("sys_sell", { name: item.name, count: Math.max(1, Math.floor(count)) });
+}
+
+function onSysUseItem(item: SysItem) {
+  sysNotice.value = `使用 ${item.name}`;
+  runSysCmd("sys_use_item", { name: item.name });
+}
+
+function onSysSort(from: number, to: number) {
+  const names = sysBagItems.value.map(it => it.name);
+  if (from < 0 || from >= names.length || to < 0 || to >= names.length) return;
+  const [moved] = names.splice(from, 1);
+  names.splice(to, 0, moved);
+  sysNotice.value = "背包顺序已更新";
+  runSysCmd("sys_sort", { order: names });
+}
+
+function onSysSortAuto() {
+  const names = sysBagItems.value.map(it => it.name).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+  sysNotice.value = "背包已按名称排序";
+  runSysCmd("sys_sort", { order: names });
+}
+
+function onSysRingMove(name: string, to: string) {
+  runSysCmd("sys_ring_move", { kind: "item", name, to: to === "bag" ? "bag" : "ring", count: 1 });
+}
+
+function onSysRingSkillMove(name: string, to: string) {
+  runSysCmd("sys_ring_move", { kind: "skill", name, to: to === "bag" ? "bag" : "ring", count: 1 });
+}
+
+function onSysShopRefresh() {
+  sysNotice.value = "正在刷新货源…";
+  runSysCmd("sys_shop_refresh", {});
+}
+
+function onSysBuyItem(good: SysGood, count = 1) {
+  sysNotice.value = `购买 ${good.name} ×${count}`;
+  runSysCmd("sys_shop_buy", { id: good.id, name: good.name, count: Math.max(1, Math.floor(count)) });
+}
+
+function onSysUseSkill(skill: SysSkill) {
+  sysNotice.value = `使用技能 ${skill.name}`;
+  runSysCmd("sys_use_skill", { index: skill.index, name: skill.name });
+}
+
+function onSysTeleport(card: SysRole) {
+  if (!card || card.enemy) return;
+  sysNotice.value = `传送到 ${card.name} 身边`;
+  runSysCmd("sys_teleport", { roleId: card.id });
+}
+
+function onSysTravel(mapName: string) {
+  if (!mapName || mapName === currentLevelName.value) return;
+  sysNotice.value = `传送至 ${mapName}`;
+  runSysCmd("sys_travel", { mapName });
+}
+
+function onSysFollow(id: string, on: boolean) {
+  sysNotice.value = on ? "已加入队伍" : "已离开队伍";
+  runSysCmd("sys_party", { roleId: id, follow: !!on });
+}
+
+watch(showSystemPanel, (on) => {
+  if (on) {
+    sysNotice.value = "";
+    reportLevels();
+  }
+});
 
 /** debug 面板选中的实体（用于在 canvas 上画高亮框）*/
 const selectedEntityId = ref<string | null>(null);
@@ -1575,6 +1965,12 @@ function localTick(): void {
   }
   // 2. 推进 tick 计数
   s.tick = (s.tick || 0) + 1;
+  // 2.1 动作小跳衰减（ms 减 TICK_DT_MS；mockHost 模式下 100ms/tick，dev-host 走 vite.config.ts）
+  for (const e of s.entities) {
+    if ((e as any).actionBobMs && (e as any).actionBobMs > 0) {
+      (e as any).actionBobMs = Math.max(0, (e as any).actionBobMs - 100);
+    }
+  }
   // 3. 定期补 spawn 野兽（每 600 tick = 60 秒一波）— mockHost 跑的时候这步无效（会跳过已有 enemy）
   if (s.tick % 600 === 0) spawnLocalMobsIfNeeded();
 }
@@ -1692,6 +2088,7 @@ const DISPLAY_MAX_STEP_MPS = 15;    // 显示位置追赶速度上限（米/秒�
 const DISPLAY_SNAP_M = 25;          // 单帧位移阈值（米）：超过视为真传送，直接吸附
 const displayPos = new Map<string, { x: number; y: number }>();
 let lastRenderAt = 0;
+const avatarScaleFactor = 2.5; // 头像相对角色格子尺寸系数
 
 function entityDisplayPos(e: Entity, dtSec: number): { x: number; y: number } {
   let cur = displayPos.get(e.id);
@@ -1794,7 +2191,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 
   // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
   // 布局自上而下：头像(30) → 名字 → sprite
-  const avatarSize = Math.max(14, Math.min(40, Math.round(dw * 0.8)));  // ★ v4：随角色尺寸（≈0.8 格）
+  const avatarSize = Math.max(14, Math.min(40, Math.round(dw * avatarScaleFactor)));  // ★ v4：随角色尺寸（≈0.8 格）
   const avatarX = px - avatarSize / 2;
   const avatarY = dy - avatarSize - 16;
   // ★ fix⑥：动图头像优先取「当前动画帧」，静态图仍走 HTMLImageElement
@@ -3749,6 +4146,59 @@ watch(playerSnapshot, () => {
       :state="state"
       @select-entity="onSelectEntity"
     />
+
+    <!-- 系统按钮（参考 DebugPanel 拖拽模式） -->
+    <div
+      class="sys-btn"
+      :style="{ left: sysBtnPos.x + 'px', top: sysBtnPos.y + 'px' }"
+      @click="onSysBtnClick"
+      @pointerdown="onSysBtnDragStart"
+      title="系统菜单"
+    >
+      ⚙
+    </div>
+
+    <!-- 系统面板 -->
+    <div
+      v-if="showSystemPanel"
+      class="sys-panel"
+      :style="{ left: sysPanelPos.x + 'px', top: sysPanelPos.y + 'px' }"
+      @pointerdown.stop
+    >
+      <SystemPanel
+        :player="sysPlayerRole"
+        :npcs="sysNpcCards"
+        :bag-items="sysBagItems"
+        :ring-items="sysRing.items"
+        :ring-skills="sysRing.skills"
+        :skills="sysSkills"
+        :goods="sysGoods"
+        :goods-source="sysGoodsSource"
+        :gold="sysGold"
+        :current-mp="sysCurrentMp"
+        :current-max-mp="sysCurrentMaxMp"
+        :current-map="currentLevelName || 'Mulberry Town'"
+        :player-x="sysPlayerX"
+        :player-y="sysPlayerY"
+        :map-nodes="sysMapNodes"
+        :nav-path="[]"
+        :notice="sysNotice"
+        @drag-start="onSysPanelDragStart"
+        @sell="onSysSellItem"
+        @use-item="onSysUseItem"
+        @sort="onSysSort"
+        @sort-auto="onSysSortAuto"
+        @ring-move="onSysRingMove"
+        @ring-skill-move="onSysRingSkillMove"
+        @shop-refresh="onSysShopRefresh"
+        @buy="onSysBuyItem"
+        @use-skill="onSysUseSkill"
+        @teleport="onSysTeleport"
+        @travel="onSysTravel"
+        @follow="onSysFollow"
+        @close="showSystemPanel = false"
+      />
+    </div>
   </div>
 </template>
 
@@ -3779,6 +4229,49 @@ body {
   position: relative;
   overflow: hidden;
   background: #1e1f1f;
+}
+
+/* 系统按钮 + 面板 */
+.sys-btn {
+  position: fixed;
+  z-index: 9998;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: rgba(30, 31, 31, 0.92);
+  border: 2px solid #d4a13e;
+  color: #ffe79e;
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  touch-action: none;
+  user-select: none;
+  transition: transform 0.1s;
+}
+.sys-btn:hover {
+  background: rgba(60, 61, 61, 0.95);
+  transform: scale(1.05);
+}
+.sys-btn:active {
+  transform: scale(0.95);
+}
+
+.sys-panel {
+  position: fixed;
+  z-index: 9997;
+  width: 420px;
+  height: 560px;
+  background: #1e1f1f;
+  border: 2px solid #4f4f4f;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
 }
 
 /* 通用：暗色像素边框风格 */

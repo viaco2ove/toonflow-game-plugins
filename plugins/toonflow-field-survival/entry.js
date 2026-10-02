@@ -23,17 +23,113 @@
 
 const TERRAIN_BLOCK_SIZE_M = 0.5;
 const CHUNK_SIZE_BLOCKS = 32;
-const CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M; // 16 米
-const TERRAIN_GROUND_SIZE_M = 3000;
+const CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M;
+const TERRAIN_GROUND_SIZE_M = 3e3;
 const TERRAIN_GROUND_HEIGHT_M = 100;
-const TERRAIN_SCALE_METER = 1.0;
-
+const TERRAIN_SCALE_METER = 1;
+function fallbackMap() {
+  return {
+    theme: "\u91CE\u5916\xB7\u6E05\u6668",
+    narration: "\u8584\u96FE\u7B3C\u7F69\u7740\u8FD9\u7247\u8352\u91CE\uFF0C\u8FDC\u5904\u4F20\u6765\u4F4E\u6C89\u7684\u5636\u543C\u3002\u6536\u62E2\u5FC3\u795E\uFF0C\u6D3B\u4E0B\u53BB\u3002",
+    zones: [
+      { name: "\u8425\u5730", x: 1500, y: 1500, r: 200, kind: "safe", desc: "\u76F8\u5BF9\u5F00\u9614\u7684\u4E34\u65F6\u8425\u5730" },
+      { name: "\u8352\u5730", x: 2100, y: 1900, r: 260, kind: "danger", desc: "\u89C6\u91CE\u5F00\u9614\u7684\u5371\u9669\u8352\u5730" },
+      { name: "\u5E9F\u589F", x: 800, y: 1e3, r: 220, kind: "loot", desc: "\u53EF\u80FD\u6B8B\u7559\u7269\u8D44\u7684\u5E9F\u589F" }
+    ],
+    enemy_archetypes: [
+      { id: "enemy_1", name: "\u8352\u91CE\u6E38\u8361\u8005", lv: 1, hp: 40, atk: 6, def: 2, speed: 1.4, bounty: { exp: 10, money: 8 }, color: "#9b3a3a" }
+    ],
+    chests: [
+      { x: 800, y: 1e3, tier: 1, loot: { exp: 15, money: 12, item: "\u5E72\u7CAE" } },
+      { x: 2200, y: 900, tier: 2, loot: { exp: 20, money: 18, item: "\u6025\u6551\u5305" } },
+      { x: 1700, y: 2400, tier: 1, loot: { exp: 12, money: 9, item: "\u5DE5\u5177\u5377" } }
+    ],
+    potions: [
+      { x: 600, y: 1800, heal: 40 },
+      { x: 1900, y: 900, heal: 40 },
+      { x: 2400, y: 2300, heal: 40 }
+    ],
+    waves: [{ archetype: "enemy_1", count: 3, interval: 600 }],
+    notes: `fallback map\uFF08agent \u4E0D\u53EF\u7528\uFF09- \u4E16\u754C ${TERRAIN_GROUND_SIZE_M}m\uFF0C\u5757 ${TERRAIN_BLOCK_SIZE_M}m\uFF0Cchunk ${CHUNK_SIZE_M}m`
+  };
+}
+function buildStoryDigest(ctx) {
+  const parts = [];
+  const card = ctx?.playerCard || {};
+  const roles = Array.isArray(ctx?.roles) ? ctx.roles : [];
+  const roleLines = roles.slice(0, 12).map((r) => {
+    const rr = r || {};
+    const skills = Array.isArray(rr.skills) ? rr.skills.map(String).slice(0, 4).join("/") : "";
+    return `- ${String(rr.name || rr.id || "?")}\uFF08${String(rr.roleType || "?")}\uFF09lv${Number(rr.level || 1)} hp${Number(rr.hp || 100)}${skills ? " \u6280\u80FD:" + skills : ""}`;
+  });
+  parts.push("[\u53C2\u6218/\u5019\u9009\u89D2\u8272]\n" + (roleLines.join("\n") || "\uFF08\u65E0\uFF09"));
+  const playerName = String(card.name || "");
+  const cardSkills = Array.isArray(card.skills) ? card.skills.map((s) => String(typeof s === "string" ? s : s?.name)).filter(Boolean) : [];
+  const cardItems = Array.isArray(card.items) ? card.items.map((s) => String(typeof s === "string" ? s : s?.name)).filter(Boolean) : [];
+  parts.push(
+    `[\u7528\u6237\u53C2\u6570\u5361]
+\u540D\u79F0:${playerName || "\uFF08\u65E0\u540D\uFF09"} lv${Number(card.level || 1)} hp${Number(card.hp || 100)} \u91D1\u94B1${Number(card.money || 0)} \u7ECF\u9A8C${Number(card.exp || 0)}
+\u6280\u80FD:${cardSkills.slice(0, 8).join("/") || "\uFF08\u65E0\uFF09"}
+\u7269\u54C1:${cardItems.slice(0, 12).join("/") || "\uFF08\u65E0\uFF09"}`
+  );
+  return parts.join("\n\n");
+}
+const MAP_AGENT_TIMEOUT_MS = 12e3;
+function withTimeout(p, ms, msg) {
+  let timer = null;
+  return Promise.race([
+    p.finally(() => {
+      if (timer) clearTimeout(timer);
+    }),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(msg)), ms);
+    })
+  ]);
+}
+async function ensureMapData(ctx) {
+  const tsApi = ctx?.tsApi;
+  if (!tsApi?.agent?.run || !tsApi?.pluginData?.set) return fallbackMap();
+  try {
+    const stored = await tsApi.pluginData.get("map_data");
+    if (stored && Array.isArray(stored.enemy_archetypes) && stored.enemy_archetypes.length) {
+      return stored;
+    }
+  } catch {
+  }
+  try {
+    const r = await withTimeout(
+      tsApi.agent.run("field-survival-map-gener", {
+        storyDigest: buildStoryDigest(ctx)
+      }),
+      MAP_AGENT_TIMEOUT_MS,
+      `map agent \u8D85\u65F6\uFF08>${MAP_AGENT_TIMEOUT_MS}ms\uFF09`
+    );
+    const map = r?.output || fallbackMap();
+    if (!Array.isArray(map.enemy_archetypes) || !map.enemy_archetypes.length) {
+      map.enemy_archetypes = fallbackMap().enemy_archetypes;
+    }
+    await tsApi.pluginData.set("map_data", map);
+    return map;
+  } catch {
+    const map = fallbackMap();
+    try {
+      await tsApi.pluginData.set("map_data", map);
+    } catch {
+    }
+    return map;
+  }
+}
 const WORLD_X_RANGE = [-1500, 1500];
 const WORLD_Z_RANGE = [-1500, 1500];
-const PLAYER_SPAWN = { x: 0, y: 0 };
-
-const MOVE_SPEED_M = 3.0;   // 米/秒
-const TICK_DT_S = 0.1;     // 一次 tick = 100ms（与前端 TICK_MS 对齐）
+const PLAYER_SPAWN = { x: 13, y: 4 };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const rnd = (a, b) => a + Math.random() * (b - a);
+const clampX = (v) => clamp(v, WORLD_X_RANGE[0] + 10, WORLD_X_RANGE[1] - 10);
+const clampY = (v) => clamp(v, WORLD_Z_RANGE[0] + 10, WORLD_Z_RANGE[1] - 10);
+const rndX = () => rnd(WORLD_X_RANGE[0] + 80, WORLD_X_RANGE[1] - 80);
+const rndY = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
+const MOVE_SPEED_M = 3;
+const TICK_DT_S = 0.1;
 const MOB_VIEW_M = 80;
 const MOB_ATK_M = 2;
 const ALLY_ATK_M = 2;
@@ -41,131 +137,117 @@ const ALLY_FOLLOW_GAP_M = 12;
 const CHEST_PICKUP_M = 2;
 const POTION_PICKUP_M = 2;
 const SKILL_RANGE_M = 30;
-
-/* ---- ★ v4 区域刷新（Region Respawn）+ 城镇安全区 + 敌人探测/脱战 ----
-   1) 世界 = 晨曦镇（安全区）+ 6 个野区（正六边形拓扑：环半径 480m，区域半径 240m）
-   2) 每个野区各自维护刷新计时：玩家离开该区域 45 秒后刷新一次（补满该区域配额）
-   3) 敌人探测半径 = MOB_DETECT_M（10 米），超出 MOB_DISENGAGE_M（12 米）脱战 → 归位巢点游荡
-   4) 敌人复活 = 区域刷新机制重新生成（死亡实体当帧从 entities 移除，不再残留 alive=false）
-*/
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const REGION_RESPAWN_SEC = 45;
-const REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;   // TICK_DT_S = 0.1
-const MOB_DETECT_M = 10;      // ★ 敌人探测半径（米）—— v4 修复项
-const MOB_DISENGAGE_M = 12;   // 脱战阈值（米）：探测半径 +2 米迟滞
-const MOB_LEASH_R_M = 8;      // 离巢超过此距离 → 归位
-const MOB_WANDER_R_M = 8;     // 归位后游荡半径
-const TOWN_SPAWN_BUFFER_M = 20;  // 野怪落点距城镇边界的最小缓冲
-
-/* ---- ★ v5 等级系统（数值来源：game.md《等级系统》1~6 节）----
-   满血HP = 100 + 等级*10 + 道具加成 + 技能永久加成
-   满蓝MP = 100 + 等级*10 + 道具/技能加成
-   攻击   = 10  + 等级*10 + 加成
-   防御   = 1   + 等级*10 + 加成   （加成项取角色卡已有字段，缺失按 0）
-   经验   ：exp / next_level_exp 为纯数字，next_level_exp = 当前 level * 100，
-            exp ≥ 阈值触发升级且支持连续多级（溢出保留、称号映射、hp/mp 重算）
-*/
-const STAT_BASE = { hp: 100, mp: 100, atk: 10, def: 1 };
-const STAT_PER_LEVEL = { hp: 10, mp: 10, atk: 10, def: 10 };
-const EXP_PER_LEVEL = 100;                 // next_level_exp = level * EXP_PER_LEVEL
-const MOB_ATK_COOLDOWN_TICKS = 45;         // 野怪两次攻击之间的冷却（tick）
-const MAX_LEVEL_UPS_PER_GAIN = 200;        // 单次结算的连升保护上限
-
-/** 区域划分方案：城镇居中（安全区），6 个野区环绕（环半径 480 m，区域半径 240 m） */
+const REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;
+const MOB_DETECT_M = 10;
+const MOB_DISENGAGE_M = 12;
+const MOB_LEASH_R_M = 8;
+const MOB_WANDER_R_M = 8;
+const TOWN_SPAWN_BUFFER_M = 20;
 const WORLD_REGIONS = [
-  { id: "town",  name: "晨曦镇",   short: "晨曦", kind: "safe",   x: 0,    y: 0,    r: 160, safe: true,  lv: 0, mobs: 0, desc: "玩家出生的城镇（安全区）：商铺、民居、水井与中立居民，不刷新野怪" },
-  { id: "wood",  name: "东岭林场", short: "东岭", kind: "forest", x: 480,  y: 0,    r: 240, safe: false, lv: 1, mobs: 4, desc: "低矮林地，狼群与哥布林斥候游荡" },
-  { id: "shore", name: "东北浅滩", short: "东北", kind: "shore",  x: 240,  y: 416,  r: 240, safe: false, lv: 1, mobs: 3, desc: "水边滩地，毒蛇与蝙蝠出没" },
-  { id: "mine",  name: "西北矿丘", short: "西北", kind: "mine",   x: -240, y: 416,  r: 240, safe: false, lv: 2, mobs: 4, desc: "废弃矿丘，骷髅兵与哥布林盘踞" },
-  { id: "ruin",  name: "西郊废墟", short: "西郊", kind: "ruin",   x: -480, y: 0,    r: 240, safe: false, lv: 2, mobs: 4, desc: "残垣断壁，骷髅兵与荒野游荡者" },
-  { id: "marsh", name: "西南沼地", short: "西南", kind: "marsh",  x: -240, y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "沼泽泥地，毒蛇群与巨狼" },
-  { id: "wild",  name: "东南荒原", short: "东南", kind: "wild",   x: 240,  y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "开阔荒原，成群野兽巡行" },
+  { id: "town", name: "\u6668\u66E6\u9547", short: "\u6668\u66E6", kind: "safe", x: 0, y: 0, r: 160, safe: true, lv: 0, mobs: 0, desc: "\u73A9\u5BB6\u51FA\u751F\u7684\u57CE\u9547\uFF08\u5B89\u5168\u533A\uFF09\uFF1A\u5546\u94FA\u3001\u6C11\u5C45\u3001\u6C34\u4E95\u4E0E\u4E2D\u7ACB\u5C45\u6C11\uFF0C\u4E0D\u5237\u65B0\u91CE\u602A" },
+  { id: "wood", name: "\u4E1C\u5CAD\u6797\u573A", short: "\u4E1C\u5CAD", kind: "forest", x: 480, y: 0, r: 240, safe: false, lv: 1, mobs: 4, desc: "\u4F4E\u77EE\u6797\u5730\uFF0C\u72FC\u7FA4\u4E0E\u54E5\u5E03\u6797\u65A5\u5019\u6E38\u8361" },
+  { id: "shore", name: "\u4E1C\u5317\u6D45\u6EE9", short: "\u4E1C\u5317", kind: "shore", x: 240, y: 416, r: 240, safe: false, lv: 1, mobs: 3, desc: "\u6C34\u8FB9\u6EE9\u5730\uFF0C\u6BD2\u86C7\u4E0E\u8759\u8760\u51FA\u6CA1" },
+  { id: "mine", name: "\u897F\u5317\u77FF\u4E18", short: "\u897F\u5317", kind: "mine", x: -240, y: 416, r: 240, safe: false, lv: 2, mobs: 4, desc: "\u5E9F\u5F03\u77FF\u4E18\uFF0C\u9AB7\u9AC5\u5175\u4E0E\u54E5\u5E03\u6797\u76D8\u8E1E" },
+  { id: "ruin", name: "\u897F\u90CA\u5E9F\u589F", short: "\u897F\u90CA", kind: "ruin", x: -480, y: 0, r: 240, safe: false, lv: 2, mobs: 4, desc: "\u6B8B\u57A3\u65AD\u58C1\uFF0C\u9AB7\u9AC5\u5175\u4E0E\u8352\u91CE\u6E38\u8361\u8005" },
+  { id: "marsh", name: "\u897F\u5357\u6CBC\u5730", short: "\u897F\u5357", kind: "marsh", x: -240, y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "\u6CBC\u6CFD\u6CE5\u5730\uFF0C\u6BD2\u86C7\u7FA4\u4E0E\u5DE8\u72FC" },
+  { id: "wild", name: "\u4E1C\u5357\u8352\u539F", short: "\u4E1C\u5357", kind: "wild", x: 240, y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "\u5F00\u9614\u8352\u539F\uFF0C\u6210\u7FA4\u91CE\u517D\u5DE1\u884C" }
 ];
-
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const rnd = (a, b) => a + Math.random() * (b - a);
-const clampX = (v) => clamp(v, WORLD_X_RANGE[0] + 10, WORLD_X_RANGE[1] - 10);
-const clampY = (v) => clamp(v, WORLD_Z_RANGE[0] + 10, WORLD_Z_RANGE[1] - 10);
-const rndX = () => rnd(WORLD_X_RANGE[0] + 80, WORLD_X_RANGE[1] - 80);
-const rndY = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
-const num = (v, d = 0) => {
+function str(v, d = "") {
+  return typeof v === "string" ? v : v == null ? d : String(v);
+}
+function num(v, d = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
-};
-const str = (v, d = "") => (typeof v === "string" ? v : v == null ? d : String(v));
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-
-function fallbackMap() {
-  return {
-    theme: "野外·清晨",
-    narration: "薄雾笼罩着这片荒野，远处传来低沉的嘶吼。收拢心神，活下去。",
-    zones: [
-      { name: "营地", x: 0,    y: 0,    r: 200,  kind: "safe",   desc: "玩家出生的安全区" },
-      { name: "荒地", x: 300,  y: 200,  r: 260,  kind: "danger", desc: "野兽频繁出没" },
-      { name: "废墟", x: -400, y: -300, r: 220,  kind: "loot",   desc: "可能残留物资" },
-    ],
-    enemy_archetypes: [
-      { id: "enemy_1", name: "荒野游荡者", lv: 1, hp: 40, atk: 6, def: 2, speed: 1.4, bounty: { exp: 10, money: 8 }, color: "#9b3a3a" },
-    ],
-    chests: [
-      { x:  100, y:  150, tier: 1, loot: { exp: 15, money: 12, item: "干粮" } },
-      { x: -200, y:  100, tier: 2, loot: { exp: 20, money: 18, item: "急救包" } },
-      { x: -500, y: -200, tier: 1, loot: { exp: 12, money:  9, item: "工具卷" } },
-      { x:  450, y:  300, tier: 2, loot: { exp: 25, money: 20, item: "药剂" } },
-    ],
-    potions: [
-      { x:   70, y: -120, heal: 40 },
-      { x: -150, y:   50, heal: 40 },
-      { x:  300, y: -300, heal: 30 },
-      { x: -350, y:  150, heal: 30 },
-    ],
-    waves: [{ archetype: "enemy_1", count: 3, interval: 600 }],
-    notes: `fallback map (agent 不可用) - 世界 ${TERRAIN_GROUND_SIZE_M}m，块 ${TERRAIN_BLOCK_SIZE_M}m，chunk ${CHUNK_SIZE_M}m`,
-  };
 }
-
-function buildSkills(card) {
+/** 技能名归一：剥离「（lv2，描述…）」等后缀 / 对象残留，限长 12，用于展示与匹配 */
+function cleanSkillName(v) {
+  let n = v && typeof v === "object" ? str(v.name ?? v.skill ?? "") : str(v);
+  n = n.replace(/\[object Object\]/g, " ");
+  n = n.replace(/[（(][^）)]*[）)]/g, " ");
+  n = n.replace(/\s+/g, " ").trim();
+  n = n.replace(/[·、,，;；:：]+$/, "").trim();
+  return n.slice(0, 12);
+}
+function skillKey(v) {
+  return cleanSkillName(v).toLowerCase();
+}
+/** 技能名匹配（前端展示名已剥离「（lv2，…）」，参数卡里仍是原文，须归一后比较） */
+function sameSkill(a, b) {
+  const ka = skillKey(a);
+  return !!ka && ka === skillKey(b);
+}
+function buildSkills(card, n = 8) {
   const raw = Array.isArray(card?.skills) ? card.skills : [];
-  const names = raw.map((s) => (typeof s === "string" ? s : str(s?.name))).filter(Boolean);
+  const seen = /* @__PURE__ */ new Map();
+  const names = [];
+  raw.forEach((s) => {
+    const base = cleanSkillName(s);
+    if (!base) return;
+    const c = (seen.get(base) || 0) + 1;
+    seen.set(base, c);
+    names.push(c === 1 ? base : `${base}${c}`);
+  });
   const out = [];
-  for (let i = 0; i < 8; i++) {
-    const name = names[i] || (i < 4 ? `技能${i + 1}` : `备用技${i - 3}`);
+  for (let i = 0; i < n; i++) {
+    const name = names[i] || (i < 4 ? `\u6280\u80FD${i + 1}` : `\u5907\u7528\u6280${i - 3}`);
     out.push({ name, power: 12 + i * 3, cost: 0, cd: 24 + i * 6, cdLeft: 0 });
   }
   return out;
 }
-
-function buildItems(card) {
-  const raw = Array.isArray(card?.items) ? card.items : [];
-  const names = raw.map((s) => (typeof s === "string" ? s : str(s?.name))).filter(Boolean);
-  const out = [];
-  for (let i = 0; i < 8; i++) {
-    const name = names[i] || (i < 4 ? `物品${i + 1}` : `备用物${i - 3}`);
-    out.push({ name, count: names[i] ? 2 : 1, heal: 20 });
+/** n=0（默认）返回全量解析结果；n>0 时用占位补足到 n 格（HUD 固定格子用） */
+function buildItems(card, n = 0) {
+  const bag = mergeBag(itemsFromCard(card), null, []);
+  const list = bag.map((it) => ({
+    name: it.name,
+    count: it.count,
+    kind: it.kind,
+    rarity: it.rarity,
+    heal: it.heal,
+    price: it.price,
+    desc: it.desc
+  }));
+  if (n > 0) {
+    for (let i = list.length; i < n; i++) {
+      list.push({ name: i < 4 ? `\u7269\u54C1${i + 1}` : `\u5907\u7528\u7269${i - 3}`, count: 1, kind: "material", rarity: "common", heal: 20, price: 0 });
+    }
   }
-  return out;
+  return list;
 }
-
 function makeEntity(role, side, x, y, idx) {
-  const hp = num(role?.hp, side === "enemy" ? 60 : 100) || 100;
+  const card = role && typeof role === "object" ? role.parameterCardJson || role.parameter_card_json || role.card || null : null;
+  const hp = num(role?.hp, NaN) || num(card?.hp, NaN) || (side === "enemy" ? 60 : 100);
   return {
     id: str(role?.id, `${side}_${idx}`),
-    name: str(role?.name, side === "enemy" ? `野兽${idx + 1}` : `角色${idx + 1}`),
-    side, x, y, vx: 0, vy: 0, hp, maxHp: hp,
+    name: str(role?.name, side === "enemy" ? `\u91CE\u517D${idx + 1}` : `\u89D2\u8272${idx + 1}`),
+    side,
+    x,
+    y,
+    vx: 0,
+    vy: 0,
+    hp,
+    maxHp: hp,
     atk: side === "enemy" ? 8 : 14,
     level: num(role?.level, 1) || 1,
     avatarPath: str(role?.avatarPath) || void 0,
-    facing: 0, cooldown: 0, alive: true,   // facing 角度制：0=右 90=下 180=左 270=上
+    facing: 0,
+    // 角度制：0=右 90=下 180=左 270=上
+    cooldown: 0,
+    alive: true
   };
 }
-
 function emptyState(ctx) {
   const card = ctx?.playerCard || {};
   return {
     phase: "select",
-    version: 4,   // v4：区域刷新（城镇安全区 + 6 野区，玩家离区 45s 刷新一次）
+    version: 3,
+    // v3：3000m 世界 + 米单位 + scale 元数据
     tick: 0,
     world: { w: WORLD_X_RANGE[1] - WORLD_X_RANGE[0], h: WORLD_Z_RANGE[1] - WORLD_Z_RANGE[0] },
+    /** v3 增强：玩家出生点 (0,0) */
     spawn: { ...PLAYER_SPAWN },
+    /** v3 增强：scale / 视距配置 */
     scale: {
       meter: TERRAIN_SCALE_METER,
       block_size: TERRAIN_BLOCK_SIZE_M,
@@ -174,15 +256,13 @@ function emptyState(ctx) {
       ground_size: TERRAIN_GROUND_SIZE_M,
       ground_height: TERRAIN_GROUND_HEIGHT_M,
       x_range: [...WORLD_X_RANGE],
-      z_range: [...WORLD_Z_RANGE],
+      z_range: [...WORLD_Z_RANGE]
     },
     roles: Array.isArray(ctx?.roles) ? ctx.roles : [],
     selections: { participants: [], spectators: [], enemies: [] },
     /** ★ fix⑤：前端 localEnemies 状态（开局未上报 bounds 时按世界边界处理） */
     mapBounds: null,
     localMobsEpoch: 0,
-    /** ★ v5：宿主已结算击杀的本地野怪（mapmob_/localmob_/zone_）死亡标记 id→tick，防前端旧载荷复活 */
-    localMobTombstones: {},
     entities: [],
     chests: [],
     potions: [],
@@ -192,55 +272,20 @@ function emptyState(ctx) {
     skillPage: 0,
     itemPage: 0,
     playerCard: card,
-    exp: 0, money: 0, drops: [], kills: 0, events: [],
+    exp: 0,
+    money: 0,
+    drops: [],
+    kills: 0,
+    events: [],
     map: null,
     mapSource: "fallback",
-    regions: [],         // ★ v4：由 initRegions() 填充（城镇 + 6 野区）
-    town: null,          // ★ v4：由 ensureTown() 填充（建筑 + 中立角色）
-    result: null,
+    regions: [],
+    // ★ v4：由 initRegions() 填充（城镇 + 6 野区）
+    town: null,
+    // ★ v4：由 ensureTown() 填充（建筑 + 中立角色）
+    result: null
   };
 }
-
-/** ★ fix③：宿主 agent 超时上限（同 entry.ts）——/plugin/tick(start) 不能被地图生成挂住 */
-const MAP_AGENT_TIMEOUT_MS = 12000;
-function withTimeout(p, ms, msg) {
-  let timer = null;
-  return Promise.race([
-    p.finally(() => { if (timer) clearTimeout(timer); }),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(msg)), ms); }),
-  ]);
-}
-
-async function ensureMapData(ctx) {
-  const tsApi = ctx?.tsApi;
-  if (!tsApi?.agent?.run || !tsApi?.pluginData?.set) return fallbackMap();
-  // ★ fix③：本会话已有可用地图 → 直接复用（start 立即返回）
-  try {
-    const stored = await tsApi.pluginData.get("map_data");
-    if (stored && Array.isArray(stored.enemy_archetypes) && stored.enemy_archetypes.length) return stored;
-  } catch { /* 读取失败 → 继续生成 */ }
-  try {
-    const r = await withTimeout(
-      tsApi.agent.run("field-survival-map-gener", { storyDigest: "" }),
-      MAP_AGENT_TIMEOUT_MS,
-      `map agent 超时（>${MAP_AGENT_TIMEOUT_MS}ms）`,
-    );
-    const map = (r?.output || fallbackMap());
-    if (!Array.isArray(map.enemy_archetypes) || !map.enemy_archetypes.length) {
-      map.enemy_archetypes = fallbackMap().enemy_archetypes;
-    }
-    await tsApi.pluginData.set("map_data", map);
-    return map;
-  } catch {
-    const map = fallbackMap();
-    try { await tsApi.pluginData.set("map_data", map); } catch {}
-    return map;
-  }
-}
-
-/** ★ fix③：波次落点统一围绕"玩家当前位置"，不再 rndX()/rndY() 全图随机
- *  （原实现怪物会落在 ±1420 米的任意位置：玩家既看不见也打不到，运气差还会
- *    恰好落在身边＝"怪物凭空出现在旁边"。此与 entry.ts 的同名逻辑保持一致。）*/
 function spawnAnchor(s, minM, maxM) {
   const p = s.entities.find((e) => e.side === "player");
   const cx = p ? p.x : PLAYER_SPAWN.x;
@@ -249,19 +294,25 @@ function spawnAnchor(s, minM, maxM) {
   const distM = minM + rnd(0, maxM - minM);
   return { x: clampX(cx + Math.cos(angle) * distM), y: clampY(cy + Math.sin(angle) * distM) };
 }
-
 function spawnWave(s, wave) {
-  const archs = (s.map?.enemy_archetypes && s.map.enemy_archetypes.length) ? s.map.enemy_archetypes : null;
+  const player = s.entities.find((e) => e.side === "player");
+  const px = player?.x ?? PLAYER_SPAWN.x;
+  const py = player?.y ?? PLAYER_SPAWN.y;
+  const archs = s.map?.enemy_archetypes && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
   if (archs) {
-    const wavesCfg = (s.map?.waves && s.map.waves.length ? s.map.waves : [{ archetype: archs[0].id, count: 3, interval: 600 }]);
+    const wavesCfg = s.map?.waves && s.map.waves.length ? s.map.waves : [{ archetype: archs[0].id, count: 3, interval: 600 }];
     const pick = wavesCfg[Math.min(wave - 1, wavesCfg.length - 1)] || wavesCfg[0];
     const arch = archs.find((a) => a.id === pick.archetype) || archs[0];
-    const count = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
-    for (let i = 0; i < count; i++) {
-      const at = spawnAnchor(s, 30, 100);      // ★ fix③：玩家周围 30~100 米
+    const count2 = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
+    for (let i = 0; i < count2; i++) {
+      const angle = rnd(0, Math.PI * 2);
+      const dist2 = 30 + rnd(0, 70);
       const e = makeEntity(
         { id: `${arch.id}_${wave}_${i}`, name: arch.name, hp: Math.round(arch.hp + (wave - 1) * 8), level: arch.lv },
-        "enemy", at.x, at.y, i,
+        "enemy",
+        clampX(px + Math.cos(angle) * dist2),
+        clampY(py + Math.sin(angle) * dist2),
+        i
       );
       e.atk = Math.round(arch.atk + (wave - 1) * 1.5);
       e.bounty = { ...arch.bounty };
@@ -280,365 +331,200 @@ function spawnWave(s, wave) {
   }
   const count = Math.min(2 + wave, 6);
   for (let i = 0; i < count; i++) {
-    const at = spawnAnchor(s, 30, 100);        // ★ fix③
-    const e = makeEntity({ id: `enemy_${s.tick}_${i}`, name: `野兽 ${i + 1}`, hp: 45 + wave * 12, level: wave },
-      "enemy", at.x, at.y, i);
+    const angle = rnd(0, Math.PI * 2);
+    const dist2 = 30 + rnd(0, 70);
+    const e = makeEntity(
+      { id: `enemy_${s.tick}_${i}`, name: `\u91CE\u517D ${i + 1}`, hp: 45 + wave * 12, level: wave },
+      "enemy",
+      clampX(px + Math.cos(angle) * dist2),
+      clampY(py + Math.sin(angle) * dist2),
+      i
+    );
     e.atk = 7 + wave * 2;
     s.entities.push(e);
   }
   for (let i = 0; i < 2; i++) {
-    const at = spawnAnchor(s, 25, 55);         // ★ fix③：宝箱
-    s.chests.push({ id: `chest_${s.tick}_${i}`, x: at.x, y: at.y, opened: false });
+    const angle = rnd(0, Math.PI * 2);
+    const dist2 = 25 + rnd(0, 30);
+    s.chests.push({ id: `chest_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist2), y: clampY(py + Math.sin(angle) * dist2), opened: false });
   }
   for (let i = 0; i < 3; i++) {
-    const at = spawnAnchor(s, 20, 45);         // ★ fix③：血瓶
-    s.potions.push({ id: `potion_${s.tick}_${i}`, x: at.x, y: at.y, heal: 18 });
+    const angle = rnd(0, Math.PI * 2);
+    const dist2 = 20 + rnd(0, 25);
+    s.potions.push({ id: `potion_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist2), y: clampY(py + Math.sin(angle) * dist2), heal: 18 });
   }
 }
-
 function pushEvent(s, text) {
   s.events.push(text);
   if (s.events.length > 40) s.events = s.events.slice(-40);
 }
-
 function floater(s, text, x, y) {
   s.floaters.push({ id: `f_${s.tick}_${Math.random().toString(36).slice(2, 6)}`, text, x, y, life: 24 });
   if (s.floaters.length > 30) s.floaters = s.floaters.slice(-30);
 }
-
-/**
- * ★ v5 伤害结算（本地权威）
- *   · 打到玩家 / 盟友：防御生效 → 实际伤害 = max(1, 攻击 − 防御)（game.md 公式）
- *   · 打到野怪：按传入伤害结算（玩家技能伤害已在 skillDamage 里扣除目标防御）
- *   · 野怪致死 → 击杀计数 + 经验走 gainExp（升级流程）+「死亡标记」防前端回推复活
- *   返回本次实际伤害。
- */
 function damage(s, target, amount) {
-  if (!target) return 0;
-  const raw = Math.round(num(amount, 0));
-  if (raw <= 0) return 0;                       // 0 伤害（占位/未命中）不结算，避免"扣 0 血"的噪声日志
-  // 防御：玩家/盟友按《等级系统》第 4 条生效（未显式给 def 的角色按 level 推导），野怪抗性由技能侧扣除
-  const isChar = target.side === "player" || target.side === "ally";
-  let def = 0;
-  if (isChar) {
-    const dv = num(target.def, NaN);
-    if (Number.isFinite(dv)) def = Math.max(0, Math.round(dv));
-    else def = Math.max(0, Math.round(STAT_BASE.def + Math.max(1, Math.round(num(target.level, 1) || 1)) * STAT_PER_LEVEL.def));
-  }
-  const deal = Math.max(1, raw - def);
-  target.hp = clamp(num(target.hp, 0) - deal, 0, num(target.maxHp, deal));
-  floater(s, `-${deal}`, target.x, target.y - 24);
-  if (target.hp <= 0 && target.alive !== false) {
+  target.hp = clamp(target.hp - amount, 0, target.maxHp);
+  floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+  if (target.hp <= 0 && target.alive) {
     target.alive = false;
     if (target.side === "enemy") {
       s.kills += 1;
       const bounty = target.bounty;
       const expGain = bounty?.exp != null ? Math.round(num(bounty.exp, 10)) : 8 + target.level * 4;
       const moneyGain = bounty?.money != null ? Math.round(num(bounty.money, 8)) : 5 + target.level * 3;
+      s.exp += expGain;
       s.money += moneyGain;
-      // ★ v5：本地权威野怪（mapmob_/localmob_/zone_）记死亡标记 —— 前端旧载荷再上报同一 id 也不复活
-      if (isLocalEnemyId(target.id)) {
-        if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
-        s.localMobTombstones[str(target.id)] = num(s.tick, 0);
-      }
       if (Math.random() < 0.5) {
-        const drop = ["野兽皮", "锋利的爪", "兽骨"][Math.floor(Math.random() * 3)];
+        const drop = ["\u91CE\u517D\u76AE", "\u950B\u5229\u7684\u722A", "\u517D\u9AA8"][Math.floor(Math.random() * 3)];
         s.drops.push(drop);
       }
-      const ups = gainExp(s, null, expGain);     // ★ v5：经验累加 + 升级流程（含 hp/mp 重算）
-      pushEvent(s, `击败 ${target.name}，获得 ${expGain} 经验、${moneyGain} 金钱${ups > 0 ? `，连续提升 ${ups} 级` : ""}`);
+      pushEvent(s, `\u51FB\u8D25 ${target.name}\uFF0C\u83B7\u5F97 ${expGain} \u7ECF\u9A8C\u3001${moneyGain} \u91D1\u94B1`);
+      grantPartyExp(s, expGain);
     } else {
-      pushEvent(s, `${target.name} 倒下了`);
-      floater(s, "DOWN", target.x, target.y - 40);
+      pushEvent(s, `${target.name} \u5012\u4E0B\u4E86`);
     }
   }
-  return deal;
 }
-
 function moveTowards(e, tx, ty, speed) {
   const dx = tx - e.x;
   const dy = ty - e.y;
   const d = Math.hypot(dx, dy) || 1;
-  e.vx = (dx / d) * speed;
-  e.vy = (dy / d) * speed;
-  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
+  e.vx = dx / d * speed;
+  e.vy = dy / d * speed;
+  if (Math.abs(dx) > 2) e.facing = dx > 0 ? 0 : 180;
 }
-
-/* ============================================================
-   ★ v5 等级系统（数值来源：game.md《等级系统》1~6 节）
-   ------------------------------------------------------------
-   · 属性公式：满血HP / 满蓝MP / 攻击 / 防御（加成取角色卡已有字段，缺失按 0）
-   · 经验流程：exp ≥ next_level_exp(= level*100) → 升级，支持连续多级：
-       level+1 → exp 扣减「升级前阈值」（溢出保留）→ 重算 next_level_exp
-       → 从「全局背景等级-称号映射」写 level_desc（无对应则空串）
-       → 按满血满蓝公式重算 hp / mp
-   · 结算权威：exp 以「玩家实体」为唯一数据源，s.exp 为同值镜像
-     （对外 result / 宿主角色卡回写仍读 s.exp，保证不丢经验）
-   ============================================================ */
-
-/** 「道具加成 / 技能永久加成」在角色卡里的结构化容器字段名 */
-const STAT_BONUS_CONTAINERS = [
-  "stat_bonus", "attribute_bonus", "bonus", "attr", "attributes",
-  "item_bonus", "equipment_bonus", "skill_bonus", "permanent_bonus",
-  "道具加成", "装备加成", "技能加成", "技能永久加成", "加成",
-];
-
-/** 属性加成在容器内的键名别名（中英文/驼峰/下划线） */
-const STAT_BONUS_KEYS = {
-  hp: ["hp", "max_hp", "maxHp", "hp_bonus", "max_hp_bonus", "生命", "血量", "生命值", "血量加成", "生命加成", "生命值加成", "血量上限加成"],
-  mp: ["mp", "max_mp", "maxMp", "mp_bonus", "max_mp_bonus", "法力", "蓝量", "魔力", "蓝量加成", "法力加成", "魔力加成", "蓝量上限加成"],
-  atk: ["atk", "attack", "atk_bonus", "attack_bonus", "攻击", "攻击力", "攻击加成", "攻击力加成"],
-  def: ["def", "defense", "def_bonus", "defense_bonus", "防御", "防御力", "防御加成", "防御力加成"],
-};
-
-/** 角色卡上「扁平加成」键名（如 hp_bonus / 血量加成） */
-const STAT_FLAT_KEYS = {
-  hp: ["hp_bonus", "max_hp_bonus", "血量加成", "生命加成", "生命值加成"],
-  mp: ["mp_bonus", "max_mp_bonus", "蓝量加成", "法力加成", "魔力加成"],
-  atk: ["atk_bonus", "attack_bonus", "攻击加成", "攻击力加成"],
-  def: ["def_bonus", "defense_bonus", "防御加成", "防御力加成"],
-};
-
-function pickBonus(obj, stat) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return 0;
-  for (const k of STAT_BONUS_KEYS[stat]) {
-    const v = num(obj[k], NaN);
-    if (Number.isFinite(v)) return v;
-  }
-  return 0;
-}
-
-/** 「道具加成 + 技能永久加成」点数：结构化容器 + 扁平「xx加成」键名两条来源，缺失按 0 */
-function bonusOf(card, stat) {
-  if (!card || typeof card !== "object") return 0;
-  let sum = 0;
-  for (const c of STAT_BONUS_CONTAINERS) sum += pickBonus(card[c], stat);
-  for (const k of STAT_FLAT_KEYS[stat]) sum += num(card[k], 0);
-  return sum;
-}
-
-/** 按《等级系统》1~4 节推导四项上限（level 至少 1） */
-function statsOf(card, level) {
-  const lv = Math.max(1, Math.round(num(level, 1) || 1));
-  return {
-    level: lv,
-    maxHp: Math.round(STAT_BASE.hp + lv * STAT_PER_LEVEL.hp + bonusOf(card, "hp")),
-    maxMp: Math.round(STAT_BASE.mp + lv * STAT_PER_LEVEL.mp + bonusOf(card, "mp")),
-    atk: Math.round(STAT_BASE.atk + lv * STAT_PER_LEVEL.atk + bonusOf(card, "atk")),
-    def: Math.round(STAT_BASE.def + lv * STAT_PER_LEVEL.def + bonusOf(card, "def")),
-  };
-}
-
-/** 「全局背景等级-称号映射」的字段名（结构化表 / 文本表两种形态） */
-const LEVEL_TITLE_FIELDS = [
-  "level_desc_map", "level_desc_table", "level_titles", "level_title_map", "level_descs",
-  "level_info", "level_title", "等级称号", "等级对照表", "等级对照表文本", "称号表",
-];
-
-/** 解析「等级:称号」文本（换行 / 分号 / 逗号分段） */
-function parseLevelDescText(text, add) {
-  let hit = 0;
-  str(text).split(/[\n\r;；,，|]+/).forEach((line) => {
-    const m = /^\s*(\d+)\s*[:：\-–—=]\s*(.+?)\s*$/.exec(line);
-    if (m) { add(m[1], m[2]); hit += 1; }
-  });
-  return hit > 0;
-}
-
-/**
- * 汇总「全局背景等级-称号映射」：来源 = 玩家角色卡（含会话背景 roles）的结构化表 / 文本表，
- * 以及各角色自身已登记的 level → level_desc（即"全局背景里该等级的称号"）。
- */
-function levelTitleMap(s) {
-  const map = {};
-  const add = (lv, desc) => {
-    const n = Math.round(num(lv, NaN));
-    const d = str(desc).trim();
-    if (Number.isFinite(n) && n > 0 && d) map[n] = d;
-  };
-  const readOne = (holder) => {
-    if (!holder || typeof holder !== "object") return;
-    for (const f of LEVEL_TITLE_FIELDS) {
-      const raw = holder[f];
-      if (!raw) continue;
-      if (Array.isArray(raw)) {
-        raw.forEach((it) => add(it?.level ?? it?.lv ?? it?.lv_num ?? it?.grade, it?.desc ?? it?.level_desc ?? it?.title ?? it?.name));
-      } else if (typeof raw === "object") {
-        Object.keys(raw).forEach((k) => {
-          const v = raw[k];
-          if (typeof v === "string") { if (!parseLevelDescText(v, add)) add(k, v); }
-          else add(k, v?.desc ?? v?.level_desc ?? v?.title ?? v?.name);
-        });
-      } else if (typeof raw === "string") {
-        parseLevelDescText(raw, add);
-      }
-    }
-    add(holder.level, holder.level_desc);
-  };
-  readOne(s?.playerCard);
-  const roles = Array.isArray(s?.roles) ? s.roles : [];
-  roles.forEach(readOne);
-  return map;
-}
-
-/** 按等级取称号：无对应等级 → 空串（game.md） */
-function levelDescOf(map, level) {
-  const n = Math.round(num(level, 0));
-  return n > 0 && map && map[n] != null ? map[n] : "";
-}
-
-/**
- * ★ v5：玩家实体数值 ← 角色卡（等级 / 经验 / 等级称号 + 道具·技能加成）按《等级系统》公式派生。
- *   fromCard=true （对局开始）：等级 / exp / next_level_exp / 称号续接角色卡，hp / mp 满血满蓝开局；
- *   fromCard=false（每帧校准）：只重算四项上限并把 hp / mp 夹进上限，绝不回复生命。
- */
-function syncPlayerStats(s, me, fromCard) {
-  if (!me || !s) return null;
-  const card = (s.playerCard && typeof s.playerCard === "object") ? s.playerCard : {};
-  if (fromCard) {
-    me.level = Math.max(1, Math.round(num(card.level, num(me.level, 1) || 1) || 1));
-    me.exp = Math.max(0, Math.round(num(card.exp, num(s.exp, 0)) || 0));
-    const lvExp = me.level * EXP_PER_LEVEL;
-    const cardNext = Math.round(num(card.next_level_exp, 0));
-    me.next_level_exp = Math.max(1, cardNext > 0 ? cardNext : lvExp);
-    me.level_desc = str(card.level_desc) || levelDescOf(levelTitleMap(s), me.level);
-    me.name = str(card.name, me.name);
-    if (str(card.avatarPath)) me.avatarPath = str(card.avatarPath);
-  }
-  const st = statsOf(card, me.level);
-  me.maxHp = st.maxHp;
-  me.maxMp = st.maxMp;
-  me.atk = st.atk;
-  me.def = st.def;
-  me.expToNext = me.next_level_exp;
-  if (fromCard) {
-    me.hp = st.maxHp;                                   // 新一局：满血满蓝出发
-    me.mp = st.maxMp;
-    me.alive = true;
-  } else {
-    me.hp = clamp(num(me.hp, st.maxHp), 0, st.maxHp);
-    me.mp = clamp(num(me.mp, st.maxMp), 0, st.maxMp);
-  }
-  s.exp = Math.max(0, Math.round(num(me.exp, 0)));      // s.exp 恒为玩家经验的镜像
-  return st;
-}
-
-/** ★ v5：经验累加 + 升级流程（支持连续多级），返回本次升级次数 */
-function gainExp(s, player, amount) {
-  const gain = Math.round(num(amount, 0));
-  const me = player || s.entities.find((e) => e.side === "player");
-  if (!me || gain <= 0) return 0;
-  me.exp = Math.max(0, Math.round(num(me.exp, num(s.exp, 0))) + gain);
-  if (!(num(me.next_level_exp, 0) > 0)) {
-    me.next_level_exp = Math.max(1, Math.round(num(me.level, 1) || 1) * EXP_PER_LEVEL);
-  }
-  const titles = levelTitleMap(s);
-  let ups = 0;
-  while (num(me.exp, 0) >= num(me.next_level_exp, 1) && ups < MAX_LEVEL_UPS_PER_GAIN) {
-    const threshold = num(me.next_level_exp, 1);        // 升级前阈值
-    me.level = Math.round(num(me.level, 1) || 1) + 1;
-    me.exp = Math.max(0, Math.round(num(me.exp, 0) - threshold));   // 溢出保留
-    me.next_level_exp = me.level * EXP_PER_LEVEL;       // 重算阈值
-    me.level_desc = levelDescOf(titles, me.level);      // 无对应 → 空串
-    const st = statsOf(s.playerCard, me.level);
-    me.maxHp = st.maxHp;
-    me.maxMp = st.maxMp;
-    me.atk = st.atk;
-    me.def = st.def;
-    me.hp = st.maxHp;                                   // 按满血满蓝公式重算（升级回复）
-    me.mp = st.maxMp;
-    ups += 1;
-    pushEvent(s, `等级提升 Lv.${me.level}（生命 ${me.maxHp} / 法力 ${me.maxMp} / 攻击 ${me.atk} / 防御 ${me.def}，称号：${me.level_desc || "无"}）`);
-    floater(s, `LEVEL UP Lv.${me.level}`, me.x, me.y - 40);
-  }
-  me.expToNext = me.next_level_exp;
-  s.exp = Math.max(0, Math.round(num(me.exp, 0)));
-  return ups;
-}
-
-/** ★ v5：玩家技能命中伤害 = max(1, 玩家攻击 + 技能威力 − 目标防御) */
-function skillDamage(player, skill, target) {
-  const atk = Math.max(1, Math.round(num(player?.atk, STAT_BASE.atk)));
-  const power = Math.max(0, Math.round(num(skill?.power, 0)));
-  const def = Math.max(0, Math.round(num(target?.def, 0)));
-  return Math.max(1, atk + power - def);
-}
-
-/** ★ v5：旧存档（v4 state）就地补齐 v5 字段，避免 bump version 把进行中的对局重置 */
-function ensureV5(s) {
-  if (!s || typeof s !== "object") return;
-  if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
-  const me = s.entities.find((e) => e.side === "player");
-  if (!me) return;
-  if (!Number.isFinite(Number(me.exp))) me.exp = Math.max(0, Math.round(num(s.exp, 0)));
-  if (!(num(me.next_level_exp, 0) > 0)) {
-    me.next_level_exp = Math.max(1, Math.round(num(me.level, 1) || 1) * EXP_PER_LEVEL);
-  }
-  syncPlayerStats(s, me, false);
-}
-
-/* ------------------------------------------------------------
-   ★ v4 区域系统工具（区域判定 / 城镇 / 区域刷新 / 野怪生成）
-   ------------------------------------------------------------ */
-
-/** 判断坐标落在哪个区域（城镇优先；野区取最近中心） */
 function regionAt(x, y) {
+  const p = { x, y };
   const town = WORLD_REGIONS[0];
-  if (Math.hypot(x - town.x, y - town.y) <= town.r) return town;
+  if (dist(p, town) <= town.r) return town;
   let best = WORLD_REGIONS[1];
   let bestD = Infinity;
   for (let i = 1; i < WORLD_REGIONS.length; i++) {
     const r = WORLD_REGIONS[i];
     const d = Math.hypot(r.x - x, r.y - y);
-    if (d < bestD) { bestD = d; best = r; }
+    if (d < bestD) {
+      bestD = d;
+      best = r;
+    }
   }
   return best;
 }
-
-/** 离给定坐标最近的野区（城镇出生点用：敌对角色落点不落在城镇内） */
 function nearestWildRegion(x, y) {
   let best = WORLD_REGIONS[1];
   let bestD = Infinity;
   for (let i = 1; i < WORLD_REGIONS.length; i++) {
     const r = WORLD_REGIONS[i];
     const d = Math.hypot(r.x - x, r.y - y);
-    if (d < bestD) { bestD = d; best = r; }
+    if (d < bestD) {
+      bestD = d;
+      best = r;
+    }
   }
   return best;
 }
-
-/** 各区域野怪名称（与前端 mobKeyFor 精灵映射对齐：狼/兽→orc、蛇→snake、蝠→bat、骷髅→skeleton、默认→goblin） */
+const LOCAL_ENEMY_PREFIXES = ["mapmob_", "localmob_", "zone_"];
+function isLocalEnemyId(id) {
+  const v = str(id);
+  return LOCAL_ENEMY_PREFIXES.some((p) => v.startsWith(p));
+}
+function mapBound(s) {
+  const b = s.mapBounds;
+  if (b && num(b.lx, 0) > 0 && num(b.ly, 0) > 0) return { lx: num(b.lx, 0), ly: num(b.ly, 0) };
+  return { lx: WORLD_X_RANGE[1] - 10, ly: WORLD_Z_RANGE[1] - 10 };
+}
+function clampToBound(s, x, y) {
+  const b = mapBound(s);
+  return { x: clamp(x, -b.lx, b.lx), y: clamp(y, -b.ly, b.ly) };
+}
+function regionOutOfMap(s, r) {
+  const b = s.mapBounds;
+  if (!b || !(num(b.lx, 0) > 0) || !(num(b.ly, 0) > 0)) return false;
+  return Math.abs(r.x) - r.r >= num(b.lx, 0) || Math.abs(r.y) - r.r >= num(b.ly, 0);
+}
+function applyLocalEnemies(s, payload) {
+  if (!payload || typeof payload !== "object") return 0;
+  const epoch = num(payload.epoch, 0);
+  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;
+  const b = payload.bounds || {};
+  const lx = num(b.lx, 0);
+  const ly = num(b.ly, 0);
+  if (lx > 0 && ly > 0) s.mapBounds = { lx, ly };
+  const list = Array.isArray(payload.list) ? payload.list : [];
+  s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
+  if (lx > 0 && ly > 0) {
+    s.entities = s.entities.filter(
+      (e) => !(e.side === "enemy" && !isLocalEnemyId(e.id) && (Math.abs(e.x) > lx || Math.abs(e.y) > ly))
+    );
+  }
+  let built = 0;
+  for (const raw of list) {
+    if (!raw || typeof raw !== "object") continue;
+    const side = str(raw.side);
+    if (side && side !== "enemy") continue;
+    if (raw.alive === false) continue;
+    const id = str(raw.id);
+    if (!id) continue;
+    const lv = Math.max(1, Math.round(num(raw.level, 1)));
+    const maxHp = Math.max(1, Math.round(num(raw.maxHp, num(raw.hp, 60)) || 60));
+    const at = clampToBound(s, num(raw.x, 0), num(raw.y, 0));
+    const e = makeEntity({ id, name: str(raw.name, "\u91CE\u602A"), hp: maxHp, level: lv }, "enemy", at.x, at.y, built);
+    const ex = e;
+    e.hp = clamp(Math.round(num(raw.hp, maxHp)), 1, maxHp);
+    e.maxHp = maxHp;
+    e.atk = Math.max(1, Math.round(num(raw.atk, e.atk)));
+    e.facing = num(raw.facing, e.facing);
+    e.cooldown = Math.max(0, Math.round(num(raw.cooldown, 0)));
+    const home = clampToBound(s, num(raw.homeX, at.x), num(raw.homeY, at.y));
+    ex.isLocal = true;
+    ex.regionId = str(raw.regionId, "local");
+    ex.homeX = home.x;
+    ex.homeY = home.y;
+    ex.aiState = "idle";
+    ex.wanderTimer = 0;
+    if (raw.bounty && typeof raw.bounty === "object") ex.bounty = { ...raw.bounty };
+    s.entities.push(e);
+    built += 1;
+  }
+  s.localMobsEpoch = epoch > 0 ? epoch : num(s.localMobsEpoch, 0);
+  return built;
+}
 const REGION_MOB_NAMES = {
-  wood:  ["巨狼", "哥布林斥候"],
-  shore: ["毒蛇", "蝙蝠"],
-  mine:  ["骷髅兵", "哥布林斥候"],
-  ruin:  ["骷髅兵", "荒野游荡者"],
-  marsh: ["毒蛇", "巨狼"],
-  wild:  ["哥布林斥候", "巨狼", "荒野游荡者"],
+  wood: ["\u5DE8\u72FC", "\u54E5\u5E03\u6797\u65A5\u5019"],
+  shore: ["\u6BD2\u86C7", "\u8759\u8760"],
+  mine: ["\u9AB7\u9AC5\u5175", "\u54E5\u5E03\u6797\u65A5\u5019"],
+  ruin: ["\u9AB7\u9AC5\u5175", "\u8352\u91CE\u6E38\u8361\u8005"],
+  marsh: ["\u6BD2\u86C7", "\u5DE8\u72FC"],
+  wild: ["\u54E5\u5E03\u6797\u65A5\u5019", "\u5DE8\u72FC", "\u8352\u91CE\u6E38\u8361\u8005"]
 };
-
-/** 野怪属性模板（无地图数据时的内置保底，与前端兜底野怪同源） */
 const MOB_PRESETS = {
-  "哥布林斥候": { hp: 30, atk: 6 },
-  "巨狼":       { hp: 60, atk: 10 },
-  "毒蛇":       { hp: 25, atk: 8 },
-  "蝙蝠":       { hp: 20, atk: 5 },
-  "骷髅兵":     { hp: 50, atk: 12 },
-  "荒野游荡者": { hp: 40, atk: 6 },
+  "\u54E5\u5E03\u6797\u65A5\u5019": { hp: 30, atk: 6 },
+  "\u5DE8\u72FC": { hp: 60, atk: 10 },
+  "\u6BD2\u86C7": { hp: 25, atk: 8 },
+  "\u8759\u8760": { hp: 20, atk: 5 },
+  "\u9AB7\u9AC5\u5175": { hp: 50, atk: 12 },
+  "\u8352\u91CE\u6E38\u8361\u8005": { hp: 40, atk: 6 }
 };
-
 let _mobSeq = 0;
-
-/** 初始化区域运行时状态（进入 playing 时调用；旧 state 缺 regions 时在 tick 里自愈补建） */
 function initRegions(s) {
   s.regions = WORLD_REGIONS.map((r) => ({
-    id: r.id, name: r.name, short: r.short, kind: r.kind,
-    x: r.x, y: r.y, r: r.r, safe: r.safe, lv: r.lv, mobs: r.mobs, desc: r.desc,
-    aliveCount: 0, playerInside: false, leftTick: -1, nextSpawnTick: -1, spawnCount: 0,
+    id: r.id,
+    name: r.name,
+    short: r.short,
+    kind: r.kind,
+    x: r.x,
+    y: r.y,
+    r: r.r,
+    safe: r.safe,
+    lv: r.lv,
+    mobs: r.mobs,
+    desc: r.desc,
+    aliveCount: 0,
+    playerInside: false,
+    leftTick: -1,
+    nextSpawnTick: -1,
+    spawnCount: 0
   }));
 }
-
-/** 某区域内当前存活的野怪数量 */
 function countAliveInRegion(s, regionId) {
   let n = 0;
   for (const e of s.entities) {
@@ -646,31 +532,27 @@ function countAliveInRegion(s, regionId) {
   }
   return n;
 }
-
-/** 在区域内取一个合法落点（避让城镇安全缓冲；尽量不贴脸玩家） */
 function regionSpawnPoint(s, region) {
   const player = s.entities.find((e) => e.side === "player");
   const town = WORLD_REGIONS[0];
   let x = region.x, y = region.y;
   for (let t = 0; t < 8; t++) {
     const a = rnd(0, Math.PI * 2);
-    const d = region.r * (0.35 + rnd(0, 0.55));      // 0.35r ~ 0.9r：落点留在本区域内
-    // ★ fix⑤：落点同时夹进「当前关卡 bounds」（前端上报）与世界边界
+    const d = region.r * (0.35 + rnd(0, 0.55));
     const cb = clampToBound(s, region.x + Math.cos(a) * d, region.y + Math.sin(a) * d);
     const cx = clampX(cb.x);
     const cy = clampY(cb.y);
-    if (Math.hypot(cx - town.x, cy - town.y) < town.r + TOWN_SPAWN_BUFFER_M) continue;   // 不进城镇
-    if (player && player.alive && Math.hypot(cx - player.x, cy - player.y) < 12) continue;  // 不贴脸
-    x = cx; y = cy;
+    if (Math.hypot(cx - town.x, cy - town.y) < town.r + TOWN_SPAWN_BUFFER_M) continue;
+    if (player && player.alive && Math.hypot(cx - player.x, cy - player.y) < 12) continue;
+    x = cx;
+    y = cy;
     break;
   }
-  return { x: x, y: y };
+  return { x, y };
 }
-
-/** 在指定区域生成 n 只野怪（★ v4：敌人复活即由此重新生成，不再依赖 alive=false 残留实体） */
 function spawnRegionMobs(s, region, n) {
-  const names = REGION_MOB_NAMES[region.id] || ["荒野游荡者"];
-  const archs = (s.map && s.map.enemy_archetypes && s.map.enemy_archetypes.length) ? s.map.enemy_archetypes : null;
+  const names = REGION_MOB_NAMES[region.id] || ["\u8352\u91CE\u6E38\u8361\u8005"];
+  const archs = s.map?.enemy_archetypes && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
   const lv = Math.max(1, region.lv);
   for (let i = 0; i < n; i++) {
     const name = names[(_mobSeq + i) % names.length];
@@ -678,19 +560,17 @@ function spawnRegionMobs(s, region, n) {
     const preset = MOB_PRESETS[name] || { hp: 40, atk: 6 };
     const arch = archs ? archs[(_mobSeq + i) % archs.length] : null;
     const hp = Math.round((arch ? num(arch.hp, preset.hp) * 0.6 : preset.hp) + (lv - 1) * 10);
-    const e = makeEntity({ id: `mob_${region.id}_${_mobSeq++}`, name: name, hp: hp, level: lv }, "enemy", at.x, at.y, i);
+    const e = makeEntity({ id: `mob_${region.id}_${_mobSeq++}`, name, hp, level: lv }, "enemy", at.x, at.y, i);
     e.atk = Math.round((arch ? num(arch.atk, preset.atk) * 0.6 : preset.atk) + (lv - 1) * 2);
     e.regionId = region.id;
     e.homeX = at.x;
     e.homeY = at.y;
     e.aiState = "idle";
     e.wanderTimer = 0;
-    e.bounty = (arch && arch.bounty) ? { ...arch.bounty } : { exp: 8 + lv * 4, money: 5 + lv * 3 };
+    e.bounty = arch && arch.bounty ? { ...arch.bounty } : { exp: 8 + lv * 4, money: 5 + lv * 3 };
     s.entities.push(e);
   }
 }
-
-/** 区域刷新计时器：玩家离开某区域 → 该区域 45 秒后刷新一次（补满配额） */
 function regionTick(s, player) {
   if (!Array.isArray(s.regions) || !s.regions.length) initRegions(s);
   if (!s.town || !s.town.buildings) ensureTown(s);
@@ -699,7 +579,6 @@ function regionTick(s, player) {
     const inside = r.id === cur.id;
     r.aliveCount = countAliveInRegion(s, r.id);
     if (inside) {
-      // 玩家在场：刷新计时挂起（不刷新），清除"刚离开"排期
       r.playerInside = true;
       r.leftTick = -1;
       r.nextSpawnTick = -1;
@@ -707,16 +586,13 @@ function regionTick(s, player) {
     }
     const wasInside = r.playerInside;
     r.playerInside = false;
-    if (r.safe) continue;                              // 城镇（安全区）永不刷新野怪
-    // ★ fix⑤（缺口①）：区域圆心落在当前关卡之外 → 本图不存在该野区，不排刷
-    //   （否则任何一张小地图都会被宿主的世界级六野区持续补怪，表现为"每张图都有野怪"）
+    if (r.safe) continue;
     if (regionOutOfMap(s, r)) {
       r.leftTick = -1;
       r.nextSpawnTick = -1;
       continue;
     }
     if (wasInside || r.nextSpawnTick < 0) {
-      // 玩家刚离开该区域（或从未排期）→ 从此刻起 45 秒后刷新一次
       r.leftTick = s.tick;
       r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;
       continue;
@@ -726,182 +602,40 @@ function regionTick(s, player) {
       if (gap > 0) {
         spawnRegionMobs(s, r, gap);
         r.spawnCount += 1;
-        pushEvent(s, `「${r.name}」重新聚集了 ${gap} 只野怪`);
+        pushEvent(s, `\u300C${r.name}\u300D\u91CD\u65B0\u805A\u96C6\u4E86 ${gap} \u53EA\u91CE\u602A`);
       }
-      r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;  // 持续驻留刷新（每 45s 一次）
+      r.nextSpawnTick = s.tick + REGION_RESPAWN_TICKS;
     }
   }
 }
-
-/* ============================================================
-   ★ fix⑤（缺口①）前端 localEnemies 载荷接管
-   ------------------------------------------------------------
-   前端 App.vue 在「本地敌怪集合结构性变化」时，把整份清单随 tick 上报：
-     localEnemies = { epoch, bounds: { lx, ly }, list: [ 敌怪实体… ] }
-     - list  ：mapmob_* / localmob_* / zone_* 三前缀的敌怪（前端权威集合）
-     - bounds：当前关卡半宽/半高（米），如 Mulberry Forest 仅 ±29 m
-   此前宿主对本载荷无任何处理逻辑 → 宿主实体表里没有这批怪，
-   于是「玩家攻击不到野怪（恒未命中）」「野怪不攻击（宿主侧无此怪）」。
-   本段实现：按 epoch 幂等重建宿主敌怪表，使其进入既有「野怪 AI + skill 命中判定」，
-   并把野怪 AI 的游荡/追击/归位与生成落点夹进 bounds。
-   ============================================================ */
-
-/** 前端权威敌怪的 id 前缀（与 App.vue localEnemiesPayload 的过滤条件一致） */
-const LOCAL_ENEMY_PREFIXES = ["mapmob_", "localmob_", "zone_"];
-
-/** 是否「前端权威敌怪」的 id */
-function isLocalEnemyId(id) {
-  const v = str(id);
-  return LOCAL_ENEMY_PREFIXES.some((p) => v.startsWith(p));
-}
-
-/** 当前关卡 AI 边界（半宽/半高，米）：有前端 bounds 用 bounds，否则回退世界边界 ±1490 */
-function mapBound(s) {
-  const b = s.mapBounds;
-  if (b && num(b.lx, 0) > 0 && num(b.ly, 0) > 0) return { lx: num(b.lx, 0), ly: num(b.ly, 0) };
-  return { lx: WORLD_X_RANGE[1] - 10, ly: WORLD_Z_RANGE[1] - 10 };
-}
-
-/** 把坐标夹进当前关卡边界（仅用于野怪生成 / AI 落点，不改玩家位姿镜像） */
-function clampToBound(s, x, y) {
-  const b = mapBound(s);
-  return { x: clamp(x, -b.lx, b.lx), y: clamp(y, -b.ly, b.ly) };
-}
-
-/** 某野区是否完全落在当前关卡之外（是 → 本图不存在该野区，不排刷，避免"每张图都有野怪"） */
-function regionOutOfMap(s, r) {
-  const b = s.mapBounds;
-  if (!b || !(num(b.lx, 0) > 0) || !(num(b.ly, 0) > 0)) return false;
-  return Math.abs(r.x) - r.r >= num(b.lx, 0) || Math.abs(r.y) - r.r >= num(b.ly, 0);
-}
-
-/**
- * 按前端上报重建「当前关卡敌怪表」：
- *   ① epoch 未变（宿主状态回推）→ 幂等跳过；
- *   ② 先移除旧的 mapmob_/localmob_/zone_ 敌怪（含死亡残留与上一张图的怪）；
- *   ③ 按 list 逐个重建为宿主 Entity（homeX/homeY 取上报值或当前位，均夹进 bounds）。
- * 返回实际重建数量。
- */
-function applyLocalEnemies(s, payload) {
-  if (!payload || typeof payload !== "object") return 0;
-  const epoch = num(payload.epoch, 0);
-  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;      // 该世代已接管，忽略回推
-  const b = payload.bounds || {};
-  const lx = num(b.lx, 0);
-  const ly = num(b.ly, 0);
-  if (lx > 0 && ly > 0) s.mapBounds = { lx: lx, ly: ly };
-  const list = Array.isArray(payload.list) ? payload.list : [];
-  // ① 快照「宿主侧已知的同名本地敌怪」：重建时沿用位姿 / 血量 / AI 状态，
-  //    避免前端旧载荷（血量、位置停留在上报时刻）把宿主已结算的结果回滚
-  const prev = new Map();
-  for (const e of s.entities) {
-    if (e.side === "enemy" && isLocalEnemyId(e.id)) prev.set(str(e.id), e);
-  }
-  // ①b 死亡标记：宿主结算掉的本地野怪在「区域刷新周期（45s）」内不得被前端载荷复活
-  if (!s.localMobTombstones || typeof s.localMobTombstones !== "object") s.localMobTombstones = {};
-  const tombs = s.localMobTombstones;
-  Object.keys(tombs).forEach((k) => {
-    if (num(s.tick, 0) - num(tombs[k], 0) >= REGION_RESPAWN_TICKS) delete tombs[k];
-  });
-  // ② 清旧（幂等：重建前先清，避免跨图 / 跨世代残留）
-  s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
-  // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」中已经落到本图界外的那些：
-  //     前端权威清单已代表当前关卡的敌怪，界外的宿主怪在小地图里既看不到也打不到
-  if (lx > 0 && ly > 0) {
-    s.entities = s.entities.filter(
-      (e) => !(e.side === "enemy" && !isLocalEnemyId(e.id) && (Math.abs(e.x) > lx || Math.abs(e.y) > ly)),
-    );
-  }
-  // ③ 重建
-  let built = 0;
-  for (const raw of list) {
-    if (!raw || typeof raw !== "object") continue;
-    const side = str(raw.side);
-    if (side && side !== "enemy") continue;                          // 只接管敌怪
-    if (raw.alive === false) continue;                               // 已阵亡的不重建
-    const id = str(raw.id);
-    if (!id) continue;
-    if (tombs[id] != null) continue;                                 // ★ v5：宿主已结算击杀（45s 内不复活）
-    const lv = Math.max(1, Math.round(num(raw.level, 1)));
-    const maxHp = Math.max(1, Math.round(num(raw.maxHp, num(raw.hp, 60)) || 60));
-    const at = clampToBound(s, num(raw.x, 0), num(raw.y, 0));
-    const e = makeEntity({ id: id, name: str(raw.name, "野怪"), hp: maxHp, level: lv }, "enemy", at.x, at.y, built);
-    e.maxHp = maxHp;
-    e.atk = Math.max(1, Math.round(num(raw.atk, e.atk)));
-    e.alive = true;
-    const home = clampToBound(s, num(raw.homeX, num(raw.x, at.x)), num(raw.homeY, num(raw.y, at.y)));
-    e.isLocal = true;                                               // 标记：AI 受 bounds 约束
-    e.regionId = str(raw.regionId, "local");
-    e.homeX = home.x;
-    e.homeY = home.y;
-    const old = prev.get(id);
-    if (old) {
-      // ★ v5：宿主侧状态优先 —— 血量为宿主结算后的真实值（不是前端上报时的旧值），
-      //        位姿 / AI 状态 / 冷却一律沿用，避免"打掉的血下一帧复活 / 位置回跳"
-      e.x = num(old.x, at.x);
-      e.y = num(old.y, at.y);
-      e.hp = clamp(num(old.hp, maxHp), 1, maxHp);
-      e.aiState = str(old.aiState, "idle");
-      e.cooldown = Math.max(0, num(old.cooldown, 0));
-      e.wanderTimer = num(old.wanderTimer, 0);
-      e.wanderX = num(old.wanderX, e.x);
-      e.wanderY = num(old.wanderY, e.y);
-      e.bounty = old.bounty ? { ...old.bounty } : e.bounty;
-    } else {
-      e.hp = clamp(Math.round(num(raw.hp, maxHp)), 1, maxHp);        // 新接入的怪：采用前端当前血量
-      e.facing = num(raw.facing, e.facing);
-      e.cooldown = Math.max(0, Math.round(num(raw.cooldown, 0)));
-      e.aiState = "idle";
-      e.wanderTimer = 0;
-      if (raw.bounty && typeof raw.bounty === "object") e.bounty = { ...raw.bounty };
-    }
-    e.vx = 0;
-    e.vy = 0;
-    s.entities.push(e);
-    built += 1;
-  }
-  s.localMobsEpoch = epoch > 0 ? epoch : num(s.localMobsEpoch, 0);
-  return built;
-}
-
-/**
- * 城镇（安全区）建筑清单
- *
- * 坐标单位「米」，矩形中心 + 宽高。
- * w / h 现在是「瓦片数」（1 瓦片 ≈ 1 米，与 Rotten-Soup mulberryTown.json
- * 单格对齐），前端按 tileset 真实像素平铺绘制。
- *   - inn   6×7 大体量双段屋顶（与 RS 大屋相近）
- *   - shop  5×6 中型铺面
- *   - house 4×5 标准民居（mulberryTown.json 主要房屋尺寸）
- *   - well  2×2 水井
- */
 const TOWN_BUILDINGS = [
-  { kind: "inn",   name: "旅店",   x: -46, y: -42, w: 6, h: 7 },
-  { kind: "shop",  name: "杂货铺", x:  46, y: -38, w: 5, h: 6 },
-  { kind: "house", name: "民居",   x: -78, y:  22, w: 4, h: 5 },
-  { kind: "house", name: "民居",   x: -50, y:  62, w: 4, h: 5 },
-  { kind: "house", name: "民居",   x:  56, y:  30, w: 4, h: 5 },
-  { kind: "house", name: "民居",   x:  82, y:  -8, w: 4, h: 5 },
-  { kind: "house", name: "民居",   x:   0, y: -78, w: 5, h: 6 },
-  { kind: "well",  name: "水井",   x:   0, y:  34, w: 2, h: 2 },
+  { kind: "inn", name: "\u65C5\u5E97", x: -46, y: -42, w: 6, h: 7 },
+  { kind: "shop", name: "\u6742\u8D27\u94FA", x: 46, y: -38, w: 5, h: 6 },
+  { kind: "house", name: "\u6C11\u5C45", x: -78, y: 22, w: 4, h: 5 },
+  { kind: "house", name: "\u6C11\u5C45", x: -50, y: 62, w: 4, h: 5 },
+  { kind: "house", name: "\u6C11\u5C45", x: 56, y: 30, w: 4, h: 5 },
+  { kind: "house", name: "\u6C11\u5C45", x: 82, y: -8, w: 4, h: 5 },
+  { kind: "house", name: "\u6C11\u5C45", x: 0, y: -78, w: 5, h: 6 },
+  { kind: "well", name: "\u6C34\u4E95", x: 0, y: 34, w: 2, h: 2 }
 ];
-
-/** 城镇中立角色（不参与战斗，仅作安全区氛围） */
 const TOWN_NPCS = [
-  { name: "镇长 老白", x: -20, y:  14 },
-  { name: "铁匠 大壮", x:  30, y: -16 },
-  { name: "商人 阿福", x:  20, y:  26 },
-  { name: "守卫 石岩", x: -32, y: -14 },
+  { name: "\u9547\u957F \u8001\u767D", x: -20, y: 14 },
+  { name: "\u94C1\u5320 \u5927\u58EE", x: 30, y: -16 },
+  { name: "\u5546\u4EBA \u963F\u798F", x: 20, y: 26 },
+  { name: "\u5B88\u536B \u77F3\u5CA9", x: -32, y: -14 }
 ];
-
-/** 建立城镇（安全区）：建筑清单 + 中立角色实体（幂等） */
 function ensureTown(s) {
   const town = WORLD_REGIONS[0];
   if (!s.town || !s.town.buildings) {
     s.town = {
-      id: town.id, name: town.name, x: town.x, y: town.y, r: town.r, safe: true,
+      id: town.id,
+      name: town.name,
+      x: town.x,
+      y: town.y,
+      r: town.r,
+      safe: true,
       buildings: TOWN_BUILDINGS.map((b, i) => ({ ...b, id: `b_${i}` })),
-      npcs: TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n })),
+      npcs: TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n }))
     };
   }
   if (!s.entities.some((e) => e.side === "neutral")) {
@@ -917,15 +651,10 @@ function ensureTown(s) {
     });
   }
 }
-
 function step(s, input, poseHint) {
-  const speed = MOVE_SPEED_M;   // 米/秒
+  const speed = MOVE_SPEED_M;
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
-  // ★ v5：每帧按《等级系统》公式校准玩家四项上限（hp / mp 只夹进上限，绝不回复生命）
-  syncPlayerStats(s, player, false);
-
-  // ★ 关键修复（坐标双写）：玩家位姿权威在客户端，宿主只镜像 tick 参数里的 player
   const pose = poseHint || input?.player;
   if (pose && Number.isFinite(num(pose.x, NaN)) && Number.isFinite(num(pose.y, NaN))) {
     player.x = clampX(num(pose.x, player.x));
@@ -938,28 +667,30 @@ function step(s, input, poseHint) {
     const dy = num(input?.dy, 0);
     if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
       const len = Math.hypot(dx, dy) || 1;
-      player.vx = (dx / len) * speed;
-      player.vy = (dy / len) * speed;
-      player.facing = dx > 0 ? 0 : dx < 0 ? 180 : (dy > 0 ? 90 : 270);
+      player.vx = dx / len * speed;
+      player.vy = dy / len * speed;
+      player.facing = dx > 0 ? 0 : dx < 0 ? 180 : dy > 0 ? 90 : 270;
     } else if (input?.moveTo) {
       const tx = num(input.moveTo.x, player.x);
       const ty = num(input.moveTo.y, player.y);
-      if (dist(player, { x: tx, y: ty }) > 1.0) moveTowards(player, tx, ty, speed);
-      else { player.vx = 0; player.vy = 0; }
+      if (dist(player, { x: tx, y: ty }) > 1) moveTowards(player, tx, ty, speed);
+      else {
+        player.vx = 0;
+        player.vy = 0;
+      }
     } else {
       player.vx = 0;
       player.vy = 0;
     }
   }
-
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
-  const allies = s.entities.filter((e) => e.side === "ally" && e.alive);
-
+  const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
+  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && partyIds.indexOf(e.id) >= 0);
   allies.forEach((a, i) => {
-    const target = enemies.reduce((best, e) => (!best || dist(a, e) < dist(a, best) ? e : best), null);
+    const target = enemies.reduce((best, e) => !best || dist(a, e) < dist(a, best) ? e : best, null);
     const anchor = {
-      x: player.x + Math.cos((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
-      y: player.y + Math.sin((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+      x: player.x + Math.cos(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+      y: player.y + Math.sin(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M
     };
     if (target && dist(a, target) < MOB_VIEW_M) moveTowards(a, target.x, target.y, speed * 0.92);
     else moveTowards(a, anchor.x, anchor.y, speed * 0.8);
@@ -968,74 +699,89 @@ function step(s, input, poseHint) {
       a.cooldown = 30;
     }
   });
-
-  // ★ v4 敌人 AI：探测半径 10 米（MOB_DETECT_M）→ 追击 → 2 米攻击
-  //          → 超出 12 米（MOB_DISENGAGE_M）脱战 → 归位巢点并在 8 米内游荡
   enemies.forEach((e) => {
-    const prey = [player, ...allies].filter((t) => t.alive)
-      .reduce((best, t) => (!best || dist(e, t) < dist(e, best) ? t : best), null);
-    const home = { x: num(e.homeX, e.x), y: num(e.homeY, e.y) };   // 巢点（无则取当前位）
+    const ex = e;
+    const prey = [player, ...allies].filter((t) => t.alive).reduce((best, t) => !best || dist(e, t) < dist(e, best) ? t : best, null);
+    const home = { x: num(ex.homeX, e.x), y: num(ex.homeY, e.y) };
     const preyIn = prey ? dist(e, prey) : Infinity;
-    // ① 追击态：超出脱战半径 → 停止追击（转归位）；否则贴身攻击 / 继续接近
-    if (e.aiState === "chase") {
+    if (ex.aiState === "chase") {
       if (!prey || preyIn > MOB_DISENGAGE_M) {
-        e.aiState = "return";
-        e.vx = 0; e.vy = 0;
+        ex.aiState = "return";
+        e.vx = 0;
+        e.vy = 0;
         return;
       }
-      if (preyIn > MOB_ATK_M) { const t = clampToBound(s, prey.x, prey.y); moveTowards(e, t.x, t.y, speed * 0.72); return; }
-      e.vx = 0; e.vy = 0;
-      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = MOB_ATK_COOLDOWN_TICKS; }
+      if (preyIn > MOB_ATK_M) {
+        const t = clampToBound(s, prey.x, prey.y);
+        moveTowards(e, t.x, t.y, speed * 0.72);
+        return;
+      }
+      e.vx = 0;
+      e.vy = 0;
+      if (e.cooldown <= 0) {
+        damage(s, prey, e.atk);
+        e.cooldown = 45;
+      }
       return;
     }
-    // ② 巡逻态：探测半径内发现玩家/盟友 → 进入追击
     if (prey && preyIn <= MOB_DETECT_M) {
-      e.aiState = "chase";
-      if (preyIn > MOB_ATK_M) { const t2 = clampToBound(s, prey.x, prey.y); moveTowards(e, t2.x, t2.y, speed * 0.72); return; }
-      e.vx = 0; e.vy = 0;
-      if (e.cooldown <= 0) { damage(s, prey, e.atk); e.cooldown = MOB_ATK_COOLDOWN_TICKS; }
+      ex.aiState = "chase";
+      if (preyIn > MOB_ATK_M) {
+        const t = clampToBound(s, prey.x, prey.y);
+        moveTowards(e, t.x, t.y, speed * 0.72);
+        return;
+      }
+      e.vx = 0;
+      e.vy = 0;
+      if (e.cooldown <= 0) {
+        damage(s, prey, e.atk);
+        e.cooldown = 45;
+      }
       return;
     }
-    // ③ 脱战/巡逻：离巢超过 8 米 → 归位；否则在巢点周围小范围游荡（绝不全图直线追）
-    if (e.aiState !== "idle" && e.aiState !== "npc") { e.aiState = "idle"; e.wanderTimer = 0; }
+    if (ex.aiState !== "idle" && ex.aiState !== "npc") {
+      ex.aiState = "idle";
+      ex.wanderTimer = 0;
+    }
     if (dist(e, home) > MOB_LEASH_R_M) {
       moveTowards(e, home.x, home.y, speed * 0.55);
-      e.wanderTimer = 0;
+      ex.wanderTimer = 0;
       return;
     }
-    if (!(num(e.wanderTimer, 0) > 0)) {
+    if (!(num(ex.wanderTimer, 0) > 0)) {
       const wa = rnd(0, Math.PI * 2);
       const wr = rnd(2, MOB_WANDER_R_M);
-      // ★ fix⑤：游荡点同样夹进当前关卡边界（森林 ±29 m 时不再飘到界外）
       const w = clampToBound(s, home.x + Math.cos(wa) * wr, home.y + Math.sin(wa) * wr);
-      e.wanderX = w.x;
-      e.wanderY = w.y;
-      e.wanderTimer = Math.round(rnd(30, 90));
+      ex.wanderX = w.x;
+      ex.wanderY = w.y;
+      ex.wanderTimer = Math.round(rnd(30, 90));
     }
-    e.wanderTimer = num(e.wanderTimer, 0) - 1;
-    const wx = num(e.wanderX, home.x);
-    const wy = num(e.wanderY, home.y);
+    ex.wanderTimer = num(ex.wanderTimer, 0) - 1;
+    const wx = num(ex.wanderX, home.x);
+    const wy = num(ex.wanderY, home.y);
     if (Math.hypot(wx - e.x, wy - e.y) > 1) moveTowards(e, wx, wy, speed * 0.35);
-    else { e.vx = 0; e.vy = 0; }
+    else {
+      e.vx = 0;
+      e.vy = 0;
+    }
   });
-
-  // 速度 m/s × dt（修复：原先按『米/帧』直接加，10 倍误差）
-  // ★ fix⑤：前端权威敌怪（isLocal）改用「当前关卡 bounds」夹取，避免被推出本图可行走区
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
     if (e.side === "enemy" && e.isLocal) {
       const p = clampToBound(s, nx, ny);
-      e.x = p.x; e.y = p.y;
+      e.x = p.x;
+      e.y = p.y;
     } else {
       e.x = clampX(nx);
       e.y = clampY(ny);
     }
   });
-  s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
+  s.skills.forEach((k) => {
+    if (k.cdLeft > 0) k.cdLeft -= 1;
+  });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
-
   s.chests.forEach((c) => {
     if (c.opened) return;
     if (dist(player, c) < CHEST_PICKUP_M) {
@@ -1043,39 +789,320 @@ function step(s, input, poseHint) {
       const loot = c.loot;
       const expGain = loot?.exp != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
       const moneyGain = loot?.money != null ? Math.round(num(loot.money, 12)) : 15 + Math.floor(rnd(0, 20));
-      const drop = loot?.item || ["生锈的钥匙", "干粮", "荧光石"][Math.floor(Math.random() * 3)];
-      s.money += moneyGain; s.drops.push(drop);
-      const chestUps = gainExp(s, player, expGain);   // ★ v5：宝箱经验同样走升级流程
-      floater(s, `宝箱 +${expGain}exp`, c.x, c.y);
-      pushEvent(s, `打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱${chestUps > 0 ? `，提升 ${chestUps} 级` : ""}`);
+      const drop = loot?.item || ["\u751F\u9508\u7684\u94A5\u5319", "\u5E72\u7CAE", "\u8367\u5149\u77F3"][Math.floor(Math.random() * 3)];
+      s.exp += expGain;
+      s.money += moneyGain;
+      s.drops.push(drop);
+      floater(s, `\u5B9D\u7BB1 +${expGain}exp`, c.x, c.y);
+      pushEvent(s, `\u6253\u5F00\u5B9D\u7BB1\uFF1A${drop}\uFF0C+${expGain} \u7ECF\u9A8C\uFF0C+${moneyGain} \u91D1\u94B1`);
     }
   });
-
   s.potions = s.potions.filter((p) => {
     if (dist(player, p) >= POTION_PICKUP_M) return true;
     const before = player.hp;
     player.hp = clamp(player.hp + p.heal, 0, player.maxHp);
     floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 24);
-    pushEvent(s, `拾取血瓶，恢复 ${Math.round(player.hp - before)} 点生命`);
+    pushEvent(s, `\u62FE\u53D6\u8840\u74F6\uFF0C\u6062\u590D ${Math.round(player.hp - before)} \u70B9\u751F\u547D`);
     return false;
   });
-
-  // ★ v4 区域刷新：敌人复活改为「随区域刷新机制重新生成」——
-  //   先把本帧阵亡的敌人实体从世界移除（不再保留 alive=false 的残留实体）
   s.entities = s.entities.filter((e) => !(e.side === "enemy" && e.alive === false));
-
-  // ★ v4 每个区域各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
-  //   （城镇安全区不刷新；不再用 enemies.length===0 触发清场补波）
   regionTick(s, player);
-
   if (!player.alive && s.phase === "playing") {
     s.phase = "over";
-    s.result = { reason: "death", exp: s.exp, money: s.money, drops: [...s.drops], kills: s.kills, survivedTicks: s.tick };
-    pushEvent(s, "你倒下了……");
+    s.result = {
+      reason: "death",
+      exp: s.exp,
+      money: s.money,
+      drops: [...s.drops],
+      kills: s.kills,
+      survivedTicks: s.tick
+    };
+    pushEvent(s, "\u4F60\u5012\u4E0B\u4E86\u2026\u2026");
   }
 }
-
-/** ★ fix④（缺口②）：候选角色是否就是玩家本人（宿主 roles 里混入了用户角色，按 id / name 双判） */
+const SYS_DATA_KEY = "sys_state";
+const SYS_PERSIST_EVERY_TICKS = 20;
+const RARITY_PRICE = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
+const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
+const KIND_LIST = ["consumable", "material", "equipment", "skill_book", "quest"];
+const BUILTIN_SHOP_GOODS = [
+  { id: "b_huiqi", name: "\u56DE\u6C14\u6563", price: 30, kind: "consumable", rarity: "common", heal: 30, desc: "\u6062\u590D 30 \u70B9\u751F\u547D", from: "builtin" },
+  { id: "b_jijiu", name: "\u6025\u6551\u5305", price: 60, kind: "consumable", rarity: "fine", heal: 60, desc: "\u6062\u590D 60 \u70B9\u751F\u547D", from: "builtin" },
+  { id: "b_ganliang", name: "\u5E72\u7CAE", price: 12, kind: "consumable", rarity: "common", heal: 14, desc: "\u6062\u590D 14 \u70B9\u751F\u547D", from: "builtin" },
+  { id: "b_zhixuecao", name: "\u6B62\u8840\u8349", price: 20, kind: "material", rarity: "common", heal: 0, desc: "\u5E38\u89C1\u8349\u836F\uFF0C\u53EF\u5165\u836F", from: "builtin" },
+  { id: "b_yinguang", name: "\u8367\u5149\u77F3", price: 45, kind: "material", rarity: "fine", heal: 0, desc: "\u6CDB\u7740\u5FAE\u5149\u7684\u77FF\u77F3", from: "builtin" },
+  { id: "b_duanjian", name: "\u7CBE\u94A2\u77ED\u5251", price: 220, kind: "equipment", rarity: "rare", heal: 0, desc: "\u653B\u51FB +6", from: "builtin" },
+  { id: "b_hufu", name: "\u76AE\u7532\u62A4\u7B26", price: 160, kind: "equipment", rarity: "fine", heal: 0, desc: "\u9632\u5FA1 +4", from: "builtin" },
+  { id: "b_xinde", name: "\u57FA\u7840\u6280\u80FD\u5FC3\u5F97", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "\u4E60\u5F97\u4E00\u9879\u57FA\u7840\u6280\u80FD", from: "builtin" }
+];
+function normRarity(v) {
+  const r = String(v ?? "").toLowerCase().trim();
+  return RARITY_LIST.indexOf(r) >= 0 ? r : "common";
+}
+function guessKind(name) {
+  const n = String(name || "");
+  if (/技能|秘籍|心得|卷轴|心法|功法/.test(n)) return "skill_book";
+  if (/剑|刀|枪|弓|甲|盾|护符|戒|铠|斧|杖|靴/.test(n)) return "equipment";
+  if (/丹|散|药|水|包|粮|汤|肉|鱼|果|酒|茶|露/.test(n)) return "consumable";
+  return "material";
+}
+function defaultHeal(name, kind) {
+  if (kind !== "consumable") return 0;
+  const n = String(name || "");
+  if (/急救|大补|灵药|仙丹|回天/.test(n)) return 60;
+  if (/回气|伤药|灵泉|清心|愈合/.test(n)) return 30;
+  if (/干粮|粮|肉|果|汤|鱼/.test(n)) return 14;
+  return 20;
+}
+/** 物品名归一：剥离「×N」数量、「（描述…）」后缀、对象残留与货币尾注，限长 20。
+ *  服务器参数卡的物品是 AI 生成的自由文本（如「银鲤×3（钓鱼累积，单尾800金）」），
+ *  展示名与匹配键必须走同一归一器，否则会出现「背包里没有该物品」的误判。 */
+function cleanName(v) {
+  let n = v && typeof v === "object" ? str(v.name ?? v.item ?? v.itemName ?? "") : str(v);
+  n = n.replace(/\[object Object\]/g, " ");
+  n = n.replace(/[（(][^）)]*[）)]/g, " ");
+  n = n.replace(/[×xX*]\s*\d+\s*(个|件|尾|份|瓶|颗|张|本)?/g, " ");
+  n = n.replace(/\s*单[尾个件份瓶颗张本]\s*\d*\s*金.*$/g, " ");
+  n = n.replace(/\s*\d+\s*金.*$/g, " ");
+  n = n.replace(/\s+/g, " ").trim();
+  n = n.replace(/[·、,，;；:：]+$/, "").trim();
+  return n.slice(0, 20);
+}
+function itemKey(v) {
+  return cleanName(v).toLowerCase();
+}
+/** 展示名/参数名可能写法不同（带描述 vs 不带），匹配一律走归一键 */
+function sameName(a, b) {
+  const ka = itemKey(a);
+  return !!ka && ka === itemKey(b);
+}
+function parseItemRaw(raw) {
+  if (raw && typeof raw === "object") {
+    const name2 = cleanName(raw);
+    if (!name2) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
+    const kind2 = KIND_LIST.indexOf(String(raw.kind)) >= 0 ? String(raw.kind) : guessKind(name2);
+    return {
+      name: name2,
+      count: Math.max(1, Math.round(num(raw.count, 1))),
+      kind: kind2,
+      rarity: normRarity(raw.rarity),
+      heal: Math.max(0, Math.round(num(raw.heal, defaultHeal(name2, kind2)))),
+      price: Math.max(0, Math.round(num(raw.price, 0))),
+      desc: str(raw.desc, "") || void 0
+    };
+  }
+  const text = str(raw).trim();
+  if (!text) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
+  // 数量：任意位置的 ×N / xN / *N（取第一个）
+  const cnt = text.match(/[×xX*]\s*(\d+)/);
+  const count = cnt ? Math.max(1, parseInt(cnt[1], 10) || 1) : 1;
+  // 价格：文本里首个「NNN金」
+  const pm = text.match(/(\d+)\s*金/);
+  const price = pm ? Math.max(0, parseInt(pm[1], 10) || 0) : 0;
+  // 描述：首个括号组
+  const dm = text.match(/[（(]([^）)]*)[）)]/);
+  const desc = dm ? dm[1].trim() : void 0;
+  const name2 = cleanName(text);
+  if (!name2) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
+  const kind2 = guessKind(name2);
+  const rm = desc ? desc.match(/史诗|传说|稀有|精良/) : null;
+  const rarity = rm ? normRarity({ 精良: "fine", 稀有: "rare", 史诗: "epic", 传说: "legend" }[rm[0]]) : "common";
+  return { name: name2, count, kind: kind2, rarity, heal: defaultHeal(name2, kind2), price, desc };
+}
+function itemsFromCard(card) {
+  const arr = Array.isArray(card?.items) ? card.items : [];
+  return arr.map(parseItemRaw).filter((i) => i.name && i.count > 0);
+}
+function mergeBag(raw, meta, order) {
+  const map = /* @__PURE__ */ new Map();
+  raw.forEach((it) => {
+    const m = meta ? meta[it.name] : void 0;
+    const cur = map.get(it.name);
+    if (cur) {
+      cur.count += it.count;
+      return;
+    }
+    map.set(it.name, {
+      name: it.name,
+      count: it.count,
+      kind: it.kind !== "material" || !m ? it.kind : m.kind,
+      rarity: it.rarity !== "common" || !m ? it.rarity : m.rarity,
+      heal: it.heal || (m ? m.heal : 0) || defaultHeal(it.name, it.kind),
+      price: it.price || (m ? m.price : 0),
+      desc: it.desc || (m ? m.desc : void 0)
+    });
+  });
+  const list = Array.from(map.values());
+  const idx = /* @__PURE__ */ new Map();
+  (order || []).forEach((n, i) => idx.set(n, i));
+  return list.sort((a, b) => {
+    const ia = idx.has(a.name) ? idx.get(a.name) : 9999;
+    const ib = idx.has(b.name) ? idx.get(b.name) : 9999;
+    return ia - ib;
+  });
+}
+function serializeBag(bag) {
+  return bag.filter((i) => i.name && i.count > 0).map((i) => i.count > 1 ? `${i.name}\xD7${i.count}` : i.name);
+}
+function sellPrice(it) {
+  if (it.price > 0) return Math.max(1, Math.round(it.price * 0.4));
+  const base = RARITY_PRICE[it.rarity] || RARITY_PRICE.common;
+  const k = it.kind === "equipment" ? 1.5 : it.kind === "skill_book" ? 2 : 1;
+  return Math.max(1, Math.round(base * k));
+}
+function playerEntity(s) {
+  return s.entities.find((e) => e.side === "player");
+}
+function patchCard(s, patch) {
+  const card = { ...s.playerCard || {}, ...patch };
+  s.playerCard = card;
+  s.writeback = { ...s.writeback || {}, ...patch };
+  s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+  if (Array.isArray(patch.items)) s.items = buildItems(card);
+  if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8);
+}
+function syncCardFromContext(s, ctx) {
+  const card = ctx?.playerCard || {};
+  if (!card || !Object.keys(card).length) return;
+  const cur = s.playerCard || {};
+  const sig = (c) => JSON.stringify([c?.items ?? null, c?.money ?? null, c?.skills ?? null]);
+  if (sig(card) === sig(cur)) return;
+  s.playerCard = card;
+  s.items = buildItems(card);
+  s.skills = buildSkills(card, 8);
+}
+function ensureNpcCards(s, levelName) {
+  const prev = new Map((s.npcCards || []).map((c) => [c.id, c]));
+  const party = s.partyIds || [];
+  const cards = s.entities.map((e) => {
+    const old = prev.get(e.id);
+    const onStage = e.side !== "enemy" || e.alive;
+    return {
+      id: e.id,
+      name: e.name,
+      side: e.side,
+      enemy: e.side === "enemy",
+      level: Math.max(1, Math.round(num(e.level, 1))),
+      hp: Math.round(e.hp),
+      maxHp: Math.round(e.maxHp),
+      exp: Math.round(num(old?.exp, 0)),
+      alive: !!e.alive,
+      mapName: onStage ? levelName || old?.mapName || "" : old?.mapName || levelName || "",
+      x: Math.round(e.x),
+      y: Math.round(e.y),
+      inParty: party.indexOf(e.id) >= 0,
+      avatarPath: e.avatarPath
+    };
+  });
+  (s.npcCards || []).forEach((c) => {
+    if (!cards.some((x) => x.id === c.id)) cards.push(c);
+  });
+  s.npcCards = cards;
+}
+function grantPartyExp(s, expGain) {
+  const party = s.partyIds || [];
+  if (!party.length || expGain <= 0) return;
+  const share = Math.max(1, Math.round(expGain * 0.6));
+  party.forEach((pid) => {
+    const c = (s.npcCards || []).find((x) => x.id === pid);
+    if (!c) return;
+    c.exp = Math.round(num(c.exp, 0)) + share;
+    while (c.exp >= c.level * 100) {
+      c.exp -= c.level * 100;
+      c.level += 1;
+      c.maxHp += 20;
+      c.hp = c.maxHp;
+    }
+    const e = s.entities.find((x) => x.id === pid);
+    if (e) {
+      e.level = c.level;
+      e.maxHp = c.maxHp;
+      e.hp = c.hp;
+    }
+  });
+  const lead = s.entities.find((e) => e.id === party[0]);
+  if (lead) floater(s, `\u961F\u4F0D +${share}exp`, lead.x, lead.y - 26);
+}
+async function persistSys(context, s) {
+  const api = context?.tsApi?.pluginData;
+  if (!api?.set) return;
+  try {
+    await api.set(SYS_DATA_KEY, {
+      ring: s.ring || { items: [], skills: [] },
+      party: s.partyIds || [],
+      npcCards: s.npcCards || [],
+      bagMeta: s.bagMeta || {},
+      bagOrder: s.bagOrder || [],
+      shop: s.shopGoods || [],
+      level: s.levelName || ""
+    });
+  } catch {
+  }
+}
+async function restoreSys(context, s) {
+  const api = context?.tsApi?.pluginData;
+  if (!api?.get) return;
+  try {
+    const d = await api.get(SYS_DATA_KEY);
+    if (!d || typeof d !== "object") return;
+    if (d.ring && typeof d.ring === "object") {
+      s.ring = {
+        items: Array.isArray(d.ring.items) ? d.ring.items : [],
+        skills: Array.isArray(d.ring.skills) ? d.ring.skills.map(String) : []
+      };
+    }
+    if (Array.isArray(d.party)) s.partyIds = d.party.map(String);
+    if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
+    if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
+    if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
+    if (Array.isArray(d.shop) && d.shop.length) s.shopGoods = d.shop;
+    if (str(d.level)) s.levelName = str(d.level, "");
+  } catch {
+  }
+}
+async function refreshShop(context, s) {
+  const notes = [];
+  const builtin = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
+  let story = [];
+  const run = context?.tsApi?.agent?.run;
+  if (run) {
+    try {
+      const r = await withTimeout(
+        run("field-survival-shop-gener", {
+          storyDigest: buildStoryDigest(context),
+          worldBookDigest: str(context?.worldBookDigest, ""),
+          playerCard: s.playerCard || {}
+        }),
+        12e3,
+        "shop agent timeout"
+      );
+      const goods = r?.output?.goods;
+      if (Array.isArray(goods)) {
+        story = goods.slice(0, 14).map((g, i) => {
+          const rawName = String(g?.name || `\u7269\u8D44${i + 1}`).slice(0, 20);
+          const kind = KIND_LIST.indexOf(String(g?.kind)) >= 0 ? String(g.kind) : guessKind(rawName);
+          return {
+            id: `s_${i}_${rawName}`,
+            name: rawName,
+            price: Math.max(1, Math.round(num(g?.price, 50))),
+            kind,
+            rarity: normRarity(g?.rarity),
+            heal: Math.max(0, Math.round(num(g?.heal, defaultHeal(rawName, kind)))),
+            desc: String(g?.desc || "").slice(0, 60),
+            from: "story"
+          };
+        });
+      }
+      if (!story.length && r?.error) notes.push(String(r.error).slice(0, 60));
+    } catch (err) {
+      notes.push(err instanceof Error ? err.message.slice(0, 60) : "shop agent failed");
+    }
+  }
+  s.shopGoods = [...story, ...builtin];
+  s.shopSource = story.length ? "agent" : "builtin";
+  if (notes.length) pushEvent(s, `\u5546\u57CE\u751F\u6210\u964D\u7EA7\uFF1A${notes[0]}`);
+  return notes;
+}
 function isPlayerRole(cand, playerRole) {
   const cid = str(cand?.id);
   const cname = str(cand?.name);
@@ -1085,61 +1112,43 @@ function isPlayerRole(cand, playerRole) {
   if (pname && cname && cname === pname) return true;
   return false;
 }
-
-export async function handle_action(action, params, state, context) {
-  const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4 || state.version === 5)
-    ? state : emptyState(context);
-  // ★ v5：v4 存档就地对齐 v5 规则（等级 / 经验 / 四项上限 / 死亡标记），不 bump version → 不重置进行中的对局
-  if (s.phase === "playing") ensureV5(s);
-
+async function handle_action(action, params, state, context) {
+  const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4) ? state : emptyState(context);
   const okResp = (msg) => ({ code: 0, message: "ok", state: s, response: msg });
-
   switch (action) {
     case "init":
     case "start_init": {
       const fresh = emptyState(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
-      return { code: 0, message: "ok", state: fresh, response: "请选择参展 / 观战 / 敌对角色后开始" };
+      return { code: 0, message: "ok", state: fresh, response: "\u8BF7\u9009\u62E9\u53CB\u65B9 / \u89C2\u6218 / \u654C\u5BF9\u89D2\u8272\u540E\u5F00\u59CB" };
     }
     case "start": {
-      const sel = (params?.selections || params || {});
+      const sel = params?.selections || params || {};
       const participants = Array.isArray(sel.participants) ? sel.participants.map(String) : [];
       const spectators = Array.isArray(sel.spectators) ? sel.spectators.map(String) : [];
       const enemies = Array.isArray(sel.enemies) ? sel.enemies.map(String) : [];
       const roles = Array.isArray(context?.roles) ? context.roles : [];
-      // ★ v5：玩家角色卡（等级 / 经验 / 称号 / 加成）取本次调用上下文的最新值
-      if (context?.playerCard && typeof context.playerCard === "object" && Object.keys(context.playerCard).length) {
-        s.playerCard = context.playerCard;
-      }
-      if (roles.length) s.roles = roles;
       const byId = (id) => roles.find((r) => String(r.id) === id || String(r.name) === id);
       const playerRole = roles.find((r) => String(r.roleType) === "player") || roles[0];
       s.selections = { participants, spectators, enemies };
       s.entities = [];
-      const playerEnt = makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
-      s.entities.push(playerEnt);
-      // ★ v5：玩家等级 / 经验续接角色卡，四项上限按《等级系统》公式派生，满血满蓝开局
-      syncPlayerStats(s, playerEnt, true);
+      s.entities.push(makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0));
       participants.forEach((id, i) => {
         const r = byId(id);
         if (!r) return;
-        // ★ fix④（缺口②）：参展列表里若混入玩家本人（宿主 roles 含用户角色、前端默认 push 玩家 id），
-        //   不再生成一份同名友方 —— 否则开局即出现"另一个我"跟着自己跑
         if (isPlayerRole(r, playerRole)) return;
-        const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
+        const angle = i / Math.max(1, participants.length) * Math.PI * 2;
         s.entities.push(makeEntity(
-          r, "ally",
+          r,
+          "ally",
           PLAYER_SPAWN.x + Math.cos(angle) * ALLY_FOLLOW_GAP_M,
           PLAYER_SPAWN.y + Math.sin(angle) * ALLY_FOLLOW_GAP_M,
-          i,
+          i
         ));
       });
-      // ★ v4：敌对角色落在「最近的野区」内（玩家出生于城镇安全区，
-      //   沿用"围绕玩家 30~100 米"的落点会落进城镇内部，破坏安全区规则）
       const startRegion = nearestWildRegion(PLAYER_SPAWN.x, PLAYER_SPAWN.y);
       enemies.forEach((id, i) => {
         const r = byId(id);
-        // ★ fix④（缺口②）：玩家本人不会被复制成"敌对角色"（同 id / 同名的 1:1 排除）
         if (r && isPlayerRole(r, playerRole)) return;
         const at = regionSpawnPoint(s, startRegion);
         const e = r ? makeEntity(r, "enemy", at.x, at.y, i) : makeEntity({ id, name: id }, "enemy", at.x, at.y, i);
@@ -1155,33 +1164,47 @@ export async function handle_action(action, params, state, context) {
       });
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
-
-      // ★ v4：区域划分（晨曦镇 + 6 野区）写入 map.zones —— 主地图与小地图据此显示区域名称
       if (s.map) {
-        s.map.zones = WORLD_REGIONS.map((r) => ({ name: r.name, x: r.x, y: r.y, r: r.r, kind: r.kind, desc: r.desc }));
+        s.map.zones = WORLD_REGIONS.map((r) => ({
+          name: r.name,
+          x: r.x,
+          y: r.y,
+          r: r.r,
+          kind: r.kind,
+          desc: r.desc
+        }));
       }
-      // ★ v4：建立城镇（安全区：建筑 + 中立角色）与区域运行时状态
       ensureTown(s);
       initRegions(s);
-      // ★ v4：初始铺怪 —— 每个野区各刷满自己的配额（城镇配额 0，安全区内无野怪）
-      WORLD_REGIONS.forEach((r) => { if (!r.safe && r.mobs > 0) spawnRegionMobs(s, r, r.mobs); });
-      // ★ v4：宝箱 / 血瓶仍按地图数据铺设一次（区域刷新只补野怪，不重置宝箱）
+      WORLD_REGIONS.forEach((r) => {
+        if (!r.safe && r.mobs > 0) spawnRegionMobs(s, r, r.mobs);
+      });
       if (!s.chests.length) {
         (s.map?.chests || []).forEach((c, i) => {
-          s.chests.push({ ...c, id: `chest_map_${i}`, x: clampX(num(c.x, 0)), y: clampY(num(c.y, 0)), opened: false });
+          s.chests.push({
+            ...c,
+            id: `chest_map_${i}`,
+            x: clampX(num(c.x, 0)),
+            y: clampY(num(c.y, 0)),
+            opened: false
+          });
         });
       }
       if (!s.potions.length) {
         (s.map?.potions || []).forEach((p, i) => {
-          s.potions.push({ id: `potion_map_${i}`, x: clampX(num(p.x, 0)), y: clampY(num(p.y, 0)), heal: num(p.heal, 40) });
+          s.potions.push({
+            id: `potion_map_${i}`,
+            x: clampX(num(p.x, 0)),
+            y: clampY(num(p.y, 0)),
+            heal: num(p.heal, 40)
+          });
         });
       }
-      // 兜底：地图数据没给宝箱 / 血瓶时，按野区（非城镇）各铺 3 个
       if (!s.chests.length) {
         ["wood", "ruin", "wild"].forEach((rid, i) => {
           const r = WORLD_REGIONS.find((z) => z.id === rid);
           const at = regionSpawnPoint(s, r);
-          s.chests.push({ id: `chest_${rid}_${i}`, x: at.x, y: at.y, opened: false, loot: { exp: 12 + i * 5, money: 10 + i * 4, item: "干粮" } });
+          s.chests.push({ id: `chest_${rid}_${i}`, x: at.x, y: at.y, opened: false, loot: { exp: 12 + i * 5, money: 10 + i * 4, item: "\u5E72\u7CAE" } });
         });
       }
       if (!s.potions.length) {
@@ -1191,20 +1214,34 @@ export async function handle_action(action, params, state, context) {
           s.potions.push({ id: `potion_${rid}_${i}`, x: at.x, y: at.y, heal: 24 + i * 6 });
         });
       }
+      await restoreSys(context, s);
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      if (!s.levelName) s.levelName = str(s.map?.theme, "");
+      if (!Array.isArray(s.partyIds) || s.partyIds.length === 0) {
+        s.partyIds = s.entities.filter((e) => e.side === "ally").map((e) => e.id);
+      }
+      ensureNpcCards(s, s.levelName || "");
+      s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
-      const theme = str(s.map?.theme, "野外");
+      const theme = str(s.map?.theme, "\u91CE\u5916");
       const narration = str(s.map?.narration, "");
-      s.events = [narration || `进入「${theme}」：操作你的角色，击杀敌人、开启宝箱、拾取血瓶。`];
-      return okResp(`进入「${theme}」`);
+      s.events = [
+        narration || `\u8FDB\u5165\u300C${theme}\u300D\uFF1A\u64CD\u4F5C\u4F60\u7684\u89D2\u8272\uFF0C\u51FB\u6740\u654C\u4EBA\u3001\u5F00\u542F\u5B9D\u7BB1\u3001\u62FE\u53D6\u8840\u74F6\u3002`
+      ];
+      return okResp(`\u8FDB\u5165\u300C${theme}\u300D`);
     }
     case "tick": {
       if (s.phase !== "playing") return okResp("");
+      s.writeback = null;
       s.tick += 1;
-      // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
       const localBuilt = applyLocalEnemies(s, params?.localEnemies);
-      step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
-      if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      syncCardFromContext(s, context);
+      ensureNpcCards(s, s.levelName || "");
+      if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
+      step(s, params?.input || params, params?.player);
+      if (localBuilt > 0) pushEvent(s, `\u5F53\u524D\u5173\u5361\u654C\u602A\u5DF2\u63A5\u5165\u5BBF\u4E3B AI\uFF08${localBuilt} \u53EA\uFF09`);
       return okResp("");
     }
     case "skill": {
@@ -1214,40 +1251,18 @@ export async function handle_action(action, params, state, context) {
       const skill = s.skills[slotIdx];
       const player = s.entities.find((e) => e.side === "player");
       if (!skill || !player || !player.alive) return okResp("");
-      if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
-      const cost = Math.max(0, Math.round(num(skill.cost, 0)));
-      if (cost > 0 && num(player.mp, 0) < cost) return okResp(`${skill.name} 法力不足`);
-      // ★ v5 本地命中判定：命中 30 米内「最近的至多 3 只」敌怪，
-      //   含 mapmob_ / localmob_ / zone_ 三类本地权威野怪（修复"玩家攻击不到野怪"）
-      // ★ 客户端权威目标优先：前端已按自己那份坐标系挑好"30 米内最近的至多 3 只"，
-      //   宿主直接按 id 结算，避免两侧坐标系不一致时"贴脸打空、误中远处野怪"。
-      const hinted = Array.isArray(params?.targets)
-        ? params.targets
-            .map((id) => s.entities.find((e) => e.id === id))
-            .filter((e) => e && e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0)
-            .slice(0, 3)
-        : [];
-      const targets = hinted.length
-        ? hinted
-        : s.entities
-            .filter((e) => e.side === "enemy" && e.alive !== false && num(e.hp, 0) > 0 && dist(player, e) < SKILL_RANGE_M)
-            .sort((a, b) => dist(player, a) - dist(player, b));
+      if (skill.cdLeft > 0) return okResp(`${skill.name} \u51B7\u5374\u4E2D`);
+      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
       if (!targets.length) {
-        floater(s, "MISS", player.x, player.y - 24);
-        return okResp(`${skill.name} 未命中（${SKILL_RANGE_M} 米内无敌怪）`);
+        damage(s, s.entities.filter((e) => e.side === "enemy" && e.alive)[0] || player, 0);
+        return okResp(`${skill.name} \u672A\u547D\u4E2D`);
       }
-      if (cost > 0) player.mp = clamp(num(player.mp, 0) - cost, 0, num(player.maxMp, 0));
       skill.cdLeft = skill.cd;
-      const hits = targets.slice(0, 3);
-      const lead = hits[0];
-      // 面向最近目标（角度制 0=右 90=下 180=左 270=上）
-      if (Math.abs(lead.x - player.x) > Math.abs(lead.y - player.y)) player.facing = lead.x > player.x ? 0 : 180;
-      else player.facing = lead.y > player.y ? 90 : 270;
-      let total = 0;
-      hits.forEach((t) => { total += damage(s, t, skillDamage(player, skill, t)); });   // 按攻击扣血 + 致死移除 + 给经验
-      const killed = hits.filter((t) => t.alive === false).length;
-      pushEvent(s, `施放 ${skill.name}：命中 ${hits.length} 只野怪，合计 ${total} 伤害${killed ? `，击杀 ${killed} 只` : ""}（经验 ${s.exp}/${player.next_level_exp}）`);
-      return okResp(`${skill.name}：命中 ${hits.length} 只，伤害 ${total}${killed ? `，击杀 ${killed} 只` : ""}`);
+      player.actionBobMs = 300;
+      floater(s, skill.name, player.x, player.y - 34);
+      targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
+      pushEvent(s, `\u65BD\u653E ${skill.name}\uFF0C\u547D\u4E2D ${Math.min(3, targets.length)} \u4E2A\u76EE\u6807`);
+      return okResp(`${skill.name}`);
     }
     case "item": {
       if (s.phase !== "playing") return okResp("");
@@ -1256,12 +1271,230 @@ export async function handle_action(action, params, state, context) {
       const item = s.items[slotIdx];
       const player = s.entities.find((e) => e.side === "player");
       if (!item || !player || !player.alive) return okResp("");
-      if (item.count <= 0) return okResp(`${item.name} 已用完`);
+      if (item.count <= 0) return okResp(`${item.name} \u5DF2\u7528\u5B8C`);
       item.count -= 1;
       const before = player.hp;
       player.hp = clamp(player.hp + item.heal, 0, player.maxHp);
-      pushEvent(s, `使用 ${item.name}，恢复 ${Math.round(player.hp - before)} 点生命`);
+      player.actionBobMs = 300;
+      floater(s, `\u4F7F\u7528 ${item.name}`, player.x, player.y - 34);
+      floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 52);
+      pushEvent(s, `\u4F7F\u7528 ${item.name}\uFF0C\u6062\u590D ${Math.round(player.hp - before)} \u70B9\u751F\u547D`);
       return okResp(`${item.name}`);
+    }
+    case "sys": {
+      const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
+      if (levels.length) {
+        s.mapNodes = levels.map((n, i) => ({ name: n, x: 160 + i % 4 * 260, y: 140 + Math.floor(i / 4) * 200 }));
+      }
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      if (!s.ring) s.ring = { items: [], skills: [] };
+      if (!Array.isArray(s.partyIds)) s.partyIds = [];
+      if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
+      ensureNpcCards(s, s.levelName || "");
+      await persistSys(context, s);
+      return okResp("");
+    }
+    case "sys_sell": {
+      const name = str(params?.name);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      const card = s.playerCard || {};
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const it = bag.find((x) => sameName(x.name, name));
+      if (!it) return okResp(`\u80CC\u5305\u91CC\u6CA1\u6709\u300C${name}\u300D`);
+      const sold = Math.min(ask, it.count);
+      const gain = sellPrice(it) * sold;
+      const nextBag = bag.map((x) => sameName(x.name, name) ? { ...x, count: x.count - sold } : x).filter((x) => x.count > 0);
+      patchCard(s, { items: serializeBag(nextBag), money: Math.round(num(card.money, 0)) + gain });
+      pushEvent(s, `\u5356\u51FA ${name}\xD7${sold}\uFF0C\u83B7\u5F97 ${gain} \u91D1\u94B1`);
+      const me = playerEntity(s);
+      if (me) floater(s, `+${gain} \u91D1`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`\u5356\u51FA ${name}\xD7${sold}\uFF08+${gain} \u91D1\uFF09`);
+    }
+    case "sys_use_item": {
+      const name = str(params?.name);
+      const me = playerEntity(s);
+      if (!me || !me.alive) return okResp("\u89D2\u8272\u4E0D\u53EF\u7528");
+      const card = s.playerCard || {};
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const it = bag.find((x) => sameName(x.name, name));
+      if (!it || it.count <= 0) return okResp(`\u300C${name}\u300D\u4E0D\u5728\u80CC\u5305\u4E2D`);
+      const heal = it.heal || defaultHeal(it.name, it.kind);
+      const before = me.hp;
+      if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
+      me.actionBobMs = 300;
+      floater(s, `\u4F7F\u7528 ${name}`, me.x, me.y - 34);
+      if (heal > 0) floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52);
+      const nextBag = bag.map((x) => sameName(x.name, name) ? { ...x, count: x.count - 1 } : x).filter((x) => x.count > 0);
+      patchCard(s, { items: serializeBag(nextBag) });
+      pushEvent(s, `\u4F7F\u7528 ${name}${heal > 0 ? `\uFF0C\u6062\u590D ${Math.round(me.hp - before)} \u70B9\u751F\u547D` : ""}`);
+      await persistSys(context, s);
+      return okResp(`\u4F7F\u7528 ${name}`);
+    }
+    case "sys_sort": {
+      const order = Array.isArray(params?.order) ? params.order.map(String) : [];
+      const card = s.playerCard || {};
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, order.length ? order : s.bagOrder);
+      s.bagOrder = bag.map((x) => x.name);
+      patchCard(s, { items: serializeBag(bag) });
+      await persistSys(context, s);
+      return okResp("\u80CC\u5305\u987A\u5E8F\u5DF2\u66F4\u65B0");
+    }
+    case "sys_ring_move": {
+      const kind = str(params?.kind, "item");
+      const name = str(params?.name);
+      const to = str(params?.to, "ring") === "bag" ? "bag" : "ring";
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!name) return okResp("\u7F3A\u5C11\u540D\u79F0");
+      if (!s.ring) s.ring = { items: [], skills: [] };
+      const card = s.playerCard || {};
+      if (kind === "skill") {
+        const skills = Array.isArray(card.skills) ? card.skills.map((x) => typeof x === "string" ? x : str(x?.name)).filter(Boolean) : [];
+        const ringSkills = s.ring.skills || [];
+        if (to === "ring") {
+          if (!skills.some((x) => sameSkill(x, name))) return okResp(`\u6280\u80FD\u300C${name}\u300D\u4E0D\u5728\u6280\u80FD\u680F`);
+          s.ring.skills = Array.from(/* @__PURE__ */ new Set([...ringSkills.filter((x) => !sameSkill(x, name)), cleanSkillName(name)]));
+          patchCard(s, { skills: skills.filter((x) => !sameSkill(x, name)) });
+          pushEvent(s, `\u6280\u80FD ${name} \u5DF2\u5B58\u5165\u7EB3\u6212`);
+        } else {
+          if (!ringSkills.some((x) => sameSkill(x, name))) return okResp(`\u7EB3\u6212\u91CC\u6CA1\u6709\u6280\u80FD\u300C${name}\u300D`);
+          s.ring.skills = ringSkills.filter((x) => !sameSkill(x, name));
+          const back = skills.find((x) => sameSkill(x, name)) || cleanSkillName(name);
+          patchCard(s, { skills: Array.from(/* @__PURE__ */ new Set([...skills.filter((x) => !sameSkill(x, name)), back])) });
+          pushEvent(s, `\u6280\u80FD ${name} \u5DF2\u4ECE\u7EB3\u6212\u53D6\u51FA`);
+        }
+        await persistSys(context, s);
+        return okResp(to === "ring" ? `\u5DF2\u5B58\u5165\u7EB3\u6212\uFF1A${name}` : `\u5DF2\u53D6\u51FA\uFF1A${name}`);
+      }
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      if (to === "ring") {
+        const it = bag.find((x) => sameName(x.name, name));
+        if (!it) return okResp(`\u80CC\u5305\u91CC\u6CA1\u6709\u300C${name}\u300D`);
+        const moved = Math.min(ask, it.count);
+        const ringItems = s.ring.items || [];
+        const exist = ringItems.find((x) => sameName(x.name, name));
+        if (exist) exist.count += moved;
+        else ringItems.push({ ...it, count: moved });
+        s.ring.items = ringItems;
+        const nextBag = bag.map((x) => sameName(x.name, name) ? { ...x, count: x.count - moved } : x).filter((x) => x.count > 0);
+        patchCard(s, { items: serializeBag(nextBag) });
+        pushEvent(s, `${name}\xD7${moved} \u5DF2\u5B58\u5165\u7EB3\u6212`);
+      } else {
+        const ringItems = s.ring.items || [];
+        const it = ringItems.find((x) => sameName(x.name, name));
+        if (!it) return okResp(`\u7EB3\u6212\u91CC\u6CA1\u6709\u300C${name}\u300D`);
+        const moved = Math.min(ask, it.count);
+        const exist = bag.find((x) => sameName(x.name, name));
+        if (exist) exist.count += moved;
+        else bag.push({ ...it, count: moved });
+        s.ring.items = ringItems.map((x) => sameName(x.name, name) ? { ...x, count: x.count - moved } : x).filter((x) => x.count > 0);
+        s.bagMeta = { ...s.bagMeta || {}, [it.name]: { ...it, count: 0 } };
+        patchCard(s, { items: serializeBag(bag) });
+        pushEvent(s, `${name}\xD7${moved} \u5DF2\u4ECE\u7EB3\u6212\u53D6\u51FA`);
+      }
+      await persistSys(context, s);
+      return okResp(to === "ring" ? `\u5DF2\u5B58\u5165\u7EB3\u6212\uFF1A${name}` : `\u5DF2\u53D6\u51FA\uFF1A${name}`);
+    }
+    case "sys_use_skill": {
+      const skName = str(params?.name);
+      const skIdx = num(params?.index, -1);
+      const meSk = playerEntity(s);
+      if (!meSk || !meSk.alive) return okResp("\u89D2\u8272\u4E0D\u53EF\u7528");
+      const si = skIdx >= 0 ? skIdx : s.skills.findIndex((k) => sameName(k.name, skName));
+      const sk = s.skills[si];
+      if (!sk) return okResp(`\u6280\u80FD\u300C${skName}\u300D\u4E0D\u5B58\u5728`);
+      if (sk.cdLeft > 0) return okResp(`${sk.name} \u51B7\u5374\u4E2D`);
+      sk.cdLeft = sk.cd;
+      meSk.actionBobMs = 300;
+      floater(s, sk.name, meSk.x, meSk.y - 34);
+      const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(meSk, e) < SKILL_RANGE_M);
+      if (!skTargets.length) {
+        pushEvent(s, `\u65BD\u653E ${sk.name}\uFF0C\u672A\u547D\u4E2D\u76EE\u6807`);
+        return okResp(`${sk.name} \u672A\u547D\u4E2D`);
+      }
+      skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
+      pushEvent(s, `\u65BD\u653E ${sk.name}\uFF0C\u547D\u4E2D ${Math.min(3, skTargets.length)} \u4E2A\u76EE\u6807`);
+      return okResp(`${sk.name}`);
+    }
+    case "sys_shop_refresh": {
+      await refreshShop(context, s);
+      await persistSys(context, s);
+      return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF09`);
+    }
+    case "sys_shop_buy": {
+      const id = str(params?.id);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id);
+      if (!good) return okResp("\u5546\u54C1\u4E0D\u5B58\u5728");
+      const card = s.playerCard || {};
+      const money = Math.round(num(card.money, 0));
+      const cost = Math.round(good.price) * ask;
+      if (money < cost) return okResp(`\u91D1\u94B1\u4E0D\u8DB3\uFF1A\u9700\u8981 ${cost}\uFF0C\u73B0\u6709 ${money}`);
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const exist = bag.find((x) => x.name === good.name);
+      if (exist) exist.count += ask;
+      else bag.push({ name: good.name, count: ask, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc });
+      s.bagMeta = {
+        ...s.bagMeta || {},
+        [good.name]: { name: good.name, count: 0, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc }
+      };
+      patchCard(s, { items: serializeBag(bag), money: money - cost });
+      pushEvent(s, `\u8D2D\u4E70 ${good.name}\xD7${ask}\uFF0C\u82B1\u8D39 ${cost} \u91D1\u94B1`);
+      const me = playerEntity(s);
+      if (me) floater(s, `-${cost} \u91D1`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`\u8D2D\u4E70 ${good.name}\xD7${ask}`);
+    }
+    case "sys_party": {
+      const rid = str(params?.roleId);
+      if (!rid) return okResp("\u7F3A\u5C11\u89D2\u8272");
+      const flag = params?.follow;
+      const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
+      const e = s.entities.find((x) => x.id === rid || x.name === rid);
+      if (e && e.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
+      const set = new Set(s.partyIds || []);
+      if (follow) set.add(rid);
+      else set.delete(rid);
+      s.partyIds = Array.from(set);
+      if (e) {
+        e.side = follow ? "ally" : "spectator";
+        if (follow && !e.alive) {
+          e.alive = true;
+          e.hp = e.maxHp;
+        }
+      }
+      ensureNpcCards(s, s.levelName || "");
+      pushEvent(s, `${e?.name || rid} ${follow ? "\u52A0\u5165\u961F\u4F0D\uFF0C\u5F00\u59CB\u8DDF\u968F\u4F60\u6218\u6597" : "\u5DF2\u8131\u79BB\u961F\u4F0D"}`);
+      await persistSys(context, s);
+      return okResp(follow ? "\u5DF2\u7EC4\u961F\u8DDF\u968F" : "\u5DF2\u53D6\u6D88\u8DDF\u968F");
+    }
+    case "sys_teleport": {
+      const rid = str(params?.roleId);
+      ensureNpcCards(s, s.levelName || "");
+      const c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
+      if (!c) return okResp("\u89D2\u8272\u4E0D\u5B58\u5728");
+      s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+      s.teleportTarget = {
+        mapName: c.mapName || s.levelName || "",
+        x: c.x,
+        y: c.y,
+        name: c.name,
+        rev: s.sysRevision
+      };
+      pushEvent(s, `\u4F20\u9001\u5230 ${c.name} \u8EAB\u8FB9\uFF08${c.mapName || "\u5F53\u524D\u5730\u56FE"}\uFF09`);
+      await persistSys(context, s);
+      return okResp(`\u5DF2\u4F20\u9001\u5230 ${c.name} \u8EAB\u8FB9`);
+    }
+    case "sys_travel": {
+      const target = str(params?.mapName);
+      if (!target) return okResp("\u7F3A\u5C11\u76EE\u6807\u5730\u56FE");
+      s.levelName = target;
+      ensureNpcCards(s, target);
+      s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+      s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      pushEvent(s, `\u4F20\u9001\u81F3\u300C${target}\u300D`);
+      await persistSys(context, s);
+      return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);
     }
     case "page": {
       const kind = str(params?.kind, "skill");
@@ -1276,8 +1509,6 @@ export async function handle_action(action, params, state, context) {
       return okResp("");
     }
     case "revive": {
-      // ★ 死亡弹窗「复活」：原地复活 —— 玩家坐标保持死亡处不变，
-      //   血量恢复满、alive 复位、冷却与速度清零，phase 回到 playing 继续可玩。
       const player = s.entities.find((e) => e.side === "player");
       if (!player) return okResp("");
       if (s.phase === "playing" && player.alive) return okResp("");
@@ -1290,22 +1521,36 @@ export async function handle_action(action, params, state, context) {
       });
       s.result = null;
       s.phase = "playing";
-      pushEvent(s, `你在原地复活（生命 ${Math.round(player.hp)}/${Math.round(player.maxHp)}）`);
-      return { code: 0, message: "revive", state: s, response: "复活成功" };
+      pushEvent(s, `\u4F60\u5728\u539F\u5730\u590D\u6D3B\uFF08\u751F\u547D ${Math.round(player.hp)}/${Math.round(player.maxHp)}\uFF09`);
+      return { code: 0, message: "revive", state: s, response: "\u590D\u6D3B\u6210\u529F" };
     }
     case "exit":
     case "quit": {
       if (s.phase !== "playing") return okResp("");
       s.phase = "over";
-      s.result = { reason: "exit", exp: s.exp, money: s.money, drops: [...s.drops], kills: s.kills, survivedTicks: s.tick };
-      pushEvent(s, "你主动结束了本次野外生存。");
-      return { code: 0, message: "exit", state: s, response: "野外生存结束" };
+      s.result = {
+        reason: "exit",
+        exp: s.exp,
+        money: s.money,
+        drops: [...s.drops],
+        kills: s.kills,
+        survivedTicks: s.tick
+      };
+      pushEvent(s, "\u4F60\u4E3B\u52A8\u7ED3\u675F\u4E86\u672C\u6B21\u91CE\u5916\u751F\u5B58\u3002");
+      return { code: 0, message: "exit", state: s, response: "\u91CE\u5916\u751F\u5B58\u7ED3\u675F" };
     }
     default:
       if (s.phase === "select") {
-        return { code: 0, message: "select_phase", state: s,
-                 response: "请先在左侧面板选择角色并点击「开始」来启动野外生存。" };
+        return {
+          code: 0,
+          message: "select_phase",
+          state: s,
+          response: "\u8BF7\u5148\u5728\u5DE6\u4FA7\u9762\u677F\u9009\u62E9\u89D2\u8272\u5E76\u70B9\u51FB\u300C\u5F00\u59CB\u300D\u6765\u542F\u52A8\u91CE\u5916\u751F\u5B58\u3002"
+        };
       }
       return okResp("");
   }
 }
+export {
+  handle_action
+};

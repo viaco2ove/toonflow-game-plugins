@@ -84,6 +84,10 @@ function devHostPlugin(conn: string, story: string): Plugin {
       //   并把 auth_token 注入到 Authorization header
       const SERVICE_URL = process.env.game_app_service_url || "http://localhost:60002";
       const AUTH_TOKEN = process.env.auth_token || "";
+      // ★ 真实插件入口文件：--conn 拟真宿主桩直接加载它执行（薄宿主策略）。
+      //   桩只负责「网络代理 + 传参 + 回推 state」，游戏/系统面板全部逻辑走 entry.js，
+      //   保证 --conn 调试链路与「插件安装后」链路行为一致。
+      const ENTRY_PATH = resolve(__dirname, "../entry.js");
       // 通用代理：/toon-asset/<path> → {SERVICE_URL}/<path>（图片/音频等静态资源）
       server.middlewares.use("/toon-asset", (req, res, next) => {
         try {
@@ -178,6 +182,8 @@ const STORY_URL = ${JSON.stringify(storyUrl)};
 const SERVICE_URL = ${JSON.stringify(SERVICE_URL)};
 // ★ 注入 auth token（从 ../.env 读），浏览器 fetch /toon-api 时自动带上
 const AUTH_TOKEN = ${JSON.stringify(AUTH_TOKEN)};
+// ★ 真实插件入口（绝对路径）——桩通过 vite /@fs 动态 import 它，执行与安装后一致的逻辑
+const ENTRY_PATH = ${JSON.stringify(ENTRY_PATH.replace(/\\/g, "/"))};
 window.__AUTH_TOKEN__ = AUTH_TOKEN;
 window.__SERVICE_URL__ = SERVICE_URL;
 let lastState = null;
@@ -225,11 +231,10 @@ window.addEventListener("message", (e) => {
   const k = JSON.stringify({ p: pluginId, s: sessionId || "all", k: dataKey || "" });
   let result = null;
   if (op === "get") {
-    const v = window.__devHostPluginData.get(k);
+    const v = window.__pdGet(k);
     result = { dataKey, value: v ? v.value : null, updatedAt: v ? v.updatedAt : 0 };
   } else if (op === "set") {
-    window.__devHostPluginData.set(k, { value, updatedAt: Date.now() });
-    window.__devHostPluginEmit(dataKey);
+    window.__pdSet(k, value);
     result = { dataKey, value: null, ok: true };
   } else if (op === "list") {
     const keys = [];
@@ -239,8 +244,7 @@ window.addEventListener("message", (e) => {
     }
     result = { keys, dataKey: "", value: null };
   } else if (op === "remove") {
-    window.__devHostPluginData.delete(k);
-    window.__devHostPluginEmit(dataKey);
+    window.__pdRemove(k);
     result = { dataKey, value: null, ok: true };
   }
   if (result) {
@@ -250,7 +254,137 @@ window.addEventListener("message", (e) => {
   }
 });
 const log = (m) => { const el = document.getElementById("log"); el.textContent = m + "\\n" + el.textContent.slice(0, 4000); };
-const post = (state) => { document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive"] }, "*"); };
+const post = (state, response) => {
+  if (state && typeof state === "object") state.response = response || "";
+  document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive","sys","sys_sell","sys_use_item","sys_sort","sys_ring_move","sys_use_skill","sys_shop_refresh","sys_shop_buy","sys_party","sys_teleport","sys_travel"], response: response || "" }, "*");
+};
+
+/* ================= 真实插件 entry.js 执行器（薄宿主） =================
+ * 桩不再自己模拟游戏逻辑：loadStoryData() 拿到服务器参数卡后，
+ * 所有 action（init/start/tick/skill/item/page/exit/revive/sys*）都转交 entry.js，
+ * 与「插件安装后」由宿主 PluginExecutor 执行的路径一致。
+ * pluginData（t_plugin_session_data 的模拟）与前端 SDK 的 tf_plugin_data 请求共用同一份存储。
+ */
+let entryMod = null;
+let entryCtx = null;
+let entryState = null;
+let entryBroken = false;
+window.__devHostPluginState = () => (entryState ? { phase: entryState.phase, tick: entryState.tick, card: entryState.playerCard, bag: (entryState.playerCard || {}).items, ring: entryState.ring } : null);
+
+// 插件会话数据（模拟 t_plugin_session_data）：内存 Map + localStorage 双写，刷新不丢
+const __PD_PREFIX = "devhost_pd_v1_";
+window.__pdKey = (pluginId, sessionId, dataKey) => JSON.stringify({ p: pluginId || "", s: sessionId || "all", k: dataKey || "" });
+window.__pdGet = (k) => {
+  if (window.__devHostPluginData.has(k)) return window.__devHostPluginData.get(k);
+  try {
+    const raw = localStorage.getItem(__PD_PREFIX + k);
+    if (raw) { const rec = JSON.parse(raw); window.__devHostPluginData.set(k, rec); return rec; }
+  } catch { /* ignore */ }
+  return null;
+};
+window.__pdSet = (k, value) => {
+  const rec = { value, updatedAt: Date.now() };
+  window.__devHostPluginData.set(k, rec);
+  try { localStorage.setItem(__PD_PREFIX + k, JSON.stringify(rec)); } catch { /* ignore */ }
+  window.__devHostPluginEmit(JSON.parse(k).k);
+  return rec;
+};
+window.__pdRemove = (k) => {
+  window.__devHostPluginData.delete(k);
+  try { localStorage.removeItem(__PD_PREFIX + k); } catch { /* ignore */ }
+  window.__devHostPluginEmit(JSON.parse(k).k);
+};
+
+const ENTRY_PLUGIN_ID = "com.toonflow.minigame-field-survival";
+function buildEntryCtx() {
+  const sessionId = (typeof window !== "undefined" && window.__STORY_SESSION_ID__) || "all";
+  entryCtx = {
+    pluginId: ENTRY_PLUGIN_ID,
+    userId: 1,
+    sessionId,
+    roles: (storyData && storyData.roles) || [],
+    playerCard: (window.__STORY_PLAYER_CARD__ || {}),
+    worldBookDigest: "",
+    tsApi: {
+      pluginData: {
+        get: async (k) => { const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return rec ? rec.value : null; },
+        set: async (k, v) => { window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k), v); return null; },
+        remove: async (k) => { window.__pdRemove(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return null; },
+        list: async () => {
+          const out = [];
+          for (const key of window.__devHostPluginData.keys()) {
+            try { const p = JSON.parse(key); if (p.p === ENTRY_PLUGIN_ID && p.s === sessionId) out.push(p.k); } catch { /* ignore */ }
+          }
+          return out;
+        },
+      },
+      // 3001 桩没有插件 agent 通道（真实宿主走 runPluginAgent）：
+      // 抛错让 entry.js 落到内置兜底（地图 fallbackMap / 商城 BUILTIN_SHOP_GOODS），
+      // 并在事件里提示「降级」。安装后链路会走真实 agent。
+      agent: {
+        run: async (agentName) => {
+          log("⚠ entry.agent.run(" + agentName + ") 在 dev-host 桩不可用 → 使用内置兜底");
+          throw new Error("dev-host 桩无插件 agent 通道");
+        },
+      },
+    },
+  };
+  return entryCtx;
+}
+
+async function loadEntryModule() {
+  if (entryMod) return entryMod;
+  const url = "/@fs/" + ENTRY_PATH;
+  const mod = await import(/* @vite-ignore */ url);
+  if (!mod || typeof mod.handle_action !== "function") throw new Error("entry.js 未导出 handle_action");
+  entryMod = mod;
+  log("✓ 已加载真实插件入口 entry.js（薄宿主模式）");
+  return mod;
+}
+
+/** 把 action 交给 entry.js 执行；成功返回 true，失败（只报一次）返回 false 交给旧逻辑兜底 */
+async function tryEntryAction(action, params) {
+  if (entryBroken) return false;
+  try {
+    const mod = await loadEntryModule();
+    if (!entryCtx) buildEntryCtx();
+    if (!entryState && action !== "init" && action !== "start_init" && action !== "start") {
+      await mod.handle_action("init", {}, null, entryCtx);
+    }
+    const res = await mod.handle_action(action, params || {}, entryState, entryCtx);
+    if (!res || !res.state) return false;
+    entryState = res.state;
+    // 反向同步参数卡：entry 内部 patchCard 改过的 card 要成为后续 tick 的 ctx 来源，
+    // 否则下一个 tick 的 syncCardFromContext 会用旧 card 覆盖（卖出/购买结果丢失）
+    if (entryState.playerCard) entryCtx.playerCard = entryState.playerCard;
+    lastState = entryState;
+    post(entryState, res.response || "");
+    log("entry→ " + action + " ok" + (res.response ? " / " + res.response : ""));
+    return true;
+  } catch (err) {
+    entryBroken = true;
+    log("! entry.js 执行失败，回退桩内本地模拟：" + (err && err.message ? err.message : err));
+    return false;
+  }
+}
+
+/* 串行队列：真宿主是串行处理 action 的，桩这里也必须串行，
+   否则「每帧 tick + 并发的 sys_* 操作」会并发写 entryState 造成状态互相覆盖。
+   tick 积压时直接丢弃（下一帧还会再来），避免队列越滚越长。 */
+let entryChain = Promise.resolve();
+let entryTickPending = false;
+function queueEntryAction(action, params) {
+  if (action === "tick") {
+    if (entryTickPending) return Promise.resolve(true);
+    entryTickPending = true;
+  }
+  const run = () => tryEntryAction(action, params).finally(() => {
+    if (action === "tick") entryTickPending = false;
+  });
+  const p = entryChain.then(run, run);
+  entryChain = p.catch(() => {});
+  return p;
+}
 const showError = (msg) => {
   const el = document.getElementById("error");
   el.textContent = msg;
@@ -316,9 +450,25 @@ async function loadStoryData() {
     const srvData = resp.data;
     const srvState = srvData.state || {};
     // 3) 转换：state.player + state.npcs → roles[]
+    //    ★ 参数卡（parameterCardJson）必须完整带出：entry.js 用它构建背包/技能/等级，
+    //      前端系统面板直接读 state.playerCard → 与服务器数据一致。
     const roles = [];
+    const numOr = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
+    // 角色在地图上的位置（角色卡「传送到」用）：兼容多种字段命名
+    const posOf = (n) => {
+      const p = n.position || n.pos || {};
+      return {
+        mapName: n.mapName || n.map || n.levelName || n.sceneName || p.mapName || "",
+        x: numOr(n.x ?? p.x, 0),
+        y: numOr(n.y ?? p.y, 0),
+      };
+    };
     if (srvState.player) {
       const p = srvState.player;
+      const card = p.parameterCardJson || p.parameter_card_json || {};
+      window.__STORY_PLAYER_CARD__ = JSON.parse(JSON.stringify(card));
+      const lv = numOr(card.level, p.attributes?.cultivationInsight || 1);
+      const pos = posOf(p);
       roles.push({
         id: p.id || "player",
         name: p.name || "玩家",
@@ -326,18 +476,43 @@ async function loadStoryData() {
         // ★ server avatarPath "/1/..." 改写到 /toon-asset/1/... 走 vite 代理
         avatarPath: (p.avatarPath && p.avatarPath.startsWith("/")) ? "/toon-asset" + p.avatarPath : (p.avatarPath || ""),
         description: p.description || "",
-        initial_level: p.parameterCardJson?.level || p.attributes?.cultivationInsight || 1,
+        initial_level: lv,
+        level: lv,
+        hp: numOr(card.hp, 100),
+        maxHp: numOr(card.hp, 100),
+        mp: numOr(card.mp, 0),
+        exp: numOr(card.exp, 0),
+        skills: Array.isArray(card.skills) ? card.skills : [],
+        items: Array.isArray(card.items) ? card.items : [],
+        parameterCardJson: card,
+        mapName: pos.mapName,
+        x: pos.x,
+        y: pos.y,
       });
     }
     for (const [npcId, npc] of Object.entries(srvState.npcs || {})) {
       const n = npc;
+      const card = n.parameterCardJson || n.parameter_card_json || {};
+      const lv = numOr(card.level, n.initial_level || 1);
+      const pos = posOf(n);
       roles.push({
         id: n.id || npcId,
         name: n.name || npcId,
         roleType: n.roleType || "npc",
         avatarPath: (n.avatarPath && n.avatarPath.startsWith("/")) ? "/toon-asset" + n.avatarPath : (n.avatarPath || ""),
         description: n.description || "",
-        initial_level: n.parameterCardJson?.level || 1,
+        initial_level: lv,
+        level: lv,
+        hp: numOr(card.hp, 100),
+        maxHp: numOr(card.hp, 100),
+        mp: numOr(card.mp, 0),
+        exp: numOr(card.exp, 0),
+        skills: Array.isArray(card.skills) ? card.skills : [],
+        items: Array.isArray(card.items) ? card.items : [],
+        parameterCardJson: card,
+        mapName: pos.mapName,
+        x: pos.x,
+        y: pos.y,
       });
     }
     // materials 占位：用 server inventory 转成 materials 格式（dev-host 后续转 items）
@@ -354,6 +529,8 @@ async function loadStoryData() {
       monsters: [],
       materials,
     };
+    // ★ 把 sessionId 暴露给 game iframe（系统面板买/卖物品要发请求到服务器）
+    if (typeof window !== "undefined") window.__STORY_SESSION_ID__ = sessionId;
     log("✓ loaded story from server: " + STORY + " (roles: " + roles.length + ", materials: " + materials.length + ", session: " + sessionId + ")");
     return true;
   } catch (e) {
@@ -371,6 +548,7 @@ async function loadStoryFromLocal() {
       return false;
     }
     storyData = await r.json();
+    if (typeof window !== "undefined") window.__STORY_SESSION_ID__ = "";
     log("✓ loaded story (local fallback): " + STORY + " (roles: " + (storyData.roles?.length || 0) + ", monsters: " + (storyData.monsters?.length || 0) + ", materials: " + (storyData.materials?.length || 0) + ")");
     return true;
   } catch (e) {
@@ -496,8 +674,17 @@ window.addEventListener("message", async (e) => {
       result: null,
       map: null, mapSource: "fallback",
     };
+    // ★ 真实插件 entry.js 接管（薄宿主）：init 返回带服务器参数卡的 select state
+    if (await queueEntryAction("init", {})) {
+      log("HOST: entry.js 已接管（init → select state）");
+      return;
+    }
     post(lastState);
     log("host→ pushed select state (roles: " + lastState.roles.length + ", items: " + lastState.items.length + ")");
+  }
+  // ★ 薄宿主：--conn 桩下所有动作优先交给真实插件 entry.js 执行（与「安装后」路径一致）
+  if (d.type === "tf_plugin_tick" && typeof d.action === "string") {
+    if (await queueEntryAction(d.action, d.params || {})) return;
   }
   if (d.type === "tf_plugin_tick" && d.action === "start") {
     if (!storyData) { showError("storyData 未加载"); return; }
@@ -903,6 +1090,15 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       port: 3000,
+      // ★ 允许 --conn 拟真宿主桩通过 /@fs/ 动态 import 插件入口 entry.js
+      //   （vite 默认只允许 workspace root=vue/ 目录，entry.js 在其上一级）
+      fs: {
+        allow: [
+          resolve(__dirname),              // vue/
+          resolve(__dirname, ".."),        // plugins/toonflow-field-survival/
+          resolve(__dirname, "../../.."),  // toonflow-game-plugins/
+        ],
+      },
     },
     define: {
       // Vite 默认不注入非 VITE_ 前缀的变量到客户端，这里显式暴露

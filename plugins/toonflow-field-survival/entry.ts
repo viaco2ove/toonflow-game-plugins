@@ -11,6 +11,11 @@
  *   skill   -> params { index } 释放技能（取用户参数卡技能）
  *   item    -> params { index } 使用物品格
  *   page    -> params { kind: "skill"|"item", delta } 翻页
+ *   sys     -> 打开系统面板（上报关卡列表 / 当前地图，初始化商城）
+ *   sys_sell / sys_use_item / sys_sort / sys_ring_move
+ *           -> 背包卖出 / 使用 / 排序 / 纳戒存取（与用户动态参数卡同步）
+ *   sys_shop_refresh / sys_shop_buy -> 商城刷新 / 购买（消耗货币）
+ *   sys_party / sys_teleport / sys_travel -> 组队跟随 / 传送角色 / 大地图传送
  *   exit    -> 主动退出，产出 result（奖励汇总）
  */
 
@@ -244,6 +249,29 @@ export interface FieldSurvivalState {
   mapBounds?: { lx: number; ly: number } | null;
   /** ★ fix⑤：前端 localEnemies 世代号（同世代重复上报视为宿主状态回推，直接忽略） */
   localMobsEpoch?: number;
+  /** ★ v5：系统面板 —— 当前地图名（前端上报） */
+  levelName?: string;
+  /** ★ v5：纳戒（存物品与技能） */
+  ring?: RingStore;
+  /** ★ v5：组队跟随的角色 id 列表 */
+  partyIds?: string[];
+  /** ★ v5：角色卡（含地图名与坐标，落 t_plugin_session_data） */
+  npcCards?: NpcCard[];
+  /** ★ v5：背包物品展示元数据（稀有度 / 类型 / 恢复量 / 估价） */
+  bagMeta?: Record<string, BagItem>;
+  /** ★ v5：背包自定义排列顺序（物品名数组） */
+  bagOrder?: string[];
+  /** ★ v5：商城商品 */
+  shopGoods?: ShopGood[];
+  shopSource?: "agent" | "builtin";
+  /** ★ v5：大地图节点（前端上报的关卡列表） */
+  mapNodes?: MapNode[];
+  /** ★ v5：面板数据版本号（用于前端感知传送等一次性指令） */
+  sysRevision?: number;
+  teleportTarget?: TeleportTarget | null;
+  travelTarget?: TeleportTarget | null;
+  /** ★ v5：回写宿主的用户动态参数卡补丁（items / skills / money），宿主消费后清空 */
+  writeback?: Record<string, any> | null;
   // 结算
   exp: number;
   money: number;
@@ -578,6 +606,8 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number) {
         s.drops.push(drop);
       }
       pushEvent(s, `击败 ${target.name}，获得 ${expGain} 经验、${moneyGain} 金钱`);
+      // ★ v5：与用户组队的角色分享经验并升级
+      grantPartyExp(s, expGain);
     } else {
       pushEvent(s, `${target.name} 倒下了`);
     }
@@ -946,7 +976,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   }
 
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
-  const allies = s.entities.filter((e) => e.side === "ally" && e.alive);
+  // ★ v5：只有「组队跟随」勾选中的角色才跟随用户参战；未组队的原地待命
+  const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
+  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && partyIds.indexOf(e.id) >= 0);
 
   // 友方角色：跟随用户并自动攻击最近敌人
   allies.forEach((a, i) => {
@@ -1076,6 +1108,307 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     };
     pushEvent(s, "你倒下了……");
   }
+}
+
+/* ============================================================
+   ★ v5：系统面板（背包 / 纳戒 / 商城 / 技能 / 地图 / 角色卡）
+   ------------------------------------------------------------
+   · 背包 / 技能 / 金钱 与用户「动态参数卡」双向同步：
+       插件侧改动 → state.writeback → 宿主写回 stateJson 参数卡；
+       宿主每 tick 注入的 ctx.playerCard 是外部改动的权威来源。
+   · 纳戒 / 队伍 / 角色卡位置 / 背包顺序 / 商城 → t_plugin_session_data(sys_state)
+   · 商城物资 = 商城 agent（故事动态数据 + 常驻世界书）+ 插件自带物资
+   ============================================================ */
+
+export interface BagItem { name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string; }
+export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; }
+export interface NpcCard {
+  id: string; name: string; side: string; enemy: boolean;
+  level: number; hp: number; maxHp: number; exp: number; alive: boolean;
+  mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string;
+}
+export interface RingStore { items: BagItem[]; skills: string[]; }
+export interface MapNode { name: string; x: number; y: number; }
+export interface TeleportTarget { mapName: string; x: number; y: number; name: string; rev: number; }
+export interface SysSnapshot {
+  ring: RingStore; party: string[]; npcCards: NpcCard[];
+  bagMeta: Record<string, BagItem>; bagOrder: string[];
+  shop: ShopGood[]; level: string;
+}
+
+/** 系统面板持久化 dataKey（t_plugin_session_data） */
+const SYS_DATA_KEY = "sys_state";
+/** 每 N 帧把系统数据落一次库（避免每 tick 都写） */
+const SYS_PERSIST_EVERY_TICKS = 20;
+/** 稀有度 → 基础估价（卖出按 40% 折算） */
+const RARITY_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
+const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
+const KIND_LIST = ["consumable", "material", "equipment", "skill_book", "quest"];
+
+/** 插件自带商城物资（商城 agent 不可用时的常备补给） */
+const BUILTIN_SHOP_GOODS: ShopGood[] = [
+  { id: "b_huiqi", name: "回气散", price: 30, kind: "consumable", rarity: "common", heal: 30, desc: "恢复 30 点生命", from: "builtin" },
+  { id: "b_jijiu", name: "急救包", price: 60, kind: "consumable", rarity: "fine", heal: 60, desc: "恢复 60 点生命", from: "builtin" },
+  { id: "b_ganliang", name: "干粮", price: 12, kind: "consumable", rarity: "common", heal: 14, desc: "恢复 14 点生命", from: "builtin" },
+  { id: "b_zhixuecao", name: "止血草", price: 20, kind: "material", rarity: "common", heal: 0, desc: "常见草药，可入药", from: "builtin" },
+  { id: "b_yinguang", name: "荧光石", price: 45, kind: "material", rarity: "fine", heal: 0, desc: "泛着微光的矿石", from: "builtin" },
+  { id: "b_duanjian", name: "精钢短剑", price: 220, kind: "equipment", rarity: "rare", heal: 0, desc: "攻击 +6", from: "builtin" },
+  { id: "b_hufu", name: "皮甲护符", price: 160, kind: "equipment", rarity: "fine", heal: 0, desc: "防御 +4", from: "builtin" },
+  { id: "b_xinde", name: "基础技能心得", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "习得一项基础技能", from: "builtin" },
+];
+
+function normRarity(v: any): string {
+  const r = String(v ?? "").toLowerCase().trim();
+  return RARITY_LIST.indexOf(r) >= 0 ? r : "common";
+}
+
+function guessKind(name: string): string {
+  const n = String(name || "");
+  if (/技能|秘籍|心得|卷轴|心法|功法/.test(n)) return "skill_book";
+  if (/剑|刀|枪|弓|甲|盾|护符|戒|铠|斧|杖|靴/.test(n)) return "equipment";
+  if (/丹|散|药|水|包|粮|汤|肉|鱼|果|酒|茶|露/.test(n)) return "consumable";
+  return "material";
+}
+
+function defaultHeal(name: string, kind: string): number {
+  if (kind !== "consumable") return 0;
+  const n = String(name || "");
+  if (/急救|大补|灵药|仙丹|回天/.test(n)) return 60;
+  if (/回气|伤药|灵泉|清心|愈合/.test(n)) return 30;
+  if (/干粮|粮|肉|果|汤|鱼/.test(n)) return 14;
+  return 20;
+}
+
+/** 参数卡里的物品项（字符串 "干粮×3" / "干粮（备注）" 或对象）→ BagItem */
+function parseItemRaw(raw: any): BagItem {
+  if (raw && typeof raw === "object") {
+    const name = str((raw as any).name ?? (raw as any).item ?? "");
+    const kind = KIND_LIST.indexOf(String((raw as any).kind)) >= 0 ? String((raw as any).kind) : guessKind(name);
+    return {
+      name,
+      count: Math.max(1, Math.round(num((raw as any).count, 1))),
+      kind,
+      rarity: normRarity((raw as any).rarity),
+      heal: Math.max(0, Math.round(num((raw as any).heal, defaultHeal(name, kind)))),
+      price: Math.max(0, Math.round(num((raw as any).price, 0))),
+      desc: str((raw as any).desc, "") || undefined,
+    };
+  }
+  const text = str(raw).trim();
+  if (!text) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
+  const m = text.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
+  if (m) {
+    const name = m[1].trim();
+    const kind = guessKind(name);
+    return { name, count: Math.max(1, parseInt(m[2], 10) || 1), kind, rarity: "common", heal: defaultHeal(name, kind), price: 0 };
+  }
+  const p = text.match(/^(.*?)[（(](.*?)[)）]\s*$/);
+  const name = (p ? p[1] : text).trim();
+  const kind = guessKind(name);
+  return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[2] : undefined };
+}
+
+function itemsFromCard(card: any): BagItem[] {
+  const arr = Array.isArray(card?.items) ? card.items : [];
+  return arr.map(parseItemRaw).filter((i) => i.name && i.count > 0);
+}
+
+/** 合并同名物品 + 套用元数据 + 按自定义顺序排列 */
+function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string[]): BagItem[] {
+  const map = new Map<string, BagItem>();
+  raw.forEach((it) => {
+    const m = meta ? meta[it.name] : undefined;
+    const cur = map.get(it.name);
+    if (cur) { cur.count += it.count; return; }
+    map.set(it.name, {
+      name: it.name,
+      count: it.count,
+      kind: it.kind !== "material" || !m ? it.kind : m.kind,
+      rarity: it.rarity !== "common" || !m ? it.rarity : m.rarity,
+      heal: it.heal || (m ? m.heal : 0) || defaultHeal(it.name, it.kind),
+      price: it.price || (m ? m.price : 0),
+      desc: it.desc || (m ? m.desc : undefined),
+    });
+  });
+  const list = Array.from(map.values());
+  const idx = new Map<string, number>();
+  (order || []).forEach((n, i) => idx.set(n, i));
+  return list.sort((a, b) => {
+    const ia = idx.has(a.name) ? (idx.get(a.name) as number) : 9999;
+    const ib = idx.has(b.name) ? (idx.get(b.name) as number) : 9999;
+    return ia - ib;
+  });
+}
+
+function serializeBag(bag: BagItem[]): string[] {
+  return bag.filter((i) => i.name && i.count > 0).map((i) => (i.count > 1 ? `${i.name}×${i.count}` : i.name));
+}
+
+function sellPrice(it: BagItem): number {
+  if (it.price > 0) return Math.max(1, Math.round(it.price * 0.4));
+  const base = RARITY_PRICE[it.rarity] || RARITY_PRICE.common;
+  const k = it.kind === "equipment" ? 1.5 : it.kind === "skill_book" ? 2 : 1;
+  return Math.max(1, Math.round(base * k));
+}
+
+function playerEntity(s: FieldSurvivalState): Entity | undefined {
+  return s.entities.find((e) => e.side === "player");
+}
+
+/** 写回宿主 + 本地参数卡同步（patch 含 items / skills 时同步快捷栏） */
+function patchCard(s: FieldSurvivalState, patch: Record<string, any>): void {
+  const card = { ...((s.playerCard || {}) as Record<string, any>), ...patch };
+  s.playerCard = card;
+  s.writeback = { ...((s.writeback || {}) as Record<string, any>), ...patch };
+  s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+  if (Array.isArray(patch.items)) s.items = buildItems(card, 8);
+  if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8);
+}
+
+/** 宿主注入的参数卡若被外部改动，以宿主为准（保证与动态参数卡同步） */
+function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): void {
+  const card = (ctx?.playerCard || {}) as Record<string, any>;
+  if (!card || !Object.keys(card).length) return;
+  const cur = (s.playerCard || {}) as Record<string, any>;
+  const sig = (c: any) => JSON.stringify([c?.items ?? null, c?.money ?? null, c?.skills ?? null]);
+  if (sig(card) === sig(cur)) return;
+  s.playerCard = card;
+  s.items = buildItems(card, 8);
+  s.skills = buildSkills(card, 8);
+}
+
+/** 角色卡：从场上实体刷新（地图名 / 坐标 / 队伍标记），保留不在场的旧卡 */
+function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
+  const prev = new Map<string, NpcCard>((s.npcCards || []).map((c) => [c.id, c]));
+  const party = s.partyIds || [];
+  const cards: NpcCard[] = s.entities.map((e) => {
+    const old = prev.get(e.id);
+    const onStage = e.side !== "enemy" || e.alive;
+    return {
+      id: e.id,
+      name: e.name,
+      side: e.side,
+      enemy: e.side === "enemy",
+      level: Math.max(1, Math.round(num(e.level, 1))),
+      hp: Math.round(e.hp),
+      maxHp: Math.round(e.maxHp),
+      exp: Math.round(num(old?.exp, 0)),
+      alive: !!e.alive,
+      mapName: onStage ? (levelName || old?.mapName || "") : (old?.mapName || levelName || ""),
+      x: Math.round(e.x),
+      y: Math.round(e.y),
+      inParty: party.indexOf(e.id) >= 0,
+      avatarPath: e.avatarPath,
+    };
+  });
+  (s.npcCards || []).forEach((c) => { if (!cards.some((x) => x.id === c.id)) cards.push(c); });
+  s.npcCards = cards;
+}
+
+/** 组队角色随击杀获得经验并升级 */
+function grantPartyExp(s: FieldSurvivalState, expGain: number): void {
+  const party = s.partyIds || [];
+  if (!party.length || expGain <= 0) return;
+  const share = Math.max(1, Math.round(expGain * 0.6));
+  party.forEach((pid) => {
+    const c = (s.npcCards || []).find((x) => x.id === pid);
+    if (!c) return;
+    c.exp = Math.round(num(c.exp, 0)) + share;
+    while (c.exp >= c.level * 100) {
+      c.exp -= c.level * 100;
+      c.level += 1;
+      c.maxHp += 20;
+      c.hp = c.maxHp;
+    }
+    const e = s.entities.find((x) => x.id === pid);
+    if (e) { e.level = c.level; e.maxHp = c.maxHp; e.hp = c.hp; }
+  });
+  const lead = s.entities.find((e) => e.id === party[0]);
+  if (lead) floater(s, `队伍 +${share}exp`, lead.x, lead.y - 26);
+}
+
+/** 系统数据 → t_plugin_session_data */
+async function persistSys(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
+  const api = context?.tsApi?.pluginData;
+  if (!api?.set) return;
+  try {
+    await api.set(SYS_DATA_KEY, {
+      ring: s.ring || { items: [], skills: [] },
+      party: s.partyIds || [],
+      npcCards: s.npcCards || [],
+      bagMeta: s.bagMeta || {},
+      bagOrder: s.bagOrder || [],
+      shop: s.shopGoods || [],
+      level: s.levelName || "",
+    });
+  } catch { /* 落库失败不阻断玩法 */ }
+}
+
+/** t_plugin_session_data → 系统数据 */
+async function restoreSys(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
+  const api = context?.tsApi?.pluginData;
+  if (!api?.get) return;
+  try {
+    const d: any = await api.get(SYS_DATA_KEY);
+    if (!d || typeof d !== "object") return;
+    if (d.ring && typeof d.ring === "object") {
+      s.ring = {
+        items: Array.isArray(d.ring.items) ? d.ring.items : [],
+        skills: Array.isArray(d.ring.skills) ? d.ring.skills.map(String) : [],
+      };
+    }
+    if (Array.isArray(d.party)) s.partyIds = d.party.map(String);
+    if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
+    if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
+    if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
+    if (Array.isArray(d.shop) && d.shop.length) s.shopGoods = d.shop;
+    if (str(d.level)) s.levelName = str(d.level, "");
+  } catch { /* 读取失败走默认 */ }
+}
+
+/** 商城：商城 agent（故事动态数据 + 常驻世界书）→ 商品；失败/为空则用插件自带物资 */
+async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<string[]> {
+  const notes: string[] = [];
+  const builtin = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
+  let story: ShopGood[] = [];
+  const run = context?.tsApi?.agent?.run;
+  if (run) {
+    try {
+      const r: any = await withTimeout(
+        run("field-survival-shop-gener", {
+          storyDigest: buildStoryDigest(context),
+          worldBookDigest: str((context as any)?.worldBookDigest, ""),
+          playerCard: s.playerCard || {},
+        }),
+        12000,
+        "shop agent timeout",
+      );
+      const goods = r?.output?.goods;
+      if (Array.isArray(goods)) {
+        story = goods.slice(0, 14).map((g: any, i: number): ShopGood => {
+          const rawName = String(g?.name || `物资${i + 1}`).slice(0, 20);
+          const kind = KIND_LIST.indexOf(String(g?.kind)) >= 0 ? String(g.kind) : guessKind(rawName);
+          return {
+            id: `s_${i}_${rawName}`,
+            name: rawName,
+            price: Math.max(1, Math.round(num(g?.price, 50))),
+            kind,
+            rarity: normRarity(g?.rarity),
+            heal: Math.max(0, Math.round(num(g?.heal, defaultHeal(rawName, kind)))),
+            desc: String(g?.desc || "").slice(0, 60),
+            from: "story",
+          };
+        });
+      }
+      if (!story.length && r?.error) notes.push(String(r.error).slice(0, 60));
+    } catch (err) {
+      notes.push(err instanceof Error ? err.message.slice(0, 60) : "shop agent failed");
+    }
+  }
+  s.shopGoods = [...story, ...builtin];
+  s.shopSource = story.length ? "agent" : "builtin";
+  if (notes.length) pushEvent(s, `商城生成降级：${notes[0]}`);
+  return notes;
 }
 
 // ---------------------------------------------------------------------------
@@ -1217,6 +1550,16 @@ export async function handle_action(
           s.potions.push({ id: `potion_${rid}_${i}`, x: at.x, y: at.y, heal: 24 + i * 6 });
         });
       }
+      // ★ v5：恢复系统面板持久化数据（纳戒 / 队伍 / 角色卡 / 背包顺序 / 商城）
+      await restoreSys(context, s);
+      if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
+      if (!s.levelName) s.levelName = str((s.map as any)?.theme, "");
+      // 开局默认把所有友方角色编入队伍（保持既有跟随体验，面板里可取消勾选）
+      if (!Array.isArray(s.partyIds) || s.partyIds.length === 0) {
+        s.partyIds = s.entities.filter((e) => e.side === "ally").map((e) => e.id);
+      }
+      ensureNpcCards(s, s.levelName || "");
+      s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
       const theme = str(s.map?.theme, "野外");
@@ -1229,9 +1572,15 @@ export async function handle_action(
 
     case "tick": {
       if (s.phase !== "playing") return okResp("");
+      s.writeback = null;          // ★ v5：上一帧回写已由宿主消费，清空避免重复写
       s.tick += 1;
       // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
       const localBuilt = applyLocalEnemies(s, (params as any)?.localEnemies);
+      // ★ v5：同步系统面板（当前地图名 / 参数卡外部改动 / 角色卡位置 / 队伍）
+      if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
+      syncCardFromContext(s, context);
+      ensureNpcCards(s, s.levelName || "");
+      if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
       if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
       return okResp("");
@@ -1248,6 +1597,9 @@ export async function handle_action(
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
       if (!targets.length) { damage(s, s.entities.filter(e=>e.side==="enemy"&&e.alive)[0] || player, 0); return okResp(`${skill.name} 未命中`); }
       skill.cdLeft = skill.cd;
+      // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
+      (player as any).actionBobMs = 300;
+      floater(s, skill.name, player.x, player.y - 34);
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
       pushEvent(s, `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标`);
       return okResp(`${skill.name}`);
@@ -1264,8 +1616,253 @@ export async function handle_action(
       item.count -= 1;
       const before = player.hp;
       player.hp = clamp(player.hp + item.heal, 0, player.maxHp);
+      // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
+      (player as any).actionBobMs = 300;
+      floater(s, `使用 ${item.name}`, player.x, player.y - 34);
+      floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 52);
       pushEvent(s, `使用 ${item.name}，恢复 ${Math.round(player.hp - before)} 点生命`);
       return okResp(`${item.name}`);
+    }
+
+    /* ============ ★ v5：系统面板（背包 / 纳戒 / 商城 / 技能 / 地图 / 角色卡）============ */
+
+    case "sys": {
+      // 前端打开系统面板时上报已知关卡（大地图）与当前地图名
+      const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
+      if (levels.length) {
+        s.mapNodes = levels.map((n, i) => ({ name: n, x: 160 + (i % 4) * 260, y: 140 + Math.floor(i / 4) * 200 }));
+      }
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      if (!s.ring) s.ring = { items: [], skills: [] };
+      if (!Array.isArray(s.partyIds)) s.partyIds = [];
+      if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
+      ensureNpcCards(s, s.levelName || "");
+      await persistSys(context, s);
+      return okResp("");
+    }
+
+    case "sys_sell": {
+      const name = str(params?.name);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const it = bag.find((x) => x.name === name);
+      if (!it) return okResp(`背包里没有「${name}」`);
+      const sold = Math.min(ask, it.count);
+      const gain = sellPrice(it) * sold;
+      const nextBag = bag
+        .map((x) => (x.name === name ? { ...x, count: x.count - sold } : x))
+        .filter((x) => x.count > 0);
+      patchCard(s, { items: serializeBag(nextBag), money: Math.round(num(card.money, 0)) + gain });
+      pushEvent(s, `卖出 ${name}×${sold}，获得 ${gain} 金钱`);
+      const me = playerEntity(s);
+      if (me) floater(s, `+${gain} 金`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`卖出 ${name}×${sold}（+${gain} 金）`);
+    }
+
+    case "sys_use_item": {
+      // 背包 / 物品栏点击使用：无专属特效时统一走「小跳 + 飘字」
+      const name = str(params?.name);
+      const me = playerEntity(s);
+      if (!me || !me.alive) return okResp("角色不可用");
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const it = bag.find((x) => x.name === name);
+      if (!it || it.count <= 0) return okResp(`「${name}」不在背包中`);
+      const heal = it.heal || defaultHeal(it.name, it.kind);
+      const before = me.hp;
+      if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
+      (me as any).actionBobMs = 300;
+      floater(s, `使用 ${name}`, me.x, me.y - 34);
+      if (heal > 0) floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52);
+      const nextBag = bag
+        .map((x) => (x.name === name ? { ...x, count: x.count - 1 } : x))
+        .filter((x) => x.count > 0);
+      patchCard(s, { items: serializeBag(nextBag) });
+      pushEvent(s, `使用 ${name}${heal > 0 ? `，恢复 ${Math.round(me.hp - before)} 点生命` : ""}`);
+      await persistSys(context, s);
+      return okResp(`使用 ${name}`);
+    }
+
+    case "sys_sort": {
+      // 背包排列顺序（前端上移/下移/置顶后提交）
+      const order = Array.isArray(params?.order) ? params.order.map(String) : [];
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, order.length ? order : s.bagOrder);
+      s.bagOrder = bag.map((x) => x.name);
+      patchCard(s, { items: serializeBag(bag) });
+      await persistSys(context, s);
+      return okResp("背包顺序已更新");
+    }
+
+    case "sys_ring_move": {
+      // 背包 ⇄ 纳戒（物品 / 技能）
+      const kind = str(params?.kind, "item");
+      const name = str(params?.name);
+      const to = str(params?.to, "ring") === "bag" ? "bag" : "ring";
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!name) return okResp("缺少名称");
+      if (!s.ring) s.ring = { items: [], skills: [] };
+      const card = (s.playerCard || {}) as Record<string, any>;
+      if (kind === "skill") {
+        const skills = Array.isArray(card.skills)
+          ? card.skills.map((x: any) => (typeof x === "string" ? x : str((x as any)?.name))).filter(Boolean)
+          : [];
+        const ringSkills = s.ring.skills || [];
+        if (to === "ring") {
+          if (skills.indexOf(name) < 0) return okResp(`技能「${name}」不在技能栏`);
+          s.ring.skills = Array.from(new Set([...ringSkills, name]));
+          patchCard(s, { skills: skills.filter((x) => x !== name) });
+          pushEvent(s, `技能 ${name} 已存入纳戒`);
+        } else {
+          if (ringSkills.indexOf(name) < 0) return okResp(`纳戒里没有技能「${name}」`);
+          s.ring.skills = ringSkills.filter((x) => x !== name);
+          patchCard(s, { skills: Array.from(new Set([...skills, name])) });
+          pushEvent(s, `技能 ${name} 已从纳戒取出`);
+        }
+        await persistSys(context, s);
+        return okResp(to === "ring" ? `已存入纳戒：${name}` : `已取出：${name}`);
+      }
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      if (to === "ring") {
+        const it = bag.find((x) => x.name === name);
+        if (!it) return okResp(`背包里没有「${name}」`);
+        const moved = Math.min(ask, it.count);
+        const ringItems = s.ring.items || [];
+        const exist = ringItems.find((x) => x.name === name);
+        if (exist) exist.count += moved;
+        else ringItems.push({ ...it, count: moved });
+        s.ring.items = ringItems;
+        const nextBag = bag
+          .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
+          .filter((x) => x.count > 0);
+        patchCard(s, { items: serializeBag(nextBag) });
+        pushEvent(s, `${name}×${moved} 已存入纳戒`);
+      } else {
+        const ringItems = s.ring.items || [];
+        const it = ringItems.find((x) => x.name === name);
+        if (!it) return okResp(`纳戒里没有「${name}」`);
+        const moved = Math.min(ask, it.count);
+        const exist = bag.find((x) => x.name === name);
+        if (exist) exist.count += moved;
+        else bag.push({ ...it, count: moved });
+        s.ring.items = ringItems
+          .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
+          .filter((x) => x.count > 0);
+        s.bagMeta = { ...(s.bagMeta || {}), [it.name]: { ...it, count: 0 } };
+        patchCard(s, { items: serializeBag(bag) });
+        pushEvent(s, `${name}×${moved} 已从纳戒取出`);
+      }
+      await persistSys(context, s);
+      return okResp(to === "ring" ? `已存入纳戒：${name}` : `已取出：${name}`);
+    }
+
+    case "sys_use_skill": {
+      // 系统面板「技能」页 / 快捷栏点击使用：无专属特效时统一走「小跳 + 飘字」
+      const skName = str(params?.name);
+      const skIdx = num(params?.index, -1);
+      const meSk = playerEntity(s);
+      if (!meSk || !meSk.alive) return okResp("角色不可用");
+      const si = skIdx >= 0 ? skIdx : s.skills.findIndex((k) => k.name === skName);
+      const sk = s.skills[si];
+      if (!sk) return okResp(`技能「${skName}」不存在`);
+      if (sk.cdLeft > 0) return okResp(`${sk.name} 冷却中`);
+      sk.cdLeft = sk.cd;
+      (meSk as any).actionBobMs = 300;
+      floater(s, sk.name, meSk.x, meSk.y - 34);
+      const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(meSk, e) < SKILL_RANGE_M);
+      if (!skTargets.length) {
+        pushEvent(s, `施放 ${sk.name}，未命中目标`);
+        return okResp(`${sk.name} 未命中`);
+      }
+      skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
+      pushEvent(s, `施放 ${sk.name}，命中 ${Math.min(3, skTargets.length)} 个目标`);
+      return okResp(`${sk.name}`);
+    }
+
+    case "sys_shop_refresh": {
+      await refreshShop(context, s);
+      await persistSys(context, s);
+      return okResp(`商城已刷新（${(s.shopGoods || []).length} 件商品）`);
+    }
+
+    case "sys_shop_buy": {
+      const id = str(params?.id);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id);
+      if (!good) return okResp("商品不存在");
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const money = Math.round(num(card.money, 0));
+      const cost = Math.round(good.price) * ask;
+      if (money < cost) return okResp(`金钱不足：需要 ${cost}，现有 ${money}`);
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const exist = bag.find((x) => x.name === good.name);
+      if (exist) exist.count += ask;
+      else bag.push({ name: good.name, count: ask, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc });
+      s.bagMeta = {
+        ...(s.bagMeta || {}),
+        [good.name]: { name: good.name, count: 0, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc },
+      };
+      patchCard(s, { items: serializeBag(bag), money: money - cost });
+      pushEvent(s, `购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
+      const me = playerEntity(s);
+      if (me) floater(s, `-${cost} 金`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`购买 ${good.name}×${ask}`);
+    }
+
+    case "sys_party": {
+      // 组队跟随开关（敌对角色与用户自身不可组队）
+      const rid = str(params?.roleId);
+      if (!rid) return okResp("缺少角色");
+      const flag = params?.follow;
+      const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
+      const e = s.entities.find((x) => x.id === rid || x.name === rid);
+      if (e && e.side === "enemy") return okResp("敌对角色无法组队");
+      const set = new Set(s.partyIds || []);
+      if (follow) set.add(rid); else set.delete(rid);
+      s.partyIds = Array.from(set);
+      if (e) {
+        e.side = follow ? "ally" : "spectator";
+        if (follow && !e.alive) { e.alive = true; e.hp = e.maxHp; }
+      }
+      ensureNpcCards(s, s.levelName || "");
+      pushEvent(s, `${e?.name || rid} ${follow ? "加入队伍，开始跟随你战斗" : "已脱离队伍"}`);
+      await persistSys(context, s);
+      return okResp(follow ? "已组队跟随" : "已取消跟随");
+    }
+
+    case "sys_teleport": {
+      // 传送到角色身边：把目标地图/坐标交给前端（前端负责切图与落点）
+      const rid = str(params?.roleId);
+      ensureNpcCards(s, s.levelName || "");
+      const c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
+      if (!c) return okResp("角色不存在");
+      s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+      s.teleportTarget = {
+        mapName: c.mapName || s.levelName || "",
+        x: c.x,
+        y: c.y,
+        name: c.name,
+        rev: s.sysRevision,
+      };
+      pushEvent(s, `传送到 ${c.name} 身边（${c.mapName || "当前地图"}）`);
+      await persistSys(context, s);
+      return okResp(`已传送到 ${c.name} 身边`);
+    }
+
+    case "sys_travel": {
+      // 大地图传送：目标关卡交给前端 switchLevel
+      const target = str(params?.mapName);
+      if (!target) return okResp("缺少目标地图");
+      s.levelName = target;
+      ensureNpcCards(s, target);
+      s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+      s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      pushEvent(s, `传送至「${target}」`);
+      await persistSys(context, s);
+      return okResp(`已传送至「${target}」`);
     }
 
     case "page": {
