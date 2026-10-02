@@ -380,11 +380,19 @@ watch(
 );
 
 /** 插件下发的传送目标 → 先切图（若目标不在本图），再落点 */
+let lastTeleportRev = -1;
 watch(
   () => ((state.value as any)?.teleportTarget || null),
   (tp) => {
     if (!tp) return;
     (state.value as any).teleportTarget = null;
+    // ★ rev 去重兜底：宿主每个 tick 都回推 state，同一 rev 只允许传送一次，
+    //   否则玩家会被反复拉回目标点（表现 = 点完传送被"绑住"）
+    const rev = Number(tp?.rev ?? -1);
+    if (rev >= 0) {
+      if (rev === lastTeleportRev) return;
+      lastTeleportRev = rev;
+    }
     void applyTeleport(tp);
   },
   { deep: true }
@@ -397,8 +405,10 @@ async function applyTeleport(tp: any): Promise<void> {
   }
   const me = state.value?.entities.find(e => e.side === "player");
   if (me) {
-    me.x = Number(tp?.x) || 0;
-    me.y = Number(tp?.y) || 0;
+    // ★ 落点安全化：夹进地图边界 + 吸附出墙/障碍（修复传送落进地图外暗区/墙里）
+    const spot = freeEnemySpot(Number(tp?.x) || 0, Number(tp?.y) || 0);
+    me.x = spot.x;
+    me.y = spot.y;
     if (state.value?.events) state.value.events.push(`[传送] 已传送到 ${tp?.name || "目标位置"}`);
   }
 }

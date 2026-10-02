@@ -1545,6 +1545,14 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
     entByKey.set(String(e.id), e);
     if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
   });
+  // ★ 停车实体（停在别的地图）也参与匹配：角色卡要显示"他在哪张图哪个位置"
+  const parkedObj: any = (s as any).parked || {};
+  Object.keys(parkedObj).forEach((k) => {
+    (Array.isArray(parkedObj[k]) ? parkedObj[k] : []).forEach((e: any) => {
+      if (!entByKey.has(String(e.id))) entByKey.set(String(e.id), e);
+      if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
+    });
+  });
   const sel: any = (s as any).selections || {};
   const inSel = (arr: any, r: any): boolean =>
     Array.isArray(arr) && arr.some((x) => String(x) === String(r.id) || String(x) === String(r.name));
@@ -1562,7 +1570,6 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
     const old = prev.get(String(role.id));
     const side = forcedSide || sideOfRole(role);
     const onMap = !!e;
-    const onStage = onMap && (side !== "enemy" || (e as any).alive);
     const pcRaw = side === "player" && s.playerCard && Object.keys(s.playerCard || {}).length
       ? (s.playerCard as Record<string, any>)
       : (role.parameterCardJson || role.parameter_card_json) || (old && (old as any).parameterCardJson) || null;
@@ -1593,7 +1600,7 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       maxHp: Math.round(e ? (e as any).maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
       exp: Math.round(num(old?.exp, 0)),
       alive: e ? !!(e as any).alive : (old ? old.alive !== false : true),
-      mapName: onMap ? (onStage ? (levelName || old?.mapName || "") : (old?.mapName || levelName || "")) : (old?.mapName || ""),
+      mapName: side === "player" ? (levelName || old?.mapName || "") : (((e as any) && (e as any).mapName) || old?.mapName || ""),
       x: Math.round(e ? (e as any).x : num(old?.x, 0)),
       y: Math.round(e ? (e as any).y : num(old?.y, 0)),
       inParty: party.indexOf(String(role.id)) >= 0,
@@ -1634,12 +1641,54 @@ function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
   const e = makeEntity(role, side as any, cb.x, cb.y, s.entities.length);
   e.homeX = e.x;
   e.homeY = e.y;
+  (e as any).mapName = s.levelName || "";
   if (side === "enemy") {
     (e as any).aiState = "idle";
     (e as any).regionId = (nearestWildRegion(e.x, e.y) || {} as any).id;
   }
   s.entities.push(e);
   return e;
+}
+
+/** ★ game.md 角色位置：角色驻留地图 —— 他在哪个地图就在哪个地图，不因玩家切图而改变。
+ *  只有组队中的角色跟随玩家跨图（落点 = 玩家身边）；脱离队伍就地留下。
+ *  非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。 */
+function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
+  if (!Array.isArray(s.entities)) return;
+  const lv = s.levelName || "";
+  const parkedAny = s as any;
+  parkedAny.parked = parkedAny.parked && typeof parkedAny.parked === "object" ? parkedAny.parked : {};
+  const party = s.partyIds || [];
+  const player = s.entities.find((e2) => e2.side === "player");
+  const stay: Entity[] = [];
+  (s.entities || []).forEach((e2) => {
+    if (e2.side === "player") { (e2 as any).mapName = lv; stay.push(e2); return; }
+    if (String(e2.side) === "enemy") { stay.push(e2); return; } // 野怪由前端 localEnemies 按图管理，不动
+    if (!(e2 as any).mapName) (e2 as any).mapName = lv; // 存量实体兜底：视为当前图
+    if (party.indexOf(String(e2.id)) >= 0) {
+      // 组队：跟随玩家到当前图，落在玩家身边
+      (e2 as any).mapName = lv;
+      if (snapParty && player) {
+        const ang = rnd(0, Math.PI * 2);
+        const cb = clampToBound(s, player.x + Math.cos(ang) * ALLY_FOLLOW_GAP_M, player.y + Math.sin(ang) * ALLY_FOLLOW_GAP_M);
+        e2.x = cb.x;
+        e2.y = cb.y;
+      }
+      stay.push(e2);
+    } else if ((e2 as any).mapName === lv) {
+      stay.push(e2);
+    } else {
+      (parkedAny.parked[(e2 as any).mapName] = parkedAny.parked[(e2 as any).mapName] || []).push(e2);
+    }
+  });
+  const back = parkedAny.parked[lv];
+  if (Array.isArray(back) && back.length) {
+    back.forEach((e2: any) => { e2.mapName = lv; });
+    s.entities = stay.concat(back);
+    parkedAny.parked[lv] = [];
+  } else {
+    s.entities = stay;
+  }
 }
 
 /** 组队角色随击杀获得经验并升级 */
@@ -1911,6 +1960,9 @@ export async function handle_action(
     case "tick": {
       if (s.phase !== "playing") return okResp("");
       s.writeback = null;          // ★ v5：上一帧回写已由宿主消费，清空避免重复写
+      // ★ teleportTarget 一次性：下发一拍后立刻清除，否则每次 tick 响应都会
+      //   重新触发前端传送 watch，把玩家反复拉回目标点（表现 = 被绑住）
+      if ((s as any).teleportTarget) (s as any).teleportTarget = null;
       s.tick += 1;
       // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
       const localBuilt = applyLocalEnemies(s, (params as any)?.localEnemies);
@@ -1922,6 +1974,12 @@ export async function handle_action(
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
+      // ★ 角色驻留地图：检测到玩家换图后，非组队角色留在原图（停车），组队角色跟来
+      if (s.levelName && s.levelName !== (s as any)._levelAt) {
+        handleLevelChange(s, true);
+        (s as any)._levelAt = s.levelName;
+        ensureNpcCards(s, s.levelName || "");
+      }
       if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
       return okResp("");
     }
@@ -2192,11 +2250,25 @@ export async function handle_action(
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
       let e = s.entities.find((x) => x.id === rid || x.name === rid);
       if (e && e.side === "enemy") return okResp("敌对角色无法组队");
+      // ★ 组队跟随：角色停在别的地图（s.parked）→ 先接回当前图
+      if (!e && follow) {
+        const parkedObj: any = (s as any).parked || {};
+        for (const k of Object.keys(parkedObj)) {
+          const arr = Array.isArray(parkedObj[k]) ? parkedObj[k] : [];
+          const idx = arr.findIndex((x: any) => String(x.id) === rid || String(x.name) === rid);
+          if (idx >= 0) {
+            e = arr.splice(idx, 1)[0];
+            s.entities.push(e);
+            break;
+          }
+        }
+      }
       // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
       if (!e && follow) {
         const role = (s.roles as any[] || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
         e = spawnRoleEntity(s, role) || undefined as any;
       }
+      if (e && follow) (e as any).mapName = s.levelName || (e as any).mapName;
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid); else set.delete(rid);
       s.partyIds = Array.from(set);
@@ -2250,6 +2322,8 @@ export async function handle_action(
       const target = str(params?.mapName);
       if (!target) return okResp("缺少目标地图");
       s.levelName = target;
+      handleLevelChange(s, false);
+      (s as any)._levelAt = s.levelName;
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
       s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };

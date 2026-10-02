@@ -86,3 +86,43 @@ await run("sys_party", { roleId: "r03", follow: true });
 const r03inParty = s.partyIds.includes("r03");
 console.log("9. r03 组队：inParty =", r03inParty, "实体 side =", s.entities.find((e) => e.id === "r03")?.side,
   r03inParty && s.entities.find((e) => e.id === "r03")?.side === "ally" ? "✅ 无实体角色组队时自动生成" : "❌");
+
+// 10) ★ teleportTarget 一次性：sys_teleport 下发后，下一个 tick 必须清除（否则前端每 tick 拉回 = 绑住）
+await run("sys_teleport", { roleId: "r02" });
+const hasTp = !!s.teleportTarget;
+await run("tick", { levelName: "Mulberry Forest", player: { x: s.entities[0].x, y: s.entities[0].y, facing: 0 } });
+console.log("10. sys_teleport 后 teleportTarget 存在 =", hasTp, "；1 tick 后 =",
+  s.teleportTarget ? "仍存在" : "已清除",
+  hasTp && !s.teleportTarget ? "✅ 一次性下发，不会反复拉回" : "❌");
+
+// 11) ★ 角色驻留地图：非组队角色不跟去新图；组队角色跟随；回原图原坐标归队
+// 当前状态：r02 在 Mulberry Forest（非组队）、r03 在队（Mulberry Forest）
+const r02Before = s.entities.find((e) => e.id === "r02");
+const r02Pos = { x: r02Before.x, y: r02Before.y };
+await run("tick", { levelName: "Dungeon1", player: { x: 0, y: 0, facing: 0 } });
+const r02After = s.entities.find((e) => e.id === "r02");
+const r03After = s.entities.find((e) => e.id === "r03");
+const r02card3 = s.npcCards.find((c) => c.id === "r02");
+console.log("11a. 切到 Dungeon1：r02（非组队）留在实体表 =", !!r02After,
+  !r02After ? "✅ 不跟去新图" : "❌ 仍跟着玩家");
+console.log("     r02 卡位置 =", r02card3?.mapName, JSON.stringify({ x: r02card3?.x, y: r02card3?.y }), "onMap =", r02card3?.onMap,
+  r02card3?.mapName === "Mulberry Forest" && r02card3?.onMap === true ? "✅ 卡片显示原图坐标" : "❌");
+console.log("     r03（组队）在同图 =", r03After?.mapName === "Dungeon1",
+  "距玩家 =", r03After ? Math.hypot(r03After.x - 0, r03After.y - 0).toFixed(1) : "?",
+  r03After?.mapName === "Dungeon1" ? "✅ 组队跟随跨图" : "❌");
+await run("tick", { levelName: "Mulberry Forest", player: { x: 13, y: 4, facing: 0 } });
+const r02Back = s.entities.find((e) => e.id === "r02");
+console.log("11b. 回到 Mulberry Forest：r02 原坐标归队 =",
+  r02Back ? JSON.stringify({ x: Math.round(r02Back.x * 10) / 10, y: Math.round(r02Back.y * 10) / 10 }) : "(无)",
+  r02Back && Math.abs(r02Back.x - r02Pos.x) < 0.01 && Math.abs(r02Back.y - r02Pos.y) < 0.01 ? "✅ 原地不变" : "❌");
+
+// 12) ★ 停车角色组队：从别的图接回当前图
+await run("tick", { levelName: "Dungeon2", player: { x: 0, y: 0, facing: 0 } });
+await run("sys_party", { roleId: "r02", follow: true });
+const r02Joined = s.entities.find((e) => e.id === "r02");
+console.log("12. r02（停在 Mulberry Forest）勾组队 → 出现在当前图 =", !!r02Joined,
+  r02Joined?.mapName === "Dungeon2" ? "✅ 跨图接回入队" : "❌");
+await run("sys_party", { roleId: "r02", follow: false });
+const r02Left = s.entities.find((e) => e.id === "r02");
+console.log("    退队后留在原地（Dungeon2） =", r02Left?.mapName === "Dungeon2" && !s.partyIds.includes("r02"),
+  r02Left?.mapName === "Dungeon2" ? "✅ 脱离队伍留在原地" : "❌");

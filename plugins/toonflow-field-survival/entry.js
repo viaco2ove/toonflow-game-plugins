@@ -1216,6 +1216,14 @@ function ensureNpcCards(s, levelName) {
     entByKey.set(String(e.id), e);
     if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
   });
+  // ★ 停车实体（停在别的地图）也参与匹配：角色卡要显示"他在哪张图哪个位置"
+  const parkedMap = s.parked && typeof s.parked === "object" ? s.parked : {};
+  Object.keys(parkedMap).forEach((k) => {
+    (Array.isArray(parkedMap[k]) ? parkedMap[k] : []).forEach((e) => {
+      if (!entByKey.has(String(e.id))) entByKey.set(String(e.id), e);
+      if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
+    });
+  });
   const sel = s.selections || {};
   const inSel = (arr, r) => Array.isArray(arr) && arr.some((x) => String(x) === String(r.id) || String(x) === String(r.name));
   const sideOfRole = (r) => {
@@ -1265,7 +1273,7 @@ function ensureNpcCards(s, levelName) {
       maxHp: Math.round(e ? e.maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
       exp: Math.round(num(old?.exp, 0)),
       alive: e ? !!e.alive : (old ? old.alive !== false : true),
-      mapName: onMap ? (onStage ? levelName || old?.mapName || "" : old?.mapName || levelName || "") : (old?.mapName || ""),
+      mapName: side === "player" ? (levelName || old?.mapName || "") : ((e && e.mapName) || old?.mapName || ""),
       x: Math.round(e ? e.x : num(old?.x, 0)),
       y: Math.round(e ? e.y : num(old?.y, 0)),
       inParty: party.indexOf(String(role.id)) >= 0,
@@ -1305,12 +1313,52 @@ function spawnRoleEntity(s, role) {
   const e = makeEntity(role, side, cb.x, cb.y, s.entities.length);
   e.homeX = e.x;
   e.homeY = e.y;
+  e.mapName = s.levelName || "";
   if (side === "enemy") {
     e.aiState = "idle";
     e.regionId = (nearestWildRegion(e.x, e.y) || {}).id;
   }
   s.entities.push(e);
   return e;
+}
+// ★ game.md 角色位置：角色驻留地图 —— 他在哪个地图就在哪个地图，不因玩家切图而改变。
+//   只有组队中的角色跟随玩家跨图（落点 = 玩家身边）；脱离队伍就地留下（留在当前坐标）。
+//   非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。
+function handleLevelChange(s, snapParty) {
+  if (!Array.isArray(s.entities)) return;
+  const lv = s.levelName || "";
+  s.parked = s.parked && typeof s.parked === "object" ? s.parked : {};
+  const party = s.partyIds || [];
+  const player = s.entities.find((e) => e.side === "player");
+  const stay = [];
+  (s.entities || []).forEach((e) => {
+    if (e.side === "player") { e.mapName = lv; stay.push(e); return; }
+    if (String(e.side) === "enemy") { stay.push(e); return; } // 野怪由前端 localEnemies 按图管理，不动
+    if (!e.mapName) e.mapName = lv; // 存量实体兜底：视为当前图
+    if (party.indexOf(String(e.id)) >= 0) {
+      // 组队：跟随玩家到当前图，落在玩家身边
+      e.mapName = lv;
+      if (snapParty && player) {
+        const ang = Math.random() * Math.PI * 2;
+        const cb = clampToBound(s, player.x + Math.cos(ang) * ALLY_FOLLOW_GAP_M, player.y + Math.sin(ang) * ALLY_FOLLOW_GAP_M);
+        e.x = cb.x;
+        e.y = cb.y;
+      }
+      stay.push(e);
+    } else if (e.mapName === lv) {
+      stay.push(e);
+    } else {
+      (s.parked[e.mapName] = s.parked[e.mapName] || []).push(e);
+    }
+  });
+  const back = s.parked[lv];
+  if (Array.isArray(back) && back.length) {
+    back.forEach((e) => { e.mapName = lv; });
+    s.entities = stay.concat(back);
+    s.parked[lv] = [];
+  } else {
+    s.entities = stay;
+  }
 }
 function grantPartyExp(s, expGain) {
   const party = s.partyIds || [];
@@ -1549,6 +1597,9 @@ async function handle_action(action, params, state, context) {
     case "tick": {
       if (s.phase !== "playing") return okResp("");
       s.writeback = null;
+      // ★ teleportTarget 一次性：下发一拍后立刻清除，否则每次 tick 响应都会
+      //   重新触发前端传送 watch，把玩家反复拉回目标点（表现 = 被绑住）
+      if (s.teleportTarget) s.teleportTarget = null;
       s.tick += 1;
       const localBuilt = applyLocalEnemies(s, params?.localEnemies);
       applyEnemyNavPayload(params?.walkGrid);
@@ -1557,6 +1608,12 @@ async function handle_action(action, params, state, context) {
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
       step(s, params?.input || params, params?.player);
+      // ★ 角色驻留地图：检测到玩家换图后，非组队角色留在原图（停车），组队角色跟来
+      if (s.levelName && s.levelName !== s._levelAt) {
+        handleLevelChange(s, true);
+        s._levelAt = s.levelName;
+        ensureNpcCards(s, s.levelName || "");
+      }
       if (localBuilt > 0) pushEvent(s, `\u5F53\u524D\u5173\u5361\u654C\u602A\u5DF2\u63A5\u5165\u5BBF\u4E3B AI\uFF08${localBuilt} \u53EA\uFF09`);
       return okResp("");
     }
@@ -1800,12 +1857,26 @@ async function handle_action(action, params, state, context) {
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
       const e0 = s.entities.find((x) => x.id === rid || x.name === rid);
       if (e0 && e0.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
-      // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
+      // ★ 组队跟随：角色停在别的地图（s.parked）→ 先接回当前图
       let e = e0;
+      if (!e && follow) {
+        const parked = s.parked || {};
+        for (const k of Object.keys(parked)) {
+          const arr = Array.isArray(parked[k]) ? parked[k] : [];
+          const idx = arr.findIndex((x) => String(x.id) === rid || String(x.name) === rid);
+          if (idx >= 0) {
+            e = arr.splice(idx, 1)[0];
+            s.entities.push(e);
+            break;
+          }
+        }
+      }
+      // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
       if (!e && follow) {
         const role = (s.roles || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
         e = spawnRoleEntity(s, role);
       }
+      if (e && follow) e.mapName = s.levelName || e.mapName;
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid);
       else set.delete(rid);
@@ -1859,6 +1930,8 @@ async function handle_action(action, params, state, context) {
       const target = str(params?.mapName);
       if (!target) return okResp("\u7F3A\u5C11\u76EE\u6807\u5730\u56FE");
       s.levelName = target;
+      handleLevelChange(s, false);
+      s._levelAt = s.levelName;
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
       s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
