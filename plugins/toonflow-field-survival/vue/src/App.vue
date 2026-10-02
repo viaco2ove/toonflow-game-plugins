@@ -42,6 +42,18 @@ import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, normalizeTiledMap, listLevelNames } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
+// ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
+import {
+  loadTileFlags,
+  buildWalkGridAsync,
+  buildWalkIndex,
+  pickSpawn,
+  resolveMove as resolveGridMove,
+  gridStats,
+  type WalkGrid,
+  type WalkIndex,
+  type TileFlagTable,
+} from "./collision";
 
 const state = ref<GameState | null>(null);
 const ready = ref(false);
@@ -1511,6 +1523,8 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     mapCfg.value = next;
     currentLevelName.value = levelName;
+    // ★ 重建碰撞网格（必须在 mapCfg.value 落地之后：尺寸守卫要用当前关卡尺寸）
+    await rebuildWalkGrid(levelName);
     // 重建装饰 chunk 索引
     decorationsByChunk.clear();
     for (const d of next.decorations as Decoration[]) {
@@ -1528,13 +1542,19 @@ async function switchLevel(levelName: string): Promise<void> {
     for (let i = 0; i < 30; i++) chunkSystem.tick();
     groundTileCache.clear();
     // 玩家挪到新地图中心
+    // ★ 落点安全化：mulberryForest / oldForest / oldGraveyard 的**中心格就是墙**，
+    //   不修正的话玩家一进图就被封死（网格碰撞会拒绝所有方向）。
+    //   settleSpawn 在位置合法（主连通域 + 离 portal ≥3 米）时原样返回 (0,0)；
+    //   否则挪到主连通域内最近的合规格。挪完立刻武装切图闸门，防止落点仍在圈内时反复切图。
     const s = state.value;
     const me = s?.entities.find((e) => e.side === "player");
     if (me) {
-      me.x = 0;
-      me.y = 0;
-      lastLocalPose = { x: 0, y: 0, facing: me.facing };
+      const spawn = settleSpawn(0, 0);
+      me.x = spawn.x;
+      me.y = spawn.z;
+      lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
     }
+    portalLatchPending = true;
     // 清掉本图野怪（旧图的怪不跟过来）
     if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
     // ★ game.md 68-69（刷新机制）：离开地图时记住"该图此刻的死怪"和离开时刻；
@@ -1815,6 +1835,115 @@ function spawnLocalMobsIfNeeded(): void {
   }
 }
 
+/* ============================================================
+   ★ 墙体碰撞网格（对齐 Rotten-Soup 的 Tile.blocked()）
+   ------------------------------------------------------------
+   数据源：compiled_dawnlike.json 里每个 tile 的 properties.blocked。
+   构建：把当前地图全部 tilelayer 叠加成 cols×rows 的 Uint8Array。
+   判定：resolveGridMove() 分轴求解，撞墙可沿墙滑行。
+   详见 collision.ts 顶部注释。
+   ============================================================ */
+let walkGrid: WalkGrid | null = null;
+/** 连通域索引（出生点必须落在主连通域，否则会被困在封闭小口袋里） */
+let walkIndex: WalkIndex | null = null;
+let tileFlags: TileFlagTable | null = null;
+/** 玩家碰撞半径（米）。沿用旧实现的 PLAYER_R = 0.4；1 格 = 1 米，故 0.4 不会卡门缝 */
+const PLAYER_COLLIDE_R = 0.4;
+/** 落点与 portal 的最小净空（米）。portal 触发半径是 2.5（见 localTick），
+ *  留 3 米避免"一进图就被判进传送门，反复切图死循环"。 */
+const PORTAL_CLEARANCE_M = 3;
+/** portal 触发半径（米）——与 Rotten-Soup 的"踩到出口即切图"等价 */
+const PORTAL_TRIGGER_M = 2.5;
+/** 切图后闸门：必须"先走出所有触发圈"才允许再次触发。
+ *  防任何原因（落点约束无解、玩家站着不动、宿主强行摆位）导致落点在圈内时无限切图。 */
+let portalLatchPending = false;
+/** 点击寻路连续被墙挡住的 tick 数（≥3 放弃本次 moveTo） */
+let moveToBlockedTicks = 0;
+
+/**
+ * 依据当前地图重建碰撞网格。读 getTiledRaw()（normalizeTiledMap 落的原始 Tiled JSON），
+ * 所以必须在 loadMapConfig / loadLevelByName 之后调用。
+ * 取不到 tileset 属性 → walkGrid 置空 → 自动降级为"无阻挡"（与旧行为一致，不会崩）。
+ */
+async function rebuildWalkGrid(levelLabel = ""): Promise<void> {
+  walkGrid = null;
+  walkIndex = null;
+  const tiled = getTiledRaw();
+  if (!tiled) return;
+  // ★ 一致性守卫：getTiledRaw() 是模块级缓存，地图走 fallback 分支时它会残留上一张图。
+  //   尺寸对不上就认为不是当前地图 → 不建网格（宁可无碰撞，也不要错位的墙）。
+  const cfgSize = mapCfg.value?.size;
+  const tW = Number((tiled as any).width) || 0;
+  const tH = Number((tiled as any).height) || 0;
+  if (cfgSize && (tW !== cfgSize[0] || tH !== cfgSize[1])) {
+    console.warn(
+      `[field-survival] Tiled 原始数据尺寸 ${tW}×${tH} 与当前关卡 ${cfgSize[0]}×${cfgSize[1]} 不一致` +
+        "（可能是 fallback 关卡）→ 本次不启用碰撞",
+    );
+    return;
+  }
+  try {
+    if (!tileFlags) tileFlags = await loadTileFlags();
+    if (!tileFlags || Object.keys(tileFlags).length === 0) return;
+    walkGrid = await buildWalkGridAsync(tiled as any, tileFlags, 1);
+    if (!walkGrid) return;
+    walkIndex = buildWalkIndex(walkGrid, PLAYER_COLLIDE_R);
+    const comp = walkIndex.sizes[walkIndex.largest] ?? 0;
+    console.info(
+      `[field-survival] 碰撞网格（${levelLabel || currentLevelName.value}）：${gridStats(walkGrid)}；` +
+        `主连通域 ${comp} 格 / 共 ${walkIndex.sizes.length - 1} 个连通域`,
+    );
+  } catch (err) {
+    walkGrid = null;
+    walkIndex = null;
+    console.warn("[field-survival] 碰撞网格构建失败 → 降级为无阻挡：", err);
+  }
+}
+
+/**
+ * 决定关卡落点 —— 薄封装：真正的策略在 collision.pickSpawn（唯一真相源，
+ * 可被离线仿真直接调用，避免测试与线上两套代码漂移）。这里只负责：
+ *   1. 把 portal 列表 + 净空常量喂进去；
+ *   2. 打日志 + 打警告。
+ *
+ * 落点规则（详见 collision.ts 的 pickSpawn）：
+ *   ① 原坐标（通常是 (0,0) 地图中心）在主连通域且离 portal ≥3 米 → 原样用；
+ *   ② 否则挪到主连通域内最近的合规格；
+ *   ③ 净空无解的极小图 → 只保连通域（并 warn）；
+ *   ④ 网格全墙 → 保持原位，靠 resolveMove 的自解困放行。
+ *
+ * 两条硬约束都是仿真发现的，不靠读代码：
+ *   ★ 连通域：mulberryForest 中心旁有个仅 4 格的封闭口袋，只按"最近可走格"落点
+ *     会让玩家 6000 tick 只走过 4 格（= 被困死）。
+ *   ★ 净空：地图标注的 PLAYER 在 mulberryForest / mulberryGraveyard / lichLair 里
+ *     离切图触发点只有 1.00 米，而触发半径 2.5 米 → 用它当落点会一进图就反复切图。
+ */
+function settleSpawn(mx: number, mz: number): { x: number; z: number } {
+  if (!walkGrid || !walkIndex) return { x: mx, z: mz };
+  const portals = (mapCfg.value?.decorations || [])
+    .filter((d: any) => (d as any).kind === "portal")
+    .map((d: any) => ({ x: d.x as number, z: d.y as number }));
+  const pick = pickSpawn(walkGrid, walkIndex, mx, mz, {
+    avoid: portals,
+    clearance: PORTAL_CLEARANCE_M,
+  });
+  if (pick.relocated) {
+    console.info(
+      `[field-survival] 落点 (${mx.toFixed(1)}, ${mz.toFixed(1)}) 不满足落点约束 → 挪到 ` +
+        `(${pick.x.toFixed(1)}, ${pick.z.toFixed(1)})（主连通域 ${walkIndex.sizes[walkIndex.largest]} 格，` +
+        `最近 portal ${pick.avoidDist.toFixed(2)} 米）`,
+    );
+  }
+  if (!pick.clearanceOk && portals.length > 0) {
+    console.warn(
+      `[field-survival] 本图找不到离 portal ≥${PORTAL_CLEARANCE_M} 米的落点` +
+        `（实际 ${pick.avoidDist.toFixed(2)} 米）→ 已退化为只保连通域；` +
+        "切图闸门 portalLatchPending 会兜住「一进图就反复切图」",
+    );
+  }
+  return { x: pick.x, z: pick.z };
+}
+
 /**
  * 客户端权威 tick（★ 单一数据源）
  *
@@ -1855,6 +1984,9 @@ function localTick(): void {
   // 1. 推进玩家位置（全流程唯一积分点）
   const me = s.entities.find((e) => e.side === "player");
   if (me) {
+    // ★ 记录本 tick 起始位置：位移算完后再交给网格碰撞求解（分轴拒绝 / 沿墙滑行）
+    const beforeX = me.x;
+    const beforeZ = me.y;
     const dx = input.value.dx;
     const dy = input.value.dy;
     if (dx !== 0 || dy !== 0) {
@@ -1890,25 +2022,51 @@ function localTick(): void {
     me.x = Math.max(-worldLimitM(), Math.min(worldLimitM(), me.x));
     me.y = Math.max(-worldLimitM(), Math.min(worldLimitM(), me.y));
 
-    // —— 碰撞检测：树/枯树/木桩不可穿越 —— 玩家半径 0.4 米，障碍半径 0.5 米
-    const PLAYER_R = 0.4;
-    const OBSTACLE_R = 0.5;
-    const decos = mapCfg.value?.decorations || [];
-    for (const dec of decos) {
-      // mulberry 风格：9298 木桩作为边界围墙（与树同效）
-      if (dec.kind !== "tree" && dec.kind !== "dead_tree" && dec.kind !== "fence") continue;
-      const dx = me.x - dec.x;
-      const dy = me.y - dec.y;
-      const d = Math.hypot(dx, dy);
-      const minDist = PLAYER_R + OBSTACLE_R;
-      if (d < minDist && d > 0.001) {
-        // 推回到刚好不撞的位置
-        const push = (minDist - d);
-        me.x += (dx / d) * push;
-        me.y += (dy / d) * push;
-      } else if (d <= 0.001) {
-        // 玩家与障碍完全重合，极端情况，往上推 0.1 米
-        me.y += 0.1;
+    // —— 旧版装饰物推挤（★ 仅在无 Tiled 网格时生效）——
+    //   Tiled 真实关卡里 decorations 只含 NPC / portal（无 tree/fence），这段本来就不触发；
+    //   有 walkGrid 时改由 tileset 的 blocked 属性统一裁决，
+    //   否则"圆形推挤"可能把玩家推进墙里，与网格判定打架。
+    if (!walkGrid) {
+      const PLAYER_R = 0.4;
+      const OBSTACLE_R = 0.5;
+      const decos = mapCfg.value?.decorations || [];
+      for (const dec of decos) {
+        // mulberry 风格：9298 木桩作为边界围墙（与树同效）
+        if (dec.kind !== "tree" && dec.kind !== "dead_tree" && dec.kind !== "fence") continue;
+        const dx = me.x - dec.x;
+        const dy = me.y - dec.y;
+        const d = Math.hypot(dx, dy);
+        const minDist = PLAYER_R + OBSTACLE_R;
+        if (d < minDist && d > 0.001) {
+          // 推回到刚好不撞的位置
+          const push = (minDist - d);
+          me.x += (dx / d) * push;
+          me.y += (dy / d) * push;
+        } else if (d <= 0.001) {
+          // 玩家与障碍完全重合，极端情况，往上推 0.1 米
+          me.y += 0.1;
+        }
+      }
+    }
+
+    // ============================================================
+    // ★ 地形碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：墙 / 水 / 树 / 栅栏等
+    //   一律来自 tileset 的 blocked 属性，见 collision.ts。
+    //   分轴求解 → 撞墙后仍可沿墙滑行；起点已在墙里则放行（自解困）。
+    // ============================================================
+    if (walkGrid) {
+      const res = resolveGridMove(walkGrid, beforeX, beforeZ, me.x, me.y, PLAYER_COLLIDE_R);
+      me.x = res.x;
+      me.y = res.z;
+      // 点击寻路（moveTo）撞墙且两轴都走不动 → 连续 3 个 tick 后放弃，
+      // 否则会一直贴着墙"空推"（Rotten-Soup 用 A* 绕行，这里不做寻路，直接放弃）
+      if (input.value.moveTo && res.hitX && res.hitZ) {
+        if (++moveToBlockedTicks >= 3) {
+          input.value.moveTo = null;
+          moveToBlockedTicks = 0;
+        }
+      } else {
+        moveToBlockedTicks = 0;
       }
     }
 
@@ -1916,14 +2074,22 @@ function localTick(): void {
     lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
   }
 
-  // ★ 关卡切换：走到出口箭头（portal）2 米内 → 加载目标地图（Rotten-Soup changeLevels 等价）
+  // ★ 关卡切换：走到出口箭头（portal）2.5 米内 → 加载目标地图（Rotten-Soup changeLevels 等价）
+  //   闸门 portalLatchPending：切图后必须先走出所有触发圈，才重新武装。
+  //   否则若落点恰好≤2.5 米（净空约束无解的极小图 / 宿主强行摆位），会每 tick 切一次图。
   if (!levelSwitching.value) {
     const meNow = s.entities.find((e) => e.side === "player");
     const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");
-    for (const p of portals) {
-      if (Math.hypot(p.x - (meNow?.x ?? 0), p.y - (meNow?.y ?? 0)) < 2.5) {
-        void switchLevel((p as any).name);
-        break;
+    const distTo = (p: any) => Math.hypot(p.x - (meNow?.x ?? 0), p.y - (meNow?.y ?? 0));
+    if (portalLatchPending) {
+      // 重新武装条件：已离开所有触发圈
+      if (!portals.some((p: any) => distTo(p) < PORTAL_TRIGGER_M)) portalLatchPending = false;
+    } else {
+      for (const p of portals) {
+        if (distTo(p) < PORTAL_TRIGGER_M) {
+          void switchLevel((p as any).name);
+          break;
+        }
       }
     }
   }
@@ -3707,6 +3873,27 @@ onMounted(async () => {
   try {
     const cfg = await loadMapConfig(startLevel);
     mapCfg.value = cfg;
+    // ★ 建碰撞网格（对齐 Rotten-Soup 的 Tile.blocked()：墙/水/树来自 tileset 属性）
+    await rebuildWalkGrid(startLevel);
+    // 初始落点安全化：复用 settleSpawn（与切图同一套规则），避免两处规则漂移。
+    // 宿主导出的出生坐标只做格中心吸附；不满足"主连通域 + portal 净空"才挪。
+    if (walkGrid && walkIndex) {
+      const me0 = state.value?.entities.find((e) => e.side === "player");
+      if (me0) {
+        const sp = settleSpawn(me0.x, me0.y);
+        if (sp.x !== me0.x || sp.z !== me0.y) {
+          console.info(
+            `[field-survival] 初始出生点 (${me0.x.toFixed(1)}, ${me0.y.toFixed(1)}) → ` +
+              `(${sp.x.toFixed(1)}, ${sp.z.toFixed(1)})`,
+          );
+          me0.x = sp.x;
+          me0.y = sp.z;
+          lastLocalPose = { x: me0.x, y: me0.y, facing: me0.facing };
+        }
+      }
+    }
+    // 开局也武装切图闸门（首帧即离开触发圈会自动解除，只在落点异常时起作用）
+    portalLatchPending = true;
     // ★ 初始关卡的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
     //   并注册"本地敌怪拉取钩子"，避免 mock 整份覆盖把 App 侧生成的怪物抹掉
     publishSafeZones(cfg);
