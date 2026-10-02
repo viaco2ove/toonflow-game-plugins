@@ -76,6 +76,28 @@ cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文�
 这个背包的物资与用户的动态参数卡的物品同步，且可用于技能上方的物品栏点击使用和切换
 物品栏点击使用如果没有对应的特效就 角色小跳和飘字来作为通用特效
 
+每个物品都可以在旁边修改特效，类型[atk, heal, buff,attribute],修改按钮【修改】，【使用】
+点击后可以修改物品参数
+例如：
+ { name: "小刀", power: 20, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee"，lv:1,buff_type:"",durability:-1,attribute_type:"",attribute_value:0}
+物品修改后，物品参数会保存到"t_plugin_session_data"
+用户动态参数卡中的“物品” 只保存物品名称列表：如“银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4”
+
+### buff 类型：
+防御/攻击/持续伤害/晕眩/无敌/加速
+buff_type:Defense/Attack/Sustained_Damage/Stunning/Invincible/Accelerate
+
+### durability 耐用度，使用多少次会被摧毁。
+durability:-1
+-1 代表永久
+
+
+### attribute_type 属性类型
+Defense/Attack/Life/Blue
+物品为用户增加的 防御/攻击/生命量/蓝量 的加成。放在背包里面就能被动加成。
+其中 type: "attribute"  代表是单纯的属性点。使用不消耗，但是依然有小跳效果也会产生普攻效果。
+
+
 ## 纳戒
 为了防止背包内容太多，可用存放物资到的纳戒中。同时也支持储存技能。
 这部分数据保存到"t_plugin_session_data". 
