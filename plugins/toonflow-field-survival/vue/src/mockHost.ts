@@ -13,6 +13,13 @@
  *   - 演示 setFullscreen：响应全屏请求修改自身 URL hash 让 App.vue 看到变化
  */
 import type { GameState, Entity, RoleOption, MonsterArchetype, MaterialItem, ItemSlot } from "./types";
+// ★ 敌人碰撞：与玩家同一套网格（collision.ts），避免宿主各写一份解析
+import {
+  decodeWalkGridPacket,
+  stepWithAvoidance,
+  snapEnemySpawn,
+  type WalkGrid,
+} from "./collision";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
 interface TestDataBundle {
@@ -87,10 +94,58 @@ function syncAppEntities(): void {
     state.entities = state.entities.filter((e) => !(isAppOwned(e.id) && !appIds.has(e.id)));
     for (const e of appList) {
       if (e && typeof e.id === "string" && !state.entities.some((x) => x.id === e.id)) {
-        state.entities.push({ ...e });
+        state.entities.push(snapEnemy(e));
       }
     }
   } catch { /* ignore */ }
+}
+
+/* ============================================================
+   ★ 敌人碰撞（与玩家同一套网格）
+   ------------------------------------------------------------
+   墙的位置只有 iframe 侧知道（tileset 属性表 + 地图 JSON 都在前端解），
+   所以前端随 tick 把压缩位图传过来（params.walkGrid，仅切图那一次）。
+   拿到网格后，敌人的每一步都过 stepWithAvoidance：
+   撞墙不是原地抖，而是按"与期望方向最接近"的顺序试其余方向 → 沿墙绕行。
+   没有网格（未收到 / 格式不符）→ 退化为原来的直线位移，行为与旧版一致。
+   ============================================================ */
+const ENEMY_COLLIDE_R = 0.38;
+/** 当前关卡的可行走网格（由前端随 tick 上报） */
+let walkGrid: WalkGrid | null = null;
+/** 已应用的网格世代号（避免重复解析同一份 base64） */
+let mockWalkGridEpoch = "";
+
+/** 按 id 幂等更新网格（前端只在切图时发，稳态零开销） */
+function applyWalkGridPacket(payload: any): void {
+  if (!payload || typeof payload !== "object") return;
+  const epoch = String((payload as any).epoch ?? "");
+  if (epoch && epoch === mockWalkGridEpoch) return;
+  const g = decodeWalkGridPacket((payload as any).grid);
+  if (!g) {
+    console.warn("[mockHost] walkGrid 载荷无法解析 → 敌人碰撞降级为无阻挡");
+    return;
+  }
+  walkGrid = g;
+  mockWalkGridEpoch = epoch;
+  console.info(`[mockHost] 敌人碰撞网格已应用：${g.cols}×${g.rows}，阻挡 ${g.blockedCount} 格`);
+}
+
+/** 把一只怪吸附到最近的合法格（刷点可能压在墙上） */
+function snapEnemy(e: Entity): Entity {
+  if (!walkGrid) return e;
+  const sp = snapEnemySpawn(walkGrid, e.x, e.y, ENEMY_COLLIDE_R);
+  if (sp) { e.x = sp.x; e.y = sp.z; }
+  return e;
+}
+
+/** 带碰撞的敌方位移（无网格 → 原样直线位移） */
+function moveEnemyBy(e: Entity, dx: number, dy: number): void {
+  if (!walkGrid) { e.x += dx; e.y += dy; return; }
+  const step = Math.hypot(dx, dy);
+  if (step < 1e-6) return;
+  const r = stepWithAvoidance(walkGrid, e.x, e.y, dx, dy, step, ENEMY_COLLIDE_R);
+  e.x = r.x;
+  e.y = r.y;
 }
 
 // 默认角色（当 test_data/test_state.json 不存在时使用）
@@ -630,6 +685,8 @@ function install(): void {
         //   否则下一次 push() 整份覆盖会把它们当场抹掉（森林野怪"闪一下就消失"）。
         syncAppEntities();
         const params2 = params || {};
+        // ★ 敌人碰撞：前端只在切图那一次带上网格，这里按 epoch 幂等应用
+        applyWalkGridPacket(params2.walkGrid);
         const me = state.entities.find((x) => x.side === "player");
         // ★ 修复：玩家位姿由 game.html 本地 tick 权威推进并随 tick 上报（params.player），
         //   mock 宿主只镜像、不再按 input.dx/dy 重复积分（原先 +3 米/帧 与前端 0.3 米/帧 双写，
@@ -651,6 +708,16 @@ function install(): void {
 
         // 全技能 CD 冷却（每 tick -1）
         for (const s of state.skills) { if (s.cdLeft > 0) s.cdLeft--; }
+
+        // ★ 敌人"解困"：刷点（makeEntity / mapmob / zone_）与安全区推出都可能把怪
+        //   放进墙里 → 每 tick 做一次廉价纠正。已经在合法位置的怪是 no-op。
+        if (walkGrid) {
+          for (const e of state.entities) {
+            if (e.side !== "enemy" || !e.alive) continue;
+            const sp = snapEnemySpawn(walkGrid, e.x, e.y, ENEMY_COLLIDE_R);
+            if (sp) { e.x = sp.x; e.y = sp.z; }
+          }
+        }
 
         // 敌人 AI：朝玩家移动 + 攻击（米单位）
         const target = me;
@@ -697,20 +764,17 @@ function install(): void {
               if (d2 > 4) {
                 // 太远：逼近
                 const sp = 2.0 * 0.1;
-                e.x += (dx / (d2 || 1)) * sp;
-                e.y += (dy / (d2 || 1)) * sp;
+                moveEnemyBy(e, (dx / (d2 || 1)) * sp, (dy / (d2 || 1)) * sp);
               } else if (d2 < 2.5) {
                 // 太近：后退（保持距离）
                 const sp = 1.5 * 0.1;
-                e.x -= (dx / (d2 || 1)) * sp;
-                e.y -= (dy / (d2 || 1)) * sp;
+                moveEnemyBy(e, -(dx / (d2 || 1)) * sp, -(dy / (d2 || 1)) * sp);
               }
               e.facing = dx > 0 ? 0 : 180;
             } else {
               // 近战：冲过去
               const sp = 2.0 * 0.1;  // 2.0 米/秒 × 0.1 秒/帧 = 0.2 米/帧（步行追赶，与 entry 对齐）
-              e.x += (dx / (d2 || 1)) * sp;
-              e.y += (dy / (d2 || 1)) * sp;
+              moveEnemyBy(e, (dx / (d2 || 1)) * sp, (dy / (d2 || 1)) * sp);
               e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
             }
           }

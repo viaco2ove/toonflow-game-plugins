@@ -50,6 +50,17 @@ import {
   pickSpawn,
   resolveMove as resolveGridMove,
   gridStats,
+  // ★ 点击寻路（A*）
+  findPath,
+  // ★ 敌人碰撞（局部避障：撞墙沿墙绕行，而不是原地抖）
+  stepWithAvoidance,
+  snapEnemySpawn,
+  // ★ 战争迷雾（FOV）
+  computeFov,
+  // ★ 把网格传给宿主（敌人碰撞用）
+  encodeWalkGridPacket,
+  // 调试用：网格 → ASCII
+  metersToCell,
   type WalkGrid,
   type WalkIndex,
   type TileFlagTable,
@@ -726,6 +737,18 @@ function onPixelModeChange() {
   try { localStorage.setItem("fs_pixel_mode", pixelMode.value ? "1" : "0"); } catch { /* ignore */ }
   applyCanvasSmoothing();
 }
+/**
+ * 迷雾开关：持久化 + 重新打开时强制重算一次 FOV。
+ * （refreshFov 按"跨格"节流，关掉再打开时玩家没跨格 → 不会自动重算，
+ *   这里把 lastFovCell 置为无效值逼它重算。）
+ */
+function onFogToggle() {
+  try { localStorage.setItem("fs_fog", fogEnabled.value ? "1" : "0"); } catch { /* ignore */ }
+  lastFovCell = { gx: -999, gz: -999 };
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (me) refreshFov(me.x, me.y);
+}
+const fogEnabled = ref(localStorage.getItem("fs_fog") !== "0");
 /** 按当前像素风开关同步 canvas 采样方式 */
 function applyCanvasSmoothing() {
   const c = canvasEl.value;
@@ -1084,13 +1107,29 @@ function onCanvasClick(e: MouseEvent) {
   const me = state.value?.entities.find((e) => e.side === "player");
   const ppx = me?.x ?? 0;
   const ppy = me?.y ?? 0;
-  input.value.moveTo = {
-    x: ppx + dx,
-    y: ppy + dy,
-  };
+  const tx = ppx + dx;
+  const ty = ppy + dy;
 
+  // 世界边界内夹取（点到图外也应该走到贴边，而不是把 moveTo 设到无穷远）
+  const lim = worldLimitM();
+  const tgt = {
+    x: Math.max(-lim, Math.min(lim, tx)),
+    y: Math.max(-lim, Math.min(lim, ty)),
+  };
+  input.value.moveTo = tgt;
   input.value.dx = 0;
   input.value.dy = 0;
+
+  // ★ 点下即跑 A*：既给出"能不能到"的即时反馈（特效颜色），也直接填好路点队列，
+  //   避免 localTick 首帧再算一次。
+  const reachable = recomputeMoveToPath(tgt.x, tgt.y);
+  pushClickFx(tgt.x, tgt.y, reachable);
+}
+
+/** 点击地面特效入队（超出上限则丢弃最旧的，避免连点导致数组无限增长） */
+function pushClickFx(x: number, y: number, ok: boolean): void {
+  clickFxList.push({ x, y, ok, t0: _animTick });
+  if (clickFxList.length > 6) clickFxList.splice(0, clickFxList.length - 6);
 }
 
 
@@ -1468,8 +1507,29 @@ function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: numbe
   };
 }
 
-/** 把刷新点推出 safe zone（安全区只保护玩家，不再冻结世界刷新） */
-function safeReadJson(entry: { bytes: Uint8Array } | undefined, label: string): any {
+/**
+ * ★ 把压缩后的可行走网格随 tick 上报给宿主（**敌人碰撞用**）。
+ *
+ * 为什么需要：敌人位姿由宿主推进（entry.ts / entry.js / mockHost.ts），
+ * 而 tileset 属性表 + 地图 JSON 只在 iframe 侧解析过。
+ * 与其让宿主三处各自再实现一遍解析（三份代码、三处漂移），
+ * 不如把位图传过去，宿主直接调同一套 collision.resolveMove。
+ *
+ * 体积：60×40 图 = 2400 字节/层 → base64 3.2KB，两层 6.4KB；
+ * 按"关卡名"做世代号，只在切图那一次发送，稳态零开销。
+ */
+let walkGridSentEpoch = "";
+function walkGridPayload(): { epoch: string; grid: any } | null {
+  if (!walkGrid) return null;
+  // ★ 世代号用"自增序号"，不能用关卡名 —— 否则 A→B→A 回到 A 时
+  //   epoch 与首次相同会被判定为"已发送"，宿主手里留的还是 B 的网格。
+  const epoch = `${walkGridEpochSeq}|${currentLevelName.value}`;
+  if (epoch === walkGridSentEpoch) return null;
+  walkGridSentEpoch = epoch;
+  return { epoch, grid: encodeWalkGridPacket(walkGrid) };
+}
+
+/** 把刷新点推出 safe zone（安全区只保护玩家，不再冻结世界刷新） */function safeReadJson(entry: { bytes: Uint8Array } | undefined, label: string): any {
   if (!entry) return null;
   try { return JSON.parse(new TextDecoder().decode(entry.bytes)); }
   catch (e) { console.warn("[field-survival] 读 " + label + " 失败：", e); return null; }
@@ -1505,6 +1565,21 @@ function clampToMapBounds(x: number, y: number): { x: number; y: number } {
   const lx = Math.max(1, (size[0] ?? 3000) / 2 - 1);
   const ly = Math.max(1, (size[1] ?? 3000) / 2 - 1);
   return { x: Math.max(-lx, Math.min(lx, x)), y: Math.max(-ly, Math.min(ly, y)) };
+}
+
+/**
+ * 刷怪点安全化：在 clampToMapBounds 的基础上再做一次"必须站得下"的吸附。
+ *
+ * 为什么需要：Tiled 对象坐标 + 环状随机偏移都可能落在墙上（mulberryForest 有
+ * 56% 的格是阻挡），刷在墙里的怪会被碰撞判定锁住 —— 玩家看得见却打不到，
+ * 或干脆在小地图上显示一个永远不动的红点。
+ * 有网格时才吸附；无网格（fallback 图）返回原坐标，行为与旧版一致。
+ */
+function freeEnemySpot(x: number, y: number): { x: number; y: number } {
+  const c = clampToMapBounds(x, y);
+  if (!walkGrid) return c;
+  const sp = snapEnemySpawn(walkGrid, c.x, c.y, ENEMY_COLLIDE_R);
+  return sp ? { x: sp.x, y: sp.z } : c;
 }
 
 /**
@@ -1611,7 +1686,7 @@ async function switchLevel(levelName: string): Promise<void> {
         // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
         //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外/宿主世界外，
         //   既进不了小地图视野，也进不了任何攻击射程。
-        const mobPos = clampToMapBounds(mob.x, mob.y);
+        const mobPos = freeEnemySpot(mob.x, mob.y);
         // ★ game.md 68：<30s 离图回来 → 该 Tiled 怪保持死亡（pendingDeadMobIds 由
         //   switchLevel 上面的"记忆死亡怪"段写入）。这是按图记忆，不依赖 host。
         const revived = pendingDeadMobIds.has(String(mob.id));
@@ -1736,7 +1811,7 @@ function spawnZoneMobs(zoneData: any, cx: number, cy: number): void {
     //   20 米外的刷新点会被夹到地图角落，玩家永远遇不到）
     const dist = 8 + Math.random() * 16;
     const id = `zone_${zoneData.name}_${Date.now()}_${seq++}`;
-    const spot = clampToMapBounds(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
+    const spot = freeEnemySpot(cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist);
     state.value.entities.push({
       id, name: arch.name, side: "enemy",
       x: spot.x,
@@ -1820,7 +1895,7 @@ function spawnLocalMobsIfNeeded(): void {
       const id = `localmob_${Date.now()}_${seq++}`;
       // ★ 刷新点：推出 safe zone 并夹进当前地图边界（否则可能刷在区内/图外永远遇不到）
       const rawSpot = pushOutsideSafeZones(me.x + Math.cos(angle) * dist, me.y + Math.sin(angle) * dist);
-      const spot = clampToMapBounds(rawSpot.x, rawSpot.y);
+      const spot = freeEnemySpot(rawSpot.x, rawSpot.y);
       state.value.entities.push({
         id, name: arch.name, side: "enemy",
         x: spot.x,
@@ -1844,6 +1919,8 @@ function spawnLocalMobsIfNeeded(): void {
    详见 collision.ts 顶部注释。
    ============================================================ */
 let walkGrid: WalkGrid | null = null;
+/** 网格世代号：每次重建自增，用于"只在新网格时上报给宿主"（敌人碰撞用） */
+let walkGridEpochSeq = 0;
 /** 连通域索引（出生点必须落在主连通域，否则会被困在封闭小口袋里） */
 let walkIndex: WalkIndex | null = null;
 let tileFlags: TileFlagTable | null = null;
@@ -1857,8 +1934,242 @@ const PORTAL_TRIGGER_M = 2.5;
 /** 切图后闸门：必须"先走出所有触发圈"才允许再次触发。
  *  防任何原因（落点约束无解、玩家站着不动、宿主强行摆位）导致落点在圈内时无限切图。 */
 let portalLatchPending = false;
-/** 点击寻路连续被墙挡住的 tick 数（≥3 放弃本次 moveTo） */
+/** 点击寻路连续被墙挡住的 tick 数（≥3 放弃本次 moveTo）。
+ *  ★ 只在 A* 无解（目标不可达）时的直线兜底分支里生效 —— 有路径时不再需要。 */
 let moveToBlockedTicks = 0;
+
+/* ============================================================
+   ★ 点击寻路（A*）
+   ------------------------------------------------------------
+   旧实现：朝目标点直线走，撞墙就左右滑，两轴都被挡 3 tick 就放弃。
+   问题：点到墙后/隔着墙的目标永远走不到（Rotten-Soup 用 ROT.Path.AStar）。
+   现实现：点下时在 WalkGrid 上跑 A* 得到路点队列，沿队列走；
+           目标格站不下（点到了墙上）则自动改走主连通域内最近的可站格。
+           无网格（fallback 图）或目标不可达 → 退回旧直线逻辑。
+   ============================================================ */
+let moveToPath: Array<{ x: number; y: number }> = [];
+/** 路径缓存键（目标 + 关卡）：变化才重算，避免每 tick 跑 A* */
+let moveToPathKey = "";
+/** 本次 moveTo 是否 A* 无解（true → 用直线兜底 + 3 tick 放弃） */
+let moveToUnreachable = false;
+
+/** 点击地面特效（世界米坐标；t0 是 _animTick 起始帧，用于算进度） */
+interface ClickFx {
+  x: number;
+  y: number;
+  /** 可达（绿） / 不可达（红） */
+  ok: boolean;
+  t0: number;
+}
+let clickFxList: ClickFx[] = [];
+/** 点击特效持续帧数（_animTick 是 60fps 帧计数 → 36 帧 ≈ 0.6 秒） */
+const CLICK_FX_FRAMES = 36;
+
+function clearMoveTo(): void {
+  input.value.moveTo = null;
+  moveToPath = [];
+  moveToPathKey = "";
+  moveToUnreachable = false;
+  moveToBlockedTicks = 0;
+}
+
+/** 目标 + 关卡名 → 路径缓存键（换图 / 换目标才重算） */
+function moveToKey(tx: number, ty: number): string {
+  return `${currentLevelName.value}|${tx.toFixed(2)},${ty.toFixed(2)}`;
+}
+
+/**
+ * 重算 A* 路径并写入 moveToPath。返回是否可达。
+ * 无网格时返回 true（视为"直线可达"，由旧逻辑处理）。
+ */
+function recomputeMoveToPath(tx: number, ty: number): boolean {
+  moveToPathKey = moveToKey(tx, ty);
+  if (!walkGrid || !walkIndex) {
+    moveToPath = [];
+    moveToUnreachable = false;
+    return true;
+  }
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (!me) return false;
+  const p = findPath(walkGrid, walkIndex, me.x, me.y, tx, ty);
+  if (!p) {
+    moveToPath = [];
+    moveToUnreachable = true;
+    return false;
+  }
+  moveToPath = p.map((pt) => ({ x: pt.x, y: pt.z }));
+  moveToUnreachable = false;
+  return true;
+}
+
+/** 沿 A* 路点走一步；路点走完 / 到达终点 → 结束本次 moveTo */
+function followMoveToPath(me: Entity): boolean {
+  while (moveToPath.length) {
+    const wp = moveToPath[0];
+    const ddx = wp.x - me.x;
+    const ddy = wp.y - me.y;
+    const d = Math.hypot(ddx, ddy);
+    if (d < 0.22) { moveToPath.shift(); continue; }   // 已到该路点 → 取下一个
+    const step = Math.min(d, LOCAL_MOVE_SPEED_M * TICK_DT);
+    me.x += (ddx / d) * step;
+    me.y += (ddy / d) * step;
+    me.facing = (Math.abs(ddx) > Math.abs(ddy))
+      ? (ddx > 0 ? 0 : 180)
+      : (ddy > 0 ? 90 : 270);
+    return true;
+  }
+  clearMoveTo();
+  return false;
+}
+
+/* ============================================================
+   ★ 战争迷雾（对齐 Rotten-Soup 的 Tile.visible() + ROT.FOV）
+   ------------------------------------------------------------
+   三层状态：未探索（全黑）/ 已探索但当前不可见（暗纱）/ 可见（清晰）。
+   遮挡来自 walkGrid.vision（tileset 的 blocks_vision）——与远程武器的
+   "光能过箭就能过"判定同源。
+   实现：FOV 只在"玩家跨格"时重算；迷雾用 1 像素 = 1 格的离屏画布，
+        渲染时整体放大成 1 次 drawImage（与 mapBake 的思路一致）。
+   ============================================================ */
+/** 玩家视野半径（米）。Rotten-Soup 火把约 7 格；这里取 13 米 ≈ 视野窗口的一半 */
+const FOV_RADIUS_M = 13;
+/** 已探索格（1 = 曾经看见过）——切图清空 */
+let fogExplored: Uint8Array | null = null;
+/** 当前可见格（玩家跨格时由 computeFov 重算） */
+let fogVisible: Uint8Array | null = null;
+/** 迷雾离屏画布（1 像素 = 1 格） */
+let fogCanvas: HTMLCanvasElement | null = null;
+let fogCtx: CanvasRenderingContext2D | null = null;
+let fogImageData: ImageData | null = null;
+/** 上次计算 FOV 的格坐标（相同则不重算，省 CPU） */
+let lastFovCell = { gx: -999, gz: -999 };
+let lastFovLevel = "";
+/** 已探索比例（HUD 显示用） */
+const fogExploredPct = ref(0);
+
+/** 换图 / 首次建网格时重置迷雾缓冲 */
+function resetFog(g: WalkGrid): void {
+  if (fogCanvas && fogCanvas.width === g.cols && fogCanvas.height === g.rows) {
+    fogExplored!.fill(0);
+    fogVisible!.fill(0);
+    fogCtx!.clearRect(0, 0, g.cols, g.rows);
+    lastFovCell = { gx: -999, gz: -999 };
+    return;
+  }
+  fogCanvas = document.createElement("canvas");
+  fogCanvas.width = g.cols;
+  fogCanvas.height = g.rows;
+  fogCtx = fogCanvas.getContext("2d", { willReadFrequently: true });
+  fogExplored = new Uint8Array(g.cols * g.rows);
+  fogVisible = new Uint8Array(g.cols * g.rows);
+  fogImageData = fogCtx ? fogCtx.createImageData(g.cols, g.rows) : null;
+  lastFovCell = { gx: -999, gz: -999 };
+}
+
+/** 重算 FOV + 更新已探索标记 + 重绘迷雾位图（仅在玩家跨格时真正执行） */
+function refreshFov(mx: number, mz: number): void {
+  if (!fogEnabled.value || !walkGrid || !fogExplored || !fogVisible) return;
+  const g = walkGrid;
+  if (lastFovLevel !== currentLevelName.value) {
+    lastFovLevel = currentLevelName.value;
+    lastFovCell = { gx: -999, gz: -999 };
+  }
+  const c = metersToCell(g, mx, mz);
+  if (c.gx === lastFovCell.gx && c.gz === lastFovCell.gz) return;
+  lastFovCell = { gx: c.gx, gz: c.gz };
+
+  fogVisible = computeFov(g, mx, mz, FOV_RADIUS_M);
+  let seen = 0;
+  for (let i = 0; i < fogExplored.length; i++) {
+    if (fogVisible[i]) fogExplored[i] = 1;
+    if (fogExplored[i]) seen++;
+  }
+  fogExploredPct.value = Math.round((seen / fogExplored.length) * 100);
+
+  // 重绘位图：未探索 = 全黑；已探索但不可见 = 半透明暗纱；可见 = 透明
+  const img = fogImageData && fogCtx && fogCanvas ? fogImageData : null;
+  if (img && fogCtx) {
+    const d = img.data;
+    for (let i = 0; i < fogExplored.length; i++) {
+      const o = i * 4;
+      const a = fogVisible[i] ? 0 : (fogExplored[i] ? 168 : 255);
+      d[o] = 6; d[o + 1] = 6; d[o + 2] = 10; d[o + 3] = a;
+    }
+    fogCtx.putImageData(img, 0, 0);
+  }
+}
+
+/** 某世界米坐标当前是否可见（不可见 = 不画这个实体） */
+function isVisibleAt(mx: number, mz: number): boolean {
+  if (!fogEnabled.value || !walkGrid || !fogVisible) return true;
+  const c = metersToCell(walkGrid, mx, mz);
+  if (c.gx < 0 || c.gx >= walkGrid.cols || c.gz < 0 || c.gz >= walkGrid.rows) return false;
+  return fogVisible[c.gz * walkGrid.cols + c.gx] === 1;
+}
+
+/* ============================================================
+   ★ 敌人碰撞（前端统一收口）
+   ------------------------------------------------------------
+   背景：敌人位姿由宿主推进（真实宿主 entry.ts / standalone mockHost.ts），
+   但墙的位置只有 iframe 侧知道（tileset 属性表 + 地图 JSON 都在前端解）。
+   宿主把敌人直线推向玩家 → 穿墙、隔墙贴脸。
+
+   做法：不把"宿主的绝对坐标"当结果，而是当成**每 tick 的意图位移**：
+     D = 宿主本 tick 位置 − 宿主上一 tick 位置     ← 意图（方向 + 步长）
+     F = stepWithAvoidance(grid, F_prev, D)       ← 在自己的位置积分，带碰撞 + 局部避障
+   于是：
+     ① 敌人永远不会落在墙里（F 一定合法）；
+     ② 撞墙不是原地抖，而是沿墙绕行（stepWithAvoidance 会按"与期望方向最接近"
+        的顺序试其余 7 个方向）；
+     ③ 前端只消费意图，不与宿主的绝对坐标打架（不会出现回拉 / 瞬移）。
+   兜底：宿主的位移过大（>1.2 米/tick = 传送，如安全区推出）或 F 与宿主偏离
+        超过 3 米 → 直接以宿主位置为准并吸附到最近合法格。
+   ============================================================ */
+const ENEMY_COLLIDE_R = 0.38;
+/** 单 tick 位移超过该值视为"传送"（正常追击 0.2~0.3 米/tick） */
+const ENEMY_TELEPORT_M = 1.2;
+/** F 与宿主位置的允许偏离上限（超出就对齐，防止长期漂移） */
+const ENEMY_DRIFT_MAX_M = 3;
+/** 每只怪的转向状态：宿主上一 tick 位置 + 前端积分出来的位置 */
+const enemySteerState = new Map<string, { hostX: number; hostY: number; fx: number; fy: number }>();
+
+/** 把一只怪对齐到宿主的合法位置（越界/墙里 → 吸附到最近的合法格） */
+function alignEnemyToHost(e: Entity): void {
+  if (!walkGrid) return;
+  const sp = snapEnemySpawn(walkGrid, e.x, e.y, ENEMY_COLLIDE_R);
+  if (sp) { e.x = sp.x; e.y = sp.z; }
+  enemySteerState.set(e.id, { hostX: e.x, hostY: e.y, fx: e.x, fy: e.y });
+}
+
+/** 对宿主推来的敌怪数组做碰撞收口（就地改写 x/y；在 state.value 赋值前调用） */
+function applyEnemyCollision(entities: Entity[]): void {
+  if (!walkGrid) { enemySteerState.clear(); return; }
+  const seen = new Set<string>();
+  for (const e of entities) {
+    if (!e || e.side !== "enemy" || e.alive === false) continue;
+    seen.add(e.id);
+    const hx = e.x;
+    const hy = e.y;
+    const prev = enemySteerState.get(e.id);
+    if (!prev) { alignEnemyToHost(e); continue; }          // 新怪（首见）
+    const dx = hx - prev.hostX;
+    const dy = hy - prev.hostY;
+    const dist = Math.hypot(dx, dy);
+    const drift = Math.hypot(hx - prev.fx, hy - prev.fy);
+    if (dist > ENEMY_TELEPORT_M || drift > ENEMY_DRIFT_MAX_M) { alignEnemyToHost(e); continue; }
+    if (dist < 1e-6) {                                     // 宿主本 tick 没动（攻击/被挡）
+      e.x = prev.fx;
+      e.y = prev.fy;
+      enemySteerState.set(e.id, { hostX: hx, hostY: hy, fx: prev.fx, fy: prev.fy });
+      continue;
+    }
+    const r = stepWithAvoidance(walkGrid, prev.fx, prev.fy, dx, dy, dist, ENEMY_COLLIDE_R);
+    e.x = r.x;
+    e.y = r.y;
+    enemySteerState.set(e.id, { hostX: hx, hostY: hy, fx: r.x, fy: r.y });
+  }
+  for (const id of Array.from(enemySteerState.keys())) if (!seen.has(id)) enemySteerState.delete(id);
+}
 
 /**
  * 依据当前地图重建碰撞网格。读 getTiledRaw()（normalizeTiledMap 落的原始 Tiled JSON），
@@ -1868,6 +2179,8 @@ let moveToBlockedTicks = 0;
 async function rebuildWalkGrid(levelLabel = ""): Promise<void> {
   walkGrid = null;
   walkIndex = null;
+  // ★ 网格重建 → 世代号自增，下一次 tick 一定会把新网格重发给宿主
+  walkGridEpochSeq++;
   const tiled = getTiledRaw();
   if (!tiled) return;
   // ★ 一致性守卫：getTiledRaw() 是模块级缓存，地图走 fallback 分支时它会残留上一张图。
@@ -1888,6 +2201,8 @@ async function rebuildWalkGrid(levelLabel = ""): Promise<void> {
     walkGrid = await buildWalkGridAsync(tiled as any, tileFlags, 1);
     if (!walkGrid) return;
     walkIndex = buildWalkIndex(walkGrid, PLAYER_COLLIDE_R);
+    // ★ 换图重置战争迷雾（已探索标记不跨图继承）
+    resetFog(walkGrid);
     const comp = walkIndex.sizes[walkIndex.largest] ?? 0;
     console.info(
       `[field-survival] 碰撞网格（${levelLabel || currentLevelName.value}）：${gridStats(walkGrid)}；` +
@@ -1996,23 +2311,30 @@ function localTick(): void {
       me.y += (dy / len) * LOCAL_MOVE_SPEED_M * TICK_DT;
       // facing 统一角度制：0=右 90=下 180=左 270=上（与渲染层 dirIndex / facingLeft 一致）
       me.facing = (dx > 0 ? 0 : dx < 0 ? 180 : dy > 0 ? 90 : 270);
-      input.value.moveTo = null;
+      // 摇杆接管 → 放弃点击寻路（含路径队列）
+      if (input.value.moveTo || moveToPath.length) clearMoveTo();
     } else if (input.value.moveTo) {
-      // 朝 moveTo 走一步
+      // ★ 点击寻路：优先沿 A* 路点走；无网格或 A* 无解 → 退回直线 + 3 tick 放弃
       const tx = input.value.moveTo.x;
       const ty = input.value.moveTo.y;
-      const ddx = tx - me.x;
-      const ddy = ty - me.y;
-      const dist = Math.hypot(ddx, ddy);
-      if (dist < 0.3) {
-        input.value.moveTo = null;
+      const key = moveToKey(tx, ty);
+      if (key !== moveToPathKey) recomputeMoveToPath(tx, ty);   // 目标变了 / 换图了 → 重算
+      if (!moveToUnreachable && walkGrid && walkIndex) {
+        followMoveToPath(me);        // 内部：路点走完会 clearMoveTo
       } else {
-        const step = Math.min(dist, LOCAL_MOVE_SPEED_M * TICK_DT);
-        me.x += (ddx / dist) * step;
-        me.y += (ddy / dist) * step;
-        me.facing = (Math.abs(ddx) > Math.abs(ddy))
-          ? (ddx > 0 ? 0 : 180)
-          : (ddy > 0 ? 90 : 270);
+        // 直线兜底（无网格的 fallback 图 / A* 无解）：撞墙由下面的 3-tick 兜底放弃
+        const ddx = tx - me.x;
+        const ddy = ty - me.y;
+        const dist = Math.hypot(ddx, ddy);
+        if (dist < 0.3) clearMoveTo();
+        else {
+          const step = Math.min(dist, LOCAL_MOVE_SPEED_M * TICK_DT);
+          me.x += (ddx / dist) * step;
+          me.y += (ddy / dist) * step;
+          me.facing = (Math.abs(ddx) > Math.abs(ddy))
+            ? (ddx > 0 ? 0 : 180)
+            : (ddy > 0 ? 90 : 270);
+        }
       }
     }
     // 松手立即停止：清空速度，宿主侧不会再产生余速滑行
@@ -2058,17 +2380,18 @@ function localTick(): void {
       const res = resolveGridMove(walkGrid, beforeX, beforeZ, me.x, me.y, PLAYER_COLLIDE_R);
       me.x = res.x;
       me.y = res.z;
-      // 点击寻路（moveTo）撞墙且两轴都走不动 → 连续 3 个 tick 后放弃，
-      // 否则会一直贴着墙"空推"（Rotten-Soup 用 A* 绕行，这里不做寻路，直接放弃）
-      if (input.value.moveTo && res.hitX && res.hitZ) {
-        if (++moveToBlockedTicks >= 3) {
-          input.value.moveTo = null;
-          moveToBlockedTicks = 0;
-        }
+      // ★ 只有"直线兜底"分支才需要 3-tick 放弃：
+      //   有 A* 路径时（moveToUnreachable=false）撞墙只是暂时的，绕行逻辑会处理；
+      //   无解时两轴都被挡说明真的过不去，贴着墙空推没意义 → 放弃。
+      if (input.value.moveTo && moveToUnreachable && res.hitX && res.hitZ) {
+        if (++moveToBlockedTicks >= 3) clearMoveTo();
       } else {
         moveToBlockedTicks = 0;
       }
     }
+
+    // ★ 战争迷雾：位置定稿后刷新 FOV（内部按"跨格"节流，同格直接 return）
+    refreshFov(me.x, me.y);
 
     // 记录本地权威位姿，供 onHostState 覆盖宿主回推值
     lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
@@ -2546,6 +2869,102 @@ function drawVfxLayer(
       case "explosion":  drawExplosion(ctx, px, py, progress, p.color || "#ff8c3a"); break;
       case "spark":      drawSpark(ctx, px, py, progress, p.color || "#fff"); break;
     }
+  }
+}
+
+/* ============================================================
+   ★ 点击地面反馈层
+   ------------------------------------------------------------
+   三样东西（都是屏幕像素绘制，与实体同层之上）：
+     1) 点击涟漪：从点击点扩散的双环 + 中心点，绿=可达 / 红=不可达
+     2) A* 路径：从玩家到目标点的虚线（帮助确认寻路真的绕开了墙）
+     3) 目标标记：脉冲圆环 + 中心十字，移动中一直显示
+   ============================================================ */
+function drawClickFxLayer(
+  ctx: CanvasRenderingContext2D,
+  wx2px: (mx: number) => number,
+  wz2py: (mz: number) => number,
+  sx: number,
+): void {
+  // —— 1) 点击涟漪 ——
+  clickFxList = clickFxList.filter((f) => _animTick - f.t0 < CLICK_FX_FRAMES);
+  for (const f of clickFxList) {
+    const p = (_animTick - f.t0) / CLICK_FX_FRAMES;   // 0 → 1
+    const px = wx2px(f.x);
+    const py = wz2py(f.y);
+    const color = f.ok ? "140, 224, 122" : "255, 107, 107";
+    ctx.save();
+    // 外环：扩散 + 淡出
+    ctx.globalAlpha = Math.max(0, 1 - p) * 0.9;
+    ctx.strokeStyle = `rgb(${color})`;
+    ctx.lineWidth = Math.max(2, (1 - p) * 4);
+    ctx.beginPath();
+    ctx.arc(px, py, (0.25 + p * 1.5) * sx, 0, Math.PI * 2);
+    ctx.stroke();
+    // 内环：稍慢一圈（双层更有"咚"的落地感）
+    const p2 = Math.max(0, p - 0.22) / 0.78;
+    if (p2 > 0) {
+      ctx.globalAlpha = Math.max(0, 1 - p2) * 0.65;
+      ctx.lineWidth = Math.max(1.5, (1 - p2) * 3);
+      ctx.beginPath();
+      ctx.arc(px, py, (0.15 + p2 * 0.95) * sx, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // 中心实心点：前 35% 才显示（"落点"的锚）
+    if (p < 0.35) {
+      ctx.globalAlpha = (1 - p / 0.35) * 0.95;
+      ctx.fillStyle = `rgb(${color})`;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(2, sx * 0.12), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // 不可达：加一个叉，明确"过不去"
+    if (!f.ok && p < 0.8) {
+      ctx.globalAlpha = Math.max(0, 1 - p / 0.8) * 0.9;
+      ctx.strokeStyle = `rgb(${color})`;
+      ctx.lineWidth = Math.max(2, sx * 0.09);
+      const r = sx * 0.22;
+      ctx.beginPath();
+      ctx.moveTo(px - r, py - r); ctx.lineTo(px + r, py + r);
+      ctx.moveTo(px + r, py - r); ctx.lineTo(px - r, py + r);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // —— 2) A* 路径虚线（只在本次 moveTo 有效时画；有路径才画）——
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (me && input.value.moveTo && moveToPath.length) {
+    ctx.save();
+    ctx.setLineDash([Math.max(3, sx * 0.18), Math.max(3, sx * 0.18)]);
+    ctx.lineWidth = Math.max(2, sx * 0.07);
+    ctx.strokeStyle = "rgba(255, 236, 150, 0.55)";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(wx2px(me.x), wz2py(me.y) - sx * 0.25);
+    for (const wp of moveToPath) ctx.lineTo(wx2px(wp.x), wz2py(wp.y) - sx * 0.25);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // —— 3) 目标标记（脉冲圆环 + 十字）——
+  if (input.value.moveTo) {
+    const px = wx2px(input.value.moveTo.x);
+    const py = wz2py(input.value.moveTo.y);
+    const pulse = 0.75 + 0.25 * Math.sin(_animTick / 6);
+    const ring = Math.max(4, sx * 0.38 * pulse);
+    ctx.save();
+    ctx.strokeStyle = moveToUnreachable ? "rgba(255,107,107,.85)" : "rgba(140,224,122,.9)";
+    ctx.lineWidth = Math.max(1.5, sx * 0.06);
+    ctx.beginPath();
+    ctx.arc(px, py, ring, 0, Math.PI * 2);
+    ctx.stroke();
+    const cr = Math.max(2, sx * 0.16);
+    ctx.beginPath();
+    ctx.moveTo(px - cr, py); ctx.lineTo(px + cr, py);
+    ctx.moveTo(px, py - cr); ctx.lineTo(px, py + cr);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -3078,6 +3497,25 @@ function render() {
     ctx.restore();
   });
 
+  // ============================================================
+  // ★ 战争迷雾（对齐 Rotten-Soup 的 Tile.visible() + ROT.FOV）
+  //   画在地形/区域/装饰之上、实体之下：
+  //     · 未探索 → 全黑；已探索但当前不可见 → 半透明暗纱；可见 → 透明
+  //     · 实体层在其上，且"不可见格的实体"在下面被跳过 → 看不到墙后的怪
+  //   性能：迷雾位图（1 像素 = 1 格）在 FOV 变化时才重绘，
+  //         本帧只有 1 次 drawImage（与 mapBake 同思路）。
+  // ============================================================
+  if (fogEnabled.value && fogCanvas && walkGrid && fogVisible) {
+    const fogOriginPx = wx2px(-walkGrid.cols / 2);
+    const fogOriginPy = wz2py(-walkGrid.rows / 2);
+    const fogW = walkGrid.cols * sx;
+    const fogH = walkGrid.rows * sx * DEPTH;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(fogCanvas, fogOriginPx, fogOriginPy, fogW, fogH);
+    ctx.restore();
+  }
+
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
   const roleIds = new Set(s.roles.map((r) => r.id));
   const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
@@ -3088,6 +3526,9 @@ function render() {
   Array.from(displayPos.keys()).forEach((id) => { if (!aliveIds.has(id)) displayPos.delete(id); });
   [...s.entities]
     .filter((e) => e.alive !== false)
+    // ★ 迷雾过滤：玩家永远可见；其余单位只在"当前可见格"上才画
+    //   （躲进墙后 / 视野外的怪不应该被看到，否则迷雾只是装饰）
+    .filter((e) => e.side === "player" || isVisibleAt(e.x, e.y))
     .map((e) => {
       const d = e.side === "player" ? { x: e.x, y: e.y } : entityDisplayPos(e, dtSec);
       return { e, drawX: d.x, drawY: d.y };
@@ -3105,6 +3546,9 @@ function render() {
 
   // —— VFX 粒子层（在飘字之前、实体之后）——
   drawVfxLayer(ctx, s.vfx, wx2px, wz2py);
+
+  // —— ★ 点击寻路可视化：A* 路径虚线 + 目标标记 + 点击涟漪 ——
+  drawClickFxLayer(ctx, wx2px, wz2py, sx);
 
   // —— 飘字（屏幕像素）——
   s.floaters.forEach((f) => {
@@ -3452,8 +3896,11 @@ function drawMinimap() {
   if (Array.isArray(extra.potions)) extra.potions.forEach((o) => dot(o.x, o.y, "rgba(228,132,196,0.9)", 1.6));
 
   // 野怪 / 盟友
+  // ★ 迷雾一致：小地图也不应暴露视野外的野怪（否则迷雾形同虚设）
   s.entities.forEach((e) => {
     if (e.alive === false) return;
+    if (e.side === "player") return;
+    if (!isVisibleAt(e.x, e.y)) return;
     if (e.side === "enemy") dot(e.x, e.y, "#ff5b5b", 3);
     else if (e.side === "ally") dot(e.x, e.y, "#5b9bff", 2.4);
     else if (e.side === "neutral") dot(e.x, e.y, "#e0c86a", 2.2);   // ★ v4：城镇中立角色
@@ -3601,6 +4048,9 @@ function loop(ts: number) {
         player: lastLocalPose ? { ...lastLocalPose } : undefined,
         // ★ 上报本地敌怪清单（仅在世代号变化的一次发送，避免每帧大数组）
         localEnemies: localEnemies || undefined,
+        // ★ 上报可行走网格（仅切图那一次）→ 宿主用它做**敌人碰撞**，
+        //   与前端同一套 collision.resolveMove，避免三处各写一份解析漂移。
+        walkGrid: walkGridPayload() || undefined,
         // ★ 上报当前关卡名：宿主（dev-host）据此决定 dungeon theme / 城镇是否刷怪。
         //   此前 dev-host 读不到 iframe 里的 window.__currentLevelName（跨 frame），
         //   永远 fallback 到 RUINS → 城镇安全区也刷怪围杀玩家。
@@ -3995,9 +4445,11 @@ onMounted(async () => {
         }
       }
     }
-    // ★  vfx/floaters 衰减由 dev-host tick 负责（vite.config.ts 每 tick life--）。
-    //    客户端不要保留 prevEntities 的 vfx，否则 prevEntities 里的 vfx 不衰减、永远显示。
-    state.value = incoming;
+  // ★ 敌人碰撞收口（在 state.value 赋值之前就地改写 incoming 的敌怪坐标）
+  if (incoming && Array.isArray(incoming.entities)) applyEnemyCollision(incoming.entities as Entity[]);
+  // ★  vfx/floaters 衰减由 dev-host tick 负责（vite.config.ts 每 tick life--）。
+  //    客户端不要保留 prevEntities 的 vfx，否则 prevEntities 里的 vfx 不衰减、永远显示。
+  state.value = incoming;
     ready.value = true;
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态
@@ -4232,6 +4684,11 @@ watch(playerSnapshot, () => {
         <label class="pixel-toggle" title="像素风渲染开关：取消勾选可关闭像素化，画面更平滑清晰">
           <input type="checkbox" v-model="pixelMode" @change="onPixelModeChange" />
           <span>像素风</span>
+        </label>
+        <!-- ★ 战争迷雾开关（遮挡来自 tileset 的 blocks_vision，与 Rotten-Soup 的 Tile.visible() 同源） -->
+        <label class="pixel-toggle" :title="`战争迷雾开关（视野 ${FOV_RADIUS_M} 米，已探索 ${fogExploredPct}%）`">
+          <input type="checkbox" v-model="fogEnabled" @change="onFogToggle" />
+          <span>迷雾 {{ fogExploredPct }}%</span>
         </label>
       </div>
 
@@ -4716,6 +5173,7 @@ body {
   align-items: center;
   justify-content: center;
   overflow: hidden;            /* 旋转后超出部分裁掉，绝不显示黑边 */
+  cursor: pointer;             /* ★ 手指光标（画布外一圈也保持"可点击走路"的暗示） */
 }
 
 
@@ -4728,6 +5186,9 @@ body {
   background: #0a0a0a;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  /* ★ 手指光标：画布本身就是"点击地面走路"的操作面（HUD 按钮各自是 pointer） */
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 /* ★ fix④：取消勾选「像素风」后，画布交给浏览器做平滑插值（界面立刻变清晰） */

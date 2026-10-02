@@ -432,6 +432,188 @@ function isLocalEnemyId(id) {
   const v = str(id);
   return LOCAL_ENEMY_PREFIXES.some((p) => v.startsWith(p));
 }
+/* ============================================================
+   敌人碰撞（宿主侧）
+   ------------------------------------------------------------
+   墙的位置只有 iframe 侧知道（tileset 的 blocked 属性 + 地图 JSON 都在前端解），
+   所以前端随 tick 把压缩位图传过来（params.walkGrid，只在切图那一次）：
+     walkGrid = { epoch, grid: { v, cols, rows, firstGid, blocked, vision } }
+   拿到网格后，敌人在 step() 的积分阶段改走带碰撞的位移：
+   撞墙不是原地抖，而是按「与期望方向最接近」的顺序试其余方向 → 沿墙绕行。
+   没收到网格 / 解码失败 → 完全退化为原来的直线位移（行为与旧版一致，不会崩）。
+
+   ⚠️ 本段是 entry.ts 同名段的 JS 镜像，也是 vue/src/collision.ts
+      （stepWithAvoidance / resolveMove / isFreeAround）的内联镜像。
+      宿主入口刻意不加任何 import：宿主加载器不一定支持相对/跨目录导入，
+      一旦加载失败整个插件就挂，风险远大于这点重复。
+      改算法时请同步三处：vue/src/collision.ts、entry.ts、entry.js。
+   ============================================================ */
+
+/** 宿主侧的最小网格（只需要挡住 / 不挡住；视野位图前端自己用） */
+let enemyNav = null;
+/** 已应用的网格世代号（幂等，避免每 tick 重复解码同一份 base64） */
+let enemyNavEpoch = "";
+/** 敌人碰撞半径（米）。比玩家的 0.4 略小：1 米宽的窄门里不至于卡住 */
+const ENEMY_NAV_R = 0.38;
+
+const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/** base64 → 字节。不依赖 atob（宿主运行时未必有） */
+function b64ToBytes(b64) {
+  const clean = String(b64 || "").replace(/[^A-Za-z0-9+/]/g, "");
+  if (!clean) return null;
+  const n = clean.length;
+  const out = new Uint8Array(Math.floor((n * 3) / 4));
+  let o = 0;
+  let buf = 0;
+  let bits = 0;
+  for (let i = 0; i < n; i++) {
+    const v = B64_ALPHABET.indexOf(clean.charAt(i));
+    if (v < 0) continue;
+    buf = (buf << 6) | v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[o++] = (buf >> bits) & 0xff;
+    }
+  }
+  return o === out.length ? out : out.slice(0, o);
+}
+
+/**
+ * 应用前端上报的网格。epoch 幂等；解码失败 → 保留旧网格（不降级成"无碰撞"，
+ * 否则一次坏包就会让敌人穿墙一整局）。
+ */
+function applyEnemyNavPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  const epoch = str(payload.epoch, "");
+  if (epoch && epoch === enemyNavEpoch) return;
+  const pkt = payload.grid;
+  if (!pkt || num(pkt.v, 0) !== 1) return;
+  const cols = num(pkt.cols, 0);
+  const rows = num(pkt.rows, 0);
+  const total = cols * rows;
+  if (!(cols > 0) || !(rows > 0) || total > 4000000) return;
+  const bytes = b64ToBytes(str(pkt.blocked, ""));
+  if (!bytes || bytes.length !== total) {
+    // 保持 ASCII：本文件按"Unicode 转义镜像"约定维护，未转义中文在旧运行时可能乱码
+    console.warn("[field-survival] walkGrid payload decode failed, keeping previous grid:",
+      bytes && bytes.length, total);
+    return;
+  }
+  enemyNav = { cols, rows, blocked: bytes };
+  enemyNavEpoch = epoch;
+}
+
+function navBlocked(g, gx, gz) {
+  if (gx < 0 || gx >= g.cols || gz < 0 || gz >= g.rows) return true;   // 越界一律挡
+  return g.blocked[gz * g.cols + gx] === 1;
+}
+
+/** 以 (x, y) 为中心、半径 r 的方内是否全可走（与玩家同一套判定） */
+function navFree(g, x, y, r) {
+  const toGx = (mx) => Math.floor(mx + g.cols / 2);
+  const toGz = (my) => Math.floor(my + g.rows / 2);
+  if (r <= 0) return !navBlocked(g, toGx(x), toGz(y));
+  const left = toGx(x - r);
+  const right = toGx(x + r);
+  const top = toGz(y - r);
+  const bottom = toGz(y + r);
+  return !navBlocked(g, left, top) && !navBlocked(g, right, top) &&
+         !navBlocked(g, left, bottom) && !navBlocked(g, right, bottom);
+}
+
+/** 分轴求解：X 被挡只丢 X、Z 继续 → 撞墙可沿墙滑行；起点已在墙里则放行（自解困） */
+function navResolve(g, x, y, nx, ny, r) {
+  if (!navFree(g, x, y, r)) return { x: nx, y: ny };
+  let outX = x;
+  let outY = y;
+  if (navFree(g, nx, y, r)) outX = nx;
+  if (navFree(g, outX, ny, r)) outY = ny;
+  return { x: outX, y: outY };
+}
+
+/** 八向候选（顺序即"优先直行，然后偏 45°，最后偏 90°"） */
+const NAV_DIRS = [
+  [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1],
+];
+
+/**
+ * 带局部避障的一步位移：期望方向优先，被挡就按点积（方向相似度）试其余方向。
+ * 不做 A*（几十只怪每 tick 各跑一次 A* 开销太大）；效果是沿墙绕行而不是原地抖。
+ */
+function navStep(g, x, y, dx, dy, step, r) {
+  const len = Math.hypot(dx, dy);
+  if (!(len > 1e-6)) return { x, y };
+  const ux = dx / len;
+  const uy = dy / len;
+  const order = NAV_DIRS.map(([ax, ay]) => {
+    const l = Math.hypot(ax, ay);
+    const nx = ax / l;
+    const ny = ay / l;
+    return { nx, ny, dot: nx * ux + ny * uy };
+  }).filter((c) => c.dot > -0.35)                 // 不往回走
+    .sort((a, b) => b.dot - a.dot);
+  for (const c of order) {
+    const nx = x + c.nx * step;
+    const ny = y + c.ny * step;
+    if (navFree(g, nx, ny, r)) return { x: nx, y: ny };
+  }
+  return navResolve(g, x, y, x + ux * step, y + uy * step, r);
+}
+
+/** 环状 BFS 找最近可站格（刷点压在墙上时用） */
+function navNearestFree(g, x, y, r, maxRing = 8) {
+  const cgx = Math.floor(x + g.cols / 2);
+  const cgz = Math.floor(y + g.rows / 2);
+  const center = (gx, gz) => ({ x: gx - g.cols / 2 + 0.5, y: gz - g.rows / 2 + 0.5 });
+  if (navFree(g, x, y, r)) return { x, y };
+  for (let ring = 1; ring <= maxRing; ring++) {
+    for (let d = -ring; d <= ring; d++) {
+      const cand = [
+        [cgx + d, cgz - ring], [cgx + d, cgz + ring],
+        [cgx - ring, cgz + d], [cgx + ring, cgz + d],
+      ];
+      for (const [gx, gz] of cand) {
+        const c = center(gx, gz);
+        if (navFree(g, c.x, c.y, r)) return c;
+      }
+    }
+  }
+  return null;
+}
+
+/** 带碰撞的一步敌方位移（无网格 → 原样直线位移，行为与旧版一致） */
+function moveEnemyCollide(e, dx, dy) {
+  if (!enemyNav) { e.x += dx; e.y += dy; return; }
+  const step = Math.hypot(dx, dy);
+  if (step < 1e-6) return;
+  const p = navStep(enemyNav, e.x, e.y, dx, dy, step, ENEMY_NAV_R);
+  e.x = p.x;
+  e.y = p.y;
+}
+
+/**
+ * 把落在墙里 / 越界的敌怪挪到最近的合法格。
+ * 刷点来源五花八门（Tiled 对象、环状随机、安全区推出），逐个改源头易漏 →
+ * 统一在每 tick 的积分阶段做一次廉价纠正（合法位置的怪是 no-op）。
+ */
+function unstickEnemies(s) {
+  if (!enemyNav) return;
+  for (const e of s.entities) {
+    if (e.side !== "enemy" || !e.alive) continue;
+    if (navFree(enemyNav, e.x, e.y, ENEMY_NAV_R)) continue;
+    const c = navNearestFree(enemyNav, e.x, e.y, ENEMY_NAV_R);
+    if (!c) continue;
+    const badHomeX = "homeX" in e && !navFree(enemyNav, num(e.homeX), c.y, ENEMY_NAV_R);
+    const badHomeY = "homeY" in e && !navFree(enemyNav, c.x, num(e.homeY), ENEMY_NAV_R);
+    e.x = c.x;
+    e.y = c.y;
+    if (badHomeX) e.homeX = c.x;
+    if (badHomeY) e.homeY = c.y;
+  }
+}
+
 function mapBound(s) {
   const b = s.mapBounds;
   if (b && num(b.lx, 0) > 0 && num(b.ly, 0) > 0) return { lx: num(b.lx, 0), ly: num(b.ly, 0) };
@@ -770,14 +952,18 @@ function step(s, input, poseHint) {
       e.vy = 0;
     }
   });
+  unstickEnemies(s);
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
     if (e.side === "enemy" && e.isLocal) {
       const p = clampToBound(s, nx, ny);
-      e.x = p.x;
-      e.y = p.y;
+      if (enemyNav) moveEnemyCollide(e, p.x - e.x, p.y - e.y);
+      else { e.x = p.x; e.y = p.y; }
+    } else if (e.side === "enemy" && enemyNav) {
+      // 宿主自己刷的敌怪也走同一套碰撞（只加碰撞，边界夹取保持原逻辑不变）
+      moveEnemyCollide(e, clampX(nx) - e.x, clampY(ny) - e.y);
     } else {
       e.x = clampX(nx);
       e.y = clampY(ny);
@@ -1243,6 +1429,7 @@ async function handle_action(action, params, state, context) {
       s.writeback = null;
       s.tick += 1;
       const localBuilt = applyLocalEnemies(s, params?.localEnemies);
+      applyEnemyNavPayload(params?.walkGrid);
       if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       syncCardFromContext(s, context);
       ensureNpcCards(s, s.levelName || "");

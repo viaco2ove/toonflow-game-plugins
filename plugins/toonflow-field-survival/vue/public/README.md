@@ -207,29 +207,115 @@ overworld          (0.0, 0.5)       13.51    3.16
 |---|---|---|
 | 坐标 | 整数格 + 回合制 | 连续米坐标 + 实时 tick |
 | 挡不挡 | `tryMove` 返回 false，该回合不动 | 分轴求解，可沿墙滑行 |
-| actor 碰撞 | `tryMove` 里遍历 `tile.actors`（撞人＝攻击、撞门＝开门） | 未做（敌人位姿由宿主驱动） |
+| actor 碰撞 | `tryMove` 里遍历 `tile.actors`（撞人＝攻击、撞门＝开门） | 只做**地形**碰撞（撞人不做伤害结算） |
 | 属性类型 | 直接 `some(o => o.blocked)`，字符串 `"false"` 会被误判成墙 | 入口统一 `toBool()` 归一 |
 | 卡墙兜底 | 无（格子制不会半格卡住） | 起点在墙里则放行移动（自解困） |
 | 出生点 | `changeLevels` 直接把玩家放到目标地图的配对传送门 | 落到主连通域 + 离 portal ≥3 米（避免"进门即反切"） |
 | 切图触发 | 踩到 LEVEL_TRANSITION 格即切 | 距离 <2.5 米即切 + `portalLatchPending` 闸门防连切 |
+| 寻路 | `ROT.Path.AStar`，绕墙 | 同源 A\*，另做视线拉直 + 禁斜穿墙角 + 目标吸附 |
+| 视野 | `Tile.visible()` + ROT（`Game.js` 用 Precise、`Player.js` 用 Recursive，混写同一份 `visible_tiles`） | ROT `RecursiveShadowcasting`（逐格对拍 0 差异）+ 三态迷雾 |
+| 野怪挡路 | `tryMove` 撞到 actor 即攻击/开门 | 宿主侧局部避障（`navStep`）+ 前端 `applyEnemyCollision` 纠偏 |
 
 ## 离线仿真（怎么验的）
 
 `collision.ts` 是纯函数模块，不依赖 Vue / DOM，所以可以脱离浏览器直接跑：
 用 esbuild 把 `src/collision.ts` 打成 ESM（桩掉 `./assets` 与 `fetch`），
-在 Node 里对 23 张真实地图做四项校验：
+在 Node 里对 23 张真实地图做全套校验：
 
 | 项 | 内容 | 结果 |
 |---|---|---|
-| A | tileset 属性解析 vs 独立 Python/JS 基线 | `blocked=1573 / vision=398` ✅ 一致 |
-| B | `pickSpawn` 落点：站得下 + 在主连通域 + 离 portal ≥2.5 米 | 23/23 通过，硬性违例 0 |
-| C | 每图 6000 tick 随机走（0.3 米/帧 + `resolveMove`） | 进墙 0 次、被困 0 例 |
-| D | `resolveMove` 单元：撞墙停住 / 贴墙滑行 / 自解困放行 / 空地正常位 | 0 例异常 |
+| A | tileset 属性解析 vs 独立基线 | `blocked=1573 / vision=398` ✅ 一致 |
+| B | `pickSpawn` 落点：站得下 + 主连通域 + 离 portal ≥3 米 | 23/23，违例 0 |
+| C | `WalkGridPacket` encode/decode 往返 + 坏包防御 | 23/23 字节级一致；空包/长度不符一律拒收 |
+| D | A\* 寻路：路点合法性 + 路径真能走通 + 无解判定 | 抽样 276 次，有解 269、走不通 0 |
+| E | FOV：自身格可见 + 5 米内不发黑 + 连线采样 | 通过 |
+| F | `stepWithAvoidance`：每步都不得进墙 | 38 475 步，进墙 0 例 |
+| **G** | **与 ROT 官方 `RecursiveShadowcasting` 逐格对拍** | **30 759 格，差异 0** ✅ |
+| H | 每图 6000 tick 随机游走（`resolveMove`，0.3 米/帧） | 进墙 0 次、被困 0 例 |
 
-## 未做（可选后续）
+### G 项：FOV 的黄金标准对拍
 
-- **野怪碰撞**：敌人位姿由宿主推进（`entry.ts` 的 tick + `mockHost.ts` 的追击），
-  两处都没有碰撞。要加需要同时改 `entry.ts` / `entry.js`（双份维护）与 `vue/src/mockHost.ts`。
-- **视野遮挡**：`blocks_vision` 网格已随 `WalkGrid` 一起产出（`isVisionBlockedCell`），
-  但渲染层还没用它做迷雾，目前只实现了"能走/不能走"。
-- **点击寻路绕行**：现在 `moveTo` 撞墙连续 3 tick 就放弃，没有 A\* 绕路。
+FOV 不靠"自己写的采样判据"验收 —— 那玩意儿有量化误差（`metersToCell` 的 floor 取格
+会把"光沿格角擦过"误记成穿墙，实测假阳性 ~0.8%）。做法是直接加载 Rotten-Soup 自带的
+`legacy/v2/assets/js/rot.js`（ROT v0.7~dev），用同一份 `vision` 位图跑官方实现，
+逐格比对：
+
+```
+=== 对拍 RecursiveShadowcasting ===
+  比对 30759 格：不一致 0 格（我们多标 0、ROT 多标 0）
+  ✅ 与 ROT 官方 RecursiveShadowcasting 完全一致
+```
+
+> **选 Recursive 而不是 Precise 的原因**：Rotten-Soup 两个都用了，但写的是**同一份**
+> `map.visible_tiles` —— `Game.js`（关卡加载）用 Precise，`Player.js`（**每回合**）用
+> Recursive。逐回合的玩家视野走的是 Recursive，所以对齐它。两者本身差 2.763%
+> （Precise 看得到更多），且我们对 Precise 同样是**只少不多**（`onlyOurs = 0`），
+> 即无论如何都不会让玩家透视墙壁。
+
+## 已补：敌人碰撞 / 战争迷雾 / 点击寻路 / 光标特效
+
+### 1. 敌人碰撞（宿主侧也拦墙）
+
+难点：**敌人位姿由宿主推进**（`entry.ts` 真实宿主 / `entry.js` JS 兜底 / `mockHost.ts` 独立模式），
+而 tileset 属性表与地图 JSON 只在 iframe 侧解析过。
+
+方案不是让宿主各写一份解析（三份代码、三处漂移），而是 **iframe 把走位网格压成位图随 tick 上报一次**：
+
+| | |
+|---|---|
+| 体积 | 60×40 图 = 2400 字节/层 → base64 后 1.9 KB（两层） |
+| 时机 | 建网格时按 `walkGridEpochSeq` 自增世代号，**每张图只发一次**，稳态零开销 |
+| 世代号 | 用自增序号而非关卡名 —— 否则 A→B→A 会被误判成"同世代"而漏发 |
+| 坏包 | `decodeWalkGridPacket` 对 `null` / 空对象 / 长度不符一律返回 `null`，宿主保留上一份网格 |
+
+宿主拿到网格后，敌人的每步位移走 `navStep`（= `collision.ts:stepWithAvoidance` 的内联镜像）：
+按"与期望方向点积"排序 8 个候选方向、过滤 `dot > -0.35`（不往回走）、
+逐个试到能站得下为止，全被挡则退化为**分轴滑行**贴墙蹭出去。
+**不给敌人上 A\*** —— 60 只怪每 tick 一次 A\* 的开销不可接受，而局部避障是恒定 O(8)。
+
+另加两道兜底：`snapEnemySpawn`（刷怪点压在墙上时环状 BFS 找最近可站格）与
+每 tick 一次的 `unstickEnemies`（被宿主强行摆进墙的怪拉回来）。
+
+> ⚠️ 宿主侧是 **inline 镜像**（`entry.ts` / `entry.js` 各一份，无 import）。
+> 宿主加载器**不保证支持 import**，一旦加了跨目录 import 会让整个插件加载失败，
+> 所以宁可承担三处同步的代价。改避障逻辑时**这三个文件要一起改**。
+
+### 2. 战争迷雾（`blocks_vision` FOV）
+
+| 项 | 做法 |
+|---|---|
+| 算法 | ROT `RecursiveShadowcasting`（理由见上），8 octant 递归投影 |
+| 阻塞源 | `g.vision` 位图 —— 与 Rotten-Soup 的 `Tile.visible()` 同源（tileset 的 `blocks_vision`） |
+| 半径 | 13 米（`FOV_RADIUS_M`；内部按 ROT 惯例 +1 传出） |
+| 三态 | 未探索（纯黑 α255）/ 已探索但当前不可见（半暗 α168）/ 可见（透明） |
+| 性能 | 只在**玩家跨格**时重算 FOV 并重绘 1px/格 的离屏 canvas；每帧只做一次 `drawImage` |
+| 实体裁剪 | 渲染层按 `isVisibleAt()` 过滤 —— 看不见的怪不画（含小地图圆点） |
+| 开关 | HUD 上的「迷雾」勾选框，状态存 `localStorage.fs_fog`，HUD 显示已探索百分比 |
+
+> ⚠️ 移植 ROT 时的两个坑（都会表现为**光贴着厚墙表面渗透进墙后空地**）：
+> ① 进入遮挡时**不能**改 `start`，只能记「最后遮挡斜率」，恢复通畅时才用它收紧；
+> ② 行末若仍处于遮挡，**必须 `break` 终止整个 octant**。
+> 现象：玩家 (16,14) 左侧一道 9 格厚墙，墙后的 (5,13)/(5,14) 被点亮。
+
+### 3. 点击寻路（A\* 绕墙）
+
+旧的 `moveTo` 是"朝目标直走、连续 3 tick 撞墙就放弃"。现在是：
+
+1. 点击 → `findPath` 在**站得下掩码**上跑 A\*（octile 启发 + 二叉堆 + `closed`/`gScore`/`cameFrom` 定型数组）；
+2. **禁止斜穿墙角**（两条正交边都可走才允许斜走）—— 玩家位移是分轴求解的，允许斜穿会给出走不出来的路径；
+3. `simplifyPath` 做视线拉直（string pulling）压掉冗余路点；
+4. 只对**离墙 0.4 米以上**的格做拉直，避免贴墙路径被"拉"进墙角；
+5. 目标格站不下（点到墙上）→自动换成主连通域内最近的可站格；
+6. 路径确实无解时才回退到直线直走，并沿用 `moveToUnreachable` 标记，3-tick 放弃逻辑只在这条路上生效。
+
+实测 D 项：抽样 276 次，有解 269 次、**"直线被墙挡但 A\* 仍走到了" 204 次** ——
+这 204 次正是旧实现会直接放弃的场景。
+
+### 4. 光标与点击特效
+
+- 舞台光标改为**手指**（`.stage` / `.stage-rotate` 的 `cursor: pointer`，`touch-action: manipulation`）。
+- 点击地面立即反馈 `ClickFx`（36 帧）：
+  - 落点扩散涟漪 —— **可达=绿**、**不可达=红 + 叉**；
+  - 目标处脉冲标记；
+  - 可达时叠加一条 A\* 虚线路径预览。
+
