@@ -125,7 +125,7 @@ buff_type:Defense/Attack/Sustained_Damage/Stunning/Invincible/Accelerate
 点击查看地图。
 默认显示 用户当前所在的地图。
 点击缩小后按入口把各个地图连成大地图。
-可以传说到各个地图
+可以传送到各个地图
 
 ## 角色卡
 无论有没有在开始游戏选择角色都要全部在这个面板显示。

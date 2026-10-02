@@ -988,6 +988,27 @@ function install(): void {
         push();
         return;
       }
+      if (action === "sys") {
+        // ★ 对齐 entry.js case "sys"：记录关卡列表 → 大地图节点（地图面板缩小视图）
+        const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
+        if (levels.length) {
+          state.mapNodes = levels.map((n: string, i: number) => ({ name: n, x: 160 + (i % 4) * 260, y: 140 + Math.floor(i / 4) * 200 }));
+        }
+        if (params?.levelName) state.levelName = String(params.levelName);
+        push();
+        return;
+      }
+      if (action === "sys_travel") {
+        // ★ 对齐 entry.js case "sys_travel"：走 teleportTarget 一次性通道（前端 watch 消费）
+        const target = String(params?.mapName || "");
+        if (!target) return;
+        state.levelName = target;
+        state.sysRevision = Math.round(Number(state.sysRevision) || 0) + 1;
+        (state as any).teleportTarget = { mapName: target, x: 0, y: 0, name: target, rev: state.sysRevision };
+        state.events.push(`[mock] 传送至「${target}」`);
+        push();
+        return;
+      }
       if (action === "exit") {
         state.phase = "over";
         state.result = { reason: "exit", exp: state.exp, money: state.money, drops: state.drops, kills: state.kills, survivedTicks: state.tick };

@@ -1934,7 +1934,8 @@ async function handle_action(action, params, state, context) {
       s._levelAt = s.levelName;
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-      s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      // ★ 大地图传送统一走 teleportTarget 通道（前端只 watch 它；travelTarget 从无人消费，是死代码）
+      s.teleportTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
       pushEvent(s, `\u4F20\u9001\u81F3\u300C${target}\u300D`);
       await persistSys(context, s);
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);

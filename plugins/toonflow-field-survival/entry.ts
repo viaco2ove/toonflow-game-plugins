@@ -2326,7 +2326,8 @@ export async function handle_action(
       (s as any)._levelAt = s.levelName;
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-      s.travelTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      // ★ 大地图传送统一走 teleportTarget 通道（前端只 watch 它；travelTarget 从无人消费，是死代码）
+      (s as any).teleportTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
       pushEvent(s, `传送至「${target}」`);
       await persistSys(context, s);
       return okResp(`已传送至「${target}」`);
