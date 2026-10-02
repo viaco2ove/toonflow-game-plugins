@@ -211,6 +211,9 @@ interface Entity {
   facing: number;
   cooldown: number;
   alive: boolean;
+  /** 巢点/生成点（野怪 AI 归位用），宿主实体统一挂在字段上 */
+  homeX?: number;
+  homeY?: number;
 }
 
 interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
@@ -1378,6 +1381,8 @@ export interface NpcCard {
   id: string; name: string; side: string; enemy: boolean;
   level: number; hp: number; maxHp: number; exp: number; alive: boolean;
   mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string;
+  /** ★ game.md 角色卡：动态参数卡（结构化字段由前端展开渲染，实时值已由宿主覆盖） */
+  parameterCardJson?: Record<string, any> | null;
 }
 export interface RingStore { items: BagItem[]; skills: string[]; }
 export interface MapNode { name: string; x: number; y: number; }
@@ -1529,32 +1534,112 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
   s.skills = buildSkills(card, 8);
 }
 
-/** 角色卡：从场上实体刷新（地图名 / 坐标 / 队伍标记），保留不在场的旧卡 */
+/** 角色卡：主体 = 当前 AI 故事对话的动态角色卡（s.roles，与 web 端 play-role-strip 同源），
+ *  无论有没有被选择上场全部显示；地图实体只合并运行时信息（位置/血量/经验/组队） */
 function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
-  const prev = new Map<string, NpcCard>((s.npcCards || []).map((c) => [c.id, c]));
+  const prev = new Map<string, NpcCard>((s.npcCards || []).map((c) => [String(c.id), c]));
   const party = s.partyIds || [];
-  const cards: NpcCard[] = s.entities.map((e) => {
-    const old = prev.get(e.id);
-    const onStage = e.side !== "enemy" || e.alive;
-    return {
-      id: e.id,
-      name: e.name,
-      side: e.side,
-      enemy: e.side === "enemy",
-      level: Math.max(1, Math.round(num(e.level, 1))),
-      hp: Math.round(e.hp),
-      maxHp: Math.round(e.maxHp),
-      exp: Math.round(num(old?.exp, 0)),
-      alive: !!e.alive,
-      mapName: onStage ? (levelName || old?.mapName || "") : (old?.mapName || levelName || ""),
-      x: Math.round(e.x),
-      y: Math.round(e.y),
-      inParty: party.indexOf(e.id) >= 0,
-      avatarPath: e.avatarPath,
-    };
+  const roles = Array.isArray(s.roles) ? (s.roles as any[]) : [];
+  const entByKey = new Map<string, any>();
+  (s.entities || []).forEach((e) => {
+    entByKey.set(String(e.id), e);
+    if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
   });
-  (s.npcCards || []).forEach((c) => { if (!cards.some((x) => x.id === c.id)) cards.push(c); });
+  const sel: any = (s as any).selections || {};
+  const inSel = (arr: any, r: any): boolean =>
+    Array.isArray(arr) && arr.some((x) => String(x) === String(r.id) || String(x) === String(r.name));
+  const sideOfRole = (r: any): string => {
+    const e = entByKey.get(String(r.id)) || entByKey.get(String(r.name));
+    if (e) return e.side;
+    if (String(r.roleType) === "player") return "player";
+    if (inSel(sel.participants, r)) return "ally";
+    if (inSel(sel.enemies, r)) return "enemy";
+    if (inSel(sel.spectators, r)) return "spectator";
+    return "neutral";
+  };
+  const buildCard = (role: any, forcedSide?: string): NpcCard => {
+    const e = entByKey.get(String(role.id)) || entByKey.get(String(role.name)) || null;
+    const old = prev.get(String(role.id));
+    const side = forcedSide || sideOfRole(role);
+    const onMap = !!e;
+    const onStage = onMap && (side !== "enemy" || (e as any).alive);
+    const pcRaw = side === "player" && s.playerCard && Object.keys(s.playerCard || {}).length
+      ? (s.playerCard as Record<string, any>)
+      : (role.parameterCardJson || role.parameter_card_json) || (old && (old as any).parameterCardJson) || null;
+    let pc: Record<string, any> | null = null;
+    if (pcRaw && typeof pcRaw === "object") {
+      pc = { ...pcRaw };
+      pc.level = Math.max(1, Math.round(num(e ? (e as any).level : num(role.initial_level, num(pc.level, 1)), 1)));
+      if (e) {
+        pc.hp = Math.round(num((e as any).hp, num(pc.hp, 0)));
+        pc.maxHp = Math.round(num((e as any).maxHp, num(pc.maxHp, pc.hp)));
+      }
+      if (side === "player") {
+        if (num((s.playerCard as any)?.mp, -1) >= 0) pc.mp = (s.playerCard as any).mp;
+        if (num((s.playerCard as any)?.money, -1) >= 0) pc.money = (s.playerCard as any).money;
+        pc.exp = Math.round(num((s.playerCard as any)?.exp, num(s.exp, 0)));
+      } else if (e) {
+        pc.exp = Math.round(num(old?.exp, num(pc.exp, 0)));
+      }
+      pc.next_level_exp = pc.level * 100;
+    }
+    return {
+      id: String(role.id),
+      name: role.name,
+      side,
+      enemy: side === "enemy",
+      level: Math.max(1, Math.round(num(e ? (e as any).level : num(role.initial_level, num(old?.level, 1)), 1))),
+      hp: Math.round(e ? (e as any).hp : num(old?.hp, num(pc?.hp, 0))),
+      maxHp: Math.round(e ? (e as any).maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
+      exp: Math.round(num(old?.exp, 0)),
+      alive: e ? !!(e as any).alive : (old ? old.alive !== false : true),
+      mapName: onMap ? (onStage ? (levelName || old?.mapName || "") : (old?.mapName || levelName || "")) : (old?.mapName || ""),
+      x: Math.round(e ? (e as any).x : num(old?.x, 0)),
+      y: Math.round(e ? (e as any).y : num(old?.y, 0)),
+      inParty: party.indexOf(String(role.id)) >= 0,
+      avatarPath: (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined,
+      parameterCardJson: pc,
+    } as NpcCard;
+  };
+  const cards: NpcCard[] = [];
+  const seen = new Set<string>();
+  const pushCard = (role: any, forcedSide?: string): void => {
+    if (!role || seen.has(String(role.id))) return;
+    seen.add(String(role.id));
+    seen.add(String(role.name));
+    cards.push(buildCard(role, forcedSide));
+  };
+  if (roles.length) {
+    const playerRole = roles.find((r) => String(r?.roleType) === "player") || null;
+    if (playerRole) pushCard(playerRole, "player");
+    roles.forEach((r) => pushCard(r));
+  } else {
+    // 兜底：故事角色列表缺失时退回地图实体（避免空面板）
+    (s.entities || []).forEach((e) => pushCard({ id: e.id, name: e.name, avatarPath: e.avatarPath }, e.side));
+  }
   s.npcCards = cards;
+}
+
+/** ★ game.md 角色位置问题：没有位置信息的角色，默认生成到可活动区域（玩家出生点附近的已知可站立区，不落障碍） */
+function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
+  if (!role) return null;
+  const exist = s.entities.find((x) => x.id === String(role.id) || x.name === String(role.name));
+  if (exist) return exist;
+  const sel: any = (s as any).selections || {};
+  const inSel = (arr: any): boolean =>
+    Array.isArray(arr) && arr.some((x) => String(x) === String(role.id) || String(x) === String(role.name));
+  const side = inSel(sel.enemies) ? "enemy" : inSel(sel.participants) ? "ally" : "spectator";
+  const ang = rnd(0, Math.PI * 2);
+  const cb = clampToBound(s, PLAYER_SPAWN.x + Math.cos(ang) * 2.5, PLAYER_SPAWN.y + Math.sin(ang) * 2.5);
+  const e = makeEntity(role, side as any, cb.x, cb.y, s.entities.length);
+  e.homeX = e.x;
+  e.homeY = e.y;
+  if (side === "enemy") {
+    (e as any).aiState = "idle";
+    (e as any).regionId = (nearestWildRegion(e.x, e.y) || {} as any).id;
+  }
+  s.entities.push(e);
+  return e;
 }
 
 /** 组队角色随击杀获得经验并升级 */
@@ -2105,8 +2190,13 @@ export async function handle_action(
       if (!rid) return okResp("缺少角色");
       const flag = params?.follow;
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
-      const e = s.entities.find((x) => x.id === rid || x.name === rid);
+      let e = s.entities.find((x) => x.id === rid || x.name === rid);
       if (e && e.side === "enemy") return okResp("敌对角色无法组队");
+      // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
+      if (!e && follow) {
+        const role = (s.roles as any[] || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
+        e = spawnRoleEntity(s, role) || undefined as any;
+      }
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid); else set.delete(rid);
       s.partyIds = Array.from(set);
@@ -2130,8 +2220,18 @@ export async function handle_action(
       // 传送到角色身边：把目标地图/坐标交给前端（前端负责切图与落点）
       const rid = str(params?.roleId);
       ensureNpcCards(s, s.levelName || "");
-      const c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
+      let c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
       if (!c) return okResp("角色不存在");
+      // ★ game.md 角色位置问题：没有位置信息的角色，默认生成到可活动区域再传送
+      if (!(c as any).onMap) {
+        const role = ((s.roles as any[]) || []).find((r) => String(r?.id) === String(c!.id) || String(r?.name) === String(c!.name));
+        const e = spawnRoleEntity(s, role);
+        if (e) {
+          ensureNpcCards(s, s.levelName || "");
+          c = (s.npcCards || []).find((x) => x.id === String(c!.id)) || c;
+          pushEvent(s, `${c!.name} 已生成到可活动区域`);
+        }
+      }
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
       s.teleportTarget = {
         mapName: c.mapName || s.levelName || "",

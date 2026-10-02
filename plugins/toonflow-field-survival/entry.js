@@ -1204,32 +1204,113 @@ function syncCardFromContext(s, ctx) {
   s.skills = buildSkills(card, 8);
 }
 function ensureNpcCards(s, levelName) {
-  const prev = new Map((s.npcCards || []).map((c) => [c.id, c]));
+  const prev = new Map((s.npcCards || []).map((c) => [String(c.id), c]));
   const party = s.partyIds || [];
-  const cards = s.entities.map((e) => {
-    const old = prev.get(e.id);
-    const onStage = e.side !== "enemy" || e.alive;
+  // ★ game.md 角色卡面板：主体 = 当前 AI 故事对话的动态角色卡（s.roles，
+  //   与 Toonflow-game-web play-role-strip / play-inline-card 同一数据源），
+  //   无论有没有在开始游戏被选择上场，全部显示（友方/中立/敌对）。
+  //   地图实体只用于合并运行时信息（位置/血量/经验/组队），不再是卡片来源。
+  const roles = Array.isArray(s.roles) ? s.roles : [];
+  const entByKey = /* @__PURE__ */ new Map();
+  (s.entities || []).forEach((e) => {
+    entByKey.set(String(e.id), e);
+    if (!entByKey.has(String(e.name))) entByKey.set(String(e.name), e);
+  });
+  const sel = s.selections || {};
+  const inSel = (arr, r) => Array.isArray(arr) && arr.some((x) => String(x) === String(r.id) || String(x) === String(r.name));
+  const sideOfRole = (r) => {
+    const e = entByKey.get(String(r.id)) || entByKey.get(String(r.name));
+    if (e) return e.side;
+    if (String(r.roleType) === "player") return "player";
+    if (inSel(sel.participants, r)) return "ally";
+    if (inSel(sel.enemies, r)) return "enemy";
+    if (inSel(sel.spectators, r)) return "spectator";
+    return "neutral";
+  };
+  const buildCard = (role, forcedSide) => {
+    const e = entByKey.get(String(role.id)) || entByKey.get(String(role.name)) || null;
+    const old = prev.get(String(role.id));
+    const side = forcedSide || sideOfRole(role);
+    const onMap = !!e;
+    const onStage = onMap && (side !== "enemy" || e.alive);
+    const pcRaw = side === "player" && s.playerCard && Object.keys(s.playerCard).length
+      ? s.playerCard
+      : role.parameterCardJson || role.parameter_card_json || (old && old.parameterCardJson) || null;
+    let pc = null;
+    if (pcRaw && typeof pcRaw === "object") {
+      pc = { ...pcRaw };
+      pc.level = Math.max(1, Math.round(num(e ? e.level : num(role.initial_level, num(pc.level, 1)), 1)));
+      if (e) {
+        pc.hp = Math.round(num(e.hp, num(pc.hp, 0)));
+        pc.maxHp = Math.round(num(e.maxHp, num(pc.maxHp, pc.hp)));
+      }
+      if (side === "player") {
+        if (num(s.playerCard?.mp, -1) >= 0) pc.mp = s.playerCard.mp;
+        if (num(s.playerCard?.money, -1) >= 0) pc.money = s.playerCard.money;
+        pc.exp = Math.round(num(s.playerCard?.exp, num(s.exp, 0)));
+      } else if (e) {
+        pc.exp = Math.round(num(old?.exp, num(pc.exp, 0)));
+      }
+      pc.next_level_exp = pc.level * 100;
+    }
     return {
-      id: e.id,
-      name: e.name,
-      side: e.side,
-      enemy: e.side === "enemy",
-      level: Math.max(1, Math.round(num(e.level, 1))),
-      hp: Math.round(e.hp),
-      maxHp: Math.round(e.maxHp),
+      id: String(role.id),
+      name: role.name,
+      side,
+      enemy: side === "enemy",
+      roleType: String(role.roleType || ""),
+      onMap,
+      level: Math.max(1, Math.round(num(e ? e.level : num(role.initial_level, num(old?.level, 1)), 1))),
+      hp: Math.round(e ? e.hp : num(old?.hp, num(pc?.hp, 0))),
+      maxHp: Math.round(e ? e.maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
       exp: Math.round(num(old?.exp, 0)),
-      alive: !!e.alive,
-      mapName: onStage ? levelName || old?.mapName || "" : old?.mapName || levelName || "",
-      x: Math.round(e.x),
-      y: Math.round(e.y),
-      inParty: party.indexOf(e.id) >= 0,
-      avatarPath: e.avatarPath
+      alive: e ? !!e.alive : (old ? old.alive !== false : true),
+      mapName: onMap ? (onStage ? levelName || old?.mapName || "" : old?.mapName || levelName || "") : (old?.mapName || ""),
+      x: Math.round(e ? e.x : num(old?.x, 0)),
+      y: Math.round(e ? e.y : num(old?.y, 0)),
+      inParty: party.indexOf(String(role.id)) >= 0,
+      avatarPath: (e && e.avatarPath) || role.avatarPath || (old && old.avatarPath) || void 0,
+      parameterCardJson: pc
     };
-  });
-  (s.npcCards || []).forEach((c) => {
-    if (!cards.some((x) => x.id === c.id)) cards.push(c);
-  });
+  };
+  const cards = [];
+  const seen = /* @__PURE__ */ new Set();
+  const pushCard = (role, forcedSide) => {
+    if (!role || seen.has(String(role.id))) return;
+    seen.add(String(role.id));
+    seen.add(String(role.name));
+    cards.push(buildCard(role, forcedSide));
+  };
+  if (roles.length) {
+    const playerRole = roles.find((r) => String(r?.roleType) === "player") || null;
+    if (playerRole) pushCard(playerRole, "player");
+    roles.forEach((r) => pushCard(r));
+  } else {
+    // 兜底：故事角色列表缺失时退回地图实体（避免空面板）
+    (s.entities || []).forEach((e) => pushCard({ id: e.id, name: e.name, avatarPath: e.avatarPath }, e.side));
+  }
   s.npcCards = cards;
+}
+// ★ game.md 角色位置问题：没有位置信息的角色，默认生成到可活动区域（不能在墙里/障碍物里）。
+//   用玩家出生点附近半径 2.5m 的已知可站立区域，clamp 后落点，绝不落进障碍。
+function spawnRoleEntity(s, role) {
+  if (!role) return null;
+  const exist = s.entities.find((x) => x.id === String(role.id) || x.name === String(role.name));
+  if (exist) return exist;
+  const sel = s.selections || {};
+  const inSel = (arr) => Array.isArray(arr) && arr.some((x) => String(x) === String(role.id) || String(x) === String(role.name));
+  const side = inSel(sel.enemies) ? "enemy" : inSel(sel.participants) ? "ally" : "spectator";
+  const ang = rnd(0, Math.PI * 2);
+  const cb = clampToBound(s, PLAYER_SPAWN.x + Math.cos(ang) * 2.5, PLAYER_SPAWN.y + Math.sin(ang) * 2.5);
+  const e = makeEntity(role, side, cb.x, cb.y, s.entities.length);
+  e.homeX = e.x;
+  e.homeY = e.y;
+  if (side === "enemy") {
+    e.aiState = "idle";
+    e.regionId = (nearestWildRegion(e.x, e.y) || {}).id;
+  }
+  s.entities.push(e);
+  return e;
 }
 function grantPartyExp(s, expGain) {
   const party = s.partyIds || [];
@@ -1717,8 +1798,14 @@ async function handle_action(action, params, state, context) {
       if (!rid) return okResp("\u7F3A\u5C11\u89D2\u8272");
       const flag = params?.follow;
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
-      const e = s.entities.find((x) => x.id === rid || x.name === rid);
-      if (e && e.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
+      const e0 = s.entities.find((x) => x.id === rid || x.name === rid);
+      if (e0 && e0.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
+      // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
+      let e = e0;
+      if (!e && follow) {
+        const role = (s.roles || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
+        e = spawnRoleEntity(s, role);
+      }
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid);
       else set.delete(rid);
@@ -1744,8 +1831,18 @@ async function handle_action(action, params, state, context) {
     case "sys_teleport": {
       const rid = str(params?.roleId);
       ensureNpcCards(s, s.levelName || "");
-      const c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
+      let c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
       if (!c) return okResp("\u89D2\u8272\u4E0D\u5B58\u5728");
+      // ★ game.md 角色位置问题：没有位置信息的角色，默认生成到可活动区域再传送
+      if (!c.onMap) {
+        const role = (s.roles || []).find((r) => String(r?.id) === String(c.id) || String(r?.name) === String(c.name));
+        const e = spawnRoleEntity(s, role);
+        if (e) {
+          ensureNpcCards(s, s.levelName || "");
+          c = (s.npcCards || []).find((x) => x.id === String(c.id)) || c;
+          pushEvent(s, `${c.name} \u5DF2\u751F\u6210\u5230\u53EF\u6D3B\u52A8\u533A\u57DF`);
+        }
+      }
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
       s.teleportTarget = {
         mapName: c.mapName || s.levelName || "",

@@ -145,7 +145,7 @@ function onSysBtnClick(e: MouseEvent) {
 /* ----------------- 系统面板数据（v6：全部来自插件 state / 参数卡） ----------------- */
 interface SysItem { id?: string; name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string; }
 interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; }
-interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; }
+interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
 interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
 
 const RARITY_DEFAULT_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
@@ -292,6 +292,9 @@ function cardToRole(c: any, i: number): SysRole {
     y: Number(c?.y || 0),
     inParty: !!c?.inParty,
     avatarPath: c?.avatarPath,
+    parameterCardJson: c?.parameterCardJson || null,
+    onMap: c?.onMap !== false,
+    roleType: String(c?.roleType || ""),
   };
 }
 
@@ -316,6 +319,9 @@ const sysPlayerRole = computed<SysRole | null>(() => {
     y: Number(me.y || 0),
     inParty: false,
     avatarPath: (me as any).avatarPath,
+    parameterCardJson: (sysCard.value && Object.keys(sysCard.value).length)
+      ? sysCard.value
+      : ((state.value as any)?.roles || []).find((r: any) => String(r?.roleType) === "player")?.parameterCardJson || null,
   };
 });
 
@@ -447,8 +453,9 @@ function onSysUseSkill(skill: SysSkill) {
 }
 
 function onSysTeleport(card: SysRole) {
-  if (!card || card.enemy) return;
-  sysNotice.value = `传送到 ${card.name} 身边`;
+  // game.md 传送到角色身边：仅排除用户自己，敌对角色也允许传送
+  if (!card || card.side === "player") return;
+  sysNotice.value = card.onMap === false ? `${card.name} 未上场，将生成到可活动区域后传送` : `传送到 ${card.name} 身边`;
   runSysCmd("sys_teleport", { roleId: card.id });
 }
 

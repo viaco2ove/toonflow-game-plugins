@@ -91,11 +91,13 @@ cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文�
 每个技能都可以在旁边修改特效，类型[atk, heal, buff],修改按钮【修改】，【使用】
 点击后可以修改技能参数
 例如：
- { name: "冲斩", power: 20, cost: 0, cd: 24, cdLeft: 0, type: "atk", range: "melee"，lv:1}
+ { name: "冲斩", power: 20, cost: 0, cd: 24, cdLeft: 0, type: "atk", range: "melee"，lv:1,buff_type:""}
 技能修改后，技能参数会保存到"t_plugin_session_data"
 用户动态参数卡中的“技能” 只保存技能名称列表：如“源之力（lv1，失控）（lv1）、暗核共鸣（lv1）、夜采直觉、暗核共鸣（lv2，共鸣通道拓宽但仍窄）、暗核共鸣（lv2）、源之力（lv1，失控）、基础功法（lv2）、源之力（lv1，失控）、暗核共鸣（lv2）、夜采直觉”
 
-
+buff 类型：
+防御/攻击/持续伤害/晕眩/无敌/加速
+buff_type:Defense/Attack/Sustained_Damage/Stunning/Invincible/Accelerate
 
 ## 地图功能
 点击查看地图。
@@ -136,6 +138,9 @@ play-role-strip 和 play-inline-card
 ## 中立npc
 如果有通用角色用通用角色扮演这个中立npc 进行发言。
 如果没有用旁白扮演这个中立npc 进行发言。
+
+## 野怪
+野怪碰撞是进行战斗而不是对话
 
 ## 判断是否为角色列表里的角色
 如果是角色列表里的角色，使用该角色进行发言
