@@ -131,19 +131,24 @@ const rndY = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
 const MOVE_SPEED_M = 3;
 const TICK_DT_S = 0.1;
 const MOB_VIEW_M = 80;
-const MOB_ATK_M = 2;
-const ALLY_ATK_M = 2;
-const ALLY_FOLLOW_GAP_M = 12;
+const MOB_ATK_M = 0.5;
+const ALLY_ATK_M = 0.5;
+/** ★ game.md：野怪发起攻击的距离 = 4 米 —— 怪不打进玩家身边 4m 内友军不动手；
+ *  友军索敌锚点是「玩家」而非友军自身（此前锚在友军身上 → 打远的）。 */
+const ALLY_ENGAGE_M = 4;
+/** 友军跟随阵位半径 2.5m（此前 12m，站位散开是「打远的」帮凶） */
+const ALLY_FOLLOW_GAP_M = 2.5;
 const CHEST_PICKUP_M = 2;
 const POTION_PICKUP_M = 2;
-const SKILL_RANGE_M = 30;
+/** ★ game.md：远程野怪/远程武器/远程技能 距离 4 米（此前 30 米） */
+const SKILL_RANGE_M = 4;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const REGION_RESPAWN_SEC = 45;
 const REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;
-const MOB_DETECT_M = 10;
-const MOB_DISENGAGE_M = 12;
-const MOB_LEASH_R_M = 8;
-const MOB_WANDER_R_M = 8;
+const MOB_DETECT_M = 4;
+const MOB_DISENGAGE_M = 4;
+const MOB_LEASH_R_M = 4;
+const MOB_WANDER_R_M = 3;
 const TOWN_SPAWN_BUFFER_M = 20;
 const WORLD_REGIONS = [
   { id: "town", name: "\u6668\u66E6\u9547", short: "\u6668\u66E6", kind: "safe", x: 0, y: 0, r: 160, safe: true, lv: 0, mobs: 0, desc: "\u73A9\u5BB6\u51FA\u751F\u7684\u57CE\u9547\uFF08\u5B89\u5168\u533A\uFF09\uFF1A\u5546\u94FA\u3001\u6C11\u5C45\u3001\u6C34\u4E95\u4E0E\u4E2D\u7ACB\u5C45\u6C11\uFF0C\u4E0D\u5237\u65B0\u91CE\u602A" },
@@ -272,6 +277,7 @@ function emptyState(ctx) {
     chests: [],
     potions: [],
     floaters: [],
+    vfx: [],   // ★ game.md 打击特效：宿主侧生成的战斗粒子（spark/explosion/slash_arc/fireball/heal_ring/buff_ring）
     skills: buildSkills(card),
     items: buildItems(card),
     skillPage: 0,
@@ -367,9 +373,34 @@ function floater(s, text, x, y) {
   s.floaters.push({ id: `f_${s.tick}_${Math.random().toString(36).slice(2, 6)}`, text, x, y, life: 24 });
   if (s.floaters.length > 30) s.floaters = s.floaters.slice(-30);
 }
-function damage(s, target, amount) {
+/** ★ game.md 打击特效：宿主侧推送 VFX 粒子（kind 与前端 drawVfxLayer 对齐） */
+function pushVfx(s, p) {
+  if (!Array.isArray(s.vfx)) s.vfx = [];
+  s.vfx.push({ id: `vfx_${s.tick}_${Math.random().toString(36).slice(2, 6)}`, ...p });
+  if (s.vfx.length > 60) s.vfx = s.vfx.slice(-60);
+}
+/**
+ * ★ game.md「默认 4 个技能特效沿用」：按技能名归类特效
+ *   远程类 → 火球(atk/ranged)  治疗类 → 治疗(heal)
+ *   加强类 → 护盾(buff)        其余 → 冲斩(atk/melee)
+ */
+function skillFxKind(skill) {
+  const n = String(skill?.name || "");
+  if (/治|疗|愈|回复|恢复|回春|奶|复苏/.test(n)) return "heal";
+  if (/盾|护|祝福|增益|强化|加攻|加防|buff/i.test(n)) return "buff";
+  if (/球|箭|弹|术|咒|射|火|冰|雷|电|风|毒|远程/.test(n)) return "ranged";
+  return "melee";
+}
+function damage(s, target, amount, attacker) {
   target.hp = clamp(target.hp - amount, 0, target.maxHp);
-  floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+  // ★ game.md 普攻特效：被击者白闪 + 命中火花/爆炸；攻击者小跳（amount=0 的「未命中」占位不触发）
+  if (amount > 0) {
+    target.hitFlashMs = 250;
+    pushVfx(s, { kind: "spark", entityId: target.id, x: target.x, y: target.y, life: 8, total: 8, color: "#ff5a5a" });
+    pushVfx(s, { kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
+    if (attacker) attacker.actionBobMs = 300;
+    floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+  }
   if (target.hp <= 0 && target.alive) {
     target.alive = false;
     if (target.side === "enemy") {
@@ -874,15 +905,18 @@ function step(s, input, poseHint) {
   const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
   const allies = s.entities.filter((e) => e.side === "ally" && e.alive && partyIds.indexOf(e.id) >= 0);
   allies.forEach((a, i) => {
-    const target = enemies.reduce((best, e) => !best || dist(a, e) < dist(a, best) ? e : best, null);
+    // ★ game.md：只有已威胁玩家（进入玩家身边 4m）的敌人才出手；目标选择锚点=玩家
+    const target = enemies
+      .filter((e) => dist(player, e) < ALLY_ENGAGE_M)
+      .reduce((best, e) => (!best || dist(player, e) < dist(player, best) ? e : best), null);
     const anchor = {
       x: player.x + Math.cos(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
       y: player.y + Math.sin(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M
     };
-    if (target && dist(a, target) < MOB_VIEW_M) moveTowards(a, target.x, target.y, speed * 0.92);
+    if (target) moveTowards(a, target.x, target.y, speed * 0.92);
     else moveTowards(a, anchor.x, anchor.y, speed * 0.8);
     if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
-      damage(s, target, a.atk);
+      damage(s, target, a.atk, a);
       a.cooldown = 30;
     }
   });
@@ -906,7 +940,7 @@ function step(s, input, poseHint) {
       e.vx = 0;
       e.vy = 0;
       if (e.cooldown <= 0) {
-        damage(s, prey, e.atk);
+        damage(s, prey, e.atk, e);
         e.cooldown = 45;
       }
       return;
@@ -921,7 +955,7 @@ function step(s, input, poseHint) {
       e.vx = 0;
       e.vy = 0;
       if (e.cooldown <= 0) {
-        damage(s, prey, e.atk);
+        damage(s, prey, e.atk, e);
         e.cooldown = 45;
       }
       return;
@@ -955,6 +989,9 @@ function step(s, input, poseHint) {
   unstickEnemies(s);
   s.entities.forEach((e) => {
     if (e.cooldown > 0) e.cooldown -= 1;
+    // ★ 打击特效衰减：hitFlashMs / actionBobMs 每 tick -100ms（与 dev-host 同步）
+    if (e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
+    if (e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
     if (e.side === "enemy" && e.isLocal) {
@@ -973,6 +1010,8 @@ function step(s, input, poseHint) {
     if (k.cdLeft > 0) k.cdLeft -= 1;
   });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
+  // ★ 打击特效衰减：vfx life 每 tick -1
+  if (Array.isArray(s.vfx) && s.vfx.length) s.vfx = s.vfx.filter((v) => { v.life -= 1; return v.life > 0; });
   s.chests.forEach((c) => {
     if (c.opened) return;
     if (dist(player, c) < CHEST_PICKUP_M) {
@@ -1244,7 +1283,9 @@ async function restoreSys(context, s) {
         skills: Array.isArray(d.ring.skills) ? d.ring.skills.map(String) : []
       };
     }
-    if (Array.isArray(d.party)) s.partyIds = d.party.map(String);
+    // ★ game.md 组队跟随：队伍只在本次会话内由角色卡面板勾选决定，
+    //   不再恢复旧存档（旧版本曾把全部友方角色自动编入队伍，恢复会继承错误的自动跟随）
+    if (Array.isArray(d.party)) s.partyIds = [];
     if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
     if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
@@ -1410,9 +1451,9 @@ async function handle_action(action, params, state, context) {
       await restoreSys(context, s);
       if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       if (!s.levelName) s.levelName = str(s.map?.theme, "");
-      if (!Array.isArray(s.partyIds) || s.partyIds.length === 0) {
-        s.partyIds = s.entities.filter((e) => e.side === "ally").map((e) => e.id);
-      }
+      // ★ game.md 组队跟随：开局默认【不】组队——只有角色卡面板勾选「组队跟随」的角色
+      //   才会跟随用户帮打怪（未组队角色原地待命，绝不自动跟随）
+      if (!Array.isArray(s.partyIds)) s.partyIds = [];
       ensureNpcCards(s, s.levelName || "");
       s.writeback = null;
       s.phase = "playing";
@@ -1454,6 +1495,22 @@ async function handle_action(action, params, state, context) {
       skill.cdLeft = skill.cd;
       player.actionBobMs = 300;
       floater(s, skill.name, player.x, player.y - 34);
+      // ★ game.md 技能特效：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
+      const fx = skillFxKind(skill);
+      if (fx === "heal") {
+        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+      } else if (fx === "buff") {
+        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+      } else if (fx === "ranged") {
+        const t0 = targets[0];
+        pushVfx(s, {
+          kind: "fireball", entityId: player.id, targetEntityId: t0?.id,
+          x: player.x, y: player.y, targetX: t0?.x ?? player.x, targetY: t0?.y ?? player.y,
+          facing: player.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0,
+        });
+      } else {
+        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+      }
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
       pushEvent(s, `\u65BD\u653E ${skill.name}\uFF0C\u547D\u4E2D ${Math.min(3, targets.length)} \u4E2A\u76EE\u6807`);
       return okResp(`${skill.name}`);
@@ -1602,6 +1659,22 @@ async function handle_action(action, params, state, context) {
       meSk.actionBobMs = 300;
       floater(s, sk.name, meSk.x, meSk.y - 34);
       const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(meSk, e) < SKILL_RANGE_M);
+      // ★ game.md 技能特效（与「skill」共用一套归类）：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
+      const _fx = skillFxKind(sk);
+      if (_fx === "heal") {
+        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+      } else if (_fx === "buff") {
+        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+      } else if (_fx === "ranged") {
+        const _t0 = skTargets[0];
+        pushVfx(s, {
+          kind: "fireball", entityId: meSk.id, targetEntityId: _t0?.id,
+          x: meSk.x, y: meSk.y, targetX: _t0?.x ?? meSk.x, targetY: _t0?.y ?? meSk.y,
+          facing: meSk.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0,
+        });
+      } else {
+        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+      }
       if (!skTargets.length) {
         pushEvent(s, `\u65BD\u653E ${sk.name}\uFF0C\u672A\u547D\u4E2D\u76EE\u6807`);
         return okResp(`${sk.name} \u672A\u547D\u4E2D`);
@@ -1651,10 +1724,16 @@ async function handle_action(action, params, state, context) {
       else set.delete(rid);
       s.partyIds = Array.from(set);
       if (e) {
-        e.side = follow ? "ally" : "spectator";
-        if (follow && !e.alive) {
-          e.alive = true;
-          e.hp = e.maxHp;
+        if (follow) {
+          // 记住入队前的阵营（ally/neutral/spectator），退队时还原——中立 NPC 退队不能变成敌人样
+          if (!e._baseSide) e._baseSide = e.side;
+          e.side = "ally";
+          if (!e.alive) {
+            e.alive = true;
+            e.hp = e.maxHp;
+          }
+        } else {
+          e.side = e._baseSide || "spectator";
         }
       }
       ensureNpcCards(s, s.levelName || "");

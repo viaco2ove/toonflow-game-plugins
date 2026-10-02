@@ -1108,7 +1108,7 @@ export default defineConfig(({ mode }) => {
     base: "./",
     build: {
       outDir: "../ui",
-      emptyOutDir: true,
+      emptyOutDir: false,
       assetsInlineLimit: 100 * 1024 * 1024,
       target: "es2020",
     },

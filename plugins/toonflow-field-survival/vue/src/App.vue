@@ -1096,13 +1096,19 @@ function onCanvasClick(e: MouseEvent) {
   const px = cssX * ratioX;
   const py = cssY * ratioY;
 
-  // ★ v3：用相机反推 canvas 像素 → 世界米（playerPos + zoom 决定）
+  // ★ v6：与 render() 的相机数学严格互逆（此前用 Math.min 导致非正方形画布下
+  //   反投影比例偏小 ~W/H 倍，落点整体向外漂移——"点 A 特效落在 B、人物走到 B"）。
+  //   render(): W = c.width/k, sx = round(max(W/vw, H/(vh*DEPTH)))，
+  //   wx2px = (mx-pp.x)*sx + W/2 → 这里逐步求逆。
   const ts = terrainScale.value;
   const [vw, vh] = ts.viewSizeMeters(zoom.value);
-  // canvas 内部坐标系里，px,py 转世界米
-  const ppm = Math.min(c.width / vw, c.height / (vh * DEPTH));
-  const dx = (px - c.width / 2) / ppm;
-  const dy = (py - c.height / 2) / (ppm * DEPTH);
+  const kInv = renderScale.value > 0 ? renderScale.value : 1;
+  const Wl = Math.round(c.width / kInv);
+  const Hl = Math.round(c.height / kInv);
+  const sxInv = Math.max(4, Math.round(Math.max(Wl / vw, Hl / (vh * DEPTH))));
+  // 屏幕（逻辑像素）偏移 → 世界米偏移（相对玩家）
+  const dx = (px / kInv - Wl / 2) / sxInv;
+  const dy = (py / kInv - Hl / 2) / (sxInv * DEPTH);
   // dx, dy 是相对玩家的偏移，加 playerPos 即世界米
   const me = state.value?.entities.find((e) => e.side === "player");
   const ppx = me?.x ?? 0;
@@ -1499,10 +1505,19 @@ function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: numbe
       typeof e?.id === "string" &&
       (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
   );
-  const b = clampToMapBounds(0, 0);
+  // ★ 修复（bounds 恒为 0）：此前写的是 clampToMapBounds(0, 0) —— 那是把「点 (0,0)」
+  //   夹进边界后返回的点，永远是 {x:0,y:0}，于是上报的 bounds 恒为 {lx:0,ly:0}，
+  //   宿主 applyLocalEnemies 里 `if (lx>0 && ly>0)` 两段全部失效：
+  //     ① mapBounds 永远 null → 野怪 AI/游荡/归位不夹进本图范围；
+  //     ② 宿主在世界野区（240~480m）自刷的怪从不被清理 → 小图里满屏无关野怪。
+  //   这里应上报的是「边界半宽/半高」本身（森林 60×40 → ±29/±19）。
+  const __size = (mapCfg.value?.size as number[] | undefined) ?? [3000, 3000];
   return {
     epoch: localMobsEpoch,
-    bounds: { lx: Math.abs(b.x), ly: Math.abs(b.y) },
+    bounds: {
+      lx: Math.max(1, (__size[0] ?? 3000) / 2 - 1),
+      ly: Math.max(1, (__size[1] ?? 3000) / 2 - 1),
+    },
     list: list.map((e) => ({ ...e })),
   };
 }
@@ -2135,9 +2150,10 @@ const enemySteerState = new Map<string, { hostX: number; hostY: number; fx: numb
 
 /** 把一只怪对齐到宿主的合法位置（越界/墙里 → 吸附到最近的合法格） */
 function alignEnemyToHost(e: Entity): void {
-  if (!walkGrid) return;
-  const sp = snapEnemySpawn(walkGrid, e.x, e.y, ENEMY_COLLIDE_R);
-  if (sp) { e.x = sp.x; e.y = sp.z; }
+  // ★ 修复「野怪瞬移」：此前这里调 snapEnemySpawn(e.x, e.y) —— 宿主推来的坐标一旦落进
+  //   障碍物（森林树冠），会在最多 8 环外重新搜一个「空闲格」并把怪瞬移过去，画面上
+  //   就是野怪凭空跳几格。宿主侧已有 unstickEnemies + 碰撞收口保证位置合法，
+  //   客户端只需忠实对齐宿主坐标，不再做第二次吸附。
   enemySteerState.set(e.id, { hostX: e.x, hostY: e.y, fx: e.x, fy: e.y });
 }
 
@@ -2163,10 +2179,14 @@ function applyEnemyCollision(entities: Entity[]): void {
       enemySteerState.set(e.id, { hostX: hx, hostY: hy, fx: prev.fx, fy: prev.fy });
       continue;
     }
+    // ★ 修复（野怪进图后"消失"）：AvoidResult 的深度轴字段名是 z（collision.ts
+    //   统一用 x/z），而实体模型用 y —— 这里曾写 `r.y`，恒为 undefined，
+    //   于是每只怪被写成 y=undefined → 渲染/小地图的可见性判定全 false → 整图野怪
+    //   看上去"没了"（实体其实还在，HUD 也还在数）。
     const r = stepWithAvoidance(walkGrid, prev.fx, prev.fy, dx, dy, dist, ENEMY_COLLIDE_R);
     e.x = r.x;
-    e.y = r.y;
-    enemySteerState.set(e.id, { hostX: hx, hostY: hy, fx: r.x, fy: r.y });
+    e.y = r.z;
+    enemySteerState.set(e.id, { hostX: hx, hostY: hy, fx: r.x, fy: r.z });
   }
   for (const id of Array.from(enemySteerState.keys())) if (!seen.has(id)) enemySteerState.delete(id);
 }
@@ -4427,12 +4447,25 @@ onMounted(async () => {
       } else {
         const hostAdopted = localEnemies.some((e: any) => incomingIds.has(e.id));
         if (hostAdopted) {
+          // ★ 宿主已接管过本清单 → incoming 的 local 敌怪表就是权威。此时客户端有、
+          //   宿主没有只剩两种可能：
+          //     a) 宿主还没追上本世代（刚 bumpLocalMobsEpoch 后的 ~1 tick 窗口）→ 回补；
+          //     b) 宿主已把它当死怪删掉（entry.ts:1300 当帧删尸，客户端永远看不到
+          //        alive=false）→ 必须记入 deadLocalEnemyIds，否则死怪以冻结血量
+          //        原地复活（表现：HUD 显示 11 只、场上站着打不死的 2HP 僵尸怪）。
+          //   用宿主回推的 localMobsEpoch 区分：追上了 = 权威，没追上 = 回补。
+          const hostEpoch = Number((incoming as any).localMobsEpoch || 0);
+          const hostCaughtUp = hostEpoch >= localMobsEpoch;
           deadLocalEnemyIds.clear();
           // 回补宿主还没同步的新怪
           const missing = localEnemies.filter(
             (e: any) => !incomingIds.has(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
           );
-          if (missing.length) incoming.entities = [...incoming.entities, ...missing];
+          if (!hostCaughtUp) {
+            if (missing.length) incoming.entities = [...incoming.entities, ...missing];
+          } else {
+            for (const e of missing as any[]) deadLocalEnemyIds.add(e.id);
+          }
         } else {
           // ★ 切图场景：宿主没回新怪（incoming.enemies.length===0），但 prevEntities
           //   里的客户端权威怪（mapmob_/localmob_/zone_）就是新图刚 push 的怪——

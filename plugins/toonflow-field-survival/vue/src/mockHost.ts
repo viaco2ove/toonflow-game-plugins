@@ -143,9 +143,11 @@ function moveEnemyBy(e: Entity, dx: number, dy: number): void {
   if (!walkGrid) { e.x += dx; e.y += dy; return; }
   const step = Math.hypot(dx, dy);
   if (step < 1e-6) return;
+  // ★ 注意：stepWithAvoidance 返回 { x, z }（collision.ts 用 z 表示深度轴），
+  //   实体模型用 y —— 曾误写 r.y → y=undefined → 野怪全部从画面/小地图上消失。
   const r = stepWithAvoidance(walkGrid, e.x, e.y, dx, dy, step, ENEMY_COLLIDE_R);
   e.x = r.x;
-  e.y = r.y;
+  e.y = r.z;
 }
 
 // 默认角色（当 test_data/test_state.json 不存在时使用）

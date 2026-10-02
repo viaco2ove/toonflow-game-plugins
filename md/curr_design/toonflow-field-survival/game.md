@@ -88,6 +88,14 @@ cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文�
 ## 技能
 技能与用户的动态参数卡的技能同步，且可用于技能栏点击使用和切换
 技能栏点击使用如果没有对应的特效就 角色小跳和飘字来作为通用特效
+每个技能都可以在旁边修改特效，类型[atk, heal, buff],修改按钮【修改】，【使用】
+点击后可以修改技能参数
+例如：
+ { name: "冲斩", power: 20, cost: 0, cd: 24, cdLeft: 0, type: "atk", range: "melee"，lv:1}
+技能修改后，技能参数会保存到"t_plugin_session_data"
+用户动态参数卡中的“技能” 只保存技能名称列表：如“源之力（lv1，失控）（lv1）、暗核共鸣（lv1）、夜采直觉、暗核共鸣（lv2，共鸣通道拓宽但仍窄）、暗核共鸣（lv2）、源之力（lv1，失控）、基础功法（lv2）、源之力（lv1，失控）、暗核共鸣（lv2）、夜采直觉”
+
+
 
 ## 地图功能
 点击查看地图。
@@ -96,6 +104,8 @@ cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文�
 可以传说到各个地图
 
 ## 角色卡
+无论有没有在开始游戏选择角色都要全部在这个面板显示。
+友方/中立/敌对角色
 ### 各个角色的动态角色卡信息进行显示（包括用户）
 就如 Toonflow-game-web的
 play-role-strip 和 play-inline-card
@@ -103,6 +113,9 @@ play-role-strip 和 play-inline-card
 ### 传送到角色身边（排除用户）
 显示 角色在那个地图的那个位置（角色的位置信息保存到"t_plugin_session_data"），旁边有个“传送到” 按钮
 点击后传送到改角色身边
+#### 角色位置问题
+如果没有角色位置信息，就默认生成到第一个图的可活动区域（不能在墙里、障碍物里）
+
 ### 组队跟随（排除用户和敌对角色）
 每个角色下面都有给 组队跟随【checkbox】,打勾后将跟随用户帮用户打怪。取消打勾就脱离队伍。
 与用户组队的角色也会长经验和升级。
@@ -126,3 +139,46 @@ play-role-strip 和 play-inline-card
 
 ## 判断是否为角色列表里的角色
 如果是角色列表里的角色，使用该角色进行发言
+
+
+# 打击特效
+## 普攻特效
+角色和敌人和用户收到攻击都会有打击特效
+
+## 通用特效
+物品栏点击使用如果没有对应的特效就 角色小跳和飘字来作为通用特效
+技能栏点击使用如果没有对应的特效就 角色小跳和飘字来作为通用特效
+
+## 默认 4 个技能 特效已经沿用
+// 默认 4 个技能（和插件 mockHost 默认对齐：近战/远程/治疗/护盾）
+const DEFAULT_SKILLS = [
+  { name: "冲斩", power: 20, cost: 0, cd: 24, cdLeft: 0, type: "atk", range: "melee" },
+  { name: "火球", power: 25, cost: 0, cd: 30, cdLeft: 0, type: "atk", range: "ranged" },
+  { name: "治疗", power: 30, cost: 0, cd: 40, cdLeft: 0, type: "heal", range: "melee" },
+  { name: "护盾", power: 0, cost: 0, cd: 60, cdLeft: 0, type: "buff", range: "melee" },
+];
+
+远程技能或者工具的特效都沿用"火球"的特效 type: "atk", range: "ranged" 
+治疗类的特效都沿用"治疗"的特效 "heal"
+加强类的特效都沿用"护盾"的特效"buff"
+近战类的特效都沿用"冲斩"的特效 type: "atk", range: "melee"
+
+
+# 野怪
+依靠了entity_type 来判断 阵营。具有不可靠性
+优化：
+1.依然采取原来的“entity_type”来初步判断阵营，这样可以无需修改原来的地图依然可用。
+5 个 playable_now 怪物：
+RAT / BAT / SNAKE / GOBLIN /ORC
+RAT / BAT / SNAKE/WILD_GOAT / GOBLIN / ZOMBIE/IMP/ORC etc
+老鼠/暗夜生物/爬虫/山羊/绿皮地精（哥布林）/人形亡者/小恶魔 等
+ [entity_types.json](../../../plugins/toonflow-field-survival/vue/public/entity_types.json)
+2.增加“camp” 代表阵营
+neutral/hostile/friendly
+没有camp时依靠entity_type来判断
+3.增加"full_name" 代表姓名
+例如没有full_name 的哥布林头上只是显示"哥布林”， 有full_name的就是“哥布林(full_name)”
+野怪头上要显示等级和entity_type和full_name
+
+4.野怪等级
+野怪的头上要显示野怪的等级
