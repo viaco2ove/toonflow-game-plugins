@@ -2814,27 +2814,26 @@ function render() {
   }
 
   // —— 土路（道路网络）——
-  // 绘制十字形土路：水平 y=0 和垂直 x=0，宽 1.5 米
-  if (SHEET_TILESET.ready) {
-    const roadW = Math.max(1, Math.round(1.5 * sx));
-    // 水平路
-    ctx.save();
-    for (let x = -30; x <= 30; x++) {
-      const pxr = wx2px(x);
-      drawTile(ctx, 7765, pxr, wz2py(0) - roadW / 2, sx, roadW);
+  //   ★ 整段禁用：用户反馈十字土块（tile 7765）影响视觉；
+  //     实际城镇/野外地图有完整的 Tiled tilelayer + decorations.fence，
+  //     不需要再额外画"水平 y=0 / 垂直 x=0"的道路网络。
+  if (false && SHEET_TILESET.ready) {
+    const isOutdoorMap = (currentLevelName.value || "").match(/Town|Forest|Graveyard|Overworld/i);
+    if (isOutdoorMap) {
+      const roadW = Math.max(1, Math.round(1.5 * sx));
+      // 水平路
+      ctx.save();
+      for (let x = -30; x <= 30; x++) {
+        const pxr = wx2px(x);
+        drawTile(ctx, 7765, pxr, wz2py(0) - roadW / 2, sx, roadW);
+      }
+      // 垂直路
+      for (let z = -30; z <= 30; z++) {
+        const pyr = wz2py(z);
+        drawTile(ctx, 7765, wx2px(0) - roadW / 2, pyr, roadW, sx);
+      }
+      ctx.restore();
     }
-    // 垂直路
-    for (let z = -30; z <= 30; z++) {
-      const pyr = wz2py(z);
-      drawTile(ctx, 7765, wx2px(0) - roadW / 2, pyr, roadW, sx);
-    }
-    ctx.restore();
-  } else {
-    // 兜底：纯色棕色
-    const roadW = Math.max(2, Math.round(1.5 * sx));
-    ctx.fillStyle = "#6b4423";
-    ctx.fillRect(0, wz2py(0) - roadW / 2, W, roadW);
-    ctx.fillRect(wx2px(0) - roadW / 2, 0, roadW, H);
   }
 
   // —— 装饰物（树/枯树/灌木/蘑菇/花/水/石/药水，按像素尺寸）——

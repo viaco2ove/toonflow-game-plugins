@@ -161,14 +161,15 @@ function num(v, d = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
 }
-/** 技能名归一：剥离「（lv2，描述…）」等后缀 / 对象残留，限长 12，用于展示与匹配 */
+/** 技能名归一：剥离「（lv2，描述…）」等后缀 / 对象残留，用于展示与匹配（不截断，
+ *  截断放在按分隔符拆分之后，避免把「A、B、C」切出半个名字） */
 function cleanSkillName(v) {
   let n = v && typeof v === "object" ? str(v.name ?? v.skill ?? "") : str(v);
   n = n.replace(/\[object Object\]/g, " ");
   n = n.replace(/[（(][^）)]*[）)]/g, " ");
   n = n.replace(/\s+/g, " ").trim();
   n = n.replace(/[·、,，;；:：]+$/, "").trim();
-  return n.slice(0, 12);
+  return n;
 }
 function skillKey(v) {
   return cleanSkillName(v).toLowerCase();
@@ -185,9 +186,13 @@ function buildSkills(card, n = 8) {
   raw.forEach((s) => {
     const base = cleanSkillName(s);
     if (!base) return;
-    const c = (seen.get(base) || 0) + 1;
-    seen.set(base, c);
-    names.push(c === 1 ? base : `${base}${c}`);
+    base.split(/[、,，;；/|]+/).forEach((part) => {
+      const nm = part.trim().slice(0, 12);
+      if (!nm) return;
+      const c = (seen.get(nm) || 0) + 1;
+      seen.set(nm, c);
+      names.push(c === 1 ? nm : `${nm}${c}`);
+    });
   });
   const out = [];
   for (let i = 0; i < n; i++) {
@@ -916,13 +921,15 @@ function itemsFromCard(card) {
 function mergeBag(raw, meta, order) {
   const map = /* @__PURE__ */ new Map();
   raw.forEach((it) => {
+    const key = itemKey(it.name);
+    if (!key) return;
     const m = meta ? meta[it.name] : void 0;
-    const cur = map.get(it.name);
+    const cur = map.get(key);
     if (cur) {
       cur.count += it.count;
       return;
     }
-    map.set(it.name, {
+    map.set(key, {
       name: it.name,
       count: it.count,
       kind: it.kind !== "material" || !m ? it.kind : m.kind,
@@ -934,10 +941,10 @@ function mergeBag(raw, meta, order) {
   });
   const list = Array.from(map.values());
   const idx = /* @__PURE__ */ new Map();
-  (order || []).forEach((n, i) => idx.set(n, i));
+  (order || []).forEach((n, i) => idx.set(itemKey(n), i));
   return list.sort((a, b) => {
-    const ia = idx.has(a.name) ? idx.get(a.name) : 9999;
-    const ib = idx.has(b.name) ? idx.get(b.name) : 9999;
+    const ia = idx.has(itemKey(a.name)) ? idx.get(itemKey(a.name)) : 9999;
+    const ib = idx.has(itemKey(b.name)) ? idx.get(itemKey(b.name)) : 9999;
     return ia - ib;
   });
 }
