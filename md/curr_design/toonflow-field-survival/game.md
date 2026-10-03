@@ -214,8 +214,8 @@ RAT / BAT / SNAKE/WILD_GOAT / GOBLIN / ZOMBIE/IMP/ORC etc
 neutral/hostile/friendly
 没有camp时依靠entity_type来判断
 3.增加"full_name" 代表姓名
-例如没有full_name 的哥布林头上只是显示"哥布林”， 有full_name的就是“哥布林(full_name)”
 野怪头上要显示等级和entity_type和full_name
+例如没有full_name 的哥布林头上只是显示"哥布林”， 有full_name的就是“哥布林(full_name)”
 
 4.野怪等级
 野怪的头上要显示野怪的等级
