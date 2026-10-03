@@ -90,6 +90,8 @@ const activeTab = ref<TabId>("bag");
         :source="goodsSource"
         @buy="(g: any, n: number) => emit('buy', g, n)"
         @refresh="() => emit('shop-refresh')"
+        @shop-refresh="() => emit('shop-refresh')"
+        @shop-agent="() => emit('shop-agent')"
       />
       <SkillPanel
         v-else-if="activeTab === 'skill'"

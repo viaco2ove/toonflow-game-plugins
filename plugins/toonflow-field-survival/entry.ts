@@ -2805,7 +2805,9 @@ export async function handle_action(
       await refreshShop(context, s);
       await persistSys(context, s);
       const src = s.shopSource === "agent" ? "商城agent·故事物资" : "插件常备物资";
-      return okResp(`商城已刷新（${(s.shopGoods || []).length} 件商品，货源：${src}）`);
+      // ★ 回复带时间戳：连续两次刷新若货源一致，文本不同才能触发前端 response watch
+      const ts = new Date().toTimeString().slice(0, 8);
+      return okResp(`商城已刷新 ${ts}（${(s.shopGoods || []).length} 件商品，货源：${src}）`);
     }
 
     case "sys_shop_buy": {

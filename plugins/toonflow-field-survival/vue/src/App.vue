@@ -445,11 +445,14 @@ function reportLevels(): void {
 const pendingSys = ref("");
 let sysCmdTimer = 0;
 
+/** 各系统命令的结果等待窗口：默认 3s；商城 agent 宿主侧要跑 15~20s，窗口必须盖住它 */
+const SYS_CMD_WAIT_MS: Record<string, number> = { sys_shop_refresh: 25000 };
+
 function runSysCmd(action: string, params: Record<string, any> = {}): void {
   pendingSys.value = action;
   sendTick(action, params);
   window.clearTimeout(sysCmdTimer);
-  sysCmdTimer = window.setTimeout(() => { pendingSys.value = ""; }, 3000);
+  sysCmdTimer = window.setTimeout(() => { pendingSys.value = ""; }, SYS_CMD_WAIT_MS[action] ?? 3000);
 }
 
 /** 插件回推 response → 显示到面板底栏（仅系统命令触发时才提示） */
@@ -457,11 +460,11 @@ watch(
   () => String(((state.value as any)?.response) || ""),
   (resp) => {
     if (!resp || !pendingSys.value) return;
-    const isRest = pendingSys.value === "sys_rest";
+    const act = pendingSys.value;
     pendingSys.value = "";
     sysNotice.value = resp;
-    // ★ 睡眠恢复结果只有系统面板底栏能看到 → 同步弹到 HUD 上
-    if (isRest) showToast(resp);
+    // ★ 睡眠/商城刷新的结果值得跳出面板提醒（睡眠→满血满蓝；商城→货源走没走 agent）
+    if (act === "sys_rest" || act === "sys_shop_refresh") showToast(resp);
   }
 );
 

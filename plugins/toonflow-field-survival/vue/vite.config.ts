@@ -296,6 +296,90 @@ window.__pdRemove = (k) => {
 };
 
 const ENTRY_PLUGIN_ID = "com.toonflow.minigame-field-survival";
+/* 拟真世界书摘要：dev-host 桩没有真实世界书服务，用 test_state.json 的
+ *   description / materials / monsters 拼一份与真实宿主同口径的「常驻世界书条目 + 故事物资」，
+ *   否则商城 agent 读到的 worldBookDigest 恒为空串，生成结果等同降级。 */
+function buildWorldBookDigest() {
+  const d = storyData || {};
+  const lines = [];
+  lines.push("[世界观]" + String(d.description || STORY || ""));
+  const mats = (d.materials || []).slice(0, 24).map((m) =>
+    "- " + String(m.name || "") + "（" + String(m.subType || m.type || "") +
+    "，官方价" + Number(m.priceOfficial || 0) + "）" + String(m.effect || m.description || "").slice(0, 60));
+  if (mats.length) lines.push("[常驻物资/世界书条目]\\n" + mats.join("\\n"));
+  const mons = (d.monsters || []).slice(0, 12).map((m) => String(m.name || m.id || ""));
+  if (mons.length) lines.push("[常驻威胁]" + mons.join("/"));
+  return lines.join("\\n\\n").slice(0, 4000);
+}
+
+/* 拟真商城 agent（dev-host 专用）：真实宿主走 runPluginAgent 调大模型，
+ *  桩里没有 LLM 通道 —— 改为按「世界书物资 + 用户参数卡」确定性生成，
+ *  返回结构与宿主一致（{ ok, output:{ goods:[{name,price,kind,rarity,heal,desc}] } }），
+ *  保证「商城 agent → 生成物资类别 → 购买 → 落 t_plugin_session_data」可端到端拟真测试。 */
+let __localMatsCache = null;
+/** ★ 世界书补全：服务端 storyInfo 只回 inventory（玩家现有物品，无 type/价格），
+ *  而「常驻世界书条目」应该是故事的完整物资录 —— 合并本地 test_data/test_state.json 的 materials。 */
+async function mergeLocalMaterials() {
+  const local = await loadLocalMaterials();
+  if (!local || !local.length || !storyData) return;
+  const have = new Set((storyData.materials || []).map((m) => String(m.name || "")));
+  const add = local.filter((m) => !have.has(String(m.name || "")));
+  if (add.length) {
+    storyData.materials = (storyData.materials || []).concat(add);
+    log("✓ 世界书物资合并：服务端 " + have.size + " + 本地 " + add.length + " = " + storyData.materials.length + " 条");
+  }
+}
+/** 拉本地 test_data/test_state.json 的完整故事物资（41 条，带 type/priceOfficial/effect）。
+ *  服务端 storyInfo 只回 inventory（自由文本、无价格），不足以支撑商城 agent，
+ *  因此当服务端物资缺价格字段时回退到本地世界书物资池。 */
+async function loadLocalMaterials() {
+  if (__localMatsCache) return __localMatsCache;
+  try {
+    const r = await fetch("/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/test_data/test_state.json");
+    if (!r.ok) return null;
+    const d = await r.json();
+    const m = (d && d.materials) || [];
+    __localMatsCache = m.length ? m : null;
+  } catch { __localMatsCache = null; }
+  return __localMatsCache;
+}
+
+async function runMockShopAgent(args) {
+  const serverMats = ((storyData && storyData.materials) || []).filter((m) => m && m.name);
+  const usable = serverMats.filter((m) => Number(m.priceOfficial ?? m.priceBlack ?? 0) > 0);
+  let mats = usable.length >= 6 ? usable : null;
+  if (!mats) mats = (await loadLocalMaterials()) || serverMats;
+  mats = mats.filter((m) => m && m.name);
+  const card = (args && args.playerCard) || window.__STORY_PLAYER_CARD__ || {};
+  const KIND_OF = { weapon: "equipment", armor: "equipment", tool: "equipment", light: "equipment", consumable: "consumable", resource: "material" };
+  const rarityOf = (p) => (p >= 400 ? "legend" : p >= 180 ? "epic" : p >= 60 ? "rare" : p >= 22 ? "fine" : "common");
+  const pool = mats.slice().sort(() => Math.random() - 0.5);
+  const goods = pool.slice(0, 12).map((m) => {
+    // 物品名归一：剥离「×N」与括号尾注（服务端 inventory 是自由文本，如「银鲤×4（…）」）
+    let rawName = String(m.name || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim();
+    if (!rawName) rawName = String(m.name || "物资");
+    const kind = KIND_OF[String(m.type || "")] || "material";
+    const price = Math.max(1, Math.round(Number(m.priceOfficial ?? m.priceBlack ?? 0) || 50));
+    const stats = m.stats || {};
+    let heal = 0;
+    if (kind === "consumable") {
+      heal = Number(stats.heal ?? stats.hp ?? 0);
+      if (!heal) heal = /8\d|强效|大补/.test(String(m.effect || m.name || "")) ? 60 : 30;
+      heal = Math.max(0, Math.round(heal));
+    }
+    return {
+      name: rawName.slice(0, 20),
+      price,
+      kind,
+      rarity: rarityOf(price),
+      heal,
+      desc: String(m.effect || m.description || m.subType || "").replace(/[（(][^）)]*[）)]/g, " ").slice(0, 28),
+    };
+  });
+  log("✓ 商城agent（拟真）：世界书 " + mats.length + " 条 → 生成 " + goods.length + " 件故事物资（玩家 lv" + Number(card.level || 1) + "）");
+  return { ok: true, output: { goods } };
+}
+
 function buildEntryCtx() {
   const sessionId = (typeof window !== "undefined" && window.__STORY_SESSION_ID__) || "all";
   entryCtx = {
@@ -304,7 +388,7 @@ function buildEntryCtx() {
     sessionId,
     roles: (storyData && storyData.roles) || [],
     playerCard: (window.__STORY_PLAYER_CARD__ || {}),
-    worldBookDigest: "",
+    worldBookDigest: buildWorldBookDigest(),
     tsApi: {
       pluginData: {
         get: async (k) => { const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return rec ? rec.value : null; },
@@ -318,12 +402,17 @@ function buildEntryCtx() {
           return out;
         },
       },
-      // 3001 桩没有插件 agent 通道（真实宿主走 runPluginAgent）：
-      // 抛错让 entry.js 落到内置兜底（地图 fallbackMap / 商城 BUILTIN_SHOP_GOODS），
-      // 并在事件里提示「降级」。安装后链路会走真实 agent。
+      // 3001 桩没有插件 agent 的 LLM 通道（真实宿主走 runPluginAgent）：
+      //   · 商城 agent → 走上面的拟真实现（世界书物资确定性生成），保证商城可端到端测试
+      //   · 其它 agent（如 map-gener）→ 抛错让 entry.js 落到内置兜底，并在事件里提示「降级」
       agent: {
-        run: async (agentName) => {
-          log("⚠ entry.agent.run(" + agentName + ") 在 dev-host 桩不可用 → 使用内置兜底");
+        run: async (agentName, args) => {
+          const n = String(agentName || "");
+          if (n.indexOf("shop") >= 0) {
+            await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
+            return runMockShopAgent(args);
+          }
+          log("⚠ entry.agent.run(" + n + ") 在 dev-host 桩不可用 → 使用内置兜底");
           throw new Error("dev-host 桩无插件 agent 通道");
         },
       },
@@ -658,6 +747,7 @@ window.addEventListener("message", async (e) => {
     const ok = await loadStoryData();
     if (!ok) { log("HOST: loadStoryData failed"); return; }
     await loadEntityTypes();
+    await mergeLocalMaterials(); // ★ 世界书补全：服务端只回 inventory，本地 test_state.json 才是完整物资条录
     log("HOST: story+entityTypes loaded, pushing select state");
     // ★ 直接同步推 select state（不用 setTimeout，background tab 上不可靠）
     lastState = {

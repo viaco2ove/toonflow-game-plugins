@@ -2315,7 +2315,9 @@ async function handle_action(action, params, state, context) {
       await refreshShop(context, s);
       await persistSys(context, s);
       const src = s.shopSource === "agent" ? "\u5546\u57CEagent\u00B7\u6545\u4E8B\u7269\u8D44" : "\u63D2\u4EF6\u5E38\u5907\u7269\u8D44";
-      return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF0C\u8D27\u6E90\uFF1A${src}\uFF09`);
+      // ★ 回复带时间戳：连续两次刷新若货源一致，文本不同才能触发前端 response watch
+      const ts = new Date().toTimeString().slice(0, 8);
+      return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0 ${ts}\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF0C\u8D27\u6E90\uFF1A${src}\uFF09`);
     }
     case "sys_shop_buy": {
       const id = str(params?.id);

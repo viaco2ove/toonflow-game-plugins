@@ -5,7 +5,11 @@ const props = defineProps<{
   source: string;
 }>();
 
-const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
+const emit = defineEmits<{
+  (e: "shop-agent"): void;
+  (e: "shop-refresh"): void;
+  (e: "buy", good: any, count: number): void;
+}>();
 
 const RARITY_COLOR: Record<string, string> = { common: "#9aa4ad", fine: "#4aa3ff", rare: "#a76bff", epic: "#ff9a3c", legend: "#ff4d4d" };
 const KIND_NAME: Record<string, string> = { consumable: "消耗品", material: "材料", equipment: "装备", skill_book: "技能书", quest: "任务物品" };
@@ -18,8 +22,8 @@ function kindName(k: string) { return KIND_NAME[k] || k || "物资"; }
     <div class="shp-bar">
       <span class="shp-gold">金币 {{ gold }}</span>
       <span class="shp-src">货源：{{ source === "agent" ? "商城 agent（故事物资）" : "插件常备物资" }}</span>
-      <button class="shp-mini shp-mini--agent" title="商城 agent：读取故事动态参数与常驻世界书，生成贴合世界观的物资" @click="emit('agent')">商城agent</button>
-      <button class="shp-mini" @click="emit('refresh')">刷新货源</button>
+      <button class="shp-mini shp-mini--agent" title="商城 agent：读取故事动态参数与常驻世界书，生成贴合世界观的物资" @click="emit('shop-agent')">商城agent</button>
+      <button class="shp-mini" @click="emit('shop-refresh')">刷新货源</button>
     </div>
 
     <div v-for="g in goods" :key="g.id" class="shp-row" :class="{ 'shp-row--no': gold < g.price }">
