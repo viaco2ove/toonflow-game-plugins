@@ -39,7 +39,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, normalizeTiledMap, listLevelNames } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames } from "./mapConfig";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
@@ -149,6 +149,8 @@ interface SysItem {
   power?: number; cost?: number; cd?: number; cdLeft?: number;
   type?: string; range?: string; lv?: number; buff_type?: string;
   durability?: number; durabilityLeft?: number; attribute_type?: string; attribute_value?: number;
+  /** ★ game.md：数量与描述（描述保留参数卡原注记全文） */
+  quantity?: number; description?: string;
   index?: number;
 }
 interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; }
@@ -199,13 +201,27 @@ function inferItemAttrLocal(name: string): string {
 }
 
 /** 解析参数卡里的字符串物品："银鲤×3" / "短刀（商城购入，8 金）" */
-function parseItemStringLocal(raw: string): { name: string; count: number; price: number } {
+function parseItemStringLocal(raw: string): { name: string; count: number; price: number; desc: string } {
   const s = String(raw).trim();
   const pm = s.match(/[（(][^）)]*?(\d+)\s*金[）)]/);
   const price = pm ? Number(pm[1]) : 0;
-  const m = s.match(/^(.+?)\s*[×x*]\s*(\d+)\s*$/);
-  if (m) return { name: m[1].trim(), count: Math.max(1, Number(m[2])), price };
-  return { name: s.replace(/[（(].*$/, "").trim() || s, count: 1, price };
+  const dm = s.match(/[（(]([^）)]*)[）)]/);
+  const desc = dm ? dm[1].trim() : "";
+  // ★ 与 entry.js cleanName 同口径：×N（任意位置）、括号注记、货币尾注全部剥离
+  const name = s
+    .replace(/\[object Object\]/g, " ")
+    .replace(/[（(][^）)]*[）)]/g, " ")
+    .replace(/[×xX*]\s*\d+\s*(个|件|尾|份|瓶|颗|张|本)?/g, " ")
+    .replace(/\s*单[尾个件份瓶颗张本]\s*\d*\s*金.*$/g, " ")
+    .replace(/\s*\d+\s*金.*$/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[·、,，;；:：]+$/, "")
+    .trim()
+    .slice(0, 20);
+  const cm = s.match(/[×xX*]\s*(\d+)/);
+  const count = cm ? Math.max(1, Number(cm[1])) : 1;
+  return { name, count, price, desc };
 }
 
 /** 卖出单价（与插件 entry 的 sellPrice 同口径：有原价按 40%，否则按稀有度基价×品类系数） */
@@ -227,15 +243,18 @@ const sysBagItems = computed<SysItem[]>(() => {
     let name = "";
     let count = 1;
     let rawPrice = 0;
+    let note = "";
     if (typeof it === "string") {
       const p = parseItemStringLocal(it);
       name = p.name;
       count = p.count;
       rawPrice = p.price;
+      note = p.desc;
     } else if (it && typeof it === "object") {
       name = String(it.name || "物品");
       count = Math.max(1, Number(it.count || 1));
       rawPrice = Number((it as any).price || 0);
+      note = String((it as any).desc || "");
     } else {
       continue;
     }
@@ -258,8 +277,9 @@ const sysBagItems = computed<SysItem[]>(() => {
     const itype = String(im.type || bt.type);
     const dur = Math.round(Number(im.durability ?? -1));
     merged.set(name, {
-      id: name, name, count, kind, rarity, heal, price,
-      desc: im.desc || m.desc,
+      id: name, name, count, quantity: count, kind, rarity, heal, price,
+      desc: im.description || im.desc || m.desc || note,
+      description: String(im.description || note),
       power: Number(im.power ?? (kind === "equipment" ? 10 : 0)),
       cost: Number(im.cost ?? 0),
       cd: Number(im.cd ?? 0),
@@ -1780,6 +1800,14 @@ async function switchLevel(levelName: string): Promise<void> {
         const lv = mob.level ?? arch.level ?? 1;
         const lvScale = 1 + (lv - 1) * 0.3; // 每级 +30%
         const hpScaled = Math.floor(arch.hp * lvScale);
+        // ★ 阵营（game.md）：地图对象 camp 属性 > entity_type 推断（mapConfig 已归一）。
+        //   hostile → 敌对野怪（side enemy）；friendly → 友方（side ally，不组队不跟随）；
+        //   neutral 在 mapConfig 已转为 NPC 装饰物，不会进 mobs。
+        const camp = mob.camp || "hostile";
+        const mobSide = camp === "friendly" ? "ally" : "enemy";
+        // ★ 头顶显示（game.md）：类型中文名 + 可选姓名——「哥布林」/「哥布林(低阶湮物)」
+        const zhName = ENTITY_TYPE_ZH[mob.entity_type] || arch.name;
+        const mobLabel = mob.full_name ? `${zhName}(${mob.full_name})` : zhName;
         // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
         //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外/宿主世界外，
         //   既进不了小地图视野，也进不了任何攻击射程。
@@ -1791,8 +1819,8 @@ async function switchLevel(levelName: string): Promise<void> {
         const enemyId = `mapmob_${mob.id}_${Date.now()}`;
         s.entities.push({
           id: enemyId,
-          name: arch.name,
-          side: "enemy",
+          name: mobLabel,
+          side: mobSide,
           x: mobPos.x,
           y: mobPos.y,
           vx: 0, vy: 0,
@@ -1805,7 +1833,11 @@ async function switchLevel(levelName: string): Promise<void> {
           facing: 180, cooldown: 0, alive: !revived,
           homeX: mobPos.x,
           homeY: mobPos.y,
-        });
+          // ★ game.md 阵营/类型/姓名透传（头顶标签、角色面板敌对判定用）
+          camp,
+          entity_type: mob.entity_type,
+          full_name: mob.full_name,
+        } as any);
         if (revived) deadLocalEnemyIds.add(enemyId);
       }
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
@@ -2814,15 +2846,17 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   }
 
   // 头顶名字 + 等级（敌人额外显示 Lv.X；头像上方居中）
+  // ★ game.md：带姓名的野怪显示「哥布林(低阶湮物)」全称（放宽截断），其余维持 4 字短标签
+  const headLabel = e.name.slice(0, e.full_name ? 14 : 4);
   const headY = hasAvatar ? avatarY - 4 : dy - 18;
   ctx.save();
   ctx.textAlign = "center";
   // 名字
   ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
   ctx.fillStyle = "rgba(0,0,0,.85)";
-  ctx.fillText(e.name.slice(0, 4), px + 1, headY + 1);
+  ctx.fillText(headLabel, px + 1, headY + 1);
   ctx.fillStyle = e.side === "enemy" ? "#ffd4d4" : "#fff";
-  ctx.fillText(e.name.slice(0, 4), px, headY);
+  ctx.fillText(headLabel, px, headY);
   // ★ 等级（仅敌人显示，红色字体放在名字右侧）
   if (e.side === "enemy" && e.level) {
     const lvlText = "Lv" + e.level;
@@ -2865,7 +2899,8 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   // ★ v3：sprite 尺寸 = 米数 × pixelsPerMeter（随 zoom 缩放）
   const pixelsPerMeter = (ppm ?? 20);
   // ★ 根据野怪名字映射到 tileset monster tile
-  const key = mobKeyFor(e.name);
+  //   game.md：优先按 entity_type 精确映射（头顶已显示中文名+姓名，中文名不再承担 sprite 映射职责）
+  const key = ENTITY_SPRITE_KEY[e.entity_type || ""] || mobKeyFor(e.name);
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
   const tileId = spriteTileId(key, _animTick);
   // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
@@ -2914,6 +2949,28 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
     ctx.fillRect(dx, dy, dw, dh);
     ctx.restore();
   }
+
+  // ★ 头顶名字 + 等级（game.md：「哥布林(低阶湮物)」+ Lv.X，画在血条上方）
+  //   带姓名的野怪放宽截断（14 字），其余维持 6 字短标签
+  const mobLabel = e.name.slice(0, e.full_name ? 14 : 6);
+  ctx.save();
+  ctx.textAlign = "center";
+  // 名字（血条上方）
+  ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
+  ctx.fillStyle = "rgba(0,0,0,.85)";
+  ctx.fillText(mobLabel, px + 1, dy - 25);
+  ctx.fillStyle = "#ffd4d4";
+  ctx.fillText(mobLabel, px, dy - 26);
+  // 等级（名字下方、血条上方）
+  if (e.level) {
+    const lvlText = "Lv" + e.level;
+    ctx.font = "bold 10px 'Microsoft YaHei', sans-serif";
+    ctx.fillStyle = "rgba(0,0,0,.85)";
+    ctx.fillText(lvlText, px + 1, dy - 11);
+    ctx.fillStyle = "#ff5252";
+    ctx.fillText(lvlText, px, dy - 12);
+  }
+  ctx.restore();
 
   // 血条
   const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
@@ -4410,6 +4467,8 @@ let stopHost: (() => void) | null = null;
 
 /** 应用启动：加载地图 → 初始化 chunk / 装饰 → 开启渲染循环 */
 onMounted(async () => {
+  // ★ 调试句柄：standalone/dev-host 下可从控制台切图（window.__switchLevel("Mulberry Forest")）
+  (window as any).__switchLevel = switchLevel;
   // ★ standalone（mockHost）：先吃下初始 state（window.__initialState 由 mockHost 写入）
   const initial = (window as any).__initialState;
   if (initial && !state.value) {
@@ -5319,9 +5378,9 @@ body {
 .pixel-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-left: 6px;
-  padding: 3px 8px;
+  gap: 1px;
+  margin-left: 1px;
+  padding: 3px 3px;
   font-size: 12px;
   line-height: 1.2;
   color: #e8e2d0;
@@ -5428,7 +5487,7 @@ body {
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 1px;
   padding: 0px 2px;
   background: #1e1f1f0d;
   border-bottom: 1px solid #1e1f1f0d;

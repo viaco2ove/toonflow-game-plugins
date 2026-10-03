@@ -42,6 +42,7 @@ const sellCount = ref(1);
 const form = reactive({
   name: "", power: 0, cost: 0, cd: 0, type: "heal", range: "melee",
   lv: 1, buff_type: "", durability: -1, attribute_type: "", attribute_value: 0,
+  quantity: 1, description: "",
 });
 
 function startEdit(it: any, i: number) {
@@ -59,6 +60,8 @@ function startEdit(it: any, i: number) {
   form.durability = Math.round(Number(it.durability ?? -1));
   form.attribute_type = (ATTR_TYPES as readonly string[]).includes(it.attribute_type) ? it.attribute_type : "";
   form.attribute_value = Math.round(Number(it.attribute_value) || 0);
+  form.quantity = Math.max(1, Math.round(Number(it.count ?? it.quantity) || 1));
+  form.description = String(it.description || it.desc || "");
 }
 function submitEdit(i: number) {
   emit("edit-item", {
@@ -74,6 +77,8 @@ function submitEdit(i: number) {
     durability: form.durability,
     attribute_type: form.attribute_type,
     attribute_value: form.attribute_value,
+    quantity: Math.max(1, Math.round(Number(form.quantity) || 1)),
+    description: form.description.trim(),
   });
   editing.value = -1;
 }
@@ -172,6 +177,8 @@ function onDrop(i: number) {
           </select>
         </label>
         <label>被动数值 attribute_value<input v-model.number="form.attribute_value" type="number" /></label>
+        <label>数量 quantity<input v-model.number="form.quantity" type="number" min="1" /></label>
+        <label style="grid-column: 1 / -1">描述 description<input v-model="form.description" maxlength="60" placeholder="保留参数卡原注记，可改写" /></label>
         <div class="bpi-edit__ops">
           <button class="bpi-btn" @click="submitEdit(i)">保存</button>
           <button class="bpi-btn bpi-btn--ghost" @click="editing = -1">取消</button>

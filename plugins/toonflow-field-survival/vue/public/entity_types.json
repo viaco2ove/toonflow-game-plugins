@@ -10,7 +10,8 @@
       "handmade_maps": "public/maps/*.json"
     },
     "note": "代码中不存在「野怪/敌人」两套分类，所有敌对生物统一为 hostile:true 的 StatelessAI 实例",
-    "description_zh_note": "description_zh 为对应英文 description 的中文翻译，专有名词（地精/巫妖等）按奇幻 RPG 惯例译法"
+    "description_zh_note": "description_zh 为对应英文 description 的中文翻译，专有名词（地精/巫妖等）按奇幻 RPG 惯例译法",
+    "camp_note": "camp: neutral/hostile/friendly；缺省时按 entity_type 推断（enemies/special_enemies → hostile，non_hostile_entity_types/机关/NPC → neutral）"
   },
   "summary": {
     "entity_type_registered_total": 33,
@@ -62,7 +63,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "camp": "hostile",
+      "name_zh": "老鼠"
     },
     {
       "entity_type": "BAT",
@@ -95,7 +98,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "camp": "hostile",
+      "name_zh": "暗夜生物"
     },
     {
       "entity_type": "SNAKE",
@@ -129,7 +134,9 @@
           "generatable": true
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "camp": "hostile",
+      "name_zh": "爬虫"
     },
     {
       "entity_type": "WILD_GOAT",
@@ -148,7 +155,9 @@
       "ai": "StatelessAI",
       "textures": [],
       "spawn": [],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "山羊"
     },
     {
       "entity_type": "GOBLIN",
@@ -191,7 +200,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "camp": "hostile",
+      "name_zh": "哥布林"
     },
     {
       "entity_type": "ZOMBIE",
@@ -219,7 +230,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "人形亡者"
     },
     {
       "entity_type": "IMP",
@@ -247,7 +260,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "小恶魔"
     },
     {
       "entity_type": "SKELETON",
@@ -282,7 +297,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "骷髅兵"
     },
     {
       "entity_type": "KOBOLD",
@@ -321,7 +338,9 @@
           "generatable": false
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "狗头人"
     },
     {
       "entity_type": "ICE_ELEMENTAL",
@@ -349,7 +368,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "冰元素"
     },
     {
       "entity_type": "ORC",
@@ -392,7 +413,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "camp": "hostile",
+      "name_zh": "半兽人"
     },
     {
       "entity_type": "BONEMAN",
@@ -420,7 +443,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "白骨人"
     },
     {
       "entity_type": "EMPOWERED_ORC",
@@ -459,7 +484,9 @@
         }
       ],
       "playable_now": false,
-      "_note": "ORC 的强化变体（hp/str/def 翻倍），xlsx 缺失，本文件补全"
+      "_note": "ORC 的强化变体（hp/str/def 翻倍），xlsx 缺失，本文件补全",
+      "camp": "hostile",
+      "name_zh": "强化半兽人"
     },
     {
       "entity_type": "DEMON",
@@ -486,7 +513,9 @@
         2415
       ],
       "spawn": [],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "恶魔"
     },
     {
       "entity_type": "GHOST",
@@ -515,7 +544,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "幽灵"
     },
     {
       "entity_type": "MUMMY",
@@ -549,7 +580,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "木乃伊"
     },
     {
       "entity_type": "SIREN",
@@ -577,7 +610,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "塞壬"
     },
     {
       "entity_type": "TROLL",
@@ -605,7 +640,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "巨魔"
     },
     {
       "entity_type": "BANSHEE",
@@ -632,7 +669,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "报丧女妖"
     },
     {
       "entity_type": "GOLEM",
@@ -659,7 +698,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "石魔"
     },
     {
       "entity_type": "CYCLOPS",
@@ -686,7 +727,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "独眼巨人"
     },
     {
       "entity_type": "MINOTAUR",
@@ -718,7 +761,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "牛头人"
     },
     {
       "entity_type": "VAMPIRE",
@@ -745,7 +790,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "camp": "hostile",
+      "name_zh": "血族"
     }
   ],
   "special_enemies": [
@@ -771,7 +818,9 @@
       ],
       "placed_in": [
         "mulberryGraveyard.json"
-      ]
+      ],
+      "camp": "hostile",
+      "name_zh": "巫妖"
     },
     {
       "entity_type": "LOOT_GOBLIN",
@@ -790,7 +839,9 @@
       "behavior": "逃跑型，掉落 GOLD",
       "placed_in": [
         "lootGoblinLair.json"
-      ]
+      ],
+      "camp": "hostile",
+      "name_zh": "拾荒哥布林"
     }
   ],
   "non_hostile_entity_types": [

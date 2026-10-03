@@ -207,6 +207,14 @@ interface Entity {
   maxHp: number;
   atk: number;
   level: number;
+  /** ★ game.md 等级系统：蓝量（满蓝 = 100 + 等级*10 + 道具/技能加成） */
+  mp?: number;
+  maxMp?: number;
+  /** ★ game.md 等级系统：当前经验 / 下级所需经验（= 当前等级*100），玩家实体上同步 */
+  exp?: number;
+  expToNext?: number;
+  /** ★ game.md 等级系统：防御（1 + 等级*10 + 道具/技能加成） */
+  def?: number;
   avatarPath?: string;
   facing: number;
   cooldown: number;
@@ -717,7 +725,7 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
       const bounty = (target as any).bounty as { exp?: number; money?: number } | undefined;
       const expGain = bounty?.exp != null ? Math.round(num(bounty.exp, 10)) : 8 + target.level * 4;
       const moneyGain = bounty?.money != null ? Math.round(num(bounty.money, 8)) : 5 + target.level * 3;
-      s.exp += expGain;
+      gainPlayerExp(s, expGain);      // ★ 等级系统：经验累加 + 升级判定（满血满蓝重算）
       s.money += moneyGain;
       if (Math.random() < 0.5) {
         const drop = ["野兽皮", "锋利的爪", "兽骨"][Math.floor(Math.random() * 3)];
@@ -1405,7 +1413,7 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       const expGain = loot?.exp != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
       const moneyGain = loot?.money != null ? Math.round(num(loot.money, 12)) : 15 + Math.floor(rnd(0, 20));
       const drop = loot?.item || ["生锈的钥匙", "干粮", "荧光石"][Math.floor(Math.random() * 3)];
-      s.exp += expGain;
+      gainPlayerExp(s, expGain);      // ★ 等级系统：开箱经验同样走升级判定
       s.money += moneyGain;
       s.drops.push(drop);
       floater(s, `宝箱 +${expGain}exp`, c.x, c.y);
@@ -1453,7 +1461,7 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
    ============================================================ */
 
 export interface BagItem {
-  name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string;
+  name: string; count: number; quantity?: number; kind: string; rarity: string; heal: number; price: number; desc?: string;
   /** ★ game.md 物品修改：战斗参数（mergeBag 时从 itemMeta / 推断默认合并） */
   power?: number; cost?: number; cd?: number; cdLeft?: number;
   type?: "atk" | "heal" | "buff" | "attribute"; range?: "melee" | "ranged";
@@ -1468,6 +1476,8 @@ export interface ItemMeta {
   lv: number; buff_type: string;
   durability: number; durabilityLeft: number;
   attribute_type: string; attribute_value: number;
+  /** ★ game.md：数量与描述（描述保留参数卡原注记全文） */
+  quantity: number; description: string;
 }
 export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; }
 export interface NpcCard {
@@ -1530,6 +1540,26 @@ function defaultHeal(name: string, kind: string): number {
 }
 
 /** 参数卡里的物品项（字符串 "干粮×3" / "干粮（备注）" 或对象）→ BagItem */
+/** 物品名归一：剥离「×N」数量、「（描述…）」后缀、对象残留与货币尾注，限长 20（与 entry.js 同口径） */
+function cleanName(v: any): string {
+  let n = v && typeof v === "object" ? str(v.name ?? v.item ?? v.itemName ?? "") : str(v);
+  n = n.replace(/\[object Object\]/g, " ");
+  n = n.replace(/[（(][^）)]*[）)]/g, " ");
+  n = n.replace(/[×xX*]\s*\d+\s*(个|件|尾|份|瓶|颗|张|本)?/g, " ");
+  n = n.replace(/\s*单[尾个件份瓶颗张本]\s*\d*\s*金.*$/g, " ");
+  n = n.replace(/\s*\d+\s*金.*$/g, " ");
+  n = n.replace(/\s+/g, " ").trim();
+  n = n.replace(/[·、,，;；:：]+$/, "").trim();
+  return n.slice(0, 20);
+}
+function itemKey(v: any): string {
+  return cleanName(v).toLowerCase();
+}
+/** 展示名/参数名可能写法不同（带描述 vs 不带），匹配一律走归一键 */
+function sameName(a: any, b: any): boolean {
+  const ka = itemKey(a);
+  return !!ka && ka === itemKey(b);
+}
 function parseItemRaw(raw: any): BagItem {
   if (raw && typeof raw === "object") {
     const name = str((raw as any).name ?? (raw as any).item ?? "");
@@ -1576,11 +1606,12 @@ function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string
     map.set(it.name, {
       name: it.name,
       count: it.count,
+      quantity: it.count,
       kind: it.kind !== "material" || !m ? it.kind : m.kind,
       rarity: it.rarity !== "common" || !m ? it.rarity : m.rarity,
       heal: it.heal || (m ? m.heal : 0) || defaultHeal(it.name, it.kind),
       price: it.price || (m ? m.price : 0),
-      desc: it.desc || (m ? m.desc : undefined),
+      desc: im?.description || it.desc || (m ? m.desc : undefined),
       power: num(im?.power, it.kind === "equipment" ? 10 : 0),
       cost: num(im?.cost, 0),
       cd: Math.max(0, num(im?.cd, 0)),
@@ -1605,7 +1636,33 @@ function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string
   });
 }
 
-function serializeBag(bag: BagItem[]): string[] {
+function serializeBag(bag: BagItem[], cardItems?: any[]): string[] {
+  // ★ game.md quantity/description：重写参数卡时保留原条目描述注记（「银鲤×3（钓鱼累积，暂未售出，单尾800金）」→「银鲤×7（钓鱼累积…）」）
+  if (Array.isArray(cardItems)) {
+    const flat: any[] = [];
+    cardItems.forEach((x) => {
+      if (typeof x === "string") splitSkillList(x).forEach((p) => { if (cleanName(p)) flat.push(p.trim()); });
+      else flat.push(x);
+    });
+    const used = new Set<string>();
+    const out: string[] = [];
+    flat.forEach((x) => {
+      const p = parseItemRaw(x);
+      if (!p.name) return;
+      const b = bag.find((y) => sameName(y.name, p.name) && !used.has(itemKey(y.name)));
+      if (!b || !(b.count > 0)) return;
+      used.add(itemKey(b.name));
+      const d = p.desc ? `（${p.desc}）` : "";
+      out.push(b.count > 1 ? `${b.name}×${b.count}${d}` : d ? `${b.name}${d}` : b.name);
+    });
+    bag.forEach((b) => {
+      if (!b.count || used.has(itemKey(b.name))) return;
+      used.add(itemKey(b.name));
+      const d = b.desc ? `（${b.desc}）` : "";
+      out.push(b.count > 1 ? `${b.name}×${b.count}${d}` : d ? `${b.name}${d}` : b.name);
+    });
+    return out;
+  }
   return bag.filter((i) => i.name && i.count > 0).map((i) => (i.count > 1 ? `${i.name}×${i.count}` : i.name));
 }
 
@@ -1660,22 +1717,192 @@ function bagAttributeBonus(s: FieldSurvivalState): Record<string, number> {
   });
   return bonus;
 }
-/** 被动加成落到玩家实体（_attrBase 记录裸装基线，重复调用不叠加） */
-function applyBagAttributes(s: FieldSurvivalState): void {
+/* ============================================================================
+   ★ game.md 等级系统（满血满蓝公式 / 经验阈值 / 升级 / 角色卡同步）
+   ----------------------------------------------------------------------------
+   满血HP = 100 + 等级*10 + 道具血量加成 + 技能永久血量加成
+   满蓝MP = 100 + 等级*10 + 道具蓝量加成 + 技能永久蓝量加成
+   攻击   = 10  + 等级*10 + 道具攻击加成 + 技能永久攻击加成
+   防御   = 1   + 等级*10 + 道具防御加成 + 技能永久防御加成
+   升级   = exp ≥ 当前level*100 → level+1 / 扣阈值保留溢出 / 阈值 = 新level*100 / 重算满血满蓝
+   ========================================================================== */
+const STAT_BASE = { hp: 100, mp: 100, atk: 10, def: 1 };
+const STAT_PER_LEVEL = 10;                 // 每级四维成长
+const PLAYER_ATTR_KEYS = ["Life", "Blue", "Attack", "Defense"] as const;
+type PlayerAttrKey = (typeof PLAYER_ATTR_KEYS)[number];
+
+/** 技能永久加成点数：skillMeta[技能].perm_{Life|Blue|Attack|Defense} 或参数卡 perm_bonus / permanent_attributes */
+function permAttributeBonus(s: FieldSurvivalState): Record<string, number> {
+  const out: Record<string, number> = { Life: 0, Blue: 0, Attack: 0, Defense: 0 };
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const add = (k: string, v: any): void => {
+    if ((PLAYER_ATTR_KEYS as readonly string[]).indexOf(k) >= 0) out[k] += Math.round(num(v, 0));
+  };
+  ["permanent_attributes", "perm_bonus", "perm_attr", "attribute_bonus"].forEach((key) => {
+    const m = card[key];
+    if (m && typeof m === "object") Object.keys(m).forEach((k) => add(k, (m as any)[k]));
+  });
+  const meta = (s.skillMeta || {}) as Record<string, any>;
+  Object.keys(meta).forEach((k) => {
+    const m = meta[k];
+    if (!m || typeof m !== "object") return;
+    PLAYER_ATTR_KEYS.forEach((ak) => {
+      add(ak, m[`perm_${ak}`]);
+      if (m.permanent && typeof m.permanent === "object") add(ak, m.permanent[ak]);
+    });
+  });
+  return out;
+}
+
+/** 满血 / 满蓝 / 攻击 / 防御（公式值，不含当前 hp/mp） */
+function playerMaxStats(s: FieldSurvivalState, level?: number): { maxHp: number; maxMp: number; atk: number; def: number } {
+  const me = playerEntity(s);
+  const lv = Math.max(1, Math.round(num(level, num(me?.level, 1))));
+  const bag = bagAttributeBonus(s);
+  const perm = permAttributeBonus(s);
+  const sum = (k: PlayerAttrKey): number => Math.round(num(bag[k], 0) + num(perm[k], 0));
+  return {
+    maxHp: Math.max(1, STAT_BASE.hp + lv * STAT_PER_LEVEL + sum("Life")),
+    maxMp: Math.max(0, STAT_BASE.mp + lv * STAT_PER_LEVEL + sum("Blue")),
+    atk: Math.max(1, STAT_BASE.atk + lv * STAT_PER_LEVEL + sum("Attack")),
+    def: Math.max(0, STAT_BASE.def + lv * STAT_PER_LEVEL + sum("Defense")),
+  };
+}
+
+/** 升级阈值：next_level_exp = 当前 level * 100 */
+function playerNextExp(level: number): number {
+  return Math.max(1, Math.round(num(level, 1))) * 100;
+}
+
+/** 刷新玩家实体的经验显示字段（HUD：EXP me.exp/me.expToNext） */
+function refreshPlayerExpFields(s: FieldSurvivalState): void {
   const me = playerEntity(s);
   if (!me) return;
-  const b = bagAttributeBonus(s);
-  const anyMe = me as any;
-  if (!anyMe._attrBase) anyMe._attrBase = { atk: num(me.atk, 0), maxHp: num(me.maxHp, 0), def: num(anyMe.def, 0), maxMp: num(anyMe.maxMp, 0) };
-  const base = anyMe._attrBase;
-  me.atk = Math.max(1, base.atk + b.Attack);
-  me.maxHp = Math.max(1, base.maxHp + b.Life);
-  anyMe.def = base.def + b.Defense;
-  if (base.maxMp > 0 || b.Blue > 0) {
-    anyMe.maxMp = Math.max(0, base.maxMp + b.Blue);
-    anyMe.mp = clamp(num(anyMe.mp, 0), 0, anyMe.maxMp);
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const lv = Math.max(1, Math.round(num(me.level, 1)));
+  const exp = Math.max(0, Math.round(num(s.exp, num(card.exp, 0))));
+  s.exp = exp;
+  me.exp = exp;
+  me.expToNext = playerNextExp(lv);
+}
+
+/** 等级称号：优先读「等级-称号对照表」，无对应等级 → 空字符串；无对照表 → 返回 null（保留原称号） */
+const LEVEL_DESC_MAP_KEYS = ["level_desc_map", "level_titles", "level_title_map", "level_desc_table", "等级称号表"];
+function resolveLevelDesc(card: Record<string, any>, level: number): string | null {
+  for (const key of LEVEL_DESC_MAP_KEYS) {
+    const m = card?.[key];
+    if (m && typeof m === "object") {
+      const v = (m as any)[String(level)] ?? (m as any)[level];
+      return v == null ? "" : String(v);
+    }
   }
-  me.hp = clamp(me.hp, 0, me.maxHp);
+  return null;
+}
+
+/** 等级/经验/HP/MP 同步到「动态角色卡」（变化才回写，避免每帧 writeback） */
+function syncPlayerCardStats(s: FieldSurvivalState, patch?: Record<string, any>): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const lv = Math.max(1, Math.round(num(me.level, 1)));
+  const exp = Math.max(0, Math.round(num(me.exp, num(s.exp, 0))));
+  const next = playerNextExp(lv);
+  const hp = Math.round(num(me.hp, 0));
+  const maxHp = Math.round(num(me.maxHp, 0));
+  const mp = Math.round(num(me.mp, 0));
+  const maxMp = Math.round(num(me.maxMp, 0));
+  const extra = patch || {};
+  const sig = [lv, exp, next, hp, maxHp, mp, maxMp, JSON.stringify(extra)].join("|");
+  if ((me as any)._cardStatSig === sig) return;
+  (me as any)._cardStatSig = sig;
+  patchCard(s, { level: lv, exp, next_level_exp: next, hp, maxHp, mp, maxMp, ...extra });
+}
+
+/** 升级判定：exp ≥ level*100 → 升级（支持连续多级），溢出经验保留，重算满血满蓝 + 写称号 */
+function checkPlayerLevelUp(s: FieldSurvivalState): number {
+  const me = playerEntity(s);
+  if (!me) return 0;
+  let lv = Math.max(1, Math.round(num(me.level, 1)));
+  let exp = Math.max(0, Math.round(num(s.exp, 0)));
+  let ups = 0;
+  while (exp >= playerNextExp(lv)) {
+    exp -= playerNextExp(lv);   // ② 扣除「升级前」阈值（③ 下一轮用新 level*100）
+    lv += 1;                    // ① 等级 +1
+    ups += 1;
+  }
+  if (!ups) { refreshPlayerExpFields(s); return 0; }
+  me.level = lv;
+  s.exp = exp;
+  applyBagAttributes(s, { full: true });        // ⑤ 按满血满蓝公式重算 hp/mp
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const desc = resolveLevelDesc(card, lv);      // ④ 等级称号
+  syncPlayerCardStats(s, desc == null ? {} : { level_desc: desc });
+  floater(s, `Lv.${lv} ↑`, me.x, me.y - 40);
+  pushEvent(s, `升级到 Lv.${lv}（经验 ${exp}/${playerNextExp(lv)}，HP/MP 已按公式补满）`);
+  return ups;
+}
+
+/** 玩家获得经验：累加 → 升级判定 → 角色卡同步（模糊描述不加经验，由 AI 层写 other） */
+function gainPlayerExp(s: FieldSurvivalState, amount: number): void {
+  const gain = Math.round(num(amount, 0));
+  if (gain <= 0) return;
+  s.exp = Math.max(0, Math.round(num(s.exp, 0)) + gain);
+  checkPlayerLevelUp(s);
+  syncPlayerCardStats(s);
+}
+
+/** 满血满蓝恢复（game.md 5：睡觉/住宿/药剂/恢复技能/剧情治愈 → 直接补满，描述写 other） */
+function restorePlayerFull(s: FieldSurvivalState, reason: string): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  applyBagAttributes(s, { full: true });
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const other = (Array.isArray(card.other) ? card.other.map((x: any) => String(x)) : []).slice(-20);
+  const note = `${reason}：HP/MP 已恢复至满值（HP ${Math.round(me.hp)}/${Math.round(me.maxHp)}，MP ${Math.round(num(me.mp, 0))}/${Math.round(num(me.maxMp, 0))}）`;
+  other.push(note);
+  syncPlayerCardStats(s, { other });
+  floater(s, "满血满蓝", me.x, me.y - 40);
+  pushEvent(s, note);
+}
+
+/** 开局：等级/经验取「动态角色卡」，四维按公式重算，当前 hp/mp 取卡面值并夹进上限 */
+function initPlayerFromCard(s: FieldSurvivalState, playerRole: any): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const card = ((s.playerCard && Object.keys(s.playerCard).length)
+    ? (s.playerCard as Record<string, any>)
+    : ((playerRole?.parameterCardJson || playerRole?.parameter_card_json || {}) as Record<string, any>)) || {};
+  if (!s.playerCard || !Object.keys(s.playerCard).length) s.playerCard = { ...card };
+  me.level = Math.max(1, Math.round(num(card.level, num(playerRole?.initial_level, num(me.level, 1)))));
+  s.exp = Math.max(0, Math.round(num(card.exp, num(s.exp, 0))));
+  const st = playerMaxStats(s, me.level);
+  me.maxHp = st.maxHp;
+  me.maxMp = st.maxMp;
+  me.atk = st.atk;
+  me.def = st.def;
+  me.hp = clamp(num(card.hp, st.maxHp), 0, st.maxHp);
+  const cardMp = num(card.mp, NaN);
+  me.mp = clamp(Number.isFinite(cardMp) ? cardMp : st.maxMp, 0, st.maxMp);
+  refreshPlayerExpFields(s);
+  syncPlayerCardStats(s);
+}
+
+/** 被动加成落到玩家实体（四维按 game.md 公式重算；full=true 时补满血满蓝） */
+function applyBagAttributes(s: FieldSurvivalState, opts?: { full?: boolean }): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const st = playerMaxStats(s);
+  me.maxHp = st.maxHp;
+  me.maxMp = st.maxMp;
+  me.atk = st.atk;
+  me.def = st.def;
+  if (opts?.full) {
+    me.hp = me.maxHp;
+    me.mp = st.maxMp;
+  } else {
+    me.hp = clamp(num(me.hp, st.maxHp), 0, me.maxHp);
+    me.mp = clamp(num(me.mp, st.maxMp), 0, st.maxMp);
+  }
+  refreshPlayerExpFields(s);
 }
 /**
  * ★ game.md 背包物品使用（HUD 物品栏 / 背包面板共用）：
@@ -1740,7 +1967,7 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
         .filter((x) => x.count > 0);
     }
   }
-  patchCard(s, { items: serializeBag(nextBag) });
+  patchCard(s, { items: serializeBag(nextBag, card.items) });
   applyBagAttributes(s);
   return msg;
 }
@@ -1817,11 +2044,15 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       if (e) {
         pc.hp = Math.round(num((e as any).hp, num(pc.hp, 0)));
         pc.maxHp = Math.round(num((e as any).maxHp, num(pc.maxHp, pc.hp)));
+        // ★ 等级系统：蓝量以实体为权威（满蓝公式 = 100 + 等级*10 + 加成）
+        pc.mp = Math.round(num((e as any).mp, num(pc.mp, 0)));
+        pc.maxMp = Math.round(num((e as any).maxMp, num(pc.maxMp, pc.mp)));
       }
       if (side === "player") {
-        if (num((s.playerCard as any)?.mp, -1) >= 0) pc.mp = (s.playerCard as any).mp;
-        if (num((s.playerCard as any)?.money, -1) >= 0) pc.money = (s.playerCard as any).money;
+        pc.money = num((s.playerCard as any)?.money, num(pc.money, 0));
         pc.exp = Math.round(num((s.playerCard as any)?.exp, num(s.exp, 0)));
+        // ★ 等级系统：与玩家实体保持一致（等级/经验/满血满蓝）
+        pc.level = Math.max(1, Math.round(num(e ? (e as any).level : pc.level, 1)));
       } else if (e) {
         pc.exp = Math.round(num(old?.exp, num(pc.exp, 0)));
       }
@@ -2091,6 +2322,8 @@ export async function handle_action(
       s.entities = [];
       // ★ v3: 玩家出生在 origin (0, 0)，与 map_config.json 一致
       s.entities.push(makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0));
+      // ★ game.md 等级系统：等级/经验取参数卡，四维按公式重算（HP/MP 取卡面值并夹进满值上限）
+      initPlayerFromCard(s, playerRole as any);
       participants.forEach((id, i) => {
         const r = byId(id);
         if (!r) return;
@@ -2188,6 +2421,8 @@ export async function handle_action(
       //   才会跟随用户帮打怪（未组队角色原地待命，绝不自动跟随）
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
       ensureNpcCards(s, s.levelName || "");
+      // ★ game.md 商城：开局即建货源（商城 agent 故事物资 + 插件自带物资），不等第一次 tick
+      if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
       s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
@@ -2214,6 +2449,7 @@ export async function handle_action(
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
       syncCardFromContext(s, context);
       applyBagAttributes(s); // ★ game.md 背包被动属性加成（Defense/Attack/Life/Blue）
+      syncPlayerCardStats(s); // ★ game.md 等级系统：等级/经验/HP/MP → 动态角色卡（变化才回写）
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
@@ -2301,7 +2537,7 @@ export async function handle_action(
       const nextBag = bag
         .map((x) => (x.name === name ? { ...x, count: x.count - sold } : x))
         .filter((x) => x.count > 0);
-      patchCard(s, { items: serializeBag(nextBag), money: Math.round(num(card.money, 0)) + gain });
+      patchCard(s, { items: serializeBag(nextBag, card.items), money: Math.round(num(card.money, 0)) + gain });
       pushEvent(s, `卖出 ${name}×${sold}，获得 ${gain} 金钱`);
       const me = playerEntity(s);
       if (me) floater(s, `+${gain} 金`, me.x, me.y - 30);
@@ -2323,7 +2559,7 @@ export async function handle_action(
       const card = (s.playerCard || {}) as Record<string, any>;
       const bag = mergeBag(itemsFromCard(card), s.bagMeta, order.length ? order : s.bagOrder);
       s.bagOrder = bag.map((x) => x.name);
-      patchCard(s, { items: serializeBag(bag) });
+      patchCard(s, { items: serializeBag(bag, card.items) });
       await persistSys(context, s);
       return okResp("背包顺序已更新");
     }
@@ -2369,7 +2605,7 @@ export async function handle_action(
         const nextBag = bag
           .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
           .filter((x) => x.count > 0);
-        patchCard(s, { items: serializeBag(nextBag) });
+        patchCard(s, { items: serializeBag(nextBag, card.items) });
         pushEvent(s, `${name}×${moved} 已存入纳戒`);
       } else {
         const ringItems = s.ring.items || [];
@@ -2383,11 +2619,21 @@ export async function handle_action(
           .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
           .filter((x) => x.count > 0);
         s.bagMeta = { ...(s.bagMeta || {}), [it.name]: { ...it, count: 0 } };
-        patchCard(s, { items: serializeBag(bag) });
+        patchCard(s, { items: serializeBag(bag, card.items) });
         pushEvent(s, `${name}×${moved} 已从纳戒取出`);
       }
       await persistSys(context, s);
       return okResp(to === "ring" ? `已存入纳戒：${name}` : `已取出：${name}`);
+    }
+
+    case "sys_rest": {
+      // ★ game.md 5：睡觉 / 住宿 / 休息过夜 → 直接满血满蓝，恢复描述写入角色卡 other
+      if (s.phase !== "playing") return okResp("");
+      const meRest = playerEntity(s);
+      if (!meRest || !meRest.alive) return okResp("角色不可用");
+      (meRest as any).actionBobMs = 300;
+      restorePlayerFull(s, str(params?.reason, "休息"));
+      return okResp(`已休息：HP ${Math.round(meRest.hp)}/${Math.round(meRest.maxHp)}，MP ${Math.round(num(meRest.mp, 0))}/${Math.round(num(meRest.maxMp, 0))}`);
     }
 
     case "sys_use_skill": {
@@ -2482,17 +2728,7 @@ export async function handle_action(
       it.durability = clamp(Math.round(num(params?.durability, it.durability == null ? -1 : it.durability)), -1, 99999);
       it.attribute_type = (ITEM_ATTR_TYPES as readonly string[]).includes(str(params?.attribute_type)) ? str(params?.attribute_type) : "";
       it.attribute_value = Math.round(num(params?.attribute_value, it.attribute_value || 0));
-      const metaEntry: ItemMeta = {
-        power: it.power!, cost: it.cost!, cd: it.cd!,
-        type: it.type as ItemType, range: it.range as "melee" | "ranged",
-        lv: it.lv!, buff_type: it.buff_type!,
-        durability: it.durability!, durabilityLeft: it.durability!,
-        attribute_type: it.attribute_type!, attribute_value: it.attribute_value!,
-      };
-      s.itemMeta = { ...(s.itemMeta || {}) };
-      if (oldName !== nm) delete s.itemMeta[oldName];
-      s.itemMeta[nm] = metaEntry;
-      // 参数卡「物品」只保存名称列表：展平后替换同名条目（数量合并、lv>1 加 lv 注记、保留原描述注记）
+      // ★ game.md quantity/description：先汇总原条目数量与描述，再决定写回值
       const flat: string[] = [];
       (Array.isArray(card.items) ? card.items : []).forEach((x: any) => {
         if (typeof x === "string") splitSkillList(x).forEach((p: string) => { if (p.trim()) flat.push(p.trim()); });
@@ -2510,7 +2746,22 @@ export async function handle_action(
         if (p.desc && !desc) desc = p.desc;
       });
       if (!total) total = it.count;
-      const annotated = `${nm}${total > 1 ? `×${total}` : ""}${it.lv! > 1 ? `（lv${it.lv}）` : ""}${desc ? `（${desc}）` : ""}`;
+      const qty = params?.quantity != null ? Math.max(1, Math.round(num(params.quantity, total))) : total;
+      const descNew = str(params?.description, "");
+      const descFinal = descNew || desc;
+      const metaEntry: ItemMeta = {
+        power: it.power!, cost: it.cost!, cd: it.cd!,
+        type: it.type as ItemType, range: it.range as "melee" | "ranged",
+        lv: it.lv!, buff_type: it.buff_type!,
+        durability: it.durability!, durabilityLeft: it.durability!,
+        attribute_type: it.attribute_type!, attribute_value: it.attribute_value!,
+        quantity: qty, description: descFinal,
+      };
+      s.itemMeta = { ...(s.itemMeta || {}) };
+      if (oldName !== nm) delete s.itemMeta[oldName];
+      s.itemMeta[nm] = metaEntry;
+      // 参数卡「物品」只保存名称列表：展平后替换同名条目（数量取 qty、lv>1 加 lv 注记、描述注记保留/更新）
+      const annotated = `${nm}${qty > 1 ? `×${qty}` : ""}${it.lv! > 1 ? `（lv${it.lv}）` : ""}${descFinal ? `（${descFinal}）` : ""}`;
       const at = flat.findIndex((x) => normName(parseItemRaw(x).name) === oldNk);
       const kept = flat.filter((x) => normName(parseItemRaw(x).name) !== oldNk);
       kept.splice(Math.max(0, Math.min(at < 0 ? kept.length : at, kept.length)), 0, annotated);
@@ -2520,7 +2771,7 @@ export async function handle_action(
       await persistSys(context, s);
       const tLabel2 = it.type === "heal" ? "治疗" : it.type === "buff" ? `强化(${it.buff_type || "-"})` : it.type === "attribute" ? `属性(${it.attribute_type || "-"})` : it.range === "ranged" ? "远程" : "近战";
       const dLabel = it.durability! < 0 ? "永久" : `耐久${it.durability}`;
-      return okResp(`「${nm}」已保存（${tLabel2}·${dLabel}）`);
+      return okResp(`「${nm}」已保存（${tLabel2}·${dLabel}·×${qty}）`);
     }
 
     case "sys_shop_refresh": {
@@ -2538,7 +2789,7 @@ export async function handle_action(
       const money = Math.round(num(card.money, 0));
       const cost = Math.round(good.price) * ask;
       if (money < cost) return okResp(`金钱不足：需要 ${cost}，现有 ${money}`);
-      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
       const exist = bag.find((x) => x.name === good.name);
       if (exist) exist.count += ask;
       else bag.push({ name: good.name, count: ask, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc });
@@ -2546,7 +2797,7 @@ export async function handle_action(
         ...(s.bagMeta || {}),
         [good.name]: { name: good.name, count: 0, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc },
       };
-      patchCard(s, { items: serializeBag(bag), money: money - cost });
+      patchCard(s, { items: serializeBag(bag, card.items), money: money - cost });
       pushEvent(s, `购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
       const me = playerEntity(s);
       if (me) floater(s, `-${cost} 金`, me.x, me.y - 30);

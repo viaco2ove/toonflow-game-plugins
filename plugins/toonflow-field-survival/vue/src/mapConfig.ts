@@ -97,6 +97,10 @@ export interface MapMob {
   entity_type: string;
   /** 野怪等级（从 Tiled 对象属性读取；地图未标注则为 1） */
   level: number;
+  /** ★ 阵营 neutral/hostile/friendly；地图对象未标注 camp 时按 entity_type 推断（白名单内 → hostile） */
+  camp: "neutral" | "hostile" | "friendly";
+  /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」；未标注则只显示类型中文名 */
+  full_name?: string;
 }
 
 /**
@@ -110,18 +114,75 @@ export interface MapMob {
  * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
  */
 export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number; level: number }> = {
-  GOBLIN:      { name: "哥布林斥候", hp: 30,  atk: 6,  level: 1 },
+  RAT:         { name: "老鼠",       hp: 12,  atk: 4,  level: 1 },
+  GOBLIN:      { name: "哥布林",     hp: 30,  atk: 6,  level: 1 },
   LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8,  level: 2 },
   ORC:         { name: "半兽人",     hp: 80,  atk: 12, level: 3 },
   ORC_BOSS:    { name: "兽人首领",   hp: 200, atk: 18, level: 8 },
   SKELETON:    { name: "骷髅兵",     hp: 50,  atk: 12, level: 2 },
   ZOMBIE:      { name: "僵尸",       hp: 60,  atk: 10, level: 1 },
+  IMP:         { name: "小恶魔",     hp: 30,  atk: 7,  level: 2 },
   GHOST:       { name: "幽灵",       hp: 35,  atk: 9,  level: 3 },
   LICH:        { name: "巫妖",       hp: 160, atk: 20, level: 7 },
   WOLF:        { name: "巨狼",       hp: 60,  atk: 10, level: 2 },
   BOAR:        { name: "野猪",       hp: 50,  atk: 8,  level: 1 },
   SNAKE:       { name: "毒蛇",       hp: 25,  atk: 8,  level: 2 },
   BAT:         { name: "蝙蝠",       hp: 20,  atk: 5,  level: 1 },
+  WILD_GOAT:   { name: "山羊",       hp: 45,  atk: 9,  level: 2 },
+};
+
+/**
+ * ★ entity_type → 头顶显示中文名（与 entity_types.json 的 name_zh 同口径）。
+ *   头顶规则：无 full_name 显示「哥布林」；有 full_name 显示「哥布林(低阶湮物)」。
+ *   表里没有的类型回退 MOB_ARCHETYPES[].name。
+ */
+export const ENTITY_TYPE_ZH: Record<string, string> = {
+  RAT: "老鼠",
+  BAT: "暗夜生物",
+  SNAKE: "爬虫",
+  WILD_GOAT: "山羊",
+  GOBLIN: "哥布林",
+  ZOMBIE: "人形亡者",
+  IMP: "小恶魔",
+  SKELETON: "骷髅兵",
+  KOBOLD: "狗头人",
+  ICE_ELEMENTAL: "冰元素",
+  ORC: "半兽人",
+  BONEMAN: "白骨人",
+  EMPOWERED_ORC: "强化半兽人",
+  DEMON: "恶魔",
+  GHOST: "幽灵",
+  MUMMY: "木乃伊",
+  SIREN: "塞壬",
+  TROLL: "巨魔",
+  BANSHEE: "报丧女妖",
+  GOLEM: "石魔",
+  CYCLOPS: "独眼巨人",
+  MINOTAUR: "牛头人",
+  VAMPIRE: "血族",
+  LICH: "巫妖",
+  LOOT_GOBLIN: "拾荒哥布林",
+  ORC_BOSS: "兽人首领",
+};
+
+/** 阵营规范化：非法值返回 null（调用方回退 entity_type 推断） */
+export function normalizeCamp(v: any): "neutral" | "hostile" | "friendly" | null {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "neutral" || s === "hostile" || s === "friendly" ? s : null;
+}
+
+/**
+ * ★ entity_type → sprite key（assets.ts 的 mob key：rat/bat/snake/goat/goblin/skeleton/orc/minotaur）。
+ *   头顶显示中文名后，中文名不再承担 sprite 关键字匹配职责，按 entity_type 精确映射；
+ *   表外类型回退 mobKeyFor(名字)。
+ */
+export const ENTITY_SPRITE_KEY: Record<string, string> = {
+  RAT: "rat", BAT: "bat", SNAKE: "snake", WILD_GOAT: "goat",
+  GOBLIN: "goblin", LOOT_GOBLIN: "goblin", IMP: "goblin", KOBOLD: "goblin",
+  SKELETON: "skeleton", ZOMBIE: "skeleton", BONEMAN: "skeleton",
+  MUMMY: "skeleton", VAMPIRE: "skeleton", BANSHEE: "skeleton", GHOST: "skeleton", LICH: "skeleton",
+  ORC: "orc", ORC_BOSS: "orc", EMPOWERED_ORC: "orc", DEMON: "orc", WOLF: "orc",
+  TROLL: "minotaur", GOLEM: "minotaur", CYCLOPS: "minotaur", MINOTAUR: "minotaur",
 };
 
 /** 野怪白名单（由 MOB_ARCHETYPES 派生，避免两处维护不一致） */
@@ -319,9 +380,12 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
-        } else if (MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+        } else if (normalizeCamp(props.camp) !== "neutral"
+                   && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
-          //   白名单见 MOB_ENTITY_TYPES（含 ORC / LICH / GHOST / LOOT_GOBLIN），
+          //   阵营判定（game.md 优化）：对象带 camp 属性时以 camp 为准；
+          //   没有 camp 时回退 entity_type 白名单推断（白名单内 → hostile），原地图无需修改依然可用。
+          //   camp=hostile 还允许白名单外的类型也能成为野怪（走兜底档案），消除 entity_type 判定的不可靠性。
           //   等级优先取 Tiled 属性 props.level，未标注时用 MOB_ARCHETYPES 默认值。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
@@ -336,7 +400,25 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             gid: obj.gid,
             entity_type: props.entity_type,
             level: mobLevel,
+            camp: normalizeCamp(props.camp) || "hostile",
+            full_name: props.full_name != null ? String(props.full_name) : undefined,
           });
+        } else if (normalizeCamp(props.camp) === "neutral" && !NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+          // ★ camp=neutral 的实体型对象（如中立野怪/商人怪）→ NPC 装饰物（不参战、头顶显示姓名）
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          const zh = ENTITY_TYPE_ZH[String(props.entity_type)] || MOB_ARCHETYPES[props.entity_type]?.name || obj.name || "路人";
+          const fullName = props.full_name != null ? String(props.full_name) : "";
+          decorations.push({
+            id: `n_${decIdx++}`,
+            kind: "npc",
+            x: wx,
+            y: wz,
+            name: fullName ? `${zh}(${fullName})` : zh,
+            variant: obj.gid ? obj.gid - 1 : 0,
+            wanders: props.wanders === true,
+            seed: (decIdx * 7919) % 1000,
+          } as any);
         } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
           // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
           const wx = obj.x / 32 - W / 2;

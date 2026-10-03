@@ -38,6 +38,13 @@ export interface Entity {
   hitFlashMs?: number;
   /** ★ 动作小跳剩余毫秒（释放技能/使用物品/发动攻击时） */
   actionBobMs?: number;
+  /** ★ 阵营 neutral/hostile/friendly；缺省按 entity_type 推断（白名单内 → hostile） */
+  camp?: string;
+  /** ★ 绑定 Rotten-Soup 怪物类型（取值见 public/entity_types.json 的 enemies[].entity_type，如 RAT / ORC / GHOST）
+   *  用于把本故事怪物档案与 Rotten-Soup 权威数值/贴图表打通；缺省时按 name 兜底 */
+  entity_type?: string;
+  /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」 */
+  full_name?: string;
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }

@@ -220,3 +220,46 @@ const r18 = await run("item", { index: 0 });
 const k18 = (s.vfx || []).map((v) => v.kind);
 console.log("18. HUD 物品栏使用金疮药：hp", `${me18.hp}`, "特效 =", JSON.stringify([...new Set(k18)]),
   k18.includes("heal_ring") && me18.hp > 10 ? "✅ 治疗环 + 回血（itemMeta 未改时走 heal）" : "❌", "|", r18?.response || "");
+
+// 19) ★ game.md quantity/description：修改数量与描述 → itemMeta 持久化 + 参数卡注记写回
+ctx.playerCard = { ...ctx.playerCard, items: ["小刀", "银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4", "力量+4"] };
+await run("start", { selections: { participants: [], spectators: [], enemies: [] } });
+const r19 = await run("sys_item_edit", { index: 1, name: "银鲤", quantity: 5, description: "鲜美的河鱼", power: 6, cost: 0, cd: 10, type: "atk", range: "melee", lv: 1, buff_type: "", durability: -1, attribute_type: "", attribute_value: 0 });
+console.log("19a. 银鲤 quantity=5/description →", JSON.stringify({ qty: s.itemMeta?.["银鲤"]?.quantity, desc: s.itemMeta?.["银鲤"]?.description }),
+  s.itemMeta?.["银鲤"]?.quantity === 5 && s.itemMeta?.["银鲤"]?.description === "鲜美的河鱼" ? "✅ 落 itemMeta" : "❌", "|", r19?.response || "");
+const fish19 = (s.playerCard?.items || []).find((x) => String(x).startsWith("银鲤"));
+console.log("19b. 参数卡条目 =", JSON.stringify(fish19),
+  fish19 === "银鲤×5（鲜美的河鱼）" ? "✅ 数量+描述写回" : "❌");
+
+// 19c. 使用后注记保留（此前 serializeBag 会抹掉「（…）」）
+await run("sys_use_item", { name: "银鲤" });
+const fish19b = (s.playerCard?.items || []).find((x) => String(x).startsWith("银鲤"));
+console.log("19c. 使用 1 次后条目 =", JSON.stringify(fish19b),
+  fish19b === "银鲤×4（鲜美的河鱼）" ? "✅ 注记保留、数量扣减" : "❌");
+
+// 19d. 只改威力不动数量 → quantity 取当前 total（4）
+await run("sys_item_edit", { index: 1, name: "银鲤", power: 8, cost: 0, cd: 10, type: "atk", range: "melee", lv: 1, buff_type: "", durability: -1, attribute_type: "", attribute_value: 0 });
+const fish19c = (s.playerCard?.items || []).find((x) => String(x).startsWith("银鲤"));
+console.log("19d. 不传 quantity 再改 →", JSON.stringify({ entry: fish19c, qty: s.itemMeta?.["银鲤"]?.quantity, desc: s.itemMeta?.["银鲤"]?.description }),
+  String(fish19c).startsWith("银鲤×4（鲜美的河鱼）") && s.itemMeta?.["银鲤"]?.quantity === 4 ? "✅ 数量/描述保持" : "❌");
+
+// 20) ★ game.md 商城：商城 agent（故事动态参数 + 常驻世界书）+ 插件自带物资；购买消耗货币
+ctx.playerCard = { ...ctx.playerCard, items: ["小刀"], money: 100 };
+await run("start", { selections: { participants: [], spectators: [], enemies: [] } });
+console.log("20a. start 自动建商城 =", JSON.stringify({ src: s.shopSource, n: (s.shopGoods || []).length, first: s.shopGoods?.[0]?.name, from: s.shopGoods?.[0]?.from }),
+  s.shopSource === "builtin" && (s.shopGoods || []).length >= 8 && s.shopGoods?.[0]?.from === "builtin"
+  ? "✅ 无 agent 时 builtin 兜底" : "❌");
+
+const r20 = await run("sys_shop_buy", { id: "b_ganliang", name: "干粮", count: 2 });
+const money20 = Math.round(Number(s.playerCard?.money ?? -1));
+const hasGanliang = (s.playerCard?.items || []).some((x) => String(x).startsWith("干粮"));
+console.log("20b. 买干粮×2（12金×2）=", JSON.stringify({ resp: r20?.response || "", money: money20, entry: (s.playerCard?.items || []).find((x) => String(x).startsWith("干粮")) }),
+  money20 === 76 && hasGanliang ? "✅ 扣钱+入背包" : "❌");
+
+const r20c = await run("sys_shop_buy", { id: "b_xinde", name: "基础技能心得", count: 1 });
+console.log("20c. 钱不足买 320 金 =", JSON.stringify({ resp: r20c?.response || "", money: Math.round(Number(s.playerCard?.money ?? -1)) }),
+  String(r20c?.response || "").includes("金钱不足") ? "✅ 拒绝购买" : "❌");
+
+const r20d = await run("sys_shop_refresh", {});
+console.log("20d. 刷新货源 =", JSON.stringify({ resp: r20d?.response || "", src: s.shopSource, n: (s.shopGoods || []).length }),
+  (s.shopGoods || []).length >= 8 ? "✅ 货源保持" : "❌");

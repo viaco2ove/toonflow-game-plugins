@@ -318,7 +318,8 @@ function makeEnemyFromEntityType(
   const avatarPath = gid ? `./images/player_sprites/${gid}.webp` : undefined;
   const isRanged = typeof rs.range === "number" && rs.range > 5;
   const id = "e_" + (++mobIdSeq);
-  const name = String(rs.name || rs.entity_type || "野怪");
+  // ★ game.md：头顶显示类型中文名（name_zh 与 mapConfig.ENTITY_TYPE_ZH 同口径），透传 camp/entity_type
+  const name = String(rs.name_zh || rs.name || rs.entity_type || "野怪");
   return {
     id, name, side: "enemy",
     x, y, vx: 0, vy: 0,
@@ -332,6 +333,8 @@ function makeEnemyFromEntityType(
     alive: true,
     avatarPath,
     isRanged,
+    camp: rs.camp === "neutral" || rs.camp === "friendly" ? rs.camp : "hostile",
+    entity_type: String(rs.entity_type || ""),
   } as any;
 }
 
@@ -644,6 +647,18 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
       money: 128,
       items: itemSlots.map((it) => (it.count > 1 ? `${it.name}×${it.count}` : it.name)),
     },
+    // ★ 对齐真实宿主 refreshShop：mock 无 tsApi.agent → builtin 兜底货源
+    shopSource: "builtin",
+    shopGoods: [
+      { id: "b_huiqi", name: "回气散", price: 30, kind: "consumable", rarity: "common", heal: 30, desc: "恢复 30 点生命", from: "builtin" },
+      { id: "b_jijiu", name: "急救包", price: 60, kind: "consumable", rarity: "fine", heal: 60, desc: "恢复 60 点生命", from: "builtin" },
+      { id: "b_ganliang", name: "干粮", price: 12, kind: "consumable", rarity: "common", heal: 14, desc: "恢复 14 点生命", from: "builtin" },
+      { id: "b_zhixuecao", name: "止血草", price: 20, kind: "material", rarity: "common", heal: 0, desc: "常见草药，可入药", from: "builtin" },
+      { id: "b_yinguang", name: "萤光石", price: 45, kind: "material", rarity: "fine", heal: 0, desc: "泛着微光的矿石", from: "builtin" },
+      { id: "b_duanjian", name: "精钢短剑", price: 220, kind: "equipment", rarity: "rare", heal: 0, desc: "攻击 +6", from: "builtin" },
+      { id: "b_hufu", name: "皮甲护符", price: 160, kind: "equipment", rarity: "fine", heal: 0, desc: "防御 +4", from: "builtin" },
+      { id: "b_xinde", name: "基础技能心得", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "习得一项基础技能", from: "builtin" },
+    ],
     skillPage: 0,
     itemPage: 0,
     map: null,
@@ -1023,6 +1038,15 @@ function install(): void {
         push();
         return;
       }
+      // ★ mock 镜像 entry.js patchCard：数量/描述写回参数卡（UI sysBagItems 以 playerCard.items 为数据源）
+      const rewriteCardItem = (nm: string, cnt: number, dsc: string) => {
+        const pc = (state as any).playerCard || ((state as any).playerCard = {});
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const kept = arr.filter((x) => clean(x) !== clean(nm));
+        if (cnt > 0) kept.push(`${nm}${cnt > 1 ? `×${cnt}` : ""}${dsc ? `（${dsc}）` : ""}`);
+        pc.items = kept;
+      };
       if (action === "sys_use_item") {
         // ★ 对齐 entry.js useBagItem：扣耐久（durability>0），耗尽损毁 1 个
         const name = String(params?.name || "");
@@ -1046,6 +1070,7 @@ function install(): void {
             state.events.push(`[mock] 使用 ${name}（剩余 ${it.count}）`);
           }
           (state as any).itemMeta = im;
+          rewriteCardItem(name, Math.max(0, Number(it.count) || 0), String((it as any).desc || ""));
         } else {
           state.events.push(`[mock] 「${name}」不在背包中`);
         }
@@ -1072,15 +1097,65 @@ function install(): void {
           }
           (it as any).attribute_type = typeof params?.attribute_type === "string" ? params.attribute_type : "";
           if (Number.isFinite(Number(params?.attribute_value))) (it as any).attribute_value = Math.round(Number(params.attribute_value));
+          // ★ game.md quantity/description：mock 同步镜像
+          const qty = Number.isFinite(Number(params?.quantity)) ? Math.max(1, Math.round(Number(params.quantity))) : Math.max(1, Number(it.count) || 1);
+          const descFinal = typeof params?.description === "string" && params.description.trim() ? params.description.trim() : String((it as any).desc || "");
+          it.count = qty;
+          (it as any).quantity = qty;
+          if (descFinal) (it as any).desc = descFinal;
           (state as any).itemMeta[it.name] = {
             power: (it as any).power || 0, cost: (it as any).cost || 0, cd: (it as any).cd || 0,
             type: (it as any).type || "heal", range: (it as any).range || "melee",
             lv: (it as any).lv || 1, buff_type: (it as any).buff_type || "",
             durability: (it as any).durability ?? -1, durabilityLeft: (it as any).durability ?? -1,
             attribute_type: (it as any).attribute_type || "", attribute_value: (it as any).attribute_value || 0,
+            quantity: qty, description: descFinal,
           };
+          rewriteCardItem(it.name, qty, descFinal);
           state.events.push(`[mock] 物品「${it.name}」参数已修改并保存`);
         }
+        push();
+        return;
+      }
+      if (action === "sys_shop_refresh") {
+        // ★ 对齐 entry.js case "sys_shop_refresh"：mock 无 agent，保持 builtin 货源
+        (state as any).shopSource = "builtin";
+        state.events.push(`[mock] 商城已刷新（${((state as any).shopGoods || []).length} 件商品）`);
+        push();
+        return;
+      }
+      if (action === "sys_shop_buy") {
+        // ★ 对齐 entry.js case "sys_shop_buy"：扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
+        const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id);
+        if (!good) {
+          state.events.push("[mock] 商品不存在");
+          push();
+          return;
+        }
+        const ask = Math.max(1, Math.round(Number(params?.count) || 1));
+        const pc = (state as any).playerCard || ((state as any).playerCard = {});
+        const money = Math.round(Number(pc.money) || 0);
+        const cost = Math.round(Number(good.price) || 0) * ask;
+        if (money < cost) {
+          state.events.push(`[mock] 金钱不足：需要 ${cost}，现有 ${money}`);
+          push();
+          return;
+        }
+        pc.money = money - cost;
+        const slot = (state.items || []).find((x: any) => x.name === good.name);
+        if (slot) slot.count += ask;
+        else (state.items || []).push({ name: good.name, count: ask, heal: good.heal || 0, mp: 0, type: good.kind === "equipment" ? "atk" : "hp" });
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const old = arr.findIndex((x) => clean(x) === clean(good.name));
+        let base = ask;
+        if (old >= 0) {
+          const m = arr[old].match(/[×xX*]\s*(\d+)/);
+          base = (m ? Number(m[1]) : 1) + ask;
+          arr.splice(old, 1);
+        }
+        arr.push(base > 1 ? `${good.name}×${base}` : good.name);
+        state.events.push(`[mock] 购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
         push();
         return;
       }
