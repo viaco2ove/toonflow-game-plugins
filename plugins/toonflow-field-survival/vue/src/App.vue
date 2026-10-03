@@ -143,8 +143,15 @@ function onSysBtnClick(e: MouseEvent) {
 }
 
 /* ----------------- 系统面板数据（v6：全部来自插件 state / 参数卡） ----------------- */
-interface SysItem { id?: string; name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string; }
-interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; }
+interface SysItem {
+  id?: string; name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string;
+  /** ★ game.md 物品修改：战斗参数（合并自 itemMeta / 按名推断） */
+  power?: number; cost?: number; cd?: number; cdLeft?: number;
+  type?: string; range?: string; lv?: number; buff_type?: string;
+  durability?: number; durabilityLeft?: number; attribute_type?: string; attribute_value?: number;
+  index?: number;
+}
+interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; }
 interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
 interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
 
@@ -173,6 +180,24 @@ function defaultHealLocal(name: string, kind: string): number {
   return 20;
 }
 
+/** ★ game.md：按名/品类推断物品默认 type/range（与 entry inferItemType 同口径） */
+function inferItemTypeLocal(name: string, kind: string): { type: string; range: string } {
+  const n = String(name || "");
+  if (kind === "skill_book") return { type: "buff", range: "melee" };
+  if (kind === "equipment" || /刀|剑|枪|弓|弩|斧|杖|匕|爪|锤/.test(n)) return { type: "atk", range: /弓|弩|杖/.test(n) ? "ranged" : "melee" };
+  if (/力量|攻击|加攻/.test(n)) return { type: "attribute", range: "melee" };
+  return { type: "heal", range: "melee" };
+}
+/** ★ game.md：按名推断被动属性类型（与 entry inferItemAttrType 同口径） */
+function inferItemAttrLocal(name: string): string {
+  const n = String(name || "");
+  if (/防御|护甲|加防|体魄|磐/.test(n)) return "Defense";
+  if (/蓝|法力|灵力|魔力/.test(n)) return "Blue";
+  if (/生命|血量|体质/.test(n)) return "Life";
+  if (/力量|攻击|加攻/.test(n)) return "Attack";
+  return "";
+}
+
 /** 解析参数卡里的字符串物品："银鲤×3" / "短刀（商城购入，8 金）" */
 function parseItemStringLocal(raw: string): { name: string; count: number; price: number } {
   const s = String(raw).trim();
@@ -191,10 +216,11 @@ function sellPriceLocal(rarity: string, kind: string, rawPrice: number): number 
   return Math.max(1, Math.round(base * k));
 }
 
-/** 背包：parameterCardJson.items（string/object 混排）+ bagMeta 元数据 + bagOrder 排列顺序 */
+/** 背包：parameterCardJson.items（string/object 混排）+ bagMeta 元数据 + itemMeta 战斗参数 + bagOrder 排列顺序 */
 const sysBagItems = computed<SysItem[]>(() => {
   const card = sysCard.value || {};
   const meta = (((state.value as any)?.bagMeta || {}) as Record<string, any>);
+  const imeta = (((state.value as any)?.itemMeta || {}) as Record<string, any>);
   const raw = Array.isArray(card.items) ? card.items : [];
   const merged = new Map<string, SysItem>();
   for (const it of raw) {
@@ -226,7 +252,27 @@ const sysBagItems = computed<SysItem[]>(() => {
     const rarity = String(objRarity || m.rarity || "common");
     const heal = Number((it && typeof it === "object" ? (it as any).heal : 0) || m.heal || defaultHealLocal(name, kind));
     const price = sellPriceLocal(rarity, kind, rawPrice || Number(m.price || 0));
-    merged.set(name, { id: name, name, count, kind, rarity, heal, price, desc: m.desc });
+    // ★ game.md 物品修改：战斗参数（itemMeta 按展示名存；无则按名/品类推断）
+    const im = imeta[name] || {};
+    const bt = inferItemTypeLocal(name, kind);
+    const itype = String(im.type || bt.type);
+    const dur = Math.round(Number(im.durability ?? -1));
+    merged.set(name, {
+      id: name, name, count, kind, rarity, heal, price,
+      desc: im.desc || m.desc,
+      power: Number(im.power ?? (kind === "equipment" ? 10 : 0)),
+      cost: Number(im.cost ?? 0),
+      cd: Number(im.cd ?? 0),
+      cdLeft: 0,
+      type: itype,
+      range: String(im.range || (itype === "atk" ? bt.range : "melee")),
+      lv: Math.max(1, Number(im.lv ?? 1)),
+      buff_type: String(im.buff_type || ""),
+      durability: dur,
+      durabilityLeft: Math.round(Number(im.durabilityLeft ?? dur)),
+      attribute_type: im.attribute_type !== undefined ? String(im.attribute_type) : inferItemAttrLocal(name),
+      attribute_value: Number(im.attribute_value ?? 0),
+    });
   }
   const list = Array.from(merged.values());
   const order = (((state.value as any)?.bagOrder || []) as string[]);
@@ -238,10 +284,11 @@ const sysBagItems = computed<SysItem[]>(() => {
     if (ib >= 0) return 1;
     return 0;
   });
+  list.forEach((it, i) => { it.index = i; });
   return list;
 });
 
-/** 技能栏：插件下发的 skills（第 i 项对应快捷栏第 i 格） */
+/** 技能栏：插件下发的 skills（第 i 项对应快捷栏第 i 格）；type/range/lv/buff_type 透传给技能面板（game.md 修改/特效归类） */
 const sysSkills = computed<SysSkill[]>(() => {
   const arr = ((state.value as any)?.skills || []) as any[];
   return arr.map((s, i) => ({
@@ -251,6 +298,10 @@ const sysSkills = computed<SysSkill[]>(() => {
     cost: Number(s.cost || 0),
     cd: Number(s.cd || 0),
     cdLeft: Number(s.cdLeft || 0),
+    type: s.type,
+    range: s.range,
+    lv: s.lv,
+    buff_type: s.buff_type,
     index: i,
   }));
 });
@@ -460,6 +511,20 @@ function onSysBuyItem(good: SysGood, count = 1) {
 function onSysUseSkill(skill: SysSkill) {
   sysNotice.value = `使用技能 ${skill.name}`;
   runSysCmd("sys_use_skill", { index: skill.index, name: skill.name });
+}
+
+/** game.md 技能修改：参数保存到 t_plugin_session_data（entry 侧 skillMeta + 参数卡技能名列表） */
+function onSysEditSkill(p: any) {
+  if (!p || p.index < 0) return;
+  sysNotice.value = `修改技能 ${p.name || ""}`;
+  runSysCmd("sys_skill_edit", p);
+}
+
+/** game.md 物品修改：参数保存到 t_plugin_session_data（entry 侧 itemMeta + 参数卡物品名列表） */
+function onSysEditItem(p: any) {
+  if (!p || p.index < 0) return;
+  sysNotice.value = `修改物品 ${p.name || ""}`;
+  runSysCmd("sys_item_edit", p);
 }
 
 function onSysTeleport(card: SysRole) {
@@ -4881,11 +4946,13 @@ watch(playerSnapshot, () => {
         @use-item="onSysUseItem"
         @sort="onSysSort"
         @sort-auto="onSysSortAuto"
+        @edit-item="onSysEditItem"
         @ring-move="onSysRingMove"
         @ring-skill-move="onSysRingSkillMove"
         @shop-refresh="onSysShopRefresh"
         @buy="onSysBuyItem"
         @use-skill="onSysUseSkill"
+        @edit-skill="onSysEditSkill"
         @teleport="onSysTeleport"
         @travel="onSysTravel"
         @follow="onSysFollow"

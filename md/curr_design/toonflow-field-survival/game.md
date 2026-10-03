@@ -79,9 +79,10 @@ cli 上传地图（自动打包，根据story.json 和[.env](../../../.env) 文�
 每个物品都可以在旁边修改特效，类型[atk, heal, buff,attribute],修改按钮【修改】，【使用】
 点击后可以修改物品参数
 例如：
- { name: "小刀", power: 20, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee"，lv:1,buff_type:"",durability:-1,attribute_type:"",attribute_value:0}
+ { name: "小刀", power: 20, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee"，lv:1,buff_type:"",durability:-1,attribute_type:"",attribute_value:0,
+quantity:4,description:"一把锋利的小刀"}
 物品修改后，物品参数会保存到"t_plugin_session_data"
-用户动态参数卡中的“物品” 只保存物品名称列表：如“银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4”
+用户动态参数卡中的“物品” 只保存物品名称列表：如“银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4、力量+4”
 
 ### buff 类型：
 防御/攻击/持续伤害/晕眩/无敌/加速
@@ -96,6 +97,14 @@ durability:-1
 Defense/Attack/Life/Blue
 物品为用户增加的 防御/攻击/生命量/蓝量 的加成。放在背包里面就能被动加成。
 其中 type: "attribute"  代表是单纯的属性点。使用不消耗，但是依然有小跳效果也会产生普攻效果。
+
+### quantity 数量
+用户动态参数卡中的“物品”:银鲤×3（钓鱼累积，暂未售出，单尾800金）
+name="银鲤"
+quantity=3, 
+description:"银鲤×3（钓鱼累积，暂未售出，单尾800金）"
+存到"t_plugin_session_data"，
+用户动态参数卡中的“物品” 只保存物品名称列表：如“银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4、力量+4”
 
 
 ## 纳戒
@@ -145,7 +154,8 @@ play-role-strip 和 play-inline-card
 与用户组队的角色也会长经验和升级。
 
 # 对话功能
-触碰角色后，角色将会调用 角色发言器agent 进行发言。台词将会同步到Toonflow-game-web 的聊天框
+触碰角色后，角色头上会显示“聊天”按钮
+点击后 将会调用 角色发言器agent 进行发言。台词将会同步到Toonflow-game-web 的聊天框
 角色发言后，提供 选项：发言/继续/离开
 ## 发言点击后
 提供三个ai 发言推进给用户和自定义。用户可输入文字或语音识别出文字后点击发送。

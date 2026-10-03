@@ -53,7 +53,7 @@ for (let i = 0; i < 35; i++) await run("tick", { levelName: "Mulberry Forest", p
 console.log("5. 35 tick 后 vfx.length =", (s.vfx || []).length, (s.vfx || []).length === 0 ? "✅ 正常衰减" : "❌ 不衰减会糊屏");
 
 // 6) 角色卡参数卡：ensureNpcCards 应挂 parameterCardJson 并用实时值覆盖
-ctx.roles.forEach((r) => { r.parameterCardJson = { name: r.name, gender: "男", age: 30, level: 1, hp: 1, exp: 0, personality: "沉稳", skills: ["斩铁"], items: [], other: [] }; });
+ctx.roles.forEach((r) => { r.parameterCardJson = { name: r.name, gender: "男", age: 30, level: 1, hp: 100, exp: 0, personality: "沉稳", skills: ["斩铁"], items: [], other: [] }; });
 await run("tick", { levelName: "Mulberry Forest", player: { x: player.x, y: player.y, facing: 0 } });
 const pc = s.npcCards.find((c) => c.side === "player");
 const npcPc = s.npcCards.find((c) => c.id === "r02");
@@ -126,3 +126,97 @@ await run("sys_party", { roleId: "r02", follow: false });
 const r02Left = s.entities.find((e) => e.id === "r02");
 console.log("    退队后留在原地（Dungeon2） =", r02Left?.mapName === "Dungeon2" && !s.partyIds.includes("r02"),
   r02Left?.mapName === "Dungeon2" ? "✅ 脱离队伍留在原地" : "❌");
+
+// 13) ★ game.md 技能同步与修改：
+//     a) buildSkills 从参数卡技能名列表解析 lv；b) sys_skill_edit 修改参数并保存；
+//     c) 参数卡技能名列表同步；d) skillMeta 持久化到 t_plugin_session_data
+const savedBlobs = [];
+ctx.tsApi = { pluginData: { set: async (k, v) => { savedBlobs.push({ k, v }); }, get: async () => null } };
+ctx.playerCard = {
+  name: "玩家", hp: 120, mp: 50, money: 10, exp: 30,
+  skills: ["源之力（lv1，失控）（lv1）、暗核共鸣（lv2）、夜采直觉"],
+};
+await run("start", { selections: { participants: [], spectators: [], enemies: [] } });
+const sk0 = s.skills[0];
+console.log("13a. 参数卡技能同步：", JSON.stringify(s.skills.slice(0, 3).map((k) => `${k.name}/lv${k.lv}/${k.type}`)),
+  sk0?.name === "源之力" && sk0?.lv === 1 && s.skills[1]?.name === "暗核共鸣" && s.skills[1]?.lv === 2 ? "✅ lv 已解析" : "❌");
+
+const r13 = await run("sys_skill_edit", { index: 0, name: "源之力", power: 99, cost: 8, cd: 50, type: "atk", range: "ranged", lv: 2, buff_type: "" });
+const sk0b = s.skills[0];
+console.log("13b. 修改后：", JSON.stringify({ name: sk0b.name, power: sk0b.power, cost: sk0b.cost, cd: sk0b.cd, type: sk0b.type, range: sk0b.range, lv: sk0b.lv }),
+  sk0b.power === 99 && sk0b.range === "ranged" && sk0b.lv === 2 ? "✅" : "❌", "|", r13?.response || "");
+
+const cardSkills = s.playerCard?.skills;
+console.log("13c. 参数卡技能名列表 =", JSON.stringify(cardSkills),
+  Array.isArray(cardSkills) && cardSkills.some((x) => String(x).includes("源之力") && String(x).includes("lv2")) ? "✅ 已同步（带 lv 注记）" : "❌");
+
+const blob = savedBlobs[savedBlobs.length - 1];
+console.log("13d. 持久化 skillMeta =", JSON.stringify(blob?.v?.skillMeta?.["源之力"]),
+  blob?.v?.skillMeta?.["源之力"]?.power === 99 ? "✅ t_plugin_session_data" : "❌");
+
+// e) 修改后特效按显式 type/range 归类：atk+ranged → fireball
+s.skills[0].cdLeft = 0;
+const pl = s.entities.find((e) => e.side === "player");
+s.entities.push({ id: "mob_9", name: "靶子", side: "enemy", x: pl.x + 1, y: pl.y, vx: 0, vy: 0, hp: 500, maxHp: 500, atk: 0, def: 0, level: 1, facing: 0, cooldown: 0, alive: true, isLocal: true });
+await run("sys_use_skill", { index: 0, name: "源之力" });
+const k13 = (s.vfx || []).map((v) => v.kind);
+console.log("13e. atk+ranged 特效 =", JSON.stringify([...new Set(k13)]), k13.includes("fireball") ? "✅ 火球（显式 type/range 优先）" : "❌");
+
+// 14) ★ game.md 背包物品同步与修改：
+//     a) 参数卡物品同步（×N 合并、type/lv 推断）；b) sys_item_edit 保存 itemMeta + 参数卡物品名列表
+ctx.playerCard = {
+  ...ctx.playerCard,
+  items: ["小刀", "银鲤×3（钓鱼累积，暂未售出，单尾800金）、银鲤×4", "力量+4"],
+};
+await run("start", { selections: { participants: [], spectators: [], enemies: [] } });
+const bagNames = s.items.map((x) => `${x.name}×${x.count}/${x.type}`);
+console.log("14a. 参数卡物品同步 =", JSON.stringify(bagNames),
+  s.items[0]?.name === "小刀" && s.items[0]?.type === "atk" && s.items[1]?.name === "银鲤" && s.items[1]?.count === 7
+  && s.items[2]?.name === "力量+4" && s.items[2]?.type === "attribute" ? "✅（小刀→atk、银鲤×7 合并、力量+4→attribute）" : "❌");
+
+const r14 = await run("sys_item_edit", { index: 1, name: "银鲤", power: 5, cost: 0, cd: 10, type: "atk", range: "melee", lv: 1, buff_type: "", durability: 3, attribute_type: "", attribute_value: 0 });
+console.log("14b. 修改银鲤 →", JSON.stringify({ type: s.itemMeta?.["银鲤"]?.type, power: s.itemMeta?.["银鲤"]?.power, durability: s.itemMeta?.["银鲤"]?.durability }),
+  s.itemMeta?.["银鲤"]?.type === "atk" && s.itemMeta?.["银鲤"]?.durability === 3 ? "✅" : "❌", "|", r14?.response || "");
+const cardItems14 = s.playerCard?.items;
+console.log("14c. 参数卡物品名列表 =", JSON.stringify(cardItems14),
+  Array.isArray(cardItems14) && cardItems14.some((x) => String(x).startsWith("银鲤×7")) ? "✅ 数量已合并 ×7" : "❌");
+
+// 15) ★ 使用 atk 物品：普攻特效（近战→冲斩刀光）+ 耐久 -1
+s.vfx = [];
+const r15 = await run("sys_use_item", { name: "银鲤" });
+const k15 = (s.vfx || []).map((v) => v.kind);
+console.log("15a. 银鲤(atk) 使用特效 =", JSON.stringify([...new Set(k15)]), k15.includes("slash_arc") ? "✅ 冲斩刀光" : "❌", "|", r15?.response || "");
+console.log("15b. 耐久 3→", s.itemMeta?.["银鲤"]?.durabilityLeft, "数量 7→", s.playerCard?.items?.find((x) => String(x).startsWith("银鲤"))?.split("×")[1]?.match(/^\d+/)?.[0] || s.playerCard?.items,
+  s.itemMeta?.["银鲤"]?.durabilityLeft === 2 ? "✅ durabilityLeft 已扣" : "❌");
+
+// 16) ★ 耐久用完损毁：连用 2 次后（2→1→0）损毁 1 个并重置耐久
+await run("sys_use_item", { name: "银鲤" });
+await run("sys_use_item", { name: "银鲤" });
+const fishEntry = (s.playerCard?.items || []).find((x) => String(x).startsWith("银鲤"));
+console.log("16. 三次使用后（耐久3）→", JSON.stringify({ durabilityLeft: s.itemMeta?.["银鲤"]?.durabilityLeft, entry: fishEntry }),
+  s.itemMeta?.["银鲤"]?.durabilityLeft === 3 && String(fishEntry).startsWith("银鲤×6") ? "✅ 损毁 1 个 + 耐久重置" : "❌");
+
+// 17) ★ attribute 物品：被动加成（放背包即生效）+ 使用不消耗（小跳+普攻特效）
+const me17 = s.entities.find((e) => e.side === "player");
+// 被动加成在首次背包操作（15a use）时已生效：基础 atk 14 + 力量+4 = 18
+console.log("17a. 力量+4 被动加成：atk =", me17.atk, me17.atk === 18 ? "✅ Attack+4 生效（14 基础 + 4）" : "❌");
+await run("tick", { levelName: "Mulberry Forest", player: { x: me17.x, y: me17.y, facing: 0 } });
+console.log("    再跑 1 tick 后 atk =", me17.atk, me17.atk === 18 ? "✅ 幂等不重复叠加" : "❌");
+s.vfx = [];
+const cntBefore = (s.playerCard?.items || []).find((x) => String(x).startsWith("力量"));
+const r17 = await run("sys_use_item", { name: "力量+4" });
+const k17 = (s.vfx || []).map((v) => v.kind);
+const cntAfter = (s.playerCard?.items || []).find((x) => String(x).startsWith("力量"));
+console.log("17b. attribute 使用：", r17?.response || "", "| 特效 =", JSON.stringify([...new Set(k17)]),
+  k17.includes("slash_arc") && String(cntAfter) === String(cntBefore) ? "✅ 不消耗 + 普攻特效 + 小跳" : "❌");
+
+// 18) ★ HUD 物品栏（case "item"）与背包同一套逻辑：治疗类 → heal_ring
+ctx.playerCard = { ...ctx.playerCard, items: ["金疮药"] };
+await run("start", { selections: { participants: [], spectators: [], enemies: [] } });
+const me18 = s.entities.find((e) => e.side === "player");
+me18.hp = 10;
+s.vfx = [];
+const r18 = await run("item", { index: 0 });
+const k18 = (s.vfx || []).map((v) => v.kind);
+console.log("18. HUD 物品栏使用金疮药：hp", `${me18.hp}`, "特效 =", JSON.stringify([...new Set(k18)]),
+  k18.includes("heal_ring") && me18.hp > 10 ? "✅ 治疗环 + 回血（itemMeta 未改时走 heal）" : "❌", "|", r18?.response || "");

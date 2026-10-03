@@ -218,7 +218,8 @@ interface Entity {
 
 interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
 interface Potion { id: string; x: number; y: number; heal: number; }
-interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number; }
+interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
+  type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; }
 interface ItemSlot { name: string; count: number; heal: number; }
 
 export interface FieldSurvivalState {
@@ -238,6 +239,10 @@ export interface FieldSurvivalState {
   floaters: Array<{ id: string; text: string; x: number; y: number; life: number }>;
   /** ★ game.md 打击特效：宿主侧生成的战斗粒子（kind 与前端 drawVfxLayer 对齐） */
   vfx?: Array<Record<string, any>>;
+  /** game.md 技能修改：用户改过的技能参数（按归一技能名存），持久化到 t_plugin_session_data */
+  skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string }>;
+  /** ★ game.md 物品修改：用户改过的物品参数（按展示名存），持久化到 t_plugin_session_data */
+  itemMeta?: Record<string, ItemMeta>;
   // 用户参数卡派生
   skills: SkillSlot[];
   items: ItemSlot[];
@@ -406,16 +411,81 @@ function num(v: unknown, d = 0): number {
   return Number.isFinite(n) ? n : d;
 }
 
-/** 从用户参数卡取前 N 个技能，补足占位技能 */
-function buildSkills(card: Record<string, unknown> | undefined, n = 8): SkillSlot[] {
+/** 技能名归一：剥离「（lv2，描述…）」等后缀 / 对象残留 */
+function cleanSkillName(v: unknown): string {
+  let n = v && typeof v === "object" ? str((v as any).name ?? (v as any).skill ?? "") : str(v);
+  n = n.replace(/\[object Object\]/g, " ");
+  n = n.replace(/[（(][^）)]*[）)]/g, " ");
+  n = n.replace(/\s+/g, " ").trim();
+  n = n.replace(/[·、,，;；:：]+$/, "").trim();
+  return n;
+}
+function skillKey(v: unknown): string {
+  return cleanSkillName(v).toLowerCase();
+}
+function sameSkill(a: unknown, b: unknown): boolean {
+  const ka = skillKey(a);
+  return !!ka && ka === skillKey(b);
+}
+/** 按名字推断默认 type/range（参数卡同步过来的技能未显式配置时用） */
+function inferSkillType(name: string): { type: "atk" | "heal" | "buff"; range: "melee" | "ranged" } {
+  const n = String(name || "");
+  if (/治|疗|愈|回复|恢复|回春|奶|复苏/.test(n)) return { type: "heal", range: "melee" };
+  if (/盾|护|祝福|增益|强化|加攻|加防|buff/i.test(n)) return { type: "buff", range: "melee" };
+  if (/球|箭|弹|术|咒|射|火|冰|雷|电|风|毒|远程/.test(n)) return { type: "atk", range: "ranged" };
+  return { type: "atk", range: "melee" };
+}
+/** game.md buff 类型：防御/攻击/持续伤害/晕眩/无敌/加速 */
+const BUFF_TYPES = ["Defense", "Attack", "Sustained_Damage", "Stunning", "Invincible", "Accelerate"];
+/** 括号深度感知拆分：只在括号外按分隔符切技能（「A（lv1，失控）（lv1）、B（lv2）」不会切烂注记） */
+function splitSkillList(raw) {
+  const out = [];
+  let buf = "";
+  let depth = 0;
+  for (const ch of String(raw)) {
+    if (ch === "\uFF08" || ch === "(") depth += 1;
+    else if (ch === "\uFF09" || ch === ")") depth = Math.max(0, depth - 1);
+    if (depth === 0 && "\u3001,\uFF0C;\uFF1B/|".includes(ch)) { out.push(buf); buf = ""; continue; }
+    buf += ch;
+  }
+  if (buf.trim()) out.push(buf);
+  return out;
+}
+/** 从用户参数卡取技能（拆分/去重/lv 解析），套用 skillMeta 用户修改，补足占位技能 */
+function buildSkills(card: Record<string, unknown> | undefined, n = 8, meta?: Record<string, any>): SkillSlot[] {
   const raw = Array.isArray(card?.skills) ? (card!.skills as unknown[]) : [];
-  const names = raw
-    .map((s) => (typeof s === "string" ? s : str((s as any)?.name)))
-    .filter(Boolean);
+  const seen = new Map<string, number>();
+  const names: string[] = [];
+  const lvs: number[] = [];
+  raw.forEach((s) => {
+    const parts = typeof s === "string" ? splitSkillList(s) : [s];
+    parts.forEach((p) => {
+      const nm = cleanSkillName(p).slice(0, 12);
+      if (!nm) return;
+      const lvM = String(typeof p === "string" ? p : str((p as any)?.name)).match(/lv\s*(\d+)/i);
+      const lv = lvM ? Math.max(1, Math.round(Number(lvM[1]))) : 1;
+      const c = (seen.get(nm) || 0) + 1;
+      seen.set(nm, c);
+      names.push(c === 1 ? nm : `${nm}${c}`);
+      lvs.push(lv);
+    });
+  });
   const out: SkillSlot[] = [];
   for (let i = 0; i < n; i++) {
     const name = names[i] || (i < 4 ? `技能${i + 1}` : `备用技${i - 3}`);
-    out.push({ name, power: 12 + i * 3, cost: 0, cd: 24 + i * 6, cdLeft: 0 });
+    const base = inferSkillType(name);
+    const m = meta && meta[skillKey(name)];
+    out.push({
+      name,
+      power: num(m?.power, 12 + i * 3),
+      cost: num(m?.cost, 0),
+      cd: num(m?.cd, 24 + i * 6),
+      cdLeft: 0,
+      type: m?.type || base.type,
+      range: m?.range || base.range,
+      lv: num(m?.lv, lvs[i] || 1),
+      buff_type: m?.buff_type || "",
+    });
   }
   return out;
 }
@@ -493,6 +563,8 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
     vfx: [],   // ★ game.md 打击特效：宿主侧生成的战斗粒子（spark/explosion/slash_arc/fireball/heal_ring/buff_ring）
     skills: buildSkills(card),
     items: buildItems(card),
+    skillMeta: {},
+    itemMeta: {},
     skillPage: 0,
     itemPage: 0,
     playerCard: card,
@@ -614,7 +686,12 @@ function pushVfx(s: FieldSurvivalState, p: Record<string, any>) {
  *   远程类 → 火球(atk/ranged)  治疗类 → 治疗(heal)
  *   加强类 → 护盾(buff)        其余 → 冲斩(atk/melee)
  */
-function skillFxKind(skill: { name: string }): "melee" | "ranged" | "heal" | "buff" {
+function skillFxKind(skill: { name: string; type?: string; range?: string }): "melee" | "ranged" | "heal" | "buff" {
+  // ★ game.md 技能修改：显式 type/range 优先（atk+melee→冲斩刀光 / atk+ranged→火球 / heal→治疗环 / buff→护盾环）
+  const t = String((skill as any)?.type || "");
+  if (t === "heal") return "heal";
+  if (t === "buff") return "buff";
+  if (t === "atk") return str((skill as any)?.range, "melee") === "ranged" ? "ranged" : "melee";
   const n = String(skill?.name || "");
   if (/治|疗|愈|回复|恢复|回春|奶|复苏/.test(n)) return "heal";
   if (/盾|护|祝福|增益|强化|加攻|加防|buff/i.test(n)) return "buff";
@@ -1375,7 +1452,23 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
    · 商城物资 = 商城 agent（故事动态数据 + 常驻世界书）+ 插件自带物资
    ============================================================ */
 
-export interface BagItem { name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string; }
+export interface BagItem {
+  name: string; count: number; kind: string; rarity: string; heal: number; price: number; desc?: string;
+  /** ★ game.md 物品修改：战斗参数（mergeBag 时从 itemMeta / 推断默认合并） */
+  power?: number; cost?: number; cd?: number; cdLeft?: number;
+  type?: "atk" | "heal" | "buff" | "attribute"; range?: "melee" | "ranged";
+  lv?: number; buff_type?: string;
+  durability?: number; durabilityLeft?: number;
+  attribute_type?: string; attribute_value?: number;
+}
+/** ★ game.md 物品修改：itemMeta 持久化结构（t_plugin_session_data） */
+export interface ItemMeta {
+  power: number; cost: number; cd: number;
+  type: "atk" | "heal" | "buff" | "attribute"; range: "melee" | "ranged";
+  lv: number; buff_type: string;
+  durability: number; durabilityLeft: number;
+  attribute_type: string; attribute_value: number;
+}
 export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; }
 export interface NpcCard {
   id: string; name: string; side: string; enemy: boolean;
@@ -1470,11 +1563,14 @@ function itemsFromCard(card: any): BagItem[] {
   return arr.map(parseItemRaw).filter((i) => i.name && i.count > 0);
 }
 
-/** 合并同名物品 + 套用元数据 + 按自定义顺序排列 */
-function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string[]): BagItem[] {
+/** 合并同名物品 + 套用元数据 + 按自定义顺序排列（imeta = 物品战斗参数元数据） */
+function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string[], imeta?: Record<string, ItemMeta>): BagItem[] {
   const map = new Map<string, BagItem>();
   raw.forEach((it) => {
     const m = meta ? meta[it.name] : undefined;
+    // ★ game.md 物品修改：战斗参数元数据（itemMeta，按展示名存）合并进背包项
+    const im = imeta ? (imeta[it.name] || imeta[it.name.toLowerCase()]) : undefined;
+    const bt = inferItemType(it.name, it.kind);
     const cur = map.get(it.name);
     if (cur) { cur.count += it.count; return; }
     map.set(it.name, {
@@ -1485,6 +1581,18 @@ function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string
       heal: it.heal || (m ? m.heal : 0) || defaultHeal(it.name, it.kind),
       price: it.price || (m ? m.price : 0),
       desc: it.desc || (m ? m.desc : undefined),
+      power: num(im?.power, it.kind === "equipment" ? 10 : 0),
+      cost: num(im?.cost, 0),
+      cd: Math.max(0, num(im?.cd, 0)),
+      cdLeft: 0,
+      type: (im?.type || bt.type) as BagItem["type"],
+      range: (im?.range || bt.range) as BagItem["range"],
+      lv: Math.max(1, num(im?.lv, 1)),
+      buff_type: im?.buff_type || "",
+      durability: num(im?.durability, -1),
+      durabilityLeft: num(im?.durabilityLeft, num(im?.durability, -1)),
+      attribute_type: im && "attribute_type" in im ? im.attribute_type : inferItemAttrType(it.name),
+      attribute_value: num(im?.attribute_value, defaultItemAttrValue(it.name)),
     });
   });
   const list = Array.from(map.values());
@@ -1508,6 +1616,135 @@ function sellPrice(it: BagItem): number {
   return Math.max(1, Math.round(base * k));
 }
 
+/** ★ game.md 背包物品：特效类型 [atk, heal, buff, attribute]（attribute = 纯属性点，使用不消耗） */
+const ITEM_TYPES = ["atk", "heal", "buff", "attribute"] as const;
+/** ★ game.md attribute_type：Defense/Attack/Life/Blue（放背包即被动加成） */
+const ITEM_ATTR_TYPES = ["Defense", "Attack", "Life", "Blue"] as const;
+type ItemType = (typeof ITEM_TYPES)[number];
+
+/** 按名/品类推断默认 type/range（未显式修改过的物品走推断） */
+function inferItemType(name: string, kind: string): { type: ItemType; range: "melee" | "ranged" } {
+  const n = String(name || "");
+  if (kind === "skill_book") return { type: "buff", range: "melee" };
+  if (kind === "equipment" || /刀|剑|枪|弓|弩|斧|杖|匕|爪|锤/.test(n)) return { type: "atk", range: /弓|弩|杖/.test(n) ? "ranged" : "melee" };
+  if (/力量|攻击|加攻/.test(n)) return { type: "attribute", range: "melee" };
+  return { type: "heal", range: "melee" };
+}
+/** 按名推断被动属性类型（「力量+4」→ Attack 之类） */
+function inferItemAttrType(name: string): string {
+  const n = String(name || "");
+  if (/防御|护甲|加防|体魄|磐/.test(n)) return "Defense";
+  if (/蓝|法力|灵力|魔力/.test(n)) return "Blue";
+  if (/生命|血量|体质/.test(n)) return "Life";
+  if (/力量|攻击|加攻/.test(n)) return "Attack";
+  return "";
+}
+/** 按名推断被动属性数值（「力量+4」→ 4；「魔力+10」→ 10） */
+function defaultItemAttrValue(name: string): number {
+  const m = String(name || "").match(/[＋+]\s*(\d+)/);
+  return m ? Math.round(Number(m[1])) : 0;
+}
+/** 耐久剩余写回 itemMeta（背包每次从参数卡重建，durabilityLeft 必须落持久层） */
+function setItemDurLeft(s: FieldSurvivalState, name: string, v: number): void {
+  const cur = (s.itemMeta || {})[name] || ({} as Partial<ItemMeta>);
+  s.itemMeta = { ...(s.itemMeta || {}), [name]: { ...cur, durabilityLeft: v } as ItemMeta };
+}
+/** ★ game.md 背包被动加成：bag 中 attribute_type ∈ Defense/Attack/Life/Blue 的物品按 attribute_value 累加 */
+function bagAttributeBonus(s: FieldSurvivalState): Record<string, number> {
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  const bonus: Record<string, number> = { Defense: 0, Attack: 0, Life: 0, Blue: 0 };
+  bag.forEach((it) => {
+    const v = Math.round(num(it.attribute_value, 0));
+    if (v !== 0 && (ITEM_ATTR_TYPES as readonly string[]).indexOf(it.attribute_type || "") >= 0) bonus[it.attribute_type as string] += v;
+  });
+  return bonus;
+}
+/** 被动加成落到玩家实体（_attrBase 记录裸装基线，重复调用不叠加） */
+function applyBagAttributes(s: FieldSurvivalState): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const b = bagAttributeBonus(s);
+  const anyMe = me as any;
+  if (!anyMe._attrBase) anyMe._attrBase = { atk: num(me.atk, 0), maxHp: num(me.maxHp, 0), def: num(anyMe.def, 0), maxMp: num(anyMe.maxMp, 0) };
+  const base = anyMe._attrBase;
+  me.atk = Math.max(1, base.atk + b.Attack);
+  me.maxHp = Math.max(1, base.maxHp + b.Life);
+  anyMe.def = base.def + b.Defense;
+  if (base.maxMp > 0 || b.Blue > 0) {
+    anyMe.maxMp = Math.max(0, base.maxMp + b.Blue);
+    anyMe.mp = clamp(num(anyMe.mp, 0), 0, anyMe.maxMp);
+  }
+  me.hp = clamp(me.hp, 0, me.maxHp);
+}
+/**
+ * ★ game.md 背包物品使用（HUD 物品栏 / 背包面板共用）：
+ *   heal → 治疗环 + 回血；buff → 护盾环；atk/attribute → 普攻效果（近战冲斩 / 远程火球）
+ *   无专属特效的统一走「角色小跳 + 飘字」（actionBobMs + floater）
+ *   durability：-1 永久；>0 每用一次 -1，用完损毁 1 个；attribute 使用不消耗
+ */
+function useBagItem(s: FieldSurvivalState, name: string): string {
+  const me = playerEntity(s);
+  if (!me || !me.alive) return "角色不可用";
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  const it = bag.find((x) => x.name === name);
+  if (!it || it.count <= 0) return `「${name}」不在背包中`;
+  const t = it.type || "heal";
+  (me as any).actionBobMs = 300;
+  floater(s, `使用 ${it.name}`, me.x, me.y - 34);
+  let consumed = true;
+  let msg = `使用 ${it.name}`;
+  if (t === "heal") {
+    const heal = it.heal || defaultHeal(it.name, it.kind);
+    const before = me.hp;
+    if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
+    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+    if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
+  } else if (t === "buff") {
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+    if (it.buff_type) msg += `（${it.buff_type}）`;
+  } else {
+    // atk / attribute：普攻效果；attribute 是纯属性点，使用不消耗但有小跳 + 普攻特效
+    const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(me, e) < SKILL_RANGE_M);
+    if ((it.range || "melee") === "ranged" && targets[0]) {
+      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0 });
+    } else {
+      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+    }
+    if (num(it.power, 0) > 0 && targets.length) {
+      damage(s, targets[0], num(it.power, 0), me);
+      msg += `，命中 ${targets[0].name}`;
+    }
+    if (t === "attribute") { consumed = false; msg += `（属性点 ${it.attribute_type || "-"}+${it.attribute_value || 0}）`; }
+  }
+  let nextBag = bag;
+  if (consumed) {
+    const dur = Math.round(num(it.durability, -1));
+    let left = Math.round(num(it.durabilityLeft, dur));
+    if (dur > 0) {
+      left -= 1;
+      if (left <= 0) {
+        nextBag = bag
+          .map((x) => (x.name === it.name ? { ...x, count: x.count - 1 } : x))
+          .filter((x) => x.count > 0);
+        setItemDurLeft(s, it.name, dur); // 换上新的一件，耐久重置
+        pushEvent(s, `${it.name} 耐久耗尽，损毁 1 个`);
+      } else {
+        setItemDurLeft(s, it.name, left);
+        pushEvent(s, `${it.name} 耐久 ${left}/${dur}`);
+      }
+    } else {
+      nextBag = bag
+        .map((x) => (x.name === it.name ? { ...x, count: x.count - 1 } : x))
+        .filter((x) => x.count > 0);
+    }
+  }
+  patchCard(s, { items: serializeBag(nextBag) });
+  applyBagAttributes(s);
+  return msg;
+}
+
 function playerEntity(s: FieldSurvivalState): Entity | undefined {
   return s.entities.find((e) => e.side === "player");
 }
@@ -1519,7 +1756,7 @@ function patchCard(s: FieldSurvivalState, patch: Record<string, any>): void {
   s.writeback = { ...((s.writeback || {}) as Record<string, any>), ...patch };
   s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
   if (Array.isArray(patch.items)) s.items = buildItems(card, 8);
-  if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8);
+  if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8, s.skillMeta);
 }
 
 /** 宿主注入的参数卡若被外部改动，以宿主为准（保证与动态参数卡同步） */
@@ -1531,7 +1768,7 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
   if (sig(card) === sig(cur)) return;
   s.playerCard = card;
   s.items = buildItems(card, 8);
-  s.skills = buildSkills(card, 8);
+  s.skills = buildSkills(card, 8, s.skillMeta);
 }
 
 /** 角色卡：主体 = 当前 AI 故事对话的动态角色卡（s.roles，与 web 端 play-role-strip 同源），
@@ -1726,6 +1963,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       bagOrder: s.bagOrder || [],
       shop: s.shopGoods || [],
       level: s.levelName || "",
+      skillMeta: s.skillMeta || {},
+      itemMeta: s.itemMeta || {},
     });
   } catch { /* 落库失败不阻断玩法 */ }
 }
@@ -1737,6 +1976,8 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
   try {
     const d: any = await api.get(SYS_DATA_KEY);
     if (!d || typeof d !== "object") return;
+    if (d.skillMeta && typeof d.skillMeta === "object") s.skillMeta = d.skillMeta;
+    if (d.itemMeta && typeof d.itemMeta === "object") s.itemMeta = d.itemMeta;
     if (d.ring && typeof d.ring === "object") {
       s.ring = {
         items: Array.isArray(d.ring.items) ? d.ring.items : [],
@@ -1940,6 +2181,7 @@ export async function handle_action(
       }
       // ★ v5：恢复系统面板持久化数据（纳戒 / 队伍 / 角色卡 / 背包顺序 / 商城）
       await restoreSys(context, s);
+      syncCardFromContext(s, context); // ★ start 也同步参数卡
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
       if (!s.levelName) s.levelName = str((s.map as any)?.theme, "");
       // ★ game.md 组队跟随：开局默认【不】组队——只有角色卡面板勾选「组队跟随」的角色
@@ -1971,6 +2213,7 @@ export async function handle_action(
       // ★ v5：同步系统面板（当前地图名 / 参数卡外部改动 / 角色卡位置 / 队伍）
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
       syncCardFromContext(s, context);
+      applyBagAttributes(s); // ★ game.md 背包被动属性加成（Defense/Attack/Life/Blue）
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
@@ -2024,18 +2267,9 @@ export async function handle_action(
       const idx = num(params?.index, 0);
       const slotIdx = s.itemPage * 4 + idx;
       const item = s.items[slotIdx];
-      const player = s.entities.find((e) => e.side === "player");
-      if (!item || !player || !player.alive) return okResp("");
-      if (item.count <= 0) return okResp(`${item.name} 已用完`);
-      item.count -= 1;
-      const before = player.hp;
-      player.hp = clamp(player.hp + item.heal, 0, player.maxHp);
-      // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
-      (player as any).actionBobMs = 300;
-      floater(s, `使用 ${item.name}`, player.x, player.y - 34);
-      floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 52);
-      pushEvent(s, `使用 ${item.name}，恢复 ${Math.round(player.hp - before)} 点生命`);
-      return okResp(`${item.name}`);
+      if (!item) return okResp("");
+      // ★ game.md 物品栏使用：与背包面板同一套 type 分路特效 / 耐久 / 属性逻辑
+      return okResp(useBagItem(s, item.name));
     }
 
     /* ============ ★ v5：系统面板（背包 / 纳戒 / 商城 / 技能 / 地图 / 角色卡）============ */
@@ -2076,27 +2310,11 @@ export async function handle_action(
     }
 
     case "sys_use_item": {
-      // 背包 / 物品栏点击使用：无专属特效时统一走「小跳 + 飘字」
+      // 背包 / 物品栏点击使用：type 分路特效 / 耐久 / 属性逻辑统一在 useBagItem
       const name = str(params?.name);
-      const me = playerEntity(s);
-      if (!me || !me.alive) return okResp("角色不可用");
-      const card = (s.playerCard || {}) as Record<string, any>;
-      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
-      const it = bag.find((x) => x.name === name);
-      if (!it || it.count <= 0) return okResp(`「${name}」不在背包中`);
-      const heal = it.heal || defaultHeal(it.name, it.kind);
-      const before = me.hp;
-      if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
-      (me as any).actionBobMs = 300;
-      floater(s, `使用 ${name}`, me.x, me.y - 34);
-      if (heal > 0) floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52);
-      const nextBag = bag
-        .map((x) => (x.name === name ? { ...x, count: x.count - 1 } : x))
-        .filter((x) => x.count > 0);
-      patchCard(s, { items: serializeBag(nextBag) });
-      pushEvent(s, `使用 ${name}${heal > 0 ? `，恢复 ${Math.round(me.hp - before)} 点生命` : ""}`);
+      const msg = useBagItem(s, name);
       await persistSys(context, s);
-      return okResp(`使用 ${name}`);
+      return okResp(msg);
     }
 
     case "sys_sort": {
@@ -2209,6 +2427,100 @@ export async function handle_action(
       skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
       pushEvent(s, `施放 ${sk.name}，命中 ${Math.min(3, skTargets.length)} 个目标`);
       return okResp(`${sk.name}`);
+    }
+
+    case "sys_skill_edit": {
+      // ★ game.md 技能修改：修改后保存到 t_plugin_session_data（skillMeta + 参数卡技能名列表）
+      const idx = Math.round(num(params?.index, -1));
+      const sk = s.skills[idx];
+      if (!sk) return okResp("技能不存在");
+      const oldKey = skillKey(sk.name);
+      const nm = cleanSkillName(str(params?.name, sk.name)).slice(0, 12) || sk.name;
+      sk.name = nm;
+      sk.power = Math.max(0, Math.round(num(params?.power, sk.power)));
+      sk.cost = Math.max(0, Math.round(num(params?.cost, sk.cost)));
+      sk.cd = Math.max(1, Math.round(num(params?.cd, sk.cd)));
+      sk.type = (["atk", "heal", "buff"] as const).includes(params?.type as any) ? (str(params?.type) as any) : (sk.type || "atk");
+      sk.range = str(params?.range) === "ranged" ? "ranged" : "melee";
+      sk.lv = Math.max(1, Math.round(num(params?.lv, sk.lv || 1)));
+      sk.buff_type = BUFF_TYPES.includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
+      s.skillMeta = { ...(s.skillMeta || {}), [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type } };
+      // 参数卡「技能」只保存技能名称列表：改名/升级时替换原条目（带 lv 注记）
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const flat: string[] = [];
+      (Array.isArray(card.skills) ? card.skills : []).forEach((x: any) => {
+        if (typeof x === "string") splitSkillList(x).forEach((p: string) => { if (cleanSkillName(p)) flat.push(p.trim()); });
+        else { const n = str(x?.name); if (n) flat.push(n); }
+      });
+      const at = flat.findIndex((x) => skillKey(x) === oldKey);
+      const annotated = sk.lv! > 1 ? `${nm}（lv${sk.lv}）` : nm;
+      if (at >= 0) flat[at] = annotated; else flat.push(annotated);
+      patchCard(s, { skills: flat });
+      pushEvent(s, `技能「${nm}」参数已修改并保存`);
+      await persistSys(context, s);
+      const tLabel = sk.type === "heal" ? "治疗" : sk.type === "buff" ? `强化(${sk.buff_type || "-"})` : sk.range === "ranged" ? "远程" : "近战";
+      return okResp(`「${nm}」已保存（${tLabel}·lv${sk.lv}）`);
+    }
+
+    case "sys_item_edit": {
+      // ★ game.md 物品修改：修改后保存到 t_plugin_session_data（itemMeta + 参数卡物品名列表）
+      const idx = Math.round(num(params?.index, -1));
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+      const it = idx >= 0 ? bag[idx] : bag.find((x) => x.name === str(params?.name));
+      if (!it) return okResp("物品不存在");
+      const oldName = it.name;
+      const nm = str(params?.name, it.name).trim().slice(0, 20) || it.name;
+      it.name = nm;
+      it.power = Math.max(0, Math.round(num(params?.power, it.power || 0)));
+      it.cost = Math.max(0, Math.round(num(params?.cost, it.cost || 0)));
+      it.cd = Math.max(0, Math.round(num(params?.cd, it.cd || 0)));
+      it.type = ((ITEM_TYPES as readonly string[]).includes(str(params?.type)) ? str(params?.type) : (it.type || "heal")) as ItemType;
+      it.range = str(params?.range) === "ranged" ? "ranged" : "melee";
+      it.lv = Math.max(1, Math.round(num(params?.lv, it.lv || 1)));
+      it.buff_type = (BUFF_TYPES as readonly string[]).includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
+      it.durability = clamp(Math.round(num(params?.durability, it.durability == null ? -1 : it.durability)), -1, 99999);
+      it.attribute_type = (ITEM_ATTR_TYPES as readonly string[]).includes(str(params?.attribute_type)) ? str(params?.attribute_type) : "";
+      it.attribute_value = Math.round(num(params?.attribute_value, it.attribute_value || 0));
+      const metaEntry: ItemMeta = {
+        power: it.power!, cost: it.cost!, cd: it.cd!,
+        type: it.type as ItemType, range: it.range as "melee" | "ranged",
+        lv: it.lv!, buff_type: it.buff_type!,
+        durability: it.durability!, durabilityLeft: it.durability!,
+        attribute_type: it.attribute_type!, attribute_value: it.attribute_value!,
+      };
+      s.itemMeta = { ...(s.itemMeta || {}) };
+      if (oldName !== nm) delete s.itemMeta[oldName];
+      s.itemMeta[nm] = metaEntry;
+      // 参数卡「物品」只保存名称列表：展平后替换同名条目（数量合并、lv>1 加 lv 注记、保留原描述注记）
+      const flat: string[] = [];
+      (Array.isArray(card.items) ? card.items : []).forEach((x: any) => {
+        if (typeof x === "string") splitSkillList(x).forEach((p: string) => { if (p.trim()) flat.push(p.trim()); });
+        else { const n2 = str(x?.name); if (n2) flat.push(n2); }
+      });
+      let total = 0;
+      let desc = "";
+      // 参数卡物品是自由文本（「银鲤×3（钓鱼累积…）」），比对前先归一（剥注记/×N）
+      const normName = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+      const oldNk = normName(oldName);
+      flat.forEach((x) => {
+        const p = parseItemRaw(x);
+        if (!p.name || normName(p.name) !== oldNk) return;
+        total += p.count;
+        if (p.desc && !desc) desc = p.desc;
+      });
+      if (!total) total = it.count;
+      const annotated = `${nm}${total > 1 ? `×${total}` : ""}${it.lv! > 1 ? `（lv${it.lv}）` : ""}${desc ? `（${desc}）` : ""}`;
+      const at = flat.findIndex((x) => normName(parseItemRaw(x).name) === oldNk);
+      const kept = flat.filter((x) => normName(parseItemRaw(x).name) !== oldNk);
+      kept.splice(Math.max(0, Math.min(at < 0 ? kept.length : at, kept.length)), 0, annotated);
+      patchCard(s, { items: kept });
+      applyBagAttributes(s);
+      pushEvent(s, `物品「${nm}」参数已修改并保存`);
+      await persistSys(context, s);
+      const tLabel2 = it.type === "heal" ? "治疗" : it.type === "buff" ? `强化(${it.buff_type || "-"})` : it.type === "attribute" ? `属性(${it.attribute_type || "-"})` : it.range === "ranged" ? "远程" : "近战";
+      const dLabel = it.durability! < 0 ? "永久" : `耐久${it.durability}`;
+      return okResp(`「${nm}」已保存（${tLabel2}·${dLabel}）`);
     }
 
     case "sys_shop_refresh": {

@@ -68,14 +68,11 @@ const activeTab = ref<TabId>("bag");
       <BagPanel
         v-if="activeTab === 'bag'"
         :items="bagItems"
-        :skills="skills"
-        :current-mp="currentMp"
-        :current-max-mp="currentMaxMp"
         @sell="(it: any, n: number) => emit('sell', it, n)"
         @use-item="(it: any) => emit('use-item', it)"
         @sort="(a: number, b: number) => emit('sort', a, b)"
         @sort-auto="() => emit('sort-auto')"
-        @use-skill="(s: any, i: number) => emit('use-skill', s, i)"
+        @edit-item="(p: any) => emit('edit-item', p)"
       />
       <RingPanel
         v-else-if="activeTab === 'ring'"
@@ -100,6 +97,7 @@ const activeTab = ref<TabId>("bag");
         :current-mp="currentMp"
         :current-max-mp="currentMaxMp"
         @use-skill="(s: any, i: number) => emit('use-skill', s, i)"
+        @edit-skill="(p: any) => emit('edit-skill', p)"
       />
       <MapPanel
         v-else-if="activeTab === 'map'"
@@ -127,11 +125,11 @@ const activeTab = ref<TabId>("bag");
 
 <style scoped>
 .sp { display: flex; flex-direction: column; height: 100%; color: #e8eef5; font-size: 13px; }
-.sp-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(255, 255, 255, 0.06); cursor: move; user-select: none; }
+.sp-head { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 44px 8px 10px; background: rgba(255, 255, 255, 0.06); cursor: move; user-select: none; }
 .sp-title { font-weight: 700; }
 .sp-gold { margin-left: auto; color: #ffd76a; }
 .sp-map { color: #9fd0ff; }
-.sp-close { background: transparent; border: 0; color: #cfd8e3; font-size: 18px; line-height: 1; cursor: pointer; }
+.sp-close { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 4px; color: #cfd8e3; font-size: 15px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; z-index: 10; }
 .sp-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
 .sp-tab { flex: 1 1 30%; padding: 6px 4px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: #cfd8e3; cursor: pointer; font-size: 12px; }
 .sp-tab--on { background: #2f6fd0; border-color: #5a9bff; color: #fff; }

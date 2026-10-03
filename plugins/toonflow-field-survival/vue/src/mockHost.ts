@@ -598,6 +598,7 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
         { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const },
         { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const },
         { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const },
+        { name: "力量+4", count: 1, heal: 0, mp: 0, type: "utility" as const },
       ];
 
   return {
@@ -637,6 +638,12 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
       { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const, range: "melee" as const },
     ],
     items: itemSlots,
+    // ★ 对齐真实宿主：mock 也下发 playerCard（背包面板 sysBagItems 以参数卡 items 为数据源）
+    playerCard: {
+      name: roles[0]?.name || "玩家",
+      money: 128,
+      items: itemSlots.map((it) => (it.count > 1 ? `${it.name}×${it.count}` : it.name)),
+    },
     skillPage: 0,
     itemPage: 0,
     map: null,
@@ -995,6 +1002,85 @@ function install(): void {
           state.mapNodes = levels.map((n: string, i: number) => ({ name: n, x: 160 + (i % 4) * 260, y: 140 + Math.floor(i / 4) * 200 }));
         }
         if (params?.levelName) state.levelName = String(params.levelName);
+        push();
+        return;
+      }
+      if (action === "sys_skill_edit") {
+        // ★ 对齐 entry.js case "sys_skill_edit"：修改技能参数（mock 下直接改 state.skills）
+        const idx = Math.max(0, Math.round(Number(params?.index) || 0));
+        const sk = state.skills[idx];
+        if (sk) {
+          if (params?.name) sk.name = String(params.name).slice(0, 12);
+          if (Number.isFinite(Number(params?.power))) sk.power = Math.max(0, Math.round(Number(params.power)));
+          if (Number.isFinite(Number(params?.cost))) sk.cost = Math.max(0, Math.round(Number(params.cost)));
+          if (Number.isFinite(Number(params?.cd)) && Number(params.cd) >= 1) sk.cd = Math.round(Number(params.cd));
+          if (["atk", "heal", "buff"].includes(params?.type)) sk.type = params.type;
+          if (params?.range === "ranged" || params?.range === "melee") sk.range = params.range;
+          if (Number.isFinite(Number(params?.lv))) (sk as any).lv = Math.max(1, Math.round(Number(params.lv)));
+          (sk as any).buff_type = typeof params?.buff_type === "string" ? params.buff_type : "";
+          state.events.push(`[mock] 技能「${sk.name}」参数已修改并保存`);
+        }
+        push();
+        return;
+      }
+      if (action === "sys_use_item") {
+        // ★ 对齐 entry.js useBagItem：扣耐久（durability>0），耗尽损毁 1 个
+        const name = String(params?.name || "");
+        const it = (state.items || []).find((x: any) => x.name === name);
+        const im = (state as any).itemMeta || {};
+        const meta = im[name] || {};
+        const dur = Math.round(Number(meta.durability ?? -1));
+        if (it && Number(it.count) > 0 && dur !== 0) {
+          if (dur > 0) {
+            const left = Math.round(Number(meta.durabilityLeft ?? dur)) - 1;
+            if (left <= 0) {
+              it.count -= 1;
+              im[name] = { ...meta, durabilityLeft: dur };
+              state.events.push(`[mock] ${name} 耐久耗尽，损毁 1 个`);
+            } else {
+              im[name] = { ...meta, durabilityLeft: left };
+              state.events.push(`[mock] 使用 ${name}（耐久 ${left}/${dur}）`);
+            }
+          } else {
+            it.count -= 1;
+            state.events.push(`[mock] 使用 ${name}（剩余 ${it.count}）`);
+          }
+          (state as any).itemMeta = im;
+        } else {
+          state.events.push(`[mock] 「${name}」不在背包中`);
+        }
+        push();
+        return;
+      }
+      if (action === "sys_item_edit") {
+        // ★ 对齐 entry.js case "sys_item_edit"：修改物品参数（mock 下直接改 state.items + itemMeta）
+        const idx = Math.max(0, Math.round(Number(params?.index) || 0));
+        (state as any).itemMeta = (state as any).itemMeta || {};
+        const it = state.items?.[idx];
+        if (it) {
+          if (params?.name) it.name = String(params.name).slice(0, 20);
+          if (Number.isFinite(Number(params?.power))) (it as any).power = Math.max(0, Math.round(Number(params.power)));
+          if (Number.isFinite(Number(params?.cost))) (it as any).cost = Math.max(0, Math.round(Number(params.cost)));
+          if (Number.isFinite(Number(params?.cd))) (it as any).cd = Math.max(0, Math.round(Number(params.cd)));
+          if (["atk", "heal", "buff", "attribute"].includes(params?.type)) (it as any).type = params.type;
+          if (params?.range === "ranged" || params?.range === "melee") (it as any).range = params.range;
+          if (Number.isFinite(Number(params?.lv))) (it as any).lv = Math.max(1, Math.round(Number(params.lv)));
+          (it as any).buff_type = typeof params?.buff_type === "string" ? params.buff_type : "";
+          if (Number.isFinite(Number(params?.durability))) {
+            (it as any).durability = Math.max(-1, Math.round(Number(params.durability)));
+            (it as any).durabilityLeft = (it as any).durability;
+          }
+          (it as any).attribute_type = typeof params?.attribute_type === "string" ? params.attribute_type : "";
+          if (Number.isFinite(Number(params?.attribute_value))) (it as any).attribute_value = Math.round(Number(params.attribute_value));
+          (state as any).itemMeta[it.name] = {
+            power: (it as any).power || 0, cost: (it as any).cost || 0, cd: (it as any).cd || 0,
+            type: (it as any).type || "heal", range: (it as any).range || "melee",
+            lv: (it as any).lv || 1, buff_type: (it as any).buff_type || "",
+            durability: (it as any).durability ?? -1, durabilityLeft: (it as any).durability ?? -1,
+            attribute_type: (it as any).attribute_type || "", attribute_value: (it as any).attribute_value || 0,
+          };
+          state.events.push(`[mock] 物品「${it.name}」参数已修改并保存`);
+        }
         push();
         return;
       }
