@@ -37,6 +37,8 @@ export interface TileFlags {
   blocked: boolean;
   /** 挡视线 / 挡箭（Rotten-Soup 的 tileproperties.blocks_vision） */
   vision: boolean;
+  /** ★ game.md 床碰撞：tileset 的 description === "bed"（旅店床铺，靠近出睡眠按钮） */
+  bed: boolean;
 }
 
 /** 全量 tile 标记表：tile id → flags */
@@ -56,6 +58,10 @@ export interface WalkGrid {
   blockedCount: number;
   /** 统计：被标 blocks_vision 的格数（调试用） */
   visionCount: number;
+  /** ★ game.md 床格（description=bed 的 tile 落点），靠近即触发睡眠按钮；宿主网格包不含此层 */
+  bed?: Uint8Array;
+  /** 统计：床格数（调试用） */
+  bedCount?: number;
 }
 
 /* ============================================================
@@ -94,13 +100,16 @@ export function loadTileFlags(): Promise<TileFlagTable> {
           if (t?.id == null) continue;
           let blocked = false;
           let vision = false;
+          let bed = false;
           for (const p of t.properties ?? []) {
             const v = toBool(p?.value);
             if (p?.name === "blocked") blocked = v;
             else if (p?.name === "blocks_vision") vision = v;
+            // ★ game.md 床碰撞：tileset 用 description="bed" 标记床铺贴图
+            else if (p?.name === "description" && String(p?.value ?? "").trim().toLowerCase() === "bed") bed = true;
           }
-          // 只记录有用的项：两个都 false 的 tile 等同于"无属性"，省内存
-          if (blocked || vision) out[Number(t.id)] = { blocked, vision };
+          // 只记录有用的项：全 false 的 tile 等同于"无属性"，省内存
+          if (blocked || vision || bed) out[Number(t.id)] = { blocked, vision, bed };
         }
         console.info(
           `[field-survival] tileset 碰撞属性已加载（${url}）：` +
@@ -164,6 +173,7 @@ export function buildWalkGrid(
 
   const blocked = new Uint8Array(cols * rows);
   const vision = new Uint8Array(cols * rows);
+  const bed = new Uint8Array(cols * rows);
   const total = cols * rows;
 
   for (const layer of tiled.layers) {
@@ -180,21 +190,24 @@ export function buildWalkGrid(
       if (!f) continue;
       if (f.blocked) blocked[i] = 1;
       if (f.vision) vision[i] = 1;
+      if (f.bed) bed[i] = 1;
     }
   }
 
   let blockedCount = 0;
   let visionCount = 0;
+  let bedCount = 0;
   for (let i = 0; i < total; i++) {
     if (blocked[i]) blockedCount++;
     if (vision[i]) visionCount++;
+    if (bed[i]) bedCount++;
   }
 
-  const g: WalkGrid = { cols, rows, blocked, vision, firstGid, blockedCount, visionCount };
+  const g: WalkGrid = { cols, rows, blocked, vision, firstGid, blockedCount, visionCount, bed, bedCount };
   console.info(
     `[field-survival] 碰撞网格已构建：${cols}×${rows}，` +
       `阻挡格 ${blockedCount}（${((blockedCount / total) * 100).toFixed(1)}%）、` +
-      `挡视线格 ${visionCount}`,
+      `挡视线格 ${visionCount}、床格 ${bedCount}`,
   );
   return g;
 }
@@ -312,6 +325,30 @@ export function isVisionBlockedCell(g: WalkGrid, gx: number, gz: number): boolea
 export function isBlockedMeters(g: WalkGrid, mx: number, mz: number): boolean {
   const { gx, gz } = metersToCell(g, mx, mz);
   return isBlockedCell(g, gx, gz);
+}
+
+/**
+ * ★ game.md 床碰撞：玩家 (米坐标) 附近 radiusM 米内是否有床格。
+ * 床是 blocked 格（玩家只能站旁边），所以按"床格中心与玩家的米距离"判定，
+ * 默认 1.8 米 ≈ 紧贴床边一步之内。
+ */
+export function isNearBed(g: WalkGrid, mx: number, mz: number, radiusM = 1.8): boolean {
+  if (!g.bed) return false;
+  const r = Math.ceil(radiusM) + 1;
+  const { gx, gz } = metersToCell(g, mx, mz);
+  for (let dz = -r; dz <= r; dz++) {
+    const z = gz + dz;
+    if (z < 0 || z >= g.rows) continue;
+    for (let dx = -r; dx <= r; dx++) {
+      const x = gx + dx;
+      if (x < 0 || x >= g.cols) continue;
+      if (g.bed[z * g.cols + x] !== 1) continue;
+      const bx = x + 0.5 - g.cols / 2;
+      const bz = z + 0.5 - g.rows / 2;
+      if ((bx - mx) * (bx - mx) + (bz - mz) * (bz - mz) <= radiusM * radiusM) return true;
+    }
+  }
+  return false;
 }
 
 /**

@@ -1576,11 +1576,23 @@ function syncCardFromContext(s, ctx) {
   const card = ctx?.playerCard || {};
   if (!card || !Object.keys(card).length) return;
   const cur = s.playerCard || {};
-  const sig = (c) => JSON.stringify([c?.items ?? null, c?.money ?? null, c?.skills ?? null]);
+  const sig = (c) => JSON.stringify([
+    c?.items ?? null, c?.money ?? null, c?.skills ?? null,
+    c?.level ?? null, c?.exp ?? null, c?.hp ?? null, c?.mp ?? null,   // ★ 等级系统字段
+  ]);
   if (sig(card) === sig(cur)) return;
   s.playerCard = card;
   s.items = buildItems(card, 0, s.itemMeta);
   s.skills = buildSkills(card, 8, s.skillMeta);
+  // ★ 等级系统：AI 剧情在角色卡上直接改动的 等级/经验/HP/MP 回灌到玩家实体（数据一致性）
+  const me = playerEntity(s);
+  if (me) {
+    if (card.level != null) me.level = Math.max(1, Math.round(num(card.level, me.level)));
+    if (card.exp != null) s.exp = Math.max(0, Math.round(num(card.exp, s.exp)));
+    if (card.hp != null) me.hp = Math.max(0, Math.round(num(card.hp, me.hp)));
+    if (card.mp != null) me.mp = Math.max(0, Math.round(num(card.mp, me.mp)));
+    refreshPlayerExpFields(s);
+  }
 }
 function ensureNpcCards(s, levelName) {
   const prev = new Map((s.npcCards || []).map((c) => [String(c.id), c]));
@@ -1630,11 +1642,15 @@ function ensureNpcCards(s, levelName) {
       if (e) {
         pc.hp = Math.round(num(e.hp, num(pc.hp, 0)));
         pc.maxHp = Math.round(num(e.maxHp, num(pc.maxHp, pc.hp)));
+        // ★ 等级系统：蓝量以实体为权威（满蓝公式 = 100 + 等级*10 + 加成）
+        pc.mp = Math.round(num(e.mp, num(pc.mp, 0)));
+        pc.maxMp = Math.round(num(e.maxMp, num(pc.maxMp, pc.mp)));
       }
       if (side === "player") {
-        if (num(s.playerCard?.mp, -1) >= 0) pc.mp = s.playerCard.mp;
-        if (num(s.playerCard?.money, -1) >= 0) pc.money = s.playerCard.money;
+        pc.money = num(s.playerCard?.money, num(pc.money, 0));
         pc.exp = Math.round(num(s.playerCard?.exp, num(s.exp, 0)));
+        // ★ 等级系统：与玩家实体保持一致（等级/经验/满血满蓝）
+        pc.level = Math.max(1, Math.round(num(e ? e.level : pc.level, 1)));
       } else if (e) {
         pc.exp = Math.round(num(old?.exp, num(pc.exp, 0)));
       }
@@ -1747,12 +1763,21 @@ function grantPartyExp(s, expGain) {
     const c = (s.npcCards || []).find((x) => x.id === pid);
     if (!c) return;
     c.exp = Math.round(num(c.exp, 0)) + share;
-    while (c.exp >= c.level * 100) {
-      c.exp -= c.level * 100;
-      c.level += 1;
-      c.maxHp += 20;
-      c.hp = c.maxHp;
+    let ups = 0;
+    while (c.exp >= playerNextExp(num(c.level, 1))) {
+      c.exp -= playerNextExp(num(c.level, 1));   // 扣「升级前」阈值，溢出保留
+      c.level = Math.max(1, Math.round(num(c.level, 1))) + 1;
+      ups += 1;
     }
+    // ★ 等级系统：NPC 也按满血满蓝公式重算（无背包/技能永久加成 → 走基础公式）
+    c.maxHp = STAT_BASE.hp + c.level * STAT_PER_LEVEL;
+    c.maxMp = STAT_BASE.mp + c.level * STAT_PER_LEVEL;
+    if (ups > 0) { c.hp = c.maxHp; c.mp = c.maxMp; }
+    else {
+      c.hp = clamp(num(c.hp, c.maxHp), 0, c.maxHp);
+      c.mp = clamp(num(c.mp, c.maxMp), 0, c.maxMp);
+    }
+    c.next_level_exp = playerNextExp(c.level);
     const e = s.entities.find((x) => x.id === pid);
     if (e) {
       e.level = c.level;
@@ -1819,7 +1844,7 @@ async function refreshShop(context, s) {
           worldBookDigest: str(context?.worldBookDigest, ""),
           playerCard: s.playerCard || {}
         }),
-        12e3,
+        2e4,
         "shop agent timeout"
       );
       const goods = r?.output?.goods;
@@ -2152,6 +2177,16 @@ async function handle_action(action, params, state, context) {
       await persistSys(context, s);
       return okResp(to === "ring" ? `\u5DF2\u5B58\u5165\u7EB3\u6212\uFF1A${name}` : `\u5DF2\u53D6\u51FA\uFF1A${name}`);
     }
+    case "sys_rest": {
+      // ★ game.md 5：睡觉 / 住宿 / 休息过夜 → 直接满血满蓝，恢复描述写入角色卡 other
+      if (s.phase !== "playing") return okResp("");
+      const meRest = playerEntity(s);
+      if (!meRest || !meRest.alive) return okResp("角色不可用");
+      meRest.actionBobMs = 300;
+      restorePlayerFull(s, str(params?.reason, "休息"));
+      return okResp(`已休息：HP ${Math.round(meRest.hp)}/${Math.round(meRest.maxHp)}，MP ${Math.round(num(meRest.mp, 0))}/${Math.round(num(meRest.maxMp, 0))}`);
+    }
+
     case "sys_use_skill": {
       const skName = str(params?.name);
       const skIdx = num(params?.index, -1);
@@ -2279,7 +2314,8 @@ async function handle_action(action, params, state, context) {
     case "sys_shop_refresh": {
       await refreshShop(context, s);
       await persistSys(context, s);
-      return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF09`);
+      const src = s.shopSource === "agent" ? "\u5546\u57CEagent\u00B7\u6545\u4E8B\u7269\u8D44" : "\u63D2\u4EF6\u5E38\u5907\u7269\u8D44";
+      return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF0C\u8D27\u6E90\uFF1A${src}\uFF09`);
     }
     case "sys_shop_buy": {
       const id = str(params?.id);

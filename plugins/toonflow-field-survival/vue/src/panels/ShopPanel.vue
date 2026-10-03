@@ -18,6 +18,7 @@ function kindName(k: string) { return KIND_NAME[k] || k || "物资"; }
     <div class="shp-bar">
       <span class="shp-gold">金币 {{ gold }}</span>
       <span class="shp-src">货源：{{ source === "agent" ? "商城 agent（故事物资）" : "插件常备物资" }}</span>
+      <button class="shp-mini shp-mini--agent" title="商城 agent：读取故事动态参数与常驻世界书，生成贴合世界观的物资" @click="emit('agent')">商城agent</button>
       <button class="shp-mini" @click="emit('refresh')">刷新货源</button>
     </div>
 
@@ -48,5 +49,6 @@ function kindName(k: string) { return KIND_NAME[k] || k || "物资"; }
 .shp-btn { padding: 4px 10px; border-radius: 5px; border: 1px solid #5a9bff; background: #2f6fd0; color: #fff; font-size: 11px; cursor: pointer; }
 .shp-btn:disabled { border-color: #4a5563; background: #3a434f; color: #8b98a6; cursor: not-allowed; }
 .shp-mini { padding: 3px 8px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06); color: #cfd8e3; font-size: 11px; cursor: pointer; }
+.shp-mini--agent { border-color: #7a5aff; background: rgba(122, 90, 255, 0.18); color: #c9baff; }
 .shp-empty { color: #93a2b3; font-size: 11px; }
 </style>

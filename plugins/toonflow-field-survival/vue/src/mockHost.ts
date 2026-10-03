@@ -1124,6 +1124,21 @@ function install(): void {
         push();
         return;
       }
+      if (action === "sys_rest") {
+        // ★ 对齐 entry.js case "sys_rest"：game.md 满血满蓝公式 100 + 等级*10（道具/技能加成 mock 侧不展开）
+        const pc = (state as any).playerCard || ((state as any).playerCard = {});
+        const lv = Math.max(1, Math.round(Number(pc.level) || 1));
+        const full = 100 + lv * 10;
+        pc.hp = full;
+        pc.mp = full;
+        const me = (state.entities || []).find((e: any) => e.side === "player");
+        if (me) { me.hp = full; me.maxHp = full; (me as any).mp = full; (me as any).maxMp = full; }
+        const other: string[] = Array.isArray(pc.other) ? pc.other : (pc.other = []);
+        other.push("在床上睡了一觉，恢复满血满蓝");
+        state.events.push(`[mock] 睡眠恢复：HP/MP ${full}/${full}`);
+        push();
+        return;
+      }
       if (action === "sys_shop_buy") {
         // ★ 对齐 entry.js case "sys_shop_buy"：扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
         const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id);

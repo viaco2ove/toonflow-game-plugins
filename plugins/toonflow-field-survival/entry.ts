@@ -1483,6 +1483,8 @@ export interface ShopGood { id: string; name: string; price: number; kind: strin
 export interface NpcCard {
   id: string; name: string; side: string; enemy: boolean;
   level: number; hp: number; maxHp: number; exp: number; alive: boolean;
+  /** ★ game.md 等级系统：蓝量 / 下级升级所需经验（= 等级*100） */
+  mp?: number; maxMp?: number; next_level_exp?: number;
   mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string;
   /** ★ game.md 角色卡：动态参数卡（结构化字段由前端展开渲染，实时值已由宿主覆盖） */
   parameterCardJson?: Record<string, any> | null;
@@ -1991,11 +1993,23 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
   const card = (ctx?.playerCard || {}) as Record<string, any>;
   if (!card || !Object.keys(card).length) return;
   const cur = (s.playerCard || {}) as Record<string, any>;
-  const sig = (c: any) => JSON.stringify([c?.items ?? null, c?.money ?? null, c?.skills ?? null]);
+  const sig = (c: any) => JSON.stringify([
+    c?.items ?? null, c?.money ?? null, c?.skills ?? null,
+    c?.level ?? null, c?.exp ?? null, c?.hp ?? null, c?.mp ?? null,   // ★ 等级系统字段
+  ]);
   if (sig(card) === sig(cur)) return;
   s.playerCard = card;
   s.items = buildItems(card, 8);
   s.skills = buildSkills(card, 8, s.skillMeta);
+  // ★ 等级系统：AI 剧情在角色卡上直接改动的 等级/经验/HP/MP 回灌到玩家实体（数据一致性）
+  const me = playerEntity(s);
+  if (me) {
+    if (card.level != null) me.level = Math.max(1, Math.round(num(card.level, me.level)));
+    if (card.exp != null) s.exp = Math.max(0, Math.round(num(card.exp, s.exp)));
+    if (card.hp != null) me.hp = Math.max(0, Math.round(num(card.hp, me.hp)));
+    if (card.mp != null) me.mp = Math.max(0, Math.round(num(card.mp, me.mp)));
+    refreshPlayerExpFields(s);
+  }
 }
 
 /** 角色卡：主体 = 当前 AI 故事对话的动态角色卡（s.roles，与 web 端 play-role-strip 同源），
@@ -2168,14 +2182,27 @@ function grantPartyExp(s: FieldSurvivalState, expGain: number): void {
     const c = (s.npcCards || []).find((x) => x.id === pid);
     if (!c) return;
     c.exp = Math.round(num(c.exp, 0)) + share;
-    while (c.exp >= c.level * 100) {
-      c.exp -= c.level * 100;
-      c.level += 1;
-      c.maxHp += 20;
-      c.hp = c.maxHp;
+    let ups = 0;
+    while (c.exp >= playerNextExp(num(c.level, 1))) {
+      c.exp -= playerNextExp(num(c.level, 1));   // 扣「升级前」阈值，溢出保留
+      c.level = Math.max(1, Math.round(num(c.level, 1))) + 1;
+      ups += 1;
     }
+    // ★ 等级系统：NPC 也按满血满蓝公式重算（无背包/技能永久加成 → 走基础公式）
+    c.maxHp = STAT_BASE.hp + c.level * STAT_PER_LEVEL;
+    c.maxMp = STAT_BASE.mp + c.level * STAT_PER_LEVEL;
+    if (ups > 0) { c.hp = c.maxHp; c.mp = c.maxMp; }
+    else {
+      c.hp = clamp(num(c.hp, c.maxHp), 0, c.maxHp);
+      c.mp = clamp(num(c.mp, c.maxMp), 0, c.maxMp);
+    }
+    c.next_level_exp = playerNextExp(c.level);
     const e = s.entities.find((x) => x.id === pid);
-    if (e) { e.level = c.level; e.maxHp = c.maxHp; e.hp = c.hp; }
+    if (e) {
+      e.level = c.level; e.maxHp = c.maxHp; e.hp = c.hp;
+      e.maxMp = c.maxMp; e.mp = c.mp;
+      e.exp = c.exp; e.expToNext = playerNextExp(c.level);
+    }
   });
   const lead = s.entities.find((e) => e.id === party[0]);
   if (lead) floater(s, `队伍 +${share}exp`, lead.x, lead.y - 26);
@@ -2240,7 +2267,7 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
           worldBookDigest: str((context as any)?.worldBookDigest, ""),
           playerCard: s.playerCard || {},
         }),
-        12000,
+        20000,
         "shop agent timeout",
       );
       const goods = r?.output?.goods;
@@ -2777,7 +2804,8 @@ export async function handle_action(
     case "sys_shop_refresh": {
       await refreshShop(context, s);
       await persistSys(context, s);
-      return okResp(`商城已刷新（${(s.shopGoods || []).length} 件商品）`);
+      const src = s.shopSource === "agent" ? "商城agent·故事物资" : "插件常备物资";
+      return okResp(`商城已刷新（${(s.shopGoods || []).length} 件商品，货源：${src}）`);
     }
 
     case "sys_shop_buy": {

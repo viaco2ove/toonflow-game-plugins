@@ -59,6 +59,8 @@ import {
   computeFov,
   // ★ 把网格传给宿主（敌人碰撞用）
   encodeWalkGridPacket,
+  // ★ game.md 床碰撞：靠近床触发睡眠按钮
+  isNearBed,
   // 调试用：网格 → ASCII
   metersToCell,
   type WalkGrid,
@@ -523,6 +525,12 @@ function onSysShopRefresh() {
   runSysCmd("sys_shop_refresh", {});
 }
 
+/** ★ game.md 商城：商城agent 按钮——主动调用商城 agent（故事动态参数 + 常驻世界书 → 物资类别） */
+function onSysShopAgent() {
+  sysNotice.value = "商城 agent 正在读取故事动态数据与世界书条目…";
+  runSysCmd("sys_shop_refresh", { agent: true });
+}
+
 function onSysBuyItem(good: SysGood, count = 1) {
   sysNotice.value = `购买 ${good.name} ×${count}`;
   runSysCmd("sys_shop_buy", { id: good.id, name: good.name, count: Math.max(1, Math.floor(count)) });
@@ -750,6 +758,14 @@ const selectableRoles = computed<RoleOption[]>(() =>
 
 /** ★ 当前玩家实体（HUD 模板用）；undefined 时让模板 fallback 走 ?? 默认值 */
 const me = computed<Entity | undefined>(() => state.value?.entities.find((e) => e.side === "player"));
+
+/* ★ game.md 等级系统：HUD 满值兜底
+   满血HP = 100 + 等级*10 + 加成 / 满蓝MP = 100 + 等级*10 + 加成 / next_level_exp = 等级*100
+   宿主未下发对应字段（老存档）时按公式推算，避免出现 0/0 或除零宽度 */
+const hudLevel = computed(() => Math.max(1, Number(me.value?.level ?? 1) || 1));
+const hudMaxHp = computed(() => Math.max(1, Math.round(Number(me.value?.maxHp ?? 0) || (100 + hudLevel.value * 10))));
+const hudMaxMp = computed(() => Math.max(1, Math.round(Number(me.value?.maxMp ?? 0) || (100 + hudLevel.value * 10))));
+const hudExpToNext = computed(() => Math.max(1, Math.round(Number(me.value?.expToNext ?? 0) || hudLevel.value * 100)));
 
 // ★ v7：reactive 数组直接 push/splice 触发响应式（最简单可靠）
 function toggle(arr: string[], id: string) {
@@ -4171,6 +4187,29 @@ let lastMinimapAt = 0;
 let lastFrameAt = 0;
 const TICK_MS = 100;
 
+/* ---------------- ★ game.md 床碰撞 → 睡眠按钮 ---------------- */
+/** 玩家是否紧邻床铺（tileset description=bed 的 blocked 格），随 tick 10Hz 刷新 */
+const nearBed = ref(false);
+
+function updateNearBed(): void {
+  const g = walkGrid;
+  const s = state.value;
+  if (!g || !g.bed || !g.bedCount || !s) {
+    if (nearBed.value) nearBed.value = false;
+    return;
+  }
+  const me = s.entities.find((e) => e.side === "player");
+  const v = me ? isNearBed(g, me.x, me.y, 1.8) : false;
+  if (v !== nearBed.value) nearBed.value = v;
+}
+
+/** 点击睡眠：走 sys_rest（entry 侧按 game.md 满血满蓝公式恢复 + 描述写 other + 参数卡同步） */
+function onSleep() {
+  if (!nearBed.value) return;
+  sysNotice.value = "你躺到床上，睡了个好觉……";
+  runSysCmd("sys_rest", {});
+}
+
 function loop(ts: number) {
   raf = requestAnimationFrame(loop);
   _animTick++;
@@ -4190,6 +4229,8 @@ function loop(ts: number) {
     lastTickAt = ts;
     // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）——本地仍保持 10Hz
     localTick();
+    // ★ game.md 床碰撞：靠近床时出睡眠按钮（10Hz 足够，9~49 格查表很便宜）
+    updateNearBed();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
@@ -4831,16 +4872,16 @@ watch(playerSnapshot, () => {
       </button>
       <div class="hud">
         <div class="hud__left">
-          <!-- 等级 + HP 条 -->
+          <!-- 等级 + HP 条 ★ 满血HP = 100 + 等级*10 + 道具/技能加成（宿主侧计算） -->
           <div class="lv-hud">Lv.{{ me?.level ?? 1 }}</div>
-          <div class="hp"><div class="hp__bar" :style="{ width: (me?.hp ?? 0) / (me?.maxHp ?? 1) * 100 + '%' }"></div></div>
-          <div class="hud__txt">HP {{ Math.round(me?.hp ?? 0) }}/{{ me?.maxHp ?? 0 }}</div>
-          <!-- MP 条（蓝） -->
-          <div class="mp"><div class="mp__bar" :style="{ width: (me?.mp ?? 0) / (me?.maxMp ?? 1) * 100 + '%' }"></div></div>
-          <div class="hud__txt">MP {{ Math.round(me?.mp ?? 0) }}/{{ me?.maxMp ?? 0 }}</div>
-          <!-- EXP 条 -->
-          <div class="exp"><div class="exp__bar" :style="{ width: (me?.exp ?? 0) / (me?.expToNext ?? 1) * 100 + '%' }"></div></div>
-          <div class="hud__txt">EXP {{ me?.exp ?? 0 }}/{{ me?.expToNext ?? 0 }}</div>
+          <div class="hp"><div class="hp__bar" :style="{ width: (me?.hp ?? 0) / hudMaxHp * 100 + '%' }"></div></div>
+          <div class="hud__txt">HP {{ Math.round(me?.hp ?? 0) }}/{{ hudMaxHp }}</div>
+          <!-- MP 条（蓝）★ 满蓝MP = 100 + 等级*10 + 道具/技能加成 -->
+          <div class="mp"><div class="mp__bar" :style="{ width: (me?.mp ?? 0) / hudMaxMp * 100 + '%' }"></div></div>
+          <div class="hud__txt">MP {{ Math.round(me?.mp ?? 0) }}/{{ hudMaxMp }}</div>
+          <!-- EXP 条 ★ next_level_exp = 当前等级 * 100 -->
+          <div class="exp"><div class="exp__bar" :style="{ width: (me?.exp ?? 0) / hudExpToNext * 100 + '%' }"></div></div>
+          <div class="hud__txt">EXP {{ Math.round(me?.exp ?? 0) }}/{{ hudExpToNext }}</div>
         </div>
         <div class="hud__mid">
           <span v-if="mapTheme" class="hud__map" :title="mapSourceLabel">🗺 {{ mapTheme }}</span>
@@ -4864,6 +4905,8 @@ watch(playerSnapshot, () => {
           <input type="checkbox" v-model="fogEnabled" @change="onFogToggle" />
           <span>迷雾 {{ fogExploredPct }}%</span>
         </label>
+        <!-- ★ game.md 床碰撞：靠近床铺（tileset description=bed）显示睡眠按钮，满血满蓝恢复 -->
+        <button v-if="nearBed" class="btn btn--sleep" title="在床上睡一觉：恢复满血满蓝" @click="onSleep">🛏 睡眠</button>
       </div>
 
       <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 mulberryTown.json 决定 -->
@@ -5009,6 +5052,7 @@ watch(playerSnapshot, () => {
         @ring-move="onSysRingMove"
         @ring-skill-move="onSysRingSkillMove"
         @shop-refresh="onSysShopRefresh"
+        @shop-agent="onSysShopAgent"
         @buy="onSysBuyItem"
         @use-skill="onSysUseSkill"
         @edit-skill="onSysEditSkill"
@@ -5616,6 +5660,32 @@ body {
   transform: translateY(2px);
   box-shadow: 0 0 0 #6a1f1f;
 }
+
+/* ★ game.md 床碰撞：睡眠按钮（靠近床铺出现，像素风与退出按钮同族、暖色区分） */
+.btn--sleep {
+  border: 2px solid #8a5a2a;
+  border-radius: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  background: #b07a3e;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 0 #5a3a18;
+  animation: sleepPulse 1.2s ease-in-out infinite;
+}
+
+.btn--sleep:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #5a3a18;
+}
+
+@keyframes sleepPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
+}
+
 
 /* ===== 缩放控制（右上角：zoom+ / zoom- 按钮，对应 25d_ai_game 的 camera zoom） ===== */
 .zoom-ctrl {
