@@ -163,6 +163,16 @@ const RARITY_DEFAULT_PRICE: Record<string, number> = { common: 8, fine: 22, rare
 /** 面板底部提示（由插件 response 或本地动作文案驱动） */
 const sysNotice = ref("");
 
+/** ★ HUD 级醒目提示（睡眠恢复等）：系统面板没打开时也要看得见 */
+const hudToast = ref("");
+let toastTimer = 0;
+function showToast(msg: string, ms = 4200): void {
+  if (!msg) return;
+  hudToast.value = msg;
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => { hudToast.value = ""; }, ms);
+}
+
 /** 插件下发的用户参数卡（宿主每 tick 注入 ctx.playerCard → state.playerCard） */
 const sysCard = computed<Record<string, any>>(() => ((state.value as any)?.playerCard || {}) as Record<string, any>);
 const sysGold = computed(() => Math.round(Number(sysCard.value?.money ?? 0)));
@@ -447,8 +457,11 @@ watch(
   () => String(((state.value as any)?.response) || ""),
   (resp) => {
     if (!resp || !pendingSys.value) return;
+    const isRest = pendingSys.value === "sys_rest";
     pendingSys.value = "";
     sysNotice.value = resp;
+    // ★ 睡眠恢复结果只有系统面板底栏能看到 → 同步弹到 HUD 上
+    if (isRest) showToast(resp);
   }
 );
 
@@ -4206,8 +4219,11 @@ function updateNearBed(): void {
 /** 点击睡眠：走 sys_rest（entry 侧按 game.md 满血满蓝公式恢复 + 描述写 other + 参数卡同步） */
 function onSleep() {
   if (!nearBed.value) return;
+  const full = `🎉 恭喜您已恢复到最佳状态！HP ${hudMaxHp.value}/${hudMaxHp.value}，MP ${hudMaxMp.value}/${hudMaxMp.value}`;
   sysNotice.value = "你躺到床上，睡了个好觉……";
-  runSysCmd("sys_rest", {});
+  // ★ 乐观提示：立刻给反馈，宿主 response 回来后再刷新为权威数值
+  showToast(full);
+  runSysCmd("sys_rest", { reason: "在床上睡了一觉" });
 }
 
 function loop(ts: number) {
@@ -4908,6 +4924,9 @@ watch(playerSnapshot, () => {
         <!-- ★ game.md 床碰撞：靠近床铺（tileset description=bed）显示睡眠按钮，满血满蓝恢复 -->
         <button v-if="nearBed" class="btn btn--sleep" title="在床上睡一觉：恢复满血满蓝" @click="onSleep">🛏 睡眠</button>
       </div>
+
+      <!-- ★ 睡眠恢复等 HUD 级提示（系统面板未打开时也能看到） -->
+      <div v-if="hudToast" class="hud-toast" @click="hudToast = ''">{{ hudToast }}</div>
 
       <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 mulberryTown.json 决定 -->
       <div class="zoom-ctrl" :title="`zoom=${zoom}（${viewSizeMeters[0]}m × ${viewSizeMeters[1]}m）`">
@@ -5659,6 +5678,34 @@ body {
 .btn--exit:active {
   transform: translateY(2px);
   box-shadow: 0 0 0 #6a1f1f;
+}
+
+/* ★ HUD 级提示条（睡眠恢复 / 关键结果）：居中偏上，暖金高亮，点击关闭 */
+.hud-toast {
+  position: absolute;
+  top: 14%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  max-width: 78%;
+  padding: 8px 16px;
+  border: 2px solid #ffd479;
+  background: linear-gradient(180deg, rgba(60, 42, 16, 0.96), rgba(38, 26, 8, 0.96));
+  color: #ffe9b0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-align: center;
+  text-shadow: 0 1px 0 #4a330f;
+  box-shadow: 0 0 0 2px #6a4a12, 0 6px 18px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  animation: toastIn 0.28s ease-out;
+  pointer-events: auto;
+}
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, -10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 
 /* ★ game.md 床碰撞：睡眠按钮（靠近床铺出现，像素风与退出按钮同族、暖色区分） */

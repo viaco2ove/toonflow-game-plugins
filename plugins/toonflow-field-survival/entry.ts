@@ -1859,7 +1859,7 @@ function restorePlayerFull(s: FieldSurvivalState, reason: string): void {
   applyBagAttributes(s, { full: true });
   const card = (s.playerCard || {}) as Record<string, any>;
   const other = (Array.isArray(card.other) ? card.other.map((x: any) => String(x)) : []).slice(-20);
-  const note = `${reason}：HP/MP 已恢复至满值（HP ${Math.round(me.hp)}/${Math.round(me.maxHp)}，MP ${Math.round(num(me.mp, 0))}/${Math.round(num(me.maxMp, 0))}）`;
+  const note = `${reason}：🎉 恭喜您已恢复到最佳状态（HP ${Math.round(me.hp)}/${Math.round(me.maxHp)}，MP ${Math.round(num(me.mp, 0))}/${Math.round(num(me.maxMp, 0))}）`;
   other.push(note);
   syncPlayerCardStats(s, { other });
   floater(s, "满血满蓝", me.x, me.y - 40);
@@ -2660,7 +2660,7 @@ export async function handle_action(
       if (!meRest || !meRest.alive) return okResp("角色不可用");
       (meRest as any).actionBobMs = 300;
       restorePlayerFull(s, str(params?.reason, "休息"));
-      return okResp(`已休息：HP ${Math.round(meRest.hp)}/${Math.round(meRest.maxHp)}，MP ${Math.round(num(meRest.mp, 0))}/${Math.round(num(meRest.maxMp, 0))}`);
+      return okResp(`🎉 恭喜您已恢复到最佳状态！HP ${Math.round(meRest.hp)}/${Math.round(meRest.maxHp)}，MP ${Math.round(num(meRest.mp, 0))}/${Math.round(num(meRest.maxMp, 0))}`);
     }
 
     case "sys_use_skill": {

@@ -1134,8 +1134,8 @@ function install(): void {
         const me = (state.entities || []).find((e: any) => e.side === "player");
         if (me) { me.hp = full; me.maxHp = full; (me as any).mp = full; (me as any).maxMp = full; }
         const other: string[] = Array.isArray(pc.other) ? pc.other : (pc.other = []);
-        other.push("在床上睡了一觉，恢复满血满蓝");
-        state.events.push(`[mock] 睡眠恢复：HP/MP ${full}/${full}`);
+        other.push(`在床上睡了一觉：🎉 恭喜您已恢复到最佳状态（HP ${full}/${full}，MP ${full}/${full}）`);
+        state.events.push(`[mock] 🎉 恭喜您已恢复到最佳状态！HP ${full}/${full}，MP ${full}/${full}`);
         push();
         return;
       }
