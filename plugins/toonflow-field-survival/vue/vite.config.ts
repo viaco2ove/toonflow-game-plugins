@@ -310,6 +310,55 @@ const post = (state, response) => {
   if (state && typeof state === "object") state.response = response || "";
   document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive","sys","sys_sell","sys_use_item","sys_sort","sys_ring_move","sys_use_skill","sys_shop_refresh","sys_shop_buy","sys_party","sys_teleport","sys_travel"], response: response || "" }, "*");
 };
+// ★ 插件侧 agent 调用通道（App.vue 直接调，不走 entry.js）
+// ★ 写入 window.top（跨 iframe boundary）：Vue 在 iframe 内，dev-host PAGE 在 top，
+//   App.vue 的 Object.defineProperty getter 从 window.top.__agentRun_impl 读取。
+const __impl = async (agentName, args) => {
+  const n = String(agentName || "");
+  if (n.indexOf("shop") >= 0) {
+    await new Promise((r) => setTimeout(r, 240));
+    return runMockShopAgent(args);
+  }
+  // ★ task-speaker-agent mock（dev-host 专用，返回 3 个选项 + 角色发言）
+  if (n.indexOf("speaker") >= 0 || n.indexOf("task-speaker") >= 0) {
+    await new Promise((r) => setTimeout(r, 600));
+    const npcId = String(args?.npcId || "").toLowerCase();
+    const mode = String(args?.mode || "options");
+    // ★ 支持前缀匹配：npc_ally_huo_kui → huokui 组；npc_ally_ → 通用盟友
+    const isAllyPrefix = npcId.startsWith("npc_ally_huo_kui") || npcId === "huokui";
+    const isAlly = npcId.startsWith("npc_ally_");
+    const DIALOGUE_MAP = {
+      // 「赦夜人冥夜走廊-第二季」故事角色（dev-host 拟真台词；真实宿主走大模型）
+      npc_ally_huo_kui: { options: ["（警觉地压低声音）别声张，这条走廊不对劲。", "（拍了拍你的肩膀）跟紧我，别走散。", "（若有所思）夜里的赦人…比传闻中更危险。"], speaker: "霍魁" },
+      huokui:           { options: ["（警觉地压低声音）别声张，这条走廊不对劲。", "（拍了拍你的肩膀）跟紧我，别走散。", "（若有所思）夜里的赦人…比传闻中更危险。"], speaker: "霍魁" },
+      npc_1_pei_yong:   { options: ["（低声）先摸清走廊的布局再说。", "（警惕环顾）有跟踪我们的气息。", "（沉吟）裴某伴你同行。"], speaker: "裴勇" },
+      chen_yan:         { options: ["（沉默地看着你）", "（低声交谈）…", "（叹了口气）…"], speaker: "陈彦" },
+      // 旧浆果镇模板 NPC（仅保留兜底，故事里已不再生成）
+      leonard:          { options: ["欢迎来到浆果镇。", "有什么需要帮忙的？", "最近镇上不太平…"], speaker: "镇长 Leonard" },
+      mayor_leonard:    { options: ["欢迎来到浆果镇。", "有什么需要帮忙的？", "最近镇上不太平…"], speaker: "镇长 Leonard" },
+      barkeep:          { options: ["来一杯？", "今天打烊了。", "别惹事。"], speaker: "酒馆老板" },
+      dwarf_bili:       { options: ["（擦着斧头）嗯？", "矮人我可是行家。", "别碰我的胡子。"], speaker: "矮人比利" },
+    };
+    // ★ 前缀兜底：npc_ally_huo_kui → huokui 组；npc_ally_* → 通用盟友组
+    let dialogue = DIALOGUE_MAP[npcId];
+    if (!dialogue) {
+      if (isAllyPrefix) dialogue = DIALOGUE_MAP.huokui;
+      else if (isAlly) dialogue = { options: ["（警觉地压低声音）…", "（拍了拍你的肩膀）…", "（若有所思）…"], speaker: "霍魁" };
+    }
+    dialogue = dialogue || {
+      options: ["（点头）…", "（摇头）…", "（微笑）…"],
+      speaker: "???",
+    };
+    if (mode === "options") {
+      return { ok: true, output: { text: JSON.stringify(dialogue.options) } };
+    }
+    // ★ chosenText 优先（AI选项），其次 text（自定义输入）
+    const chosenText = String(args?.chosenText ?? args?.text ?? "");
+    return { ok: true, output: { text: dialogue.speaker + "：" + (chosenText || "（沉默）") } };
+  }
+  throw new Error("dev-host 桩无 agent 通道（" + n + "）");
+};
+(window.top ?? window).__agentRun_impl = __impl;
 
 /* ================= 真实插件 entry.js 执行器（薄宿主） =================
  * 桩不再自己模拟游戏逻辑：loadStoryData() 拿到服务器参数卡后，
@@ -850,18 +899,23 @@ window.addEventListener("message", async (e) => {
     (sel.participants || []).forEach((id, i) => {
       // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
       const r = roles.find((x) => x.id === id) || roles.find((x) => x.name === id);
-      if (r && (!playerRole || r.id !== playerRole.id)) {
-        const lv = r.initial_level || 10;
-        const s = 1 + (lv - 1) * 0.3;
-        ents.push({
-          id: r.id, name: r.name, side: "ally",
-          x: Math.cos(i) * 12, y: Math.sin(i) * 12, vx: 0, vy: 0,
-          hp: Math.floor(100 * s), maxHp: Math.floor(100 * s),
-          mp: Math.floor(30 + lv * 5), maxMp: Math.floor(30 + lv * 5),
-          exp: 0, expToNext: Math.floor(50 * Math.pow(1.5, lv - 1)),
-          level: lv, atk: 25, def: 8, facing: 0, cooldown: 0, alive: true, avatarPath: r.avatarPath,
-        });
-      }
+      // ★ 不再自动生成"莫名奇妙"的 NPC ally——
+      //   participants 必须在选人面板由用户显式勾选才生成实体；空数组 / 全是玩家本人 → 0 ally
+      if (!r) return;
+      if (playerRole && r.id === playerRole.id) return;
+      const lv = r.initial_level || 10;
+      const s = 1 + (lv - 1) * 0.3;
+      // ★ 玩家中心 50 米半径随机（避开 5 米内）
+      const ang = Math.random() * Math.PI * 2;
+      const dist = 5 + Math.random() * 45;
+      ents.push({
+        id: r.id, name: r.name, side: "ally",
+        x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, vx: 0, vy: 0,
+        hp: Math.floor(100 * s), maxHp: Math.floor(100 * s),
+        mp: Math.floor(30 + lv * 5), maxMp: Math.floor(30 + lv * 5),
+        exp: 0, expToNext: Math.floor(50 * Math.pow(1.5, lv - 1)),
+        level: lv, atk: 25, def: 8, facing: 0, cooldown: 0, alive: true, avatarPath: r.avatarPath,
+      });
     });
     // ★ 直接同步推 playing state（用 setTimeout(200) 在 background tab 上不可靠，
     //   bsk 控制台时整个 setTimeout 队列被节流到 1Hz，start action 永远到不了）
@@ -1234,6 +1288,7 @@ export default defineConfig(({ mode }) => {
     ],
     server: {
       port: 3000,
+      host: true, // ★ 监听所有接口（包括 127.0.0.1 和 ::1），确保 bsk CDP 能连接
       // ★ 允许 --conn 拟真宿主桩通过 /@fs/ 动态 import 插件入口 entry.js
       //   （vite 默认只允许 workspace root=vue/ 目录，entry.js 在其上一级）
       fs: {

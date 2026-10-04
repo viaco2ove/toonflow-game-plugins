@@ -929,33 +929,12 @@ function ensureTown(s) {
       ]
     };
   }
-  if (!s.entities.some((e) => e.side === "neutral")) {
-    TOWN_NPCS.forEach((n, i) => {
-      const e = makeEntity({ id: `npc_${i}`, name: n.name, hp: 200 }, "neutral", n.x, n.y, i);
-      e.atk = 0;
-      e.facing = [0, 90, 180, 270][i % 4];
-      e.regionId = town.id;
-      e.homeX = n.x;
-      e.homeY = n.y;
-      e.aiState = "npc";
-      s.entities.push(e);
-    });
-  }
-  // ★ mulberryTown.json Actors 层的 NPC：注入为 mapnpc_* 实体，让玩家可对话
-  if (!s.entities.some((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"))) {
-    TOWN_NPCS_MAP_JSON.forEach((n, i) => {
-      const id = `mapnpc_${i + 100}`;
-      const e = makeEntity({ id, name: n.name, hp: 200 }, "neutral", n.x, n.y, i + 100);
-      e.atk = 0;
-      e.regionId = town.id;
-      e.homeX = n.x;
-      e.homeY = n.y;
-      e.aiState = "npc";
-      e.entity_type = "NPC";
-      e.camp = "neutral";
-      s.entities.push(e);
-    });
-  }
+  // ★ 移除硬编码 NPC 注入（用户需求：「不能有多余的 NPC」）：
+  //   TOWN_NPCS（镇长 老白/铁匠 大壮/商人 阿福/守卫 石岩）与 TOWN_NPCS_MAP_JSON
+  //   （「矮人比利」/「镇长 Leonard」/ 23 个无名 NPC）都是旧浆果镇模板写死的数据，
+  //   与当前故事（赦夜人冥夜走廊：陈彦/裴勇/霍魁…）毫无关系。
+  //   保留 s.town.npcs 元数据供面板展示，但**不再注入 entities** ——
+  //   地图 NPC 一律由 vue 侧 mapConfig.npcs（故事角色白名单过滤后）注入，见 App.vue injectMapNpcsToState。
 }
 function step(s, input, poseHint) {
   const speed = MOVE_SPEED_M;
@@ -2559,60 +2538,9 @@ async function handle_action(action, params, state, context) {
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);
     }
     case "sys_chat": {
-      // ★ game.md 对话功能：调用角色发言器 agent（task-speaker-agent）
-      const npcId = str(params?.npcId, "");
-      const npcName = str(params?.npcName, "???");
-      const userText = params?.userText ?? null;
-      const lastResp = str(params?.lastResp, "");
-      if (!npcId) return okResp("\u7F3A\u5C11\u89D2\u8272\u6807\u8BC6");
-      // 查找角色
-      const npcEntity = s.entities.find((e) => e.id === npcId);
-      const npcSide = npcEntity?.side;
-      // game.md 中立npc：查找通用角色或旁白
-      const isNeutral = npcSide === "neutral";
-      const roleEntry = ((s.roles ?? [])).find(
-        (r) => String(r?.id) === npcId || String(r?.name) === npcId,
-      );
-      // 中立npc用通用角色扮演，否则用该角色
-      const roleName = isNeutral
-        ? "\u65C1\u767D" // 没有通用角色时用旁白
-        : str(roleEntry?.name || npcName, npcName);
-      const roleCard = isNeutral ? null : (roleEntry || null);
-
-      // 调用角色发言器 agent
-      try {
-        if (context?.tsApi?.agent) {
-          const result = await context.tsApi.agent.run("task-speaker-agent", {
-            npcId,
-            npcName: roleName,
-            npcCard: roleCard,
-            isNeutral,
-            userText: userText ?? null,
-            lastResp: lastResp || null,
-            context: {
-              storyDigest: context?.sessionId ? `session:${context.sessionId}` : "",
-              playerLevel: (s.entities.find((e) => e.side === "player")?.level) ?? 1,
-            },
-          });
-          if (result?.ok && result?.output?.text) {
-            const text = String(result.output.text).trim();
-            pushEvent(s, `${roleName}\uFF1A${text}`);
-            // ★ 台词同步到 Toonflow-game-web 聊天框（response 携带 JSON 给前端转发）
-            await persistSys(context, s);
-            return okResp(JSON.stringify({ speaker: roleName, text, avatar: roleEntry?.avatarPath ?? undefined }));
-          }
-          if (result?.error) console.warn("[field-survival] sys_chat agent error:", result.error);
-        }
-      } catch (e) {
-        console.warn("[field-survival] sys_chat agent call failed:", e);
-      }
-      // 降级：若无 agent 或调用失败，给一条旁白
-      const fallbackText = userText
-        ? `${roleName}\u82E5\u6709\u6240\u601D\u5730\u56DE\u5E94\u4E86\u4F60\u7684\u8BDD\u3002`
-        : `\u4F60\u4E0E${roleName}\u5BF9\u89C6\u3002${roleName}\u5FAE\u5FAE\u70B9\u5934\uFF0C\u5374\u672A\u53D1\u4E00\u8A00\u3002`;
-      pushEvent(s, `${roleName}\uFF1A${fallbackText}`);
-      await persistSys(context, s);
-      return okResp(JSON.stringify({ speaker: roleName, text: fallbackText }));
+      // ★ 对话功能已迁移到插件 App.vue（直接调 window.__agentRun）
+      // 此处只做占位，避免 entry.js 执行到这里
+      return okResp(JSON.stringify({ error: "sys_chat 由插件 App.vue 处理", fallback: false }));
     }
 
     case "page": {

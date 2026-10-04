@@ -22,3 +22,6 @@ python -m toon_plugins plugin_session_data -i com.toonflow.minigame-field-surviv
 
 # 7. build tbg 文件到同级目录下
 python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -build "D:/Users/viaco/tools/Toonflow-game/toonflow-game-plugins/workshops/toonflow-field-survival/map_design/赦夜人冥夜走廊-第二季"
+
+# 获取（t_plugin_session_data 表）角色位置和地图信息
+python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -role -position

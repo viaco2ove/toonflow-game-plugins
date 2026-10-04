@@ -230,3 +230,12 @@ class ToonClient:
         if story:
             body["story"] = story
         return self._post("/plugin/data", body)
+
+    # ── Game / Story APIs ───────────────────────────────────────────────────────
+
+    def story_info(self, story, world_id=None):
+        """获取 /game/storyInfo 接口数据（角色、状态、动态事件等）。"""
+        body = {"story": story}
+        if world_id is not None:
+            body["worldId"] = world_id
+        return self._post("/game/storyInfo", body)

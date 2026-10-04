@@ -389,12 +389,23 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             y: obj.y / 32 - 1 - H / 2,
           };
         } else if (props.entity_type === "NPC") {
-          // NPC → 同时进入 decorations（用于头像 sprite）+ npcs[]（用于生成 side=neutral 实体）
-          // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > obj.name > 兜底
+          // ★ 占位判定先行：Tiled 里只挂了 entity_type + wanders、无 full_name/props.name/obj.name/dialog
+          //   的「无名 NPC」必须**完全跳过**（既不进 npcs[]，也不画 decorations 头像），
+          //   否则地图会刷出 20+ 个头顶写着 "NPC" 的「莫名奇妙的 NPC」污染整个地图。
+          //   修复点：原本只过滤 npcs[]，但 decorations.push() 之前已经无条件执行 → 仍然刷屏。
           const fullName = props.full_name != null ? String(props.full_name) : "";
           const propName = String(props.name || "").trim();
           const objName = String(obj.name || "").trim();
-          // 如果 propName 已经是中文（无空格 + 不像英文名）就直接用，否则按 obj.name 兜底
+          const hasDialog = typeof props.dialog === "string" && props.dialog.length > 0;
+          const hasMeaningfulName =
+            (fullName && fullName !== "NPC") ||
+            (propName && propName !== "NPC") ||
+            (objName && objName !== "NPC");
+          if (!hasMeaningfulName && !hasDialog) {
+            // 纯占位 NPC：完全跳过 → 装饰层不画头像、npcs[] 也不收录，避免「莫名奇妙的 NPC」刷屏
+            continue;
+          }
+          // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > obj.name > 兜底
           const isAscii = /^[\x00-\x7F]+$/.test(propName);
           const displayName = fullName
             || (propName && !isAscii ? propName : "")
@@ -402,6 +413,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             || "NPC";
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
+          // 只有「真有名字或有 dialog 的 NPC」才画头像装饰
           decorations.push({
             id: `n_${decIdx++}`,
             kind: "npc",
@@ -517,9 +529,14 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
       )
     : null;
 
+  // ★ 占位名字兜底：Tiled JSON 通常不带顶层 name 字段（mulberryTown.json 就是 null），
+  //   之前 `obj.name ?? "overworld"` 永远回落到 "overworld" → 地图主题面板错把 Mulberry Town 显示成 overworld。
+  //   修复：当 Tiled 没写 name 时，回退到调用方传入的 levelName（小写驼峰 → Pascal Case 友好显示）。
+  const tiledName = (obj && typeof obj.name === "string" && obj.name.trim()) ? obj.name.trim() : "";
+  const finalName = tiledName || (levelName ? levelName : "overworld");
   return {
     ...f,
-    name: String(obj.name ?? "overworld"),
+    name: finalName,
     // ★ 按地图实际大小（不强制 ±1500 大地图）
     size: [W, H],
     x_range: [-W / 2, W / 2],
@@ -533,6 +550,9 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
     mobs,
     npcs,
     mobLevelRange,
+    // ★ Tiled 实际加载成功时，清掉 fallback 的"未找到 mulberryTown.json"诊断字段，
+    //   否则外部面板/HUD 会显示 "fallback（未找到 mulberryTown.json 时使用）"自相矛盾
+    notes: undefined,
   };
 }
 

@@ -3,8 +3,28 @@
 """toon_plugins CLI"""
 import os
 import sys
+
+# Windows 终端 UTF-8 支持
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import click
 import json as _json
+
+try:
+    from datetime import datetime
+except ImportError:
+    datetime = None
+
+try:
+    from tabulate import tabulate
+    _HAVE_TABULATE = True
+except ImportError:
+    _HAVE_TABULATE = False
 
 CLI_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, CLI_ROOT)
@@ -235,6 +255,10 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, upload_mode, include
                     for fn in files:
                         if fn.endswith(".pyc") or fn == ".DS_Store":
                             continue
+                        # ★ Windows 设备名（nul/con/prn/aux 等）打包会触发 relpath 抛
+                        #   ValueError: path is on mount '\\.\nul'，跳过
+                        if fn.lower() in {"nul", "con", "prn", "aux"}:
+                            continue
                         fp = os.path.join(base, fn)
                         rel = os.path.relpath(fp, pdir).replace(os.sep, "/")
                         zf.write(fp, rel)
@@ -372,6 +396,9 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
             for fn in files:
                 if fn.endswith(".pyc") or fn == ".DS_Store":
                     continue
+                # ★ Windows 设备名（nul/con/prn/aux 等）跳过
+                if fn.lower() in {"nul", "con", "prn", "aux"}:
+                    continue
                 fp = os.path.join(base, fn)
                 rel = os.path.relpath(fp, plugin_dir).replace(os.sep, "/")
                 zf.write(fp, rel)
@@ -453,6 +480,76 @@ def build_tbg_file(source_path: str) -> dict:
 # sessionId 默认为 "all"（跨会话共享，与 req.md 约定一致）；
 # 传 --session 切换到具体会话。
 # ─────────────────────────────────────────────────────────────────────────
+@main.command(name="story_info")
+@click.option("--story", "-s", required=True, help="故事名称（如 赦夜人冥夜走廊-第二季）")
+@click.option("--worldid", "world_id", type=int, default=None, help="世界 ID（可选）")
+@click.option("--roles", is_flag=True, help="只显示角色列表（roles/npcs）")
+@click.option("--state", is_flag=True, help="只显示 state 顶层字段")
+@click.pass_context
+def story_info(ctx, story, world_id, roles, state):
+    """获取 /game/storyInfo 接口数据（角色、状态、动态事件等）。
+
+    用法示例：
+      python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --worldid 47
+      python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --roles
+      python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --state
+    """
+    client = resolve_client(ctx.obj["env_path"])
+    result = client.story_info(story, world_id)
+
+    if state:
+        # 只显示 state 顶层字段
+        state_data = result.get("state", {})
+        click.echo(_json.dumps(state_data, ensure_ascii=False, indent=2))
+        return
+
+    if roles:
+        # 只显示角色（player + npcs）
+        state_data = result.get("state", {})
+        player = state_data.get("player", {})
+        npcs = state_data.get("npcs", {})
+
+        click.secho("=== 玩家 ===", bold=True)
+        pcj = player.get("parameterCardJson", {})
+        click.echo(f"  id: {player.get('id')}")
+        click.echo(f"  name: {player.get('name')}")
+        click.echo(f"  roleType: {player.get('roleType')}")
+        click.echo(f"  level: {pcj.get('level', 'N/A')}")
+        click.echo(f"  hp: {pcj.get('hp', 'N/A')}/{pcj.get('hp', 'N/A')}")
+        click.echo(f"  x/y: {pcj.get('x', 'N/A')}/{pcj.get('y', 'N/A')}")
+        click.echo(f"  mapName: {pcj.get('mapName', 'N/A')}")
+
+        click.secho(f"\n=== NPC ({len(npcs)} 个) ===", bold=True)
+        if isinstance(npcs, dict):
+            for k, v in npcs.items():
+                pcj = v.get("parameterCardJson", {})
+                click.echo(f"\n  [{k}] {v.get('name')} ({v.get('roleType')})")
+                click.echo(f"    level: {pcj.get('level', 'N/A')}")
+                click.echo(f"    hp: {pcj.get('hp', 'N/A')}/{pcj.get('maxHp', pcj.get('hp', 'N/A'))}")
+                click.echo(f"    x/y: {pcj.get('x', 'N/A')}/{pcj.get('y', 'N/A')}")
+                click.echo(f"    mapName: {pcj.get('mapName', 'N/A')}")
+        elif isinstance(npcs, list):
+            for v in npcs:
+                pcj = v.get("parameterCardJson", {})
+                click.echo(f"\n  [{v.get('id')}] {v.get('name')} ({v.get('roleType')})")
+                click.echo(f"    level: {pcj.get('level', 'N/A')}")
+                click.echo(f"    hp: {pcj.get('hp', 'N/A')}/{pcj.get('maxHp', pcj.get('hp', 'N/A'))}")
+                click.echo(f"    x/y: {pcj.get('x', 'N/A')}/{pcj.get('y', 'N/A')}")
+                click.echo(f"    mapName: {pcj.get('mapName', 'N/A')}")
+        return
+
+    # 默认：一行摘要
+    state_data = result.get("state", {})
+    player = state_data.get("player", {})
+    npcs = state_data.get("npcs", {})
+    npc_count = len(npcs) if isinstance(npcs, (dict, list)) else 0
+    click.echo(
+        f"{result.get('chapterTitle')} round={state_data.get('round')} "
+        f"玩家={player.get('name')} NPC={npc_count} "
+        f"(--roles 看角色 / --state 看全量)"
+    )
+
+
 @main.command(name="plugin_session_data")
 @click.option("-i", "plugin_id", required=True, help="插件 id（如 toonflow-field-survival）")
 @click.option("-story", "story", default="", help="故事标识（可读字段，写入 t_plugin_session_data.pluginName 不持久，仅日志用）")
@@ -468,10 +565,13 @@ def build_tbg_file(source_path: str) -> dict:
               help="上传地图：传 .tbg/.json 文件（直接写 map_data）或地图目录（自动 zip 打包成 .tbg 写 map_data）。等价 --set -k map_data --value-file <file>")
 @click.option("-build", "build_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
               help="只构建 .tbg 文件到目录同级（不写 t_plugin_session_data），等价把 -u 的打包步骤单独跑。")
+@click.option("-role", "op_role", is_flag=True, help="读取并展示 AI 故事角色位置（dataKey=ai_story_roles）")
+@click.option("-position", "op_position", is_flag=True, help="配合 -role 使用，按 x/y 排序展示角色位置")
 @click.pass_context
 def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
                        op_get, op_set, op_list, op_remove,
-                       value_inline, value_file, upload_tbg, build_tbg):
+                       value_inline, value_file, upload_tbg, build_tbg,
+                       op_role, op_position):
     """Read / write / list / remove a plugin's session data (t_plugin_session_data).
 
     The backend endpoint is POST /plugin/data; sessionId="all" is treated as
@@ -512,6 +612,58 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         if not ops:
             ops = ["list"] if not data_key else ["get"]
         op = ops[0]
+
+    # ★ -role/-position：读取 AI 故事角色位置（dataKey=ai_story_roles）
+    if op_role:
+        if op_get or op_set or op_remove:
+            click.secho("[ERR] -role 与 --get/--set/--remove 互斥", fg="red"); return
+        ai_key = "ai_story_roles"
+        r = client.get_plugin_data(plugin_id, ai_key, session_id=session_id, story=story)
+        if isinstance(r, dict) and isinstance(r.get("data"), dict) and "value" in r["data"]:
+            value = r["data"].get("value")
+        else:
+            value = r.get("value") if isinstance(r, dict) else None
+
+        if not value or not isinstance(value, dict):
+            click.secho(f"[INFO] {ai_key} 未存储或为空", fg="yellow")
+            return
+
+        roles = value.get("roles") or []
+        level = value.get("level") or ""
+        updated_at = value.get("updatedAt")
+
+        if updated_at:
+            try:
+                ts = datetime.fromtimestamp(updated_at / 1000).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                ts = str(updated_at)
+            click.echo(f"地图: {level}  ·  更新: {ts}")
+        else:
+            click.echo(f"地图: {level}")
+
+        if not roles:
+            click.echo("(没有角色数据)")
+            return
+
+        if op_position:
+            roles = sorted(roles, key=lambda r: (r.get("mapName", ""), r.get("x", 0), r.get("y", 0)))
+
+        # 表格输出
+        rows = []
+        for r0 in roles:
+            alive = "✓" if r0.get("alive") else "✗"
+            rows.append([
+                str(r0.get("id", "")),
+                str(r0.get("name", "")),
+                str(r0.get("roleType", "")),
+                str(r0.get("side", "")),
+                f"{r0.get('x', 0):.2f}",
+                f"{r0.get('y', 0):.2f}",
+                str(r0.get("mapName", "")),
+                alive,
+            ])
+        click.echo(tabulate(rows, headers=["id", "name", "roleType", "side", "x", "y", "mapName", "alive"], tablefmt="psql"))
+        return
 
     if op in ("get", "set", "remove") and not data_key:
         click.secho("[ERR] " + op + " 必须传 -k/--key", fg="red"); return

@@ -143,7 +143,7 @@ buff_type:Defense/Attack/Sustained_Damage/Stunning/Invincible/Accelerate
 可以传送到各个地图
 
 ## 角色卡
-无论有没有在开始游戏选择角色都要全部在这个面板显示。
+无论有没有在开始游戏选择角色都要全部在这个面板显示。 ally 角色实体。
 友方/中立/敌对角色
 ### 各个角色的动态角色卡信息进行显示（包括用户）
 就如 Toonflow-game-web的
@@ -154,13 +154,15 @@ play-role-strip 和 play-inline-card
 点击后传送到改角色身边
 #### 角色位置问题
 如果没有角色位置信息，就默认生成到第一个图的可活动区域（不能在墙里、障碍物里）
-x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100)),
-y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100)),
+x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100+5)),
+y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100+5)),
+cb = clampToBound(s, PLAYER_SPAWN.x + Math.random() * 50, PLAYER_SPAWN.y + Math.random() * 50);
 
 ### 组队跟随（排除用户和敌对角色）
 每个角色下面都有给 组队跟随【checkbox】,打勾后将跟随用户帮用户打怪。取消打勾就脱离队伍。
 与用户组队的角色也会长经验和升级。
 取消组队后，角色不再跟随而是留在原地。位置信息和所在地图信息也会被保存。下次进入这个地图时，角色会留在原地。
+这个时候储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
 
 ### 敌对角色
 不能组队，但是对应的增加"呼唤“按钮，把敌对角色呼唤过来到当前地图，作为敌人

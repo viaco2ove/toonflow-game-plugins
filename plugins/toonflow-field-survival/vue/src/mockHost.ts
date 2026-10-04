@@ -1140,36 +1140,16 @@ function install(): void {
         return;
       }
       if (action === "sys_chat") {
-        // ★ game.md 对话功能：mock 无 agent，降级给出固定台词
+        // ★ game.md 对话功能：mockHost 无 agent，不兜底，返回错误让前端明确提示
         const npcId = String(params?.npcId || "");
         const npcName = String(params?.npcName || "???");
-        const userText = params?.userText as string | null | undefined;
-        const lastResp = String(params?.lastResp || "");
-        const npcEntity = (state.entities || []).find((e: any) => e.id === npcId);
-        const isNeutral = npcEntity?.side === "neutral";
-        const speaker = isNeutral ? "旁白" : npcName;
-
-        const lines = [
-          "你好，旅人。有什么事吗？",
-          "唔…你说的这个，我倒是有些印象。",
-          "继续说吧，我听着呢。",
-          "让我想想……或许这需要更多的探索。",
-          "时间不早了，不如先休息一下？",
-          "那边的森林里，据说藏着不少好东西。",
-          "嗯，有道理。继续说下去。",
-          "你是个有趣的人，愿意多聊聊吗？",
-          "我这里有些故事，不知你是否感兴趣。",
-          "若你有需要，尽管开口便是。",
-        ];
-        // 简单轮换：基于 npcId 字符码和对话轮次确定台词
-        const turn = lastResp ? 1 : 0;
-        const idx = (npcId.split("").reduce((a, c) => a + c.charCodeAt(0), 0) + turn) % lines.length;
-        const text = userText
-          ? `${speaker}点了点头：「${lines[idx]}」`
-          : lines[idx];
-        state.events.push(`[mock] ${speaker}：${text}`);
-        // ★ mockHost：state.response 携带 JSON，iframe watch 读取后 append 到聊天记录
-        (state as any).response = JSON.stringify({ speaker, text });
+        const mode = String(params?.mode || "response");
+        (state as any).response = JSON.stringify({
+          error: "角色发言器 agent 未配置（dev-host / mock 模式）",
+          fallback: false,
+          mode,
+          npcName,
+        });
         push();
         return;
       }

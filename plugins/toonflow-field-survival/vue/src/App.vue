@@ -1,4 +1,10 @@
 <script setup lang="ts">
+/** dev-host 桩 / 真实宿主注入的 agent 调用通道（插件侧直接调，不用绕 entry） */
+declare global {
+  interface Window {
+    __agentRun?: (agentName: string, args: any) => Promise<{ ok: boolean; output?: { text: string }; error?: string }>;
+  }
+}
 /**
  * 野外生存 —— 2.5D 动作生存（全屏）
  *
@@ -67,6 +73,37 @@ import {
   type WalkIndex,
   type TileFlagTable,
 } from "./collision";
+
+/** ★ dev-host 桩注入点（Object.defineProperty + getter 跨 iframe 边界）。
+ *  问题根因：Vue app 的 `<script>` 比 PAGE 模板的 `<script>` 先执行，
+ *  直接 `window.__agentRun = throw_fn` 会覆盖掉 PAGE 模板后来注入的 mock。
+ *  解决：
+ *  1. Vue app 用 getter 读取 `__agentRun_impl`（私有命名避免覆盖）
+ *  2. dev-host PAGE 模板把 mock 写入 `window.top.__agentRun_impl`
+ *     （跨 iframe boundary：Vue 在 iframe 内，dev-host 在 top）
+ *  3. 使用 `Object.defineProperty` configurable 避免冲突
+ *
+ *  生产 build（game.html）：`window.top === window`，`__agentRun_impl` 不存在 → 用 fallback。 */
+const __agentRunFallback = async (_agentName: string, _args: any) => {
+  throw new Error("⚠ agent 通道不可用（dev-host 无 task-speaker-agent，请接入真实宿主）");
+};
+try {
+  Object.defineProperty(window, "__agentRun", {
+    get() {
+      const top = window.top ?? window;
+      return (top as any).__agentRun_impl ?? __agentRunFallback;
+    },
+    set(v) {
+      const top = window.top ?? window;
+      (top as any).__agentRun_impl = v;
+    },
+    configurable: true,
+    enumerable: false,
+  });
+} catch (_) {
+  /* 某些沙箱环境不允许 defineProperty，直接挂 window 赋值兜底 */
+  (window as any).__agentRun = __agentRunFallback;
+}
 
 const state = ref<GameState | null>(null);
 const ready = ref(false);
@@ -462,24 +499,8 @@ watch(
     if (!resp || !pendingSys.value) return;
     const act = pendingSys.value;
     pendingSys.value = "";
-    // ★ game.md 对话功能：sys_chat 的 response 是 JSON {speaker, text, avatar}
-    if (act === "sys_chat") {
-      try {
-        const chatData = JSON.parse(resp);
-        if (chatData?.speaker && chatData?.text) {
-          const msg: ChatMessage = { speaker: chatData.speaker, text: chatData.text, avatar: chatData.avatar };
-          chatMessages.value.push(msg);
-          chatAgentResp.value = chatData.text; // 保存用于"继续"
-          // 同步到宿主聊天框（宿主负责写入 Toonflow-game-web）
-          sendChat(chatData.speaker, chatData.text, chatData.avatar);
-        }
-      } catch {
-        // 非 JSON 直接显示
-        sysNotice.value = resp;
-      }
-      chatPending.value = false;
-      return;
-    }
+    // ★ sys_chat 已由 triggerChatSpeak() 直接调 agent 处理，此处不再响应
+    if (act === "sys_chat") return;
     sysNotice.value = resp;
     // ★ 睡眠/商城刷新的结果值得跳出面板提醒（睡眠→满血满蓝；商城→货源走没走 agent）
     if (act === "sys_rest" || act === "sys_shop_refresh") showToast(resp);
@@ -1758,9 +1779,34 @@ function freeEnemySpot(x: number, y: number): { x: number; y: number } {
 function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | null | undefined, opts: { debugPullFirstNear?: boolean } = {}): void {
   if (!s || !cfg?.npcs?.length) return;
   const me = s.entities.find((e) => e.side === "player");
+  // ★ 只注入玩家附近 50 米内的 NPC（地图 Tiled Actors 层常放几十个占位 NPC，
+  //   全量注入会让地图刷出一堆"莫名奇妙"的 NPC）
+  const NEAR_RADIUS = 50;
+  // ★ 故事角色白名单（第二道闸）：Tiled 地图是跨故事复用的模板（mulberryTown 里写死了
+  //   DWARF_BILI「矮人比利」/ BARTENDER「酒馆老板」/ Mayor Leonard 等旧浆果镇占位 NPC），
+  //   它们与当前故事的角色名单毫无关系 —— 「赦夜人冥夜走廊」里根本没有矮人比利。
+  //   规则：只有 displayName / name 能在故事角色卡（s.roles）里找到对应者，才允许注入；
+  //   找不到 → 视为"模板残留 NPC"，既不注入实体、也不画头像装饰（地图上彻底消失）。
+  //   英文 dialog key 的 NPC（BARTENDER/DWARF_BILI）没有中文名 → 永远匹配不上 → 自动被过滤。
+  const storyRoleNames = new Set<string>(
+    ((s as any).roles || [])
+      .map((r: any) => String(r?.name || "").trim())
+      .filter(Boolean),
+  );
+  // ★ 守卫：角色名单为空（非故事模式 / 宿主未推 roles）时不启用白名单过滤，
+  //   否则会把所有地图 NPC 全部误杀（白名单空集 → isStoryNpc 恒 false）。
+  const useWhitelist = storyRoleNames.size > 0;
+  const isStoryNpc = (npc: any): boolean => {
+    if (!useWhitelist) return true;
+    const names = [String(npc?.displayName || "").trim(), String(npc?.name || "").trim()];
+    return names.some((n) => n && storyRoleNames.has(n));
+  };
+  let filtered = 0;
   for (const npc of cfg.npcs) {
     const npcEntityId = `mapnpc_${npc.id}`;
     if (s.entities.some((e) => e.id === npcEntityId)) continue;
+    if (!isStoryNpc(npc)) { filtered++; continue; }
+    if (me && Math.hypot(npc.x - me.x, npc.y - me.y) > NEAR_RADIUS) continue;
     const pos = freeEnemySpot(npc.x, npc.y);
     s.entities.push({
       id: npcEntityId,
@@ -1782,6 +1828,18 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       npc_wanders: npc.wanders,
     } as any);
   }
+  // ★ 同步清掉装饰层里被过滤的模板残留 NPC 头像（kind=npc 且 name 不在故事角色名单）
+  if (useWhitelist) {
+    const decs = cfg.decorations as Array<any> | undefined;
+    if (Array.isArray(decs)) {
+      for (let i = decs.length - 1; i >= 0; i--) {
+        const d = decs[i];
+        if (d?.kind !== "npc") continue;
+        const nm = String(d?.name || "").trim();
+        if (!nm || !storyRoleNames.has(nm)) { decs.splice(i, 1); filtered++; }
+      }
+    }
+  }
   if (opts.debugPullFirstNear) {
     // ★ 重新取 me：上面 inject 循环时 me 可能是 settleSpawn 之前的旧坐标，
     //   现在所有 NPC 都已入 state，玩家也是 settleSpawn 之后最新坐标
@@ -1792,7 +1850,11 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       first.y = meNow.y + 0.6;
     }
   }
-  console.info("[field-survival] 已加载 NPC：", cfg.npcs.length);
+  console.info(
+    "[field-survival] 已加载 NPC：",
+    s.entities.filter((e) => String(e.id).startsWith("mapnpc_")).length,
+    "（过滤模板残留 NPC：", filtered, "）",
+  );
 }
 
 /**
@@ -1845,6 +1907,17 @@ async function switchLevel(levelName: string): Promise<void> {
     portalLatchPending = true;
     // 清掉本图野怪（旧图的怪不跟过来）
     if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
+    // ★ ally 只在 start_map 出现：玩家离开起始地图后清除所有 allies，
+    //   避免"所有地图都出现霍魁"的全图漫游 bug。
+    //   获取 start_map 时用 DEFAULT_START_LEVEL 兜底（永不抛错）。
+    const startMap = (await import("./mapConfig")).DEFAULT_START_LEVEL;
+    if (s && levelName !== startMap) {
+      const before = s.entities.length;
+      s.entities = s.entities.filter((e) => e.side !== "ally");
+      if (before !== s.entities.length) {
+        console.info("[field-survival] 离开起始地图 " + startMap + " → 清除 " + (before - s.entities.length) + " 个 allies");
+      }
+    }
     // ★ game.md 68-69（刷新机制）：离开地图时记住"该图此刻的死怪"和离开时刻；
     //   30 秒内回来 → 死怪仍死（不刷新）；满 30 秒回来 → 死怪在出生点满血重生。
     //   同一张图内死亡怪永远不重生（"不离开地图不会刷新"）。
@@ -1942,6 +2015,7 @@ async function switchLevel(levelName: string): Promise<void> {
     //   之前仅作为 kind=npc 装饰物 → 不在 entities 里 → updateNearChat() 找不到 → 不能对话。
     //   现在生成 side=neutral 实体：玩家走近 1.6m 内触发"💬 聊天"，sys_chat 走旁白 (entry.js:2522-2530)。
     if (s && next.npcs?.length) {
+      console.log("npc:",next.npcs);
       injectMapNpcsToState(s, next, { debugPullFirstNear: true });
       state.value.events.push(`[${next.name}] 发现 ${next.npcs.length} 位 NPC！`);
     }
@@ -2162,7 +2236,9 @@ const PLAYER_COLLIDE_R = 0.4;
  *  留 3 米避免"一进图就被判进传送门，反复切图死循环"。 */
 const PORTAL_CLEARANCE_M = 3;
 /** portal 触发半径（米）——与 Rotten-Soup 的"踩到出口即切图"等价 */
-const PORTAL_TRIGGER_M = 2.5;
+const PORTAL_TRIGGER_M = 1.2;
+const PORTAL_TRIGGER_M_RADIUS = 0.6;
+
 /** 切图后闸门：必须"先走出所有触发圈"才允许再次触发。
  *  防任何原因（落点约束无解、玩家站着不动、宿主强行摆位）导致落点在圈内时无限切图。 */
 let portalLatchPending = false;
@@ -2955,7 +3031,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const headLabel = e.full_name
     ? e.name.slice(0, 14)
     : isMapNpc
-      ? e.name.slice(0, 10)   // NPC：保留 10 字（Mayor Leonard / 镇长老白）
+      ? e.name.slice(0, 10)   // NPC：保留 10 字
       : e.name.slice(0, 4);
   const headY = hasAvatar ? avatarY - 4 : dy - 18;
   ctx.save();
@@ -3939,7 +4015,7 @@ function renderOneDecoration(
       // ★ 地图连接处（入口）：红色半透明感知区域 + 脉冲箭头 + 目的地名
       ctx.save();
       // 1) 红色半透明感知区域色块（1.5 tile 半径范围）
-      const pr = sx * 1.5;   // 感知区域半径
+      const pr = sx * PORTAL_TRIGGER_M_RADIUS;   // 感知区域半径
       const pa = 0.12 + 0.08 * Math.sin(_animTick / 10);
       ctx.globalAlpha = pa;
       ctx.fillStyle = "#ff3333";
@@ -4318,7 +4394,7 @@ function updateNearBed(): void {
 /* ---------------- ★ game.md 对话功能：靠近角色触发出聊按钮 ---------------- */
 /** 可对话的最近角色（非敌人），随 tick 10Hz 刷新 */
 const nearChat = ref<{ id: string; name: string; avatarPath?: string } | null>(null);
-const CHAT_RADIUS_M = 1.6; // 玩家与角色对话触发半径（米）
+const CHAT_RADIUS_M = 2.5; // 玩家与角色对话触发半径（米）——放宽以便靠近 ally 就提示
 
 /** 更新 nearChat：找最近的可对话角色（非 enemy 阵营、alive） */
 function updateNearChat(): void {
@@ -4342,16 +4418,18 @@ function updateNearChat(): void {
 
 /* ---------------- ★ game.md 对话功能：聊天状态 ---------------- */
 interface ChatMessage { speaker: string; avatar?: string; text: string; mine?: boolean; }
-const chatActive = ref(false);          // 面板是否打开
-const chatMessages = ref<ChatMessage[]>([]); // 聊天记录
-const chatInputText = ref("");          // 用户输入
-const chatPending = ref(false);         // 等待 agent 响应
-const chatNpcId = ref("");             // 当前对话角色 id
-const chatNpcName = ref("");            // 当前对话角色名
-const chatAgentResp = ref("");          // agent 上一句台词（用于"继续"）
-
-/** 打开聊天：nearChat 角色触发 */
-function onChatStart() {
+// chatPhase: "idle" = 等待用户操作 | "options" = 显示AI选项等待选择 | "pending" = 等待agent响应
+const chatActive = ref(false);
+const chatMessages = ref<ChatMessage[]>([]);
+const chatInputText = ref("");
+const chatPending = ref(false);          // 等 agent 响应（角色发言中）
+const chatPhase = ref<"idle" | "options" | "pending">("idle"); // 对话阶段
+const chatNpcId = ref("");
+const chatNpcName = ref("");
+const chatAgentResp = ref("");           // agent 上一句台词
+const chatOptions = ref<string[]>([]);   // AI 生成的 3 个发言选项
+const chatError = ref("");               // agent 调用失败的错误消息（显示在面板顶部醒目提示）
+async function onChatStart() {
   const npc = nearChat.value;
   if (!npc) return;
   chatNpcId.value = npc.id;
@@ -4360,38 +4438,124 @@ function onChatStart() {
   chatInputText.value = "";
   chatPending.value = false;
   chatAgentResp.value = "";
+  chatOptions.value = [];
+  chatPhase.value = "idle";
+  chatError.value = "";
   chatActive.value = true;
-  // 首次发言：调用 agent
-  triggerChatSpeak();
+  // ★ game.md 对话功能：开场自动让角色先发言（用户进入对话默认看 AI 角色开腔）
+  await triggerChatSpeak("response");
+  // ★ UX：首发完成后 0.4s 自动出 AI 推荐选项——用户进对话立刻看到3 选项，不必额外操作
+  //   （避免"我点了聊天但只看到3 个底栏按钮，不知道要再点发言"的迷茫）
+  window.setTimeout(async () => {
+    if (chatActive.value && chatNpcId.value === npc.id && chatPhase.value === "idle" && !chatPending.value) {
+      await triggerChatSpeak("options");
+    }
+  }, 400);
 }
 
-/** 调用角色发言器 agent（task-speaker-agent） */
-function triggerChatSpeak(userText?: string) {
+/**
+ * 调用角色发言器 agent（task-speaker-agent）
+ * 插件侧直接调 agent，不走宿主 entry
+ * mode: "options" = 请求生成3个发言选项 | "response" = 请求角色继续发言
+ */
+async function triggerChatSpeak(mode: "options" | "response" = "response", userText?: string) {
   if (!chatNpcId.value) return;
   chatPending.value = true;
-  runSysCmd("sys_chat", {
-    npcId: chatNpcId.value,
-    npcName: chatNpcName.value,
-    userText: userText ?? null,
-    lastResp: chatAgentResp.value || null,
-  });
+  chatPhase.value = "pending";
+  try {
+    // ★ 插件侧直接调 agent（window.__agentRun 由 dev-host 桩 / 真实宿主注入）
+    const fn = window.__agentRun as ((name: string, args: any) => Promise<{ ok: boolean; output?: { text: string } }>) | undefined;
+    if (!fn) throw new Error("agent 通道不可用");
+    const npcEntity = (state.value.entities || []).find((e: any) => e.id === chatNpcId.value);
+    const isNeutral = npcEntity?.side === "neutral";
+    const roleEntry = ((state.value as any).roles || []).find(
+      (r: any) => String(r?.id) === chatNpcId.value || String(r?.name) === chatNpcId.value,
+    );
+    const roleName = isNeutral ? "旁白" : (roleEntry?.name || chatNpcName.value);
+    const result = await fn("task-speaker-agent", {
+      npcId: chatNpcId.value,
+      npcName: roleName,
+      npcCard: isNeutral ? null : (roleEntry || null),
+      isNeutral,
+      userText: userText ?? null,
+      lastResp: chatAgentResp.value || null,
+      mode,
+      context: {
+        storyDigest: "",
+        playerLevel: ((state.value.entities || []).find((e: any) => e.side === "player") as any)?.level ?? 1,
+      },
+    });
+    if (result?.ok && result?.output?.text) {
+      const raw = String(result.output.text).trim();
+      if (mode === "options") {
+        // 解析 agent 返回的 3 个选项
+        let options: string[] = [];
+        try {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) options = parsed.slice(0, 3);
+        } catch {
+          options = raw.split(/\n/).map((l: string) =>
+            l.replace(/^[0-9a-zA-Z零一二三四五六七八九十]+[.、)\uFF09]+/, "").trim()
+          ).filter(Boolean).slice(0, 3);
+        }
+        if (options.length === 0) throw new Error("agent 未返回有效选项");
+        chatOptions.value = options;
+        chatPhase.value = "options";
+      } else {
+        // 角色台词
+        chatMessages.value.push({ speaker: roleName, text: raw, avatar: roleEntry?.avatarPath });
+        chatAgentResp.value = raw;
+        chatPhase.value = "idle";
+        // 同步到宿主聊天框
+        (window as any).__sendChat?.(roleName, raw, roleEntry?.avatarPath);
+      }
+    } else {
+      throw new Error(result?.error || "agent 调用失败");
+    }
+  } catch (e: any) {
+    // ★ 调用失败 → 显示红色错误提示，不兜底台词
+    chatError.value = String(e?.message || e || "调用角色发言器失败");
+    chatPhase.value = "idle";
+  } finally {
+    chatPending.value = false;
+  }
 }
 
-/** 用户输入文字后点击发送 */
-function onChatSend() {
+/**
+ * ★ game.md 对话功能：发言按钮
+ * phase=options 时 → 点发言让 AI 生成3个选项
+ * phase=idle 时 → 点发言也让 AI 生成选项（首次发言走这里）
+ */
+async function onChatSpeak() {
+  if (chatPending.value) return;
+  await triggerChatSpeak("options");
+}
+
+/** 选择 AI 生成的选项之一 */
+async function onChatOptionPick(option: string) {
+  chatOptions.value = [];
+  chatPhase.value = "idle";
+  // 把选项作为用户发言发给角色，角色继续发言
+  chatMessages.value.push({ speaker: "我", text: option, mine: true });
+  chatAgentResp.value = option;
+  await triggerChatSpeak("response", option);
+}
+
+/** 用户在自定义输入框输入后点击发送 */
+async function onChatSend() {
   const txt = chatInputText.value.trim();
   if (!txt) return;
-  // 显示用户发言
-  chatMessages.value.push({ speaker: "我", text: txt, mine: true });
   chatInputText.value = "";
-  const last = chatMessages.value.filter((m) => !m.mine).pop();
-  chatAgentResp.value = last?.text ?? "";
-  triggerChatSpeak(txt);
+  chatOptions.value = [];
+  chatPhase.value = "idle";
+  chatMessages.value.push({ speaker: "我", text: txt, mine: true });
+  chatAgentResp.value = txt;
+  await triggerChatSpeak("response", txt);
 }
 
 /** 继续：agent 继续发言（用户不说话，直接让 agent 继续） */
-function onChatContinue() {
-  triggerChatSpeak();
+async function onChatContinue() {
+  await triggerChatSpeak();
 }
 
 /** 离开：关闭聊天 */
@@ -4401,9 +4565,36 @@ function onChatLeave() {
   chatInputText.value = "";
   chatPending.value = false;
   chatAgentResp.value = "";
+  chatOptions.value = [];
+  chatPhase.value = "idle";
   chatNpcId.value = "";
   chatNpcName.value = "";
 }
+
+/** 测试入口：强制打开聊天（用于自动化测试） */
+(window as any).__forceChat = () => {
+  const npc = nearChat.value;
+  if (npc) onChatStart();
+  else {
+    // 找不到 nearChat 时，直接设置一个 mock NPC 触发聊天
+    chatNpcId.value = "npc_ally_huo_kui" as any;
+    chatNpcName.value = "霍魁";
+    chatMessages.value = [];
+    chatInputText.value = "";
+    chatPending.value = false;
+    chatAgentResp.value = "";
+    chatOptions.value = [];
+    chatPhase.value = "idle";
+    chatError.value = "";
+    chatActive.value = true;
+    triggerChatSpeak("response");
+    window.setTimeout(() => {
+      if (chatActive.value && chatPhase.value === "idle" && !chatPending.value) {
+        triggerChatSpeak("options");
+      }
+    }, 400);
+  }
+};
 
 /** 点击睡眠：走 sys_rest（entry 侧按 game.md 满血满蓝公式恢复 + 描述写 other + 参数卡同步） */
 function onSleep() {
@@ -4892,9 +5083,19 @@ onMounted(async () => {
           if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
         }
       }
-      // ★ 客户端权威中立 NPC（mapnpc_*）— 每帧追加保留（宿主永远不知道它们存在）。
-      //   切换关卡时旧图的 NPC id 不在 prevEntities 里 → 自动丢弃。
-      const keptNpcs = localNpcs.filter((e: any) => e.alive !== false);
+      // ★ 客户端权威中立 NPC（mapnpc_*）— 按 id 去重合并（宿主也可能注入同 id 实体）。
+      //   修复「实体无限翻倍」：此前无条件 append，宿主侧 ensureTown 每帧注入的 mapnpc_*
+      //   与客户端保留的 mapnpc_* 同 id 叠加 → 900+ tick 后 mapnpc_100 重复 996 次、
+      //   总实体数 24000+，渲染直接卡死。
+      //   规则：incoming 里已有的 id 以宿主为准；只回补宿主缺失的客户端 mapnpc_*。
+      const incomingNpcIds = new Set(
+        incoming.entities
+          .filter((e: any) => typeof e?.id === "string" && e.id.startsWith("mapnpc_"))
+          .map((e: any) => e.id),
+      );
+      const keptNpcs = localNpcs.filter(
+        (e: any) => e.alive !== false && !incomingNpcIds.has(e.id),
+      );
       if (keptNpcs.length) incoming.entities = [...incoming.entities, ...keptNpcs];
     }
   // ★ 敌人碰撞收口（在 state.value 赋值之前就地改写 incoming 的敌怪坐标）
@@ -5157,10 +5358,24 @@ watch(playerSnapshot, () => {
           <span class="chat-panel__title">💬 与 {{ chatNpcName }} 对话</span>
           <button class="chat-panel__close" @click="onChatLeave">✕</button>
         </div>
+        <!-- ★ agent 调用失败时的红色错误提示（不塞进聊天记录） -->
+        <div v-if="chatError" class="chat-panel__error">
+          ⚠ {{ chatError }}
+        </div>
         <div class="chat-panel__msgs">
-          <div v-for="(m, i) in chatMessages" :key="i" :class="['chat-msg', m.mine ? 'chat-msg--mine' : 'chat-msg--npc']">
+          <div v-for="(m, i) in chatMessages" :key="i" :class="['chat-msg', m.mine ? 'chat-msg--mine' : (m.speaker?.startsWith('⚠') ? 'chat-msg--error' : 'chat-msg--npc')]">
             <span class="chat-msg__speaker">{{ m.mine ? '我' : m.speaker }}</span>
             <p class="chat-msg__text">{{ m.text }}</p>
+          </div>
+          <!-- ★ AI 生成的3个发言选项（phase=options 时显示） -->
+          <div v-if="chatPhase === 'options'" class="chat-options">
+            <p class="chat-options__label">请选择发言方式：</p>
+            <button
+              v-for="(opt, i) in chatOptions" :key="i"
+              class="chat-option-btn"
+              @click="onChatOptionPick(opt)"
+            >{{ opt }}</button>
+            <button class="chat-option-btn chat-option-btn--custom" @click="chatPhase = 'idle'; chatInputText = ''">✏ 自定义发言…</button>
           </div>
           <div v-if="chatPending" class="chat-msg chat-msg--loading">
             <span class="chat-msg__speaker">{{ chatNpcName }}</span>
@@ -5178,7 +5393,9 @@ watch(playerSnapshot, () => {
           <button class="chat-panel__send" :disabled="chatPending || !chatInputText.trim()" @click="onChatSend">发送</button>
         </div>
         <div class="chat-panel__actions">
-          <button class="chat-action-btn" :disabled="chatPending" @click="onChatSend">发言</button>
+          <!-- ★ 发言：点击重新生成 AI 推荐选项（进入对话已自动出 3 选项，可点击重新生成） -->
+          <button class="chat-action-btn" :disabled="chatPending" @click="onChatSpeak" title="让 AI 重新生成 3 个发言选项">🔄 换选项</button>
+          <!-- ★ 继续：agent 直接继续发言（不经选项） -->
           <button class="chat-action-btn" :disabled="chatPending" @click="onChatContinue">继续</button>
           <button class="chat-action-btn chat-action-btn--leave" @click="onChatLeave">离开</button>
         </div>
@@ -6039,6 +6256,17 @@ body {
   flex-shrink: 0;
 }
 .chat-panel__title { font-size: 11px; color: #9ac8ff; font-weight: 700; }
+.chat-panel__error {
+  margin: 4px 8px;
+  padding: 6px 10px;
+  background: rgba(255, 60, 60, 0.15);
+  border: 1px solid rgba(255, 60, 60, 0.5);
+  border-radius: 6px;
+  color: #ff6b6b;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
 .chat-panel__close {
   background: none; border: none; color: #7a9abf; font-size: 14px; cursor: pointer; padding: 0 4px;
 }
@@ -6072,6 +6300,16 @@ body {
   color: #c8f0c8;
 }
 .chat-msg__loading-dot { color: #7a9abf; font-style: italic; }
+/* ★ 对话功能：agent 调用失败时的红色错误消息 */
+.chat-msg--error .chat-msg__text {
+  background: rgba(100, 20, 20, 0.7);
+  border: 1px solid rgba(255, 80, 80, 0.4);
+  color: #ff9999;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.chat-msg--error .chat-msg__speaker { color: #ff6666; }
 
 .chat-panel__input-row {
   display: flex;
@@ -6105,6 +6343,40 @@ body {
   justify-content: center;
   flex-shrink: 0;
 }
+
+/* ★ game.md 对话功能：AI 生成的3个发言选项 */
+.chat-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px 2px;
+  border-top: 1px solid rgba(80, 140, 220, 0.3);
+}
+.chat-options__label {
+  margin: 0 0 2px;
+  font-size: 10px;
+  color: #7ab8ff;
+  font-weight: 600;
+}
+.chat-option-btn {
+  width: 100%;
+  padding: 5px 10px;
+  background: rgba(40, 70, 120, 0.7);
+  border: 1px solid rgba(90, 150, 220, 0.5);
+  border-radius: 4px;
+  color: #dceeff;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-option-btn:hover { background: rgba(60, 100, 160, 0.8); border-color: rgba(130, 180, 255, 0.7); }
+.chat-option-btn--custom {
+  border-style: dashed;
+  color: #9ac8ff;
+  font-size: 11px;
+}
+
 .chat-action-btn {
   padding: 3px 14px;
   border-radius: 3px;

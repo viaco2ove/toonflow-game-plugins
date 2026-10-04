@@ -91,7 +91,7 @@ DOOR、CHEST、NPC、LADDER、LEVEL_TRANSITION、PLAYER，没有任何 ENEMY/MON
 所有 objects 的entity_type枚举：
 DOOR：门（Vertical Door / Horizontal Door）
 CHEST：宝箱
-NPC：NPC（村民、酒馆老板、镇长、矮人等，wanders=true 是闲逛 NPC）
+NPC：NPC（村民、酒馆老板、矮人等，wanders=true 是闲逛 NPC）
 LADDER：梯子（地牢传送）
 LEVEL_TRANSITION：场景切换传送门（森林 / 墓地）
 PLAYER：玩家出生点
