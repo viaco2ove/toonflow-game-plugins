@@ -1896,6 +1896,8 @@ async function switchLevel(levelName: string): Promise<void> {
     //   之前仅作为 kind=npc 装饰物 → 不在 entities 里 → updateNearChat() 找不到 → 不能对话。
     //   现在生成 side=neutral 实体：玩家走近 1.6m 内触发"💬 聊天"，sys_chat 走旁白 (entry.js:2522-2530)。
     if (s && next.npcs?.length) {
+      // ★ 调试：把第一个 NPC 临时放到玩家旁边 1.5m 内，验证聊天按钮触发
+      const me = s.entities.find((e) => e.side === "player");
       for (const npc of next.npcs) {
         const npcEntityId = `mapnpc_${npc.id}`;
         if (s.entities.some((e) => e.id === npcEntityId)) continue;
@@ -1921,7 +1923,15 @@ async function switchLevel(levelName: string): Promise<void> {
           entity_type: "NPC",
           // ★ 让 sprite 渲染走"装饰物 + name 显示"路径（头顶用 entity.name）
           npc_wanders: npc.wanders,
+          // ★ 调试：第 0 个 NPC 强行挪到玩家 1.0m 内（CHAT_RADIUS_M=1.6m 内）
+          _debug_near: me ? { origX: pos.x, origY: pos.y, meX: me.x, meY: me.y } : null,
         } as any);
+      }
+      // ★ 调试：第一个 NPC 移近玩家（临时验证）
+      const firstNpc = s.entities.find((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"));
+      if (firstNpc && me) {
+        firstNpc.x = me.x + 0.8;
+        firstNpc.y = me.y + 0.6;
       }
       state.value.events.push(`[${next.name}] 发现 ${next.npcs.length} 位 NPC！`);
       console.info("[field-survival] 已加载 NPC：", next.npcs.length, next.npcs);
