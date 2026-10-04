@@ -119,3 +119,20 @@ export function onHostState(handler: (data: HostState) => void): () => void {
 export function isHostReady(): boolean {
   return hostReady;
 }
+
+/**
+ * ★ game.md 对话功能：向宿主发送聊天台词，同步到 Toonflow-game-web 聊天框。
+ * 宿主接收后写入 web 聊天记录（插件侧只负责渲染到聊天面板）。
+ * 消息结构兼容 toonflow-game-app 的 chat-message 消费格式。
+ */
+export function sendChat(speaker: string, text: string, avatar?: string): void {
+  try {
+    if (!isConnMode() && window.parent === window) {
+      window.dispatchEvent(new MessageEvent("message", { data: { type: "tf_plugin_chat", speaker, text, avatar } }));
+      return;
+    }
+    window.parent.postMessage({ type: "tf_plugin_chat", speaker, text, avatar }, "*");
+  } catch {
+    /* ignore */
+  }
+}

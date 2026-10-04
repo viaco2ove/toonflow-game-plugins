@@ -1089,6 +1089,8 @@ function step(s, input, poseHint) {
   }
 }
 const SYS_DATA_KEY = "sys_state";
+// ★ game.md 对话功能：AI 故事角色位置/地图信息的持久化键（写入 t_plugin_session_data 表）
+const AI_STORY_ROLES_KEY = "ai_story_roles";
 const SYS_PERSIST_EVERY_TICKS = 20;
 const RARITY_PRICE = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
 const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
@@ -1695,23 +1697,47 @@ function ensureNpcCards(s, levelName) {
   s.npcCards = cards;
 }
 // ★ game.md 角色位置问题：没有位置信息的角色，默认生成到可活动区域（不能在墙里/障碍物里）。
-//   用玩家出生点附近半径 2.5m 的已知可站立区域，clamp 后落点，绝不落进障碍。
+//   默认落点 (0,0) 附近 2.5m 半径（town 区附近），避开玩家出生点；clamp 边界 + enemyNav 可用时
+//   用 navNearestFree 找最近可站格，绝不落进障碍。
+const ROLE_SPAWN_R_M = 2.5;
 function spawnRoleEntity(s, role) {
   if (!role) return null;
   const exist = s.entities.find((x) => x.id === String(role.id) || x.name === String(role.name));
   if (exist) return exist;
   const sel = s.selections || {};
   const inSel = (arr) => Array.isArray(arr) && arr.some((x) => String(x) === String(role.id) || String(x) === String(role.name));
-  const side = inSel(sel.enemies) ? "enemy" : inSel(sel.participants) ? "ally" : "spectator";
+  // ★ AI 故事角色区分：roleType 决定阵营（player→player, npc/system/general→ally）
+  const roleType = str(role?.roleType);
+  let side;
+  if (roleType === "player") side = "player";
+  else if (inSel(sel.enemies)) side = "enemy";
+  else if (inSel(sel.participants)) side = "ally";
+  else if (roleType === "npc" || roleType === "system" || roleType === "general") side = "ally";
+  else side = "spectator";
+  // ★ 默认落点 (0,0) 附近 2.5m 环形随机分布，与 town 区对齐
   const ang = rnd(0, Math.PI * 2);
-  const cb = clampToBound(s, PLAYER_SPAWN.x + Math.cos(ang) * 2.5, PLAYER_SPAWN.y + Math.sin(ang) * 2.5);
-  const e = makeEntity(role, side, cb.x, cb.y, s.entities.length);
+  let target = {
+    x: Math.cos(ang) * ROLE_SPAWN_R_M,
+    y: Math.sin(ang) * ROLE_SPAWN_R_M
+  };
+  // 边界钳制
+  target = clampToBound(s, target.x, target.y);
+  // 优先 enemyNav 避障，没拿到网格就退而求其次
+  if (enemyNav) {
+    const free = navNearestFree(enemyNav, target.x, target.y, 0.4, 8);
+    if (free) target = free;
+  }
+  const e = makeEntity(role, side, target.x, target.y, s.entities.length);
   e.homeX = e.x;
   e.homeY = e.y;
   e.mapName = s.levelName || "";
+  e.roleType = roleType;
+  // ★ 中立/通用角色保持非攻击状态（不会主动追玩家）
   if (side === "enemy") {
     e.aiState = "idle";
     e.regionId = (nearestWildRegion(e.x, e.y) || {}).id;
+  } else {
+    e.aiState = "idle";
   }
   s.entities.push(e);
   return e;
@@ -1803,8 +1829,42 @@ async function persistSys(context, s) {
       skillMeta: s.skillMeta || {},
       itemMeta: s.itemMeta || {}
     });
+    // ★ game.md 对话功能：AI 故事角色位置/地图信息单独持久化（dataKey=ai_story_roles → t_plugin_session_data），
+    //   后续开新局时 AI 聊天窗口能直接读到「陈彦现在在 mulberry_forest 地图 (12.3, -5.6)」，不用再遍历 entities。
+    const aiRoles = collectAiStoryRoles(s);
+    await api.set(AI_STORY_ROLES_KEY, {
+      roles: aiRoles,
+      level: s.levelName || "",
+      updatedAt: Date.now()
+    });
   } catch {
   }
+}
+/** ★ game.md 对话功能：收集所有 AI 故事角色的位置/地图信息（写入 t_plugin_session_data） */
+function collectAiStoryRoles(s) {
+  const arr = [];
+  const ents = Array.isArray(s.entities) ? s.entities : [];
+  for (const e of ents) {
+    if (!e) continue;
+    const rt = String(e.roleType || "");
+    // 玩家自己 / 地图内置 NPC (TOWN_NPCS, side=neutral) / 怪物 都不进 AI 故事角色列表
+    if (e.side === "player") continue;
+    if (e.side === "enemy") continue;
+    if (e.side === "neutral") continue;
+    if (!rt) continue;
+    arr.push({
+      id: String(e.id || e.name || ""),
+      name: String(e.name || e.id || ""),
+      roleType: rt,
+      side: String(e.side || ""),
+      x: Math.round(num(e.x, 0) * 100) / 100,
+      y: Math.round(num(e.y, 0) * 100) / 100,
+      mapName: String(e.mapName || s.levelName || ""),
+      alive: e.alive !== false,
+      updatedAt: Date.now()
+    });
+  }
+  return arr;
 }
 async function restoreSys(context, s) {
   const api = context?.tsApi?.pluginData;
@@ -1935,6 +1995,19 @@ async function handle_action(action, params, state, context) {
         const r = byId(id);
         if (r) s.entities.push({ ...makeEntity(r, "spectator", -40, -40 + s.entities.length * 4, 0), alive: true });
       });
+      // ★ game.md 对话功能：AI 故事角色（非玩家、非 enemies、非参与者、非 spectators）也生成到地图上 (0,0) 附近。
+      //   不再只生成在地图外（-40,-40），方便玩家走近时触发对话按钮。
+      //   玩家已在前面 spawn 过了；participants 已经在 allies 里；spectators 已经在 spectator 里；
+      //   enemies 也已在 enemies 里；这里补剩下的"无明确阵营"的 AI 故事角色。
+      const alreadySpawned = new Set(s.entities.map((e) => String(e.id) || String(e.name)));
+      const seen = new Set([playerRole?.id, ...participants, ...spectators, ...enemies].map((x) => String(x || "")));
+      roles.forEach((r) => {
+        if (!r) return;
+        const id = String(r.id || r.name || "");
+        if (!id || seen.has(id) || alreadySpawned.has(id)) return;
+        if (isPlayerRole(r, playerRole)) return;
+        spawnRoleEntity(s, r);
+      });
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
       if (s.map) {
@@ -1991,6 +2064,8 @@ async function handle_action(action, params, state, context) {
       syncCardFromContext(s, context); // ★ start 也同步参数卡（宿主可能在 init 后才注入 playerCard）
       if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       if (!s.levelName) s.levelName = str(s.map?.theme, "");
+      // ★ game.md 对话功能：AI 故事角色 spawn 完毕 → 立即把位置/地图信息写入 t_plugin_session_data
+      await persistSys(context, s);
       // ★ game.md 组队跟随：开局默认【不】组队——只有角色卡面板勾选「组队跟随」的角色
       //   才会跟随用户帮打怪（未组队角色原地待命，绝不自动跟随）
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
@@ -2433,6 +2508,63 @@ async function handle_action(action, params, state, context) {
       await persistSys(context, s);
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);
     }
+    case "sys_chat": {
+      // ★ game.md 对话功能：调用角色发言器 agent（task-speaker-agent）
+      const npcId = str(params?.npcId, "");
+      const npcName = str(params?.npcName, "???");
+      const userText = params?.userText ?? null;
+      const lastResp = str(params?.lastResp, "");
+      if (!npcId) return okResp("\u7F3A\u5C11\u89D2\u8272\u6807\u8BC6");
+      // 查找角色
+      const npcEntity = s.entities.find((e) => e.id === npcId);
+      const npcSide = npcEntity?.side;
+      // game.md 中立npc：查找通用角色或旁白
+      const isNeutral = npcSide === "neutral";
+      const roleEntry = ((s.roles ?? [])).find(
+        (r) => String(r?.id) === npcId || String(r?.name) === npcId,
+      );
+      // 中立npc用通用角色扮演，否则用该角色
+      const roleName = isNeutral
+        ? "\u65C1\u767D" // 没有通用角色时用旁白
+        : str(roleEntry?.name || npcName, npcName);
+      const roleCard = isNeutral ? null : (roleEntry || null);
+
+      // 调用角色发言器 agent
+      try {
+        if (context?.tsApi?.agent) {
+          const result = await context.tsApi.agent.run("task-speaker-agent", {
+            npcId,
+            npcName: roleName,
+            npcCard: roleCard,
+            isNeutral,
+            userText: userText ?? null,
+            lastResp: lastResp || null,
+            context: {
+              storyDigest: context?.sessionId ? `session:${context.sessionId}` : "",
+              playerLevel: (s.entities.find((e) => e.side === "player")?.level) ?? 1,
+            },
+          });
+          if (result?.ok && result?.output?.text) {
+            const text = String(result.output.text).trim();
+            pushEvent(s, `${roleName}\uFF1A${text}`);
+            // ★ 台词同步到 Toonflow-game-web 聊天框（response 携带 JSON 给前端转发）
+            await persistSys(context, s);
+            return okResp(JSON.stringify({ speaker: roleName, text, avatar: roleEntry?.avatarPath ?? undefined }));
+          }
+          if (result?.error) console.warn("[field-survival] sys_chat agent error:", result.error);
+        }
+      } catch (e) {
+        console.warn("[field-survival] sys_chat agent call failed:", e);
+      }
+      // 降级：若无 agent 或调用失败，给一条旁白
+      const fallbackText = userText
+        ? `${roleName}\u82E5\u6709\u6240\u601D\u5730\u56DE\u5E94\u4E86\u4F60\u7684\u8BDD\u3002`
+        : `\u4F60\u4E0E${roleName}\u5BF9\u89C6\u3002${roleName}\u5FAE\u5FAE\u70B9\u5934\uFF0C\u5374\u672A\u53D1\u4E00\u8A00\u3002`;
+      pushEvent(s, `${roleName}\uFF1A${fallbackText}`);
+      await persistSys(context, s);
+      return okResp(JSON.stringify({ speaker: roleName, text: fallbackText }));
+    }
+
     case "page": {
       const kind = str(params?.kind, "skill");
       const delta = num(params?.delta, 1);

@@ -12,7 +12,7 @@
  *   - zoom ∈ [10, 30]：zoom 越大 → 视野越小（放大看脚下）
  */
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
-import { onHostState, sendToHost, sendTick, notifyLoaded } from "./bridge";
+import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
@@ -462,6 +462,24 @@ watch(
     if (!resp || !pendingSys.value) return;
     const act = pendingSys.value;
     pendingSys.value = "";
+    // ★ game.md 对话功能：sys_chat 的 response 是 JSON {speaker, text, avatar}
+    if (act === "sys_chat") {
+      try {
+        const chatData = JSON.parse(resp);
+        if (chatData?.speaker && chatData?.text) {
+          const msg: ChatMessage = { speaker: chatData.speaker, text: chatData.text, avatar: chatData.avatar };
+          chatMessages.value.push(msg);
+          chatAgentResp.value = chatData.text; // 保存用于"继续"
+          // 同步到宿主聊天框（宿主负责写入 Toonflow-game-web）
+          sendChat(chatData.speaker, chatData.text, chatData.avatar);
+        }
+      } catch {
+        // 非 JSON 直接显示
+        sysNotice.value = resp;
+      }
+      chatPending.value = false;
+      return;
+    }
     sysNotice.value = resp;
     // ★ 睡眠/商城刷新的结果值得跳出面板提醒（睡眠→满血满蓝；商城→货源走没走 agent）
     if (act === "sys_rest" || act === "sys_shop_refresh") showToast(resp);
@@ -1874,6 +1892,40 @@ async function switchLevel(levelName: string): Promise<void> {
       }
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
     }
+    // ★ 从 Tiled 地图 Actors 层加载中立 NPC（mulberryTown 的 Mayor Leonard / Bar / NPC 等）。
+    //   之前仅作为 kind=npc 装饰物 → 不在 entities 里 → updateNearChat() 找不到 → 不能对话。
+    //   现在生成 side=neutral 实体：玩家走近 1.6m 内触发"💬 聊天"，sys_chat 走旁白 (entry.js:2522-2530)。
+    if (s && next.npcs?.length) {
+      for (const npc of next.npcs) {
+        const npcEntityId = `mapnpc_${npc.id}`;
+        if (s.entities.some((e) => e.id === npcEntityId)) continue;
+        // 安全落点（避开图纸边界 + 主角当前位置）
+        const pos = freeEnemySpot(npc.x, npc.y);
+        s.entities.push({
+          id: npcEntityId,
+          name: npc.displayName,
+          side: "neutral",
+          x: pos.x,
+          y: pos.y,
+          vx: 0, vy: 0,
+          hp: 200, maxHp: 200,
+          mp: 0, maxMp: 0,
+          exp: 0, expToNext: 0,
+          level: 1,
+          atk: 0, def: 0,
+          facing: 180, cooldown: 0, alive: true,
+          homeX: pos.x,
+          homeY: pos.y,
+          // ★ 中立 NPC 标识：让前端走"无 sprite 装饰"的渲染分支
+          camp: "neutral",
+          entity_type: "NPC",
+          // ★ 让 sprite 渲染走"装饰物 + name 显示"路径（头顶用 entity.name）
+          npc_wanders: npc.wanders,
+        } as any);
+      }
+      state.value.events.push(`[${next.name}] 发现 ${next.npcs.length} 位 NPC！`);
+      console.info("[field-survival] 已加载 NPC：", next.npcs.length, next.npcs);
+    }
     state.value = s ? { ...s } : s;
     // ★ 把本图加载的地图怪物发布给 mockHost（standalone 下由 mock 接管 AI/结算）；
     //   同时 +1 世代号 → 下一次 tick 会把整份清单上报宿主（真实宿主下由宿主接管 AI/结算）
@@ -2879,7 +2931,13 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
 
   // 头顶名字 + 等级（敌人额外显示 Lv.X；头像上方居中）
   // ★ game.md：带姓名的野怪显示「哥布林(低阶湮物)」全称（放宽截断），其余维持 4 字短标签
-  const headLabel = e.name.slice(0, e.full_name ? 14 : 4);
+  // ★ NPC（mapnpc_* / entity_type=NPC）全名显示（如 "Mayor Leonard" / "Bar"），不截到 4 字
+  const isMapNpc = typeof e.id === "string" && e.id.startsWith("mapnpc_");
+  const headLabel = e.full_name
+    ? e.name.slice(0, 14)
+    : isMapNpc
+      ? e.name.slice(0, 10)   // NPC：保留 10 字（Mayor Leonard / 镇长老白）
+      : e.name.slice(0, 4);
   const headY = hasAvatar ? avatarY - 4 : dy - 18;
   ctx.save();
   ctx.textAlign = "center";
@@ -3888,6 +3946,8 @@ function renderOneDecoration(
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
       // ★ NPC：真实精灵 tile + 2 帧走路动画 + 游走（Rotten-Soup 的 AnimatedSprite 等价）
       //   Dawnlike 人物动画规律：第 2 帧 = 基础 tile + 8（与 player [4334, 4342] 一致）
+      // ★ 名字由 entity 层（drawEntity headLabel）负责统一渲染，装饰物层只画 sprite，
+      //   避免双重绘制 + 字号不一致。原逻辑保留作为 fallback（SHEET_TILESET 未就绪时启用）。
       const npcName = (dec as any).name || "NPC";
       const baseTile = dec.variant && dec.variant > 0 ? dec.variant : 4695; // 兜底 = 默认村民第一帧
       const walkFrame = Math.floor((_animTick + (dec as any).seed || 0) / 14) % 2; // ~220ms 切帧，每个 NPC 相位不同
@@ -3905,15 +3965,20 @@ function renderOneDecoration(
       // 走路时轻微上下起伏（1px 级别）
       const bob = walking ? Math.abs(Math.sin(t * 6)) * sx * 0.06 : 0;
       drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5);
-      // 名字（跟随 NPC 位置）
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.78)";
-      ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
-      ctx.textAlign = "center";
-      ctx.fillText(npcName, drawX, drawY + sx * 0.2);
-      ctx.restore();
+      // ★ 不再在装饰物层绘制名字 — 实体层（mapnpc_* entity）的 drawEntity 统一负责
+      //   字体更大、与玩家/敌怪头顶一致、不会被墙体遮挡时遗漏。
+      //   Fallback 路径（SHEET_TILESET 未就绪）保留名称绘制，保证开发期可读性。
+      const _suppressName = false;
+      if (_suppressName) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.78)";
+        ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText(npcName, drawX, drawY + sx * 0.2);
+        ctx.restore();
+      }
     } else if (dec.kind === "npc") {
-      // Fallback: 简化圆形
+      // Fallback: 简化圆形 + 名字（entity 层未就绪时的兜底，正常路径下 entity 层统一绘制）
       const sz = Math.round(0.8 * sx);
       ctx.save();
       ctx.fillStyle = "#d4a574";
@@ -4219,6 +4284,96 @@ function updateNearBed(): void {
   if (v !== nearBed.value) nearBed.value = v;
 }
 
+/* ---------------- ★ game.md 对话功能：靠近角色触发出聊按钮 ---------------- */
+/** 可对话的最近角色（非敌人），随 tick 10Hz 刷新 */
+const nearChat = ref<{ id: string; name: string; avatarPath?: string } | null>(null);
+const CHAT_RADIUS_M = 1.6; // 玩家与角色对话触发半径（米）
+
+/** 更新 nearChat：找最近的可对话角色（非 enemy 阵营、alive） */
+function updateNearChat(): void {
+  const s = state.value;
+  if (!s) {
+    if (nearChat.value) nearChat.value = null;
+    return;
+  }
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) { if (nearChat.value) nearChat.value = null; return; }
+
+  let best: typeof nearChat.value = null;
+  let bestDist = CHAT_RADIUS_M;
+  for (const e of s.entities) {
+    if (e.side === "enemy" || !e.alive || e.side === "player") continue;
+    const d = Math.hypot(e.x - me.x, e.y - me.y);
+    if (d < bestDist) { bestDist = d; best = { id: e.id, name: e.name, avatarPath: e.avatarPath }; }
+  }
+  if (best?.id !== nearChat.value?.id) nearChat.value = best;
+}
+
+/* ---------------- ★ game.md 对话功能：聊天状态 ---------------- */
+interface ChatMessage { speaker: string; avatar?: string; text: string; mine?: boolean; }
+const chatActive = ref(false);          // 面板是否打开
+const chatMessages = ref<ChatMessage[]>([]); // 聊天记录
+const chatInputText = ref("");          // 用户输入
+const chatPending = ref(false);         // 等待 agent 响应
+const chatNpcId = ref("");             // 当前对话角色 id
+const chatNpcName = ref("");            // 当前对话角色名
+const chatAgentResp = ref("");          // agent 上一句台词（用于"继续"）
+
+/** 打开聊天：nearChat 角色触发 */
+function onChatStart() {
+  const npc = nearChat.value;
+  if (!npc) return;
+  chatNpcId.value = npc.id;
+  chatNpcName.value = npc.name;
+  chatMessages.value = [];
+  chatInputText.value = "";
+  chatPending.value = false;
+  chatAgentResp.value = "";
+  chatActive.value = true;
+  // 首次发言：调用 agent
+  triggerChatSpeak();
+}
+
+/** 调用角色发言器 agent（task-speaker-agent） */
+function triggerChatSpeak(userText?: string) {
+  if (!chatNpcId.value) return;
+  chatPending.value = true;
+  runSysCmd("sys_chat", {
+    npcId: chatNpcId.value,
+    npcName: chatNpcName.value,
+    userText: userText ?? null,
+    lastResp: chatAgentResp.value || null,
+  });
+}
+
+/** 用户输入文字后点击发送 */
+function onChatSend() {
+  const txt = chatInputText.value.trim();
+  if (!txt) return;
+  // 显示用户发言
+  chatMessages.value.push({ speaker: "我", text: txt, mine: true });
+  chatInputText.value = "";
+  const last = chatMessages.value.filter((m) => !m.mine).pop();
+  chatAgentResp.value = last?.text ?? "";
+  triggerChatSpeak(txt);
+}
+
+/** 继续：agent 继续发言（用户不说话，直接让 agent 继续） */
+function onChatContinue() {
+  triggerChatSpeak();
+}
+
+/** 离开：关闭聊天 */
+function onChatLeave() {
+  chatActive.value = false;
+  chatMessages.value = [];
+  chatInputText.value = "";
+  chatPending.value = false;
+  chatAgentResp.value = "";
+  chatNpcId.value = "";
+  chatNpcName.value = "";
+}
+
 /** 点击睡眠：走 sys_rest（entry 侧按 game.md 满血满蓝公式恢复 + 描述写 other + 参数卡同步） */
 function onSleep() {
   if (!nearBed.value) return;
@@ -4250,6 +4405,8 @@ function loop(ts: number) {
     localTick();
     // ★ game.md 床碰撞：靠近床时出睡眠按钮（10Hz 足够，9~49 格查表很便宜）
     updateNearBed();
+    // ★ game.md 对话功能：10Hz 刷新附近可对话角色
+    updateNearChat();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
@@ -4634,6 +4791,14 @@ onMounted(async () => {
           typeof e?.id === "string" &&
           (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
       );
+      // ★ 客户端权威中立实体（mapnpc_*，地图 Actors 层的城镇 NPC）— 同样不在 incoming 里，
+      //   必须按合并而非丢弃。规则与 mapmob_* 对齐。
+      const localNpcs = prevEntities.filter(
+        (e: any) =>
+          e?.side === "neutral" &&
+          typeof e?.id === "string" &&
+          e.id.startsWith("mapnpc_"),
+      );
       for (const e of localEnemies as any[]) {
         if (e.alive === false && !deadLocalEnemyIds.has(e.id)) deadLocalEnemyIds.add(e.id);
       }
@@ -4678,6 +4843,10 @@ onMounted(async () => {
           if (keptMapMobs.length) incoming.entities = [...incoming.entities, ...keptMapMobs];
         }
       }
+      // ★ 客户端权威中立 NPC（mapnpc_*）— 每帧追加保留（宿主永远不知道它们存在）。
+      //   切换关卡时旧图的 NPC id 不在 prevEntities 里 → 自动丢弃。
+      const keptNpcs = localNpcs.filter((e: any) => e.alive !== false);
+      if (keptNpcs.length) incoming.entities = [...incoming.entities, ...keptNpcs];
     }
   // ★ 敌人碰撞收口（在 state.value 赋值之前就地改写 incoming 的敌怪坐标）
   if (incoming && Array.isArray(incoming.entities)) applyEnemyCollision(incoming.entities as Entity[]);
@@ -4926,10 +5095,45 @@ watch(playerSnapshot, () => {
         </label>
         <!-- ★ game.md 床碰撞：靠近床铺（tileset description=bed）显示睡眠按钮，满血满蓝恢复 -->
         <button v-if="nearBed" class="btn btn--sleep" title="在床上睡一觉：恢复满血满蓝" @click="onSleep">🛏 睡眠</button>
+        <!-- ★ game.md 对话功能：靠近角色触发出聊按钮 -->
+        <button v-if="nearChat" class="btn btn--chat" title="与角色对话" @click="onChatStart">💬 聊天</button>
       </div>
 
       <!-- ★ 睡眠恢复等 HUD 级提示（系统面板未打开时也能看到） -->
       <div v-if="hudToast" class="hud-toast" @click="hudToast = ''">{{ hudToast }}</div>
+
+      <!-- ★ game.md 对话功能：聊天面板 -->
+      <div v-if="chatActive" class="chat-panel">
+        <div class="chat-panel__header">
+          <span class="chat-panel__title">💬 与 {{ chatNpcName }} 对话</span>
+          <button class="chat-panel__close" @click="onChatLeave">✕</button>
+        </div>
+        <div class="chat-panel__msgs">
+          <div v-for="(m, i) in chatMessages" :key="i" :class="['chat-msg', m.mine ? 'chat-msg--mine' : 'chat-msg--npc']">
+            <span class="chat-msg__speaker">{{ m.mine ? '我' : m.speaker }}</span>
+            <p class="chat-msg__text">{{ m.text }}</p>
+          </div>
+          <div v-if="chatPending" class="chat-msg chat-msg--loading">
+            <span class="chat-msg__speaker">{{ chatNpcName }}</span>
+            <p class="chat-msg__text chat-msg__loading-dot">…思考中…</p>
+          </div>
+        </div>
+        <div class="chat-panel__input-row">
+          <input
+            v-model="chatInputText"
+            class="chat-panel__input"
+            placeholder="输入文字或语音识别…"
+            :disabled="chatPending"
+            @keyup.enter="onChatSend"
+          />
+          <button class="chat-panel__send" :disabled="chatPending || !chatInputText.trim()" @click="onChatSend">发送</button>
+        </div>
+        <div class="chat-panel__actions">
+          <button class="chat-action-btn" :disabled="chatPending" @click="onChatSend">发言</button>
+          <button class="chat-action-btn" :disabled="chatPending" @click="onChatContinue">继续</button>
+          <button class="chat-action-btn chat-action-btn--leave" @click="onChatLeave">离开</button>
+        </div>
+      </div>
 
       <!-- ★ v3 缩放控制（右上角，对应 25d_ai_game 的相机 zoom），上下限由 mulberryTown.json 决定 -->
       <div class="zoom-ctrl" :title="`zoom=${zoom}（${viewSizeMeters[0]}m × ${viewSizeMeters[1]}m）`">
@@ -4976,7 +5180,7 @@ watch(playerSnapshot, () => {
       </div>
 
       <div class="events">
-        <div v-for="(e, i) in lastEvents" :key="i">{{ e }}</div>
+        <div v-for="(e, i) in (state?.events || []).slice(-8)" :key="i">{{ e }}</div>
       </div>
 
       <!-- 半透明控制层 -->
@@ -5734,6 +5938,138 @@ body {
 @keyframes sleepPulse {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.25); }
+}
+
+/* ★ game.md 对话功能：聊天按钮（靠近角色时出现，蓝色调与睡眠按钮区分） */
+.btn--chat {
+  border: 2px solid #2a5a8a;
+  border-radius: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  background: #3a7abf;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 0 #1a3a5a;
+  animation: chatPulse 1.5s ease-in-out infinite;
+}
+.btn--chat:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #1a3a5a;
+}
+@keyframes chatPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.2); }
+}
+
+/* ★ game.md 对话功能：聊天面板 */
+.chat-panel {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9996;
+  width: min(480px, 94vw);
+  max-height: 42vh;
+  background: rgba(18, 20, 26, 0.96);
+  border: 2px solid #3a5a8a;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+  font-size: 12px;
+}
+.chat-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(30, 50, 80, 0.7);
+  border-bottom: 1px solid #2a4a7a;
+  flex-shrink: 0;
+}
+.chat-panel__title { font-size: 11px; color: #9ac8ff; font-weight: 700; }
+.chat-panel__close {
+  background: none; border: none; color: #7a9abf; font-size: 14px; cursor: pointer; padding: 0 4px;
+}
+.chat-panel__msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 80px;
+  max-height: 22vh;
+}
+.chat-msg { display: flex; flex-direction: column; gap: 1px; }
+.chat-msg--npc { align-items: flex-start; }
+.chat-msg--mine { align-items: flex-end; }
+.chat-msg--loading { opacity: 0.6; }
+.chat-msg__speaker { font-size: 10px; font-weight: 700; color: #7ab8ff; }
+.chat-msg--mine .chat-msg__speaker { color: #8adb8a; }
+.chat-msg__text {
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(40, 60, 100, 0.5);
+  color: #dceeff;
+  max-width: 80%;
+  line-height: 1.4;
+}
+.chat-msg--mine .chat-msg__text {
+  background: rgba(30, 70, 40, 0.6);
+  color: #c8f0c8;
+}
+.chat-msg__loading-dot { color: #7a9abf; font-style: italic; }
+
+.chat-panel__input-row {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid #2a4a7a;
+  flex-shrink: 0;
+}
+.chat-panel__input {
+  flex: 1;
+  background: rgba(30, 40, 60, 0.8);
+  border: 1px solid #3a5a8a;
+  border-radius: 3px;
+  color: #dceeff;
+  font-size: 12px;
+  padding: 3px 6px;
+  outline: none;
+}
+.chat-panel__input:focus { border-color: #5a8abf; }
+.chat-panel__input::placeholder { color: #5a7a9f; }
+.chat-panel__send {
+  background: #2a5a9a; border: 1px solid #4a7abf; border-radius: 3px;
+  color: #c8e4ff; font-size: 11px; cursor: pointer; padding: 3px 8px;
+}
+.chat-panel__send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.chat-panel__actions {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px 6px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.chat-action-btn {
+  padding: 3px 14px;
+  border-radius: 3px;
+  border: 1px solid #3a5a8a;
+  background: #1e3a6a;
+  color: #9ac8ff;
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.chat-action-btn--leave {
+  border-color: #5a2a2a;
+  background: #4a1e1e;
+  color: #ffaaaa;
 }
 
 

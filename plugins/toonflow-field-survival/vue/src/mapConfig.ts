@@ -104,6 +104,27 @@ export interface MapMob {
 }
 
 /**
+ * ★ 地图上的中立 NPC（从 Tiled Actors 层提取 entity_type=NPC 的对象）。
+ *   与装饰物（kind="npc"，只用于头像 sprite）不同——npcs[] 用于生成 side=neutral 实体，
+ *   让玩家走近时能触发"💬 聊天"按钮 + 头顶完整显示中文名。
+ */
+export interface MapNpc {
+  id: number;
+  /** Tiled 对象名（Mayor Leonard / NPC / Bar 等） */
+  name: string;
+  /** 显示用名字：Tiled.full_name 优先，其次中文翻译/对象名 */
+  displayName: string;
+  x: number;
+  y: number;
+  /** 瓦片 gid（用于 sprite 选 frame） */
+  gid?: number;
+  /** 是否 wanders（绕 home 小范围漂移） */
+  wanders: boolean;
+  /** dialog key（如 BARTENDER / DWARF_BILI / MAYOR_LEONARD）— 留扩展位 */
+  dialog?: string;
+}
+
+/**
  * ★ 野怪档案表（战斗数值单一数据源）
  *
  * 这张表同时是 Tiled 地图解析的「野怪白名单」：
@@ -255,6 +276,8 @@ export interface MapConfig {
   playerSpawn?: { x: number; y: number };
   /** ★ Tiled Actors 层的怪物列表（如 GOBLIN） */
   mobs?: MapMob[];
+  /** ★ Tiled Actors 层的中立 NPC（Mayor Leonard / 城镇 Bar 等）—— 进入 entities 让玩家可对话 */
+  npcs?: MapNpc[];
   /** ★ 该地图野怪等级范围（null = 无野怪，[min, max] = 等级区间） */
   mobLevelRange?: [number, number] | null;
 }
@@ -342,6 +365,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
   const H = num(obj.height, 56);
   const decorations: MapDecoration[] = [];
   const mobs: MapMob[] = [];
+  const npcs: MapNpc[] = [];
   let decIdx = 0;
   let playerSpawn: { x: number; y: number } | null = null;
 
@@ -365,8 +389,17 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             y: obj.y / 32 - 1 - H / 2,
           };
         } else if (props.entity_type === "NPC") {
-          // NPC → 装饰物（kind=npc），App.vue 已有 NPC 渲染逻辑
-          const npcName = String(props.name || obj.name || "NPC");
+          // NPC → 同时进入 decorations（用于头像 sprite）+ npcs[]（用于生成 side=neutral 实体）
+          // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > obj.name > 兜底
+          const fullName = props.full_name != null ? String(props.full_name) : "";
+          const propName = String(props.name || "").trim();
+          const objName = String(obj.name || "").trim();
+          // 如果 propName 已经是中文（无空格 + 不像英文名）就直接用，否则按 obj.name 兜底
+          const isAscii = /^[\x00-\x7F]+$/.test(propName);
+          const displayName = fullName
+            || (propName && !isAscii ? propName : "")
+            || objName
+            || "NPC";
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
           decorations.push({
@@ -374,12 +407,23 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             kind: "npc",
             x: wx,
             y: wz,
-            name: npcName,
+            name: displayName,
             variant: obj.gid ? obj.gid - 1 : 0,
             // ★ NPC 行为数据（渲染层做游走动画用）
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
+          // ★ 收集到 npcs[]：App.vue switchLevel 会用这个生成 side=neutral 实体
+          npcs.push({
+            id: obj.id,
+            name: objName || propName || "NPC",
+            displayName,
+            x: wx,
+            y: wz,
+            gid: obj.gid,
+            wanders: props.wanders === true,
+            dialog: typeof props.dialog === "string" ? props.dialog : undefined,
+          });
         } else if (normalizeCamp(props.camp) !== "neutral"
                    && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
@@ -487,6 +531,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
     chunks: [],
     playerSpawn: playerSpawn ?? undefined,
     mobs,
+    npcs,
     mobLevelRange,
   };
 }

@@ -80,7 +80,7 @@ window.addEventListener("message", (e) => {
   if (d.type === "tf_plugin_tick" && d.action === "start") {
     const sel = d.params?.selections || {};
     const ents = [
-      { id: "p1", name: "测试玩家(宿主)", side: "player", x: 0, y: 0, vx: 0, vy: 0,
+      { id: "p1", name: "测试玩家(宿主)", side: "player", x: 13, y: 4, vx: 0, vy: 0,
         hp: 200, maxHp: 200, mp: 80, maxMp: 80, exp: 0, expToNext: 100, level: 10,
         atk: 30, def: 10, facing: 0, cooldown: 0, alive: true,
         avatarPath: "./public/test_data/toonflow_agme_cache/avatars/player/avatar.webp" },
@@ -111,8 +111,39 @@ window.addEventListener("message", (e) => {
     }, 500);
   }
 
-  if (d.type === "tf_plugin_tick" && d.action === "tick") {
-    // 真实宿主会镜像推进玩家坐标（前端上报了 player 坐标）
+  if (d.type === "tf_plugin_tick") {
+    const innerAction = d.params?.action || "";
+    // ★ game.md 对话功能：sys_chat → 返回角色发言 JSON
+    if (innerAction === "sys_chat") {
+      const npcId = String(d.params?.npcId || "");
+      const npcName = String(d.params?.npcName || "???");
+      const last = window._lastState || { entities: [], events: [] };
+      const npcEntity = (last.entities || []).find((e) => String(e.id) === npcId || String(e.name) === npcId);
+      const roleName = npcEntity?.name || npcName;
+      const fallbackLines = [
+        roleName + " 微微点头，似乎在思考如何回应你。",
+        roleName + "：'这个问题说来话长。'",
+        roleName + "沉默了一会儿，轻声说道：'你问得好。'",
+      ];
+      const text = fallbackLines[Math.floor(Math.random() * fallbackLines.length)];
+      const response = JSON.stringify({ speaker: roleName, text: text, avatar: npcEntity && npcEntity.avatarPath });
+      setTimeout(() => {
+        const state = {
+          phase: "playing", version: 5, tick: (d.params?.tick || 0) + 1,
+          world: { w: 3000, h: 3000 }, roles: [],
+          selections: { participants: [], spectators: [], enemies: [] },
+          entities: last.entities || [], chests: [], potions: [], floaters: [],
+          skills: [], items: [], skillPage: 0, itemPage: 0,
+          exp: 0, money: 0, drops: [], kills: 0, events: [], result: null,
+          map: null, mapSource: "fallback",
+          response,
+        };
+        window._lastState = { ...state };
+        postTo(state);
+      }, 300);
+      return;
+    }
+    // 正常 tick：真实宿主会镜像推进玩家坐标（前端上报了 player 坐标）
     // 这里简单 echo 状态：保留上一次的 entities，仅推进 tick
     setTimeout(() => {
       const last = window._lastState || { entities: [], events: [] };
