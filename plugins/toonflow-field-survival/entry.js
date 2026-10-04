@@ -880,6 +880,38 @@ const TOWN_NPCS = [
   { name: "\u5546\u4EBA \u963F\u798F", x: 20, y: 26 },
   { name: "\u5B88\u536B \u77F3\u5CA9", x: -32, y: -14 }
 ];
+// ★ 城镇 NPC 补充：mulberryTown.json Actors 层的 NPC 对象（Mayor Leonard / Bar / NPC 等），
+//   原本只作为装饰物画在地图上、不会进入 entities 列表 → 不能对话。
+//   这里把同源坐标转换为世界坐标（米），让 ensureTown 一并注入，sys_chat 走旁白通道。
+//   坐标公式与 vue/src/mapConfig.ts normalizeTiledMap 一致：wx = obj.x / 32 - W/2；wz = obj.y / 32 - 1 - H/2
+//   mulberryTown.json：W=43, H=56
+const TOWN_NPCS_MAP_JSON = [
+  { name: "NPC", x: 128 / 32 - 43 / 2, y: 800 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 96 / 32 - 43 / 2, y: 832 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 224 / 32 - 43 / 2, y: 320 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 256 / 32 - 43 / 2, y: 320 / 32 - 1 - 56 / 2 },
+  { name: "\u77EE\u4EBA\u6BD4\u5229", x: 256 / 32 - 43 / 2, y: 416 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 448 / 32 - 43 / 2, y: 512 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 512 / 32 - 43 / 2, y: 512 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 736 / 32 - 43 / 2, y: 1056 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 736 / 32 - 43 / 2, y: 1312 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 96 / 32 - 43 / 2, y: 1632 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 224 / 32 - 43 / 2, y: 1568 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 1152 / 32 - 43 / 2, y: 512 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 1152 / 32 - 43 / 2, y: 640 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 704 / 32 - 43 / 2, y: 1056 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 480 / 32 - 43 / 2, y: 1600 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 576 / 32 - 43 / 2, y: 1568 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 512 / 32 - 43 / 2, y: 1664 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 288 / 32 - 43 / 2, y: 1344 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 256 / 32 - 43 / 2, y: 1344 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 320 / 32 - 43 / 2, y: 1376 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 1248 / 32 - 43 / 2, y: 1280 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 1056 / 32 - 43 / 2, y: 1184 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 544 / 32 - 43 / 2, y: 768 / 32 - 1 - 56 / 2 },
+  { name: "NPC", x: 800 / 32 - 43 / 2, y: 768 / 32 - 1 - 56 / 2 },
+  { name: "\u9547\u957F Leonard", x: 96 / 32 - 43 / 2, y: 1024 / 32 - 1 - 56 / 2 }
+];
 function ensureTown(s) {
   const town = WORLD_REGIONS[0];
   if (!s.town || !s.town.buildings) {
@@ -891,7 +923,10 @@ function ensureTown(s) {
       r: town.r,
       safe: true,
       buildings: TOWN_BUILDINGS.map((b, i) => ({ ...b, id: `b_${i}` })),
-      npcs: TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n }))
+      npcs: [
+        ...TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n })),
+        ...TOWN_NPCS_MAP_JSON.map((n, i) => ({ id: `mapnpc_${i + 100}`, name: n.name, x: n.x, y: n.y }))
+      ]
     };
   }
   if (!s.entities.some((e) => e.side === "neutral")) {
@@ -903,6 +938,21 @@ function ensureTown(s) {
       e.homeX = n.x;
       e.homeY = n.y;
       e.aiState = "npc";
+      s.entities.push(e);
+    });
+  }
+  // ★ mulberryTown.json Actors 层的 NPC：注入为 mapnpc_* 实体，让玩家可对话
+  if (!s.entities.some((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"))) {
+    TOWN_NPCS_MAP_JSON.forEach((n, i) => {
+      const id = `mapnpc_${i + 100}`;
+      const e = makeEntity({ id, name: n.name, hp: 200 }, "neutral", n.x, n.y, i + 100);
+      e.atk = 0;
+      e.regionId = town.id;
+      e.homeX = n.x;
+      e.homeY = n.y;
+      e.aiState = "npc";
+      e.entity_type = "NPC";
+      e.camp = "neutral";
       s.entities.push(e);
     });
   }
