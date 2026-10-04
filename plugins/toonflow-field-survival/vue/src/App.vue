@@ -1750,6 +1750,49 @@ function freeEnemySpot(x: number, y: number): { x: number; y: number } {
 }
 
 /**
+ * ★ 把 cfg.npcs[] 注入到 state.entities（side=neutral，mapnpc_*）。
+ *   - 同一 id 已存在 → 跳过（幂等）
+ *   - 玩家附近的 npc：临时调试下把第 0 个挪到玩家 1.0m 内（CHAT_RADIUS_M=1.6）
+ *     （用户验证"neutral 也得交谈"功能专用；正式版移除）
+ */
+function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | null | undefined, opts: { debugPullFirstNear?: boolean } = {}): void {
+  if (!s || !cfg?.npcs?.length) return;
+  const me = s.entities.find((e) => e.side === "player");
+  for (const npc of cfg.npcs) {
+    const npcEntityId = `mapnpc_${npc.id}`;
+    if (s.entities.some((e) => e.id === npcEntityId)) continue;
+    const pos = freeEnemySpot(npc.x, npc.y);
+    s.entities.push({
+      id: npcEntityId,
+      name: npc.displayName,
+      side: "neutral",
+      x: pos.x,
+      y: pos.y,
+      vx: 0, vy: 0,
+      hp: 200, maxHp: 200,
+      mp: 0, maxMp: 0,
+      exp: 0, expToNext: 0,
+      level: 1,
+      atk: 0, def: 0,
+      facing: 180, cooldown: 0, alive: true,
+      homeX: pos.x,
+      homeY: pos.y,
+      camp: "neutral",
+      entity_type: "NPC",
+      npc_wanders: npc.wanders,
+    } as any);
+  }
+  if (opts.debugPullFirstNear && me) {
+    const first = s.entities.find((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"));
+    if (first) {
+      first.x = me.x + 0.8;
+      first.y = me.y + 0.6;
+    }
+  }
+  console.info("[field-survival] 已加载 NPC：", cfg.npcs.length);
+}
+
+/**
  * ★ 关卡切换（Rotten-Soup changeLevels 等价）：
  *   加载目标地图 → 重建 chunk 索引 → 玩家挪到新图中心
  */
@@ -1896,45 +1939,8 @@ async function switchLevel(levelName: string): Promise<void> {
     //   之前仅作为 kind=npc 装饰物 → 不在 entities 里 → updateNearChat() 找不到 → 不能对话。
     //   现在生成 side=neutral 实体：玩家走近 1.6m 内触发"💬 聊天"，sys_chat 走旁白 (entry.js:2522-2530)。
     if (s && next.npcs?.length) {
-      // ★ 调试：把第一个 NPC 临时放到玩家旁边 1.5m 内，验证聊天按钮触发
-      const me = s.entities.find((e) => e.side === "player");
-      for (const npc of next.npcs) {
-        const npcEntityId = `mapnpc_${npc.id}`;
-        if (s.entities.some((e) => e.id === npcEntityId)) continue;
-        // 安全落点（避开图纸边界 + 主角当前位置）
-        const pos = freeEnemySpot(npc.x, npc.y);
-        s.entities.push({
-          id: npcEntityId,
-          name: npc.displayName,
-          side: "neutral",
-          x: pos.x,
-          y: pos.y,
-          vx: 0, vy: 0,
-          hp: 200, maxHp: 200,
-          mp: 0, maxMp: 0,
-          exp: 0, expToNext: 0,
-          level: 1,
-          atk: 0, def: 0,
-          facing: 180, cooldown: 0, alive: true,
-          homeX: pos.x,
-          homeY: pos.y,
-          // ★ 中立 NPC 标识：让前端走"无 sprite 装饰"的渲染分支
-          camp: "neutral",
-          entity_type: "NPC",
-          // ★ 让 sprite 渲染走"装饰物 + name 显示"路径（头顶用 entity.name）
-          npc_wanders: npc.wanders,
-          // ★ 调试：第 0 个 NPC 强行挪到玩家 1.0m 内（CHAT_RADIUS_M=1.6m 内）
-          _debug_near: me ? { origX: pos.x, origY: pos.y, meX: me.x, meY: me.y } : null,
-        } as any);
-      }
-      // ★ 调试：第一个 NPC 移近玩家（临时验证）
-      const firstNpc = s.entities.find((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"));
-      if (firstNpc && me) {
-        firstNpc.x = me.x + 0.8;
-        firstNpc.y = me.y + 0.6;
-      }
+      injectMapNpcsToState(s, next, { debugPullFirstNear: true });
       state.value.events.push(`[${next.name}] 发现 ${next.npcs.length} 位 NPC！`);
-      console.info("[field-survival] 已加载 NPC：", next.npcs.length, next.npcs);
     }
     state.value = s ? { ...s } : s;
     // ★ 把本图加载的地图怪物发布给 mockHost（standalone 下由 mock 接管 AI/结算）；
@@ -4713,6 +4719,8 @@ onMounted(async () => {
     mapCfg.value = cfg;
     // ★ 建碰撞网格（对齐 Rotten-Soup 的 Tile.blocked()：墙/水/树来自 tileset 属性）
     await rebuildWalkGrid(startLevel);
+    // ★ 注入地图 NPC（mapnpc_*）→ 让玩家可对话（与 switchLevel 同源逻辑）
+    injectMapNpcsToState(state.value, cfg, { debugPullFirstNear: true });
     // 初始落点安全化：复用 settleSpawn（与切图同一套规则），避免两处规则漂移。
     // 宿主导出的出生坐标只做格中心吸附；不满足"主连通域 + portal 净空"才挪。
     if (walkGrid && walkIndex) {
