@@ -36,19 +36,59 @@ const IFRAME_HTML = `<!doctype html>
   body{margin:0;padding:0;font-family:sans-serif}
   #iframe-wrap{position:fixed;inset:0}
   iframe{width:100%;height:100%;border:0;display:block}
-  .log{position:fixed;left:8px;bottom:8px;background:#000a;color:#fff;padding:6px 10px;border-radius:6px;font:12px monospace;max-width:60%;max-height:30vh;overflow:auto;z-index:9}
+  #log{position:fixed;left:8px;bottom:8px;background:#000a;color:#fff;padding:0;border-radius:6px;font:12px monospace;max-width:60%;max-height:60vh;overflow:hidden;z-index:9;box-shadow:0 2px 12px #0006;user-select:none}
+  #log-header{display:flex;align-items:center;gap:6px;padding:4px 8px;background:#111;border-radius:6px 6px 0 0;cursor:move}
+  #log-header .log-title{color:#888;font-size:11px;flex:1}
+  #log-toggle{background:none;border:1px solid #444;color:#888;padding:0 5px;border-radius:3px;font-size:11px;cursor:pointer;line-height:1.4}
+  #log-body{padding:6px 10px;max-height:calc(30vh - 28px);overflow:auto;white-space:pre-wrap}
+  #log.collapsed #log-body{display:none}
+  #log.collapsed{max-height:none}
+  #log.collapsed #log-header{border-radius:6px}
 </style>
 </head><body>
 <div id="iframe-wrap"><iframe id="game" src="${PLUGIN_URL}"></iframe></div>
-<div class="log" id="log"></div>
+<div id="log"><div id="log-header"><span class="log-title">📋 log</span><button id="log-toggle">−</button></div><div id="log-body"></div></div>
 <script>
+// ★ #log 可拖动 + 可折叠
+(function () {
+  const logEl = document.getElementById("log");
+  const logBody = document.getElementById("log-body");
+  const logToggle = document.getElementById("log-toggle");
+  const logHeader = document.getElementById("log-header");
+  let collapsed = false;
+  logToggle && logToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    collapsed = !collapsed;
+    logEl.classList.toggle("collapsed", collapsed);
+    logToggle.textContent = collapsed ? "+" : "−";
+  });
+  let dragging = false, dragOffX = 0, dragOffY = 0;
+  logHeader && logHeader.addEventListener("mousedown", (e) => {
+    if (e.target === logToggle) return;
+    dragging = true;
+    const rect = logEl.getBoundingClientRect();
+    dragOffX = e.clientX - rect.left;
+    dragOffY = e.clientY - rect.top;
+    logHeader.style.cursor = "grabbing";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    logEl.style.left = (e.clientX - dragOffX) + "px";
+    logEl.style.top = (e.clientY - dragOffY) + "px";
+    logEl.style.bottom = "auto";
+    logEl.style.right = "auto";
+  });
+  document.addEventListener("mouseup", () => { if (dragging) { dragging = false; logHeader && (logHeader.style.cursor = "move"); } });
+  logHeader && (logHeader.style.cursor = "move");
+})();
 const ROLES = ${JSON.stringify(ROLES)};
 const SKILLS = ${JSON.stringify(SKILLS)};
 const ITEMS = ${JSON.stringify(ITEMS)};
 
 const log = (m) => {
-  const el = document.getElementById("log");
-  el.textContent = m + "\\n" + el.textContent.slice(0, 4000);
+  const el = document.getElementById("log-body");
+  if (!el) return;
+  el.textContent = m + "\n" + el.textContent.slice(0, 4000);
 };
 
 const postTo = (state) => {

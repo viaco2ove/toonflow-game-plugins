@@ -166,17 +166,62 @@ function devHostPlugin(conn: string, story: string): Plugin {
   body{margin:0;padding:0;font-family:system-ui,sans-serif;background:#1a1a1a;color:#eee}
   #wrap{position:fixed;inset:0}
   iframe{width:100%;height:100%;border:0;display:block}
-  #log{position:fixed;left:8px;bottom:8px;background:#000a;padding:8px 12px;border-radius:6px;font:12px monospace;max-width:60%;max-height:30vh;overflow:auto;z-index:9;line-height:1.5}
+  #log{position:fixed;left:8px;bottom:8px;background:#000a;padding:0;border-radius:6px;font:12px monospace;max-width:60%;max-height:60vh;overflow:hidden;z-index:9;line-height:1.5;box-shadow:0 2px 12px #0006;user-select:none}
+  #log-header{display:flex;align-items:center;gap:6px;padding:4px 8px;background:#111;border-radius:6px 6px 0 0;cursor:move}
+  #log-header .log-title{color:#888;font-size:11px;flex:1}
+  #log-toggle{background:none;border:1px solid #444;color:#888;padding:0 5px;border-radius:3px;font-size:11px;cursor:pointer;line-height:1.4}
+  #log-body{padding:6px 10px;max-height:calc(30vh - 28px);overflow:auto;white-space:pre-wrap}
+  #log.collapsed #log-body{display:none}
+  #log.collapsed{max-height:none}
+  #log.collapsed #log-header{border-radius:6px}
   #badge{position:fixed;right:8px;top:8px;background:#f33;color:#fff;padding:4px 10px;border-radius:4px;font:12px monospace;z-index:9;max-width:60%;text-align:right}
   #error{position:fixed;inset:30px;display:none;align-items:center;justify-content:center;background:#1a1a1a;color:#f88;font:14px monospace;z-index:10;text-align:center;padding:40px;line-height:2}
 </style>
 </head>
 <body>
-<div id="wrap"><iframe id="game" src="/?__inner=1"></iframe></div>
+<div id="wrap"><iframe id="game" src="/?__inner=1&pluginId=com.toonflow.minigame-field-survival&sessionId=dev-host&story=${encodeURIComponent(STORY)}"></iframe></div>
 <div id="badge">dev-host (--conn ${STORY})</div>
 <div id="error"></div>
-<div id="log"></div>
+<div id="log"><div id="log-header"><span class="log-title">📋 log</span><button id="log-toggle">−</button></div><div id="log-body"></div></div>
 <script>
+// ★ #log 可拖动 + 可折叠
+(function () {
+  const logEl = document.getElementById("log");
+  const logBody = document.getElementById("log-body");
+  const logToggle = document.getElementById("log-toggle");
+  const logHeader = document.getElementById("log-header");
+
+  // --- 折叠 ---
+  let collapsed = false;
+  logToggle.addEventListener("click", (e) => {
+    e.stopPropagation();
+    collapsed = !collapsed;
+    logEl.classList.toggle("collapsed", collapsed);
+    logToggle.textContent = collapsed ? "+" : "−";
+  });
+
+  // --- 拖动 ---
+  let dragging = false, dragOffX = 0, dragOffY = 0;
+  logHeader.addEventListener("mousedown", (e) => {
+    if (e.target === logToggle) return;
+    dragging = true;
+    const rect = logEl.getBoundingClientRect();
+    dragOffX = e.clientX - rect.left;
+    dragOffY = e.clientY - rect.top;
+    logHeader.style.cursor = "grabbing";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    logEl.style.left = (e.clientX - dragOffX) + "px";
+    logEl.style.top = (e.clientY - dragOffY) + "px";
+    logEl.style.bottom = "auto";
+    logEl.style.right = "auto";
+  });
+  document.addEventListener("mouseup", () => {
+    if (dragging) { dragging = false; logHeader.style.cursor = "move"; }
+  });
+  logHeader.style.cursor = "move";
+})();
 const STORY = ${JSON.stringify(STORY)};
 const STORY_URL = ${JSON.stringify(storyUrl)};
 const SERVICE_URL = ${JSON.stringify(SERVICE_URL)};
@@ -186,6 +231,9 @@ const AUTH_TOKEN = ${JSON.stringify(AUTH_TOKEN)};
 const ENTRY_PATH = ${JSON.stringify(ENTRY_PATH.replace(/\\/g, "/"))};
 window.__AUTH_TOKEN__ = AUTH_TOKEN;
 window.__SERVICE_URL__ = SERVICE_URL;
+// ★ 让 iframe 里能读到 window.__CONN__ / window.__STORY__（define 注入的是局部 const，运行时读不到）
+window.__CONN__ = ${JSON.stringify(conn)};
+window.__STORY__ = ${JSON.stringify(story)};
 let lastState = null;
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
@@ -253,7 +301,11 @@ window.addEventListener("message", (e) => {
     (gameWin || window.parent).postMessage({ type: "tf_plugin_data_result", reqId, ok: true, ...result }, "*");
   }
 });
-const log = (m) => { const el = document.getElementById("log"); el.textContent = m + "\\n" + el.textContent.slice(0, 4000); };
+const log = (m) => {
+  const el = document.getElementById("log-body");
+  if (!el) return;
+  el.textContent = m + '\\n' + el.textContent.slice(0, 4000);
+};
 const post = (state, response) => {
   if (state && typeof state === "object") state.response = response || "";
   document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive","sys","sys_sell","sys_use_item","sys_sort","sys_ring_move","sys_use_skill","sys_shop_refresh","sys_shop_buy","sys_party","sys_teleport","sys_travel"], response: response || "" }, "*");
@@ -1147,6 +1199,8 @@ window.addEventListener("message", async (e) => {
         const u = req.url || "/";
         // ?__inner=1 是 dev-host 内嵌 iframe 的标记，加载真正的游戏本体（不再重定向）
         if (u.includes("__inner=1")) return next();
+        // /@fs/*、/src/* 等模块路径和静态资源透传（让 vite 自己处理）
+        if (u.includes("/@fs") || u.includes("/src/") || u.includes("/node_modules/")) return next();
         // 静态资源 / 资源路径透传
         if (u !== "/" && !u.startsWith("/?")) return next();
         res.setHeader("Content-Type", "text/html; charset=utf-8");

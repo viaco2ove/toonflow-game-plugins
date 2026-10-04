@@ -1782,11 +1782,14 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       npc_wanders: npc.wanders,
     } as any);
   }
-  if (opts.debugPullFirstNear && me) {
+  if (opts.debugPullFirstNear) {
+    // ★ 重新取 me：上面 inject 循环时 me 可能是 settleSpawn 之前的旧坐标，
+    //   现在所有 NPC 都已入 state，玩家也是 settleSpawn 之后最新坐标
+    const meNow = s.entities.find((e) => e.side === "player");
     const first = s.entities.find((e) => typeof e.id === "string" && e.id.startsWith("mapnpc_"));
-    if (first) {
-      first.x = me.x + 0.8;
-      first.y = me.y + 0.6;
+    if (first && meNow) {
+      first.x = meNow.x + 0.8;
+      first.y = meNow.y + 0.6;
     }
   }
   console.info("[field-survival] 已加载 NPC：", cfg.npcs.length);
@@ -3933,12 +3936,24 @@ function renderOneDecoration(
       ctx.fillRect(x0, y0, bw, bh);
       ctx.restore();
     } else if ((dec as any).kind === "portal") {
-      // ★ 出口箭头（Rotten-Soup LEVEL_TRANSITION 的视觉提示）：黄色箭头 + 目的地名
+      // ★ 地图连接处（入口）：红色半透明感知区域 + 脉冲箭头 + 目的地名
       ctx.save();
-      // 箭头本体（脉冲动画吸引注意）
-      const pulse = 0.75 + 0.25 * Math.sin(_animTick / 8);
-      ctx.globalAlpha = pulse;
-      ctx.fillStyle = "#ffd23e";
+      // 1) 红色半透明感知区域色块（1.5 tile 半径范围）
+      const pr = sx * 1.5;   // 感知区域半径
+      const pa = 0.12 + 0.08 * Math.sin(_animTick / 10);
+      ctx.globalAlpha = pa;
+      ctx.fillStyle = "#ff3333";
+      ctx.beginPath();
+      ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fill();
+      // 2) 红色边框
+      ctx.globalAlpha = 0.5 + 0.3 * Math.sin(_animTick / 10);
+      ctx.strokeStyle = "#ff3333";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // 3) 脉冲箭头
+      ctx.globalAlpha = 0.75 + 0.25 * Math.sin(_animTick / 8);
+      ctx.fillStyle = "#ff4444";
       ctx.strokeStyle = "rgba(0,0,0,.8)";
       ctx.lineWidth = 2;
       const aw = sx * 0.9, ah = sx * 0.55;
@@ -3950,13 +3965,13 @@ function renderOneDecoration(
       ctx.closePath();
       ctx.fill(); ctx.stroke();
       ctx.globalAlpha = 1;
-      // 目的地文字
+      // 4) 目的地文字
       const dest = (dec as any).name || "出口";
       ctx.fillStyle = "rgba(0,0,0,.85)";
       ctx.font = "bold " + Math.max(8, Math.round(sx * 0.28)) + "px 'Microsoft YaHei', sans-serif";
       ctx.textAlign = "center";
       ctx.fillText(dest, px + 1, py - sx * 1.1 + 1);
-      ctx.fillStyle = "#ffe79e";
+      ctx.fillStyle = "#ff9999";
       ctx.fillText(dest, px, py - sx * 1.1);
       ctx.restore();
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
@@ -4702,6 +4717,20 @@ let stopHost: (() => void) | null = null;
 onMounted(async () => {
   // ★ 调试句柄：standalone/dev-host 下可从控制台切图（window.__switchLevel("Mulberry Forest")）
   (window as any).__switchLevel = switchLevel;
+
+  // ★ --conn 模式（dev-host / 真实宿主）：Vue app 就绪后主动通知宿主推送 select state
+  //   dev-host 的 PAGE 模板里注册了 window.__devHostPluginLoaded 监听，
+  //   收到后触发 storyData 加载 → init → select state 推送
+  if ((window as any).__CONN__ === "1" || (window as any).__STORY__) {
+    console.info("[field-survival] --conn 模式：等待真实宿主推送 state");
+    window.__devHostPluginLoaded = window.__devHostPluginLoaded || [];
+    window.__devHostPluginLoaded.push(() => {
+      console.info("[field-survival] dev-host 已收到插件加载通知");
+    });
+    // 向父窗口（dev-host）发送加载完成消息，触发 init 流程
+    window.parent?.postMessage({ type: "tf_plugin_loaded", pluginId: (window as any).__entryPluginId || "com.toonflow.minigame-field-survival" }, "*");
+  }
+
   // ★ standalone（mockHost）：先吃下初始 state（window.__initialState 由 mockHost 写入）
   const initial = (window as any).__initialState;
   if (initial && !state.value) {
@@ -4719,8 +4748,6 @@ onMounted(async () => {
     mapCfg.value = cfg;
     // ★ 建碰撞网格（对齐 Rotten-Soup 的 Tile.blocked()：墙/水/树来自 tileset 属性）
     await rebuildWalkGrid(startLevel);
-    // ★ 注入地图 NPC（mapnpc_*）→ 让玩家可对话（与 switchLevel 同源逻辑）
-    injectMapNpcsToState(state.value, cfg, { debugPullFirstNear: true });
     // 初始落点安全化：复用 settleSpawn（与切图同一套规则），避免两处规则漂移。
     // 宿主导出的出生坐标只做格中心吸附；不满足"主连通域 + portal 净空"才挪。
     if (walkGrid && walkIndex) {
@@ -4738,6 +4765,10 @@ onMounted(async () => {
         }
       }
     }
+    // ★ 注入地图 NPC（mapnpc_*）→ 让玩家可对话（与 switchLevel 同源逻辑）
+    //   必须在 settleSpawn 之后，否则 debugPullFirstNear 会把 NPC 挪到玩家旧坐标，
+    //   然后 settleSpawn 又把玩家挪走 → NPC 仍离玩家 14m+ → 永远触发不了聊天按钮
+    injectMapNpcsToState(state.value, cfg, { debugPullFirstNear: true });
     // 开局也武装切图闸门（首帧即离开触发圈会自动解除，只在落点异常时起作用）
     portalLatchPending = true;
     // ★ 初始关卡的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
