@@ -53,6 +53,8 @@ export interface MapDecoration {
   /** 世界坐标 y = 世界 z（米） */
   y: number;
   variant?: number;
+  /** ★ 来源 Tiled 对象 id（kind="npc" 用）：实体层已生成 mapnpc_<id> 时装饰层跳过，防双重绘制 */
+  npcObjId?: number;
 }
 
 export interface MapChest {
@@ -184,6 +186,21 @@ export const ENTITY_TYPE_ZH: Record<string, string> = {
   LICH: "巫妖",
   LOOT_GOBLIN: "拾荒哥布林",
   ORC_BOSS: "兽人首领",
+};
+
+/**
+ * ★ NPC dialog key → 头顶显示中文名（与 vite.config.ts dev-host DIALOGUE_MAP 的 speaker 同口径）。
+ *   Tiled 地图里 DWARF_BILI / BARTENDER 这类 NPC 只带 dialog key、对象名叫 "NPC"，
+ *   不查这张表的话头顶会显示难看的 "NPC"；表里没有的 key 回退原值。
+ */
+export const NPC_DIALOG_ZH: Record<string, string> = {
+  DWARF_BILI: "矮人比利",
+  BARTENDER: "酒馆老板",
+  MAYOR_LEONARD: "镇长 Leonard",
+  LEONARD: "镇长 Leonard",
+  BARKEEP: "酒馆老板",
+  // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
+  NANI_AND_BILI_RESCUE: "娜妮",
 };
 
 /** 阵营规范化：非法值返回 null（调用方回退 entity_type 推断） */
@@ -389,10 +406,12 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             y: obj.y / 32 - 1 - H / 2,
           };
         } else if (props.entity_type === "NPC") {
-          // ★ 占位判定先行：Tiled 里只挂了 entity_type + wanders、无 full_name/props.name/obj.name/dialog
-          //   的「无名 NPC」必须**完全跳过**（既不进 npcs[]，也不画 decorations 头像），
-          //   否则地图会刷出 20+ 个头顶写着 "NPC" 的「莫名奇妙的 NPC」污染整个地图。
-          //   修复点：原本只过滤 npcs[]，但 decorations.push() 之前已经无条件执行 → 仍然刷屏。
+          // ★ 分层处理（game.md：entity_type 只决定行为类，外观由 object.gid 指向图集）：
+          //   - 无名占位 NPC（含农场动物：mulberryTown id 190/191/192 的牛）→ 只进装饰层，
+          //     用 obj.gid 选贴图 + wanders 游走，**不生成实体、不画头顶名字**，
+          //     避免「莫名奇妙的 NPC」刷屏，同时动物也能以正确的牛贴图出现。
+          //   - 有名字或有 dialog 的 NPC → 装饰层 + npcs[]（App.vue 生成 mapnpc_* 实体，
+          //     支持走近触发「💬 聊天」+ 头顶中文名）。
           const fullName = props.full_name != null ? String(props.full_name) : "";
           const propName = String(props.name || "").trim();
           const objName = String(obj.name || "").trim();
@@ -401,41 +420,47 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             (fullName && fullName !== "NPC") ||
             (propName && propName !== "NPC") ||
             (objName && objName !== "NPC");
-          if (!hasMeaningfulName && !hasDialog) {
-            // 纯占位 NPC：完全跳过 → 装饰层不画头像、npcs[] 也不收录，避免「莫名奇妙的 NPC」刷屏
-            continue;
-          }
-          // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > obj.name > 兜底
+          const interactable = hasMeaningfulName || hasDialog;
+          // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > dialog key 中文名 > obj.name > 兜底
+          //   （「Bar」这种位置占位名不能盖过 dialog 的角色名——酒馆老板不该显示成 "Bar"）
           const isAscii = /^[\x00-\x7F]+$/.test(propName);
+          const dialogZh = hasDialog ? (NPC_DIALOG_ZH[String(props.dialog).trim().toUpperCase()] || "") : "";
           const displayName = fullName
             || (propName && !isAscii ? propName : "")
-            || objName
+            || dialogZh
+            || (objName && objName !== "NPC" ? objName : "")
+            || (propName ? propName : "")
             || "NPC";
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
-          // 只有「真有名字或有 dialog 的 NPC」才画头像装饰
+          // ★ 装饰层：所有 NPC 都画（variant = gid-1 → 图集 tile id，绘制层按 gid 出图）
           decorations.push({
             id: `n_${decIdx++}`,
             kind: "npc",
             x: wx,
             y: wz,
-            name: displayName,
+            // 无名 NPC 不带名字（绘制层据此不画标签），只有 gid 贴图 + 游走
+            name: interactable ? displayName : "",
             variant: obj.gid ? obj.gid - 1 : 0,
+            // ★ Tiled 对象 id：实体层已生成 mapnpc_<id> 时装饰层跳过，避免同一 NPC 画两遍
+            npcObjId: obj.id,
             // ★ NPC 行为数据（渲染层做游走动画用）
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
-          // ★ 收集到 npcs[]：App.vue switchLevel 会用这个生成 side=neutral 实体
-          npcs.push({
-            id: obj.id,
-            name: objName || propName || "NPC",
-            displayName,
-            x: wx,
-            y: wz,
-            gid: obj.gid,
-            wanders: props.wanders === true,
-            dialog: typeof props.dialog === "string" ? props.dialog : undefined,
-          });
+          // ★ 只有「可交互 NPC」才进 npcs[]：App.vue switchLevel 会用这个生成 side=neutral 实体
+          if (interactable) {
+            npcs.push({
+              id: obj.id,
+              name: objName || propName || "NPC",
+              displayName,
+              x: wx,
+              y: wz,
+              gid: obj.gid,
+              wanders: props.wanders === true,
+              dialog: typeof props.dialog === "string" ? props.dialog : undefined,
+            });
+          }
         } else if (normalizeCamp(props.camp) !== "neutral"
                    && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
@@ -815,6 +840,7 @@ export function normalizeMapConfig(raw: unknown, levelName?: string): MapConfig 
             x: num(d?.x, 0),
             y: num(d?.y, 0),
             variant: d?.variant != null ? num(d.variant, 0) : undefined,
+            npcObjId: d?.npcObjId != null ? num(d.npcObjId, 0) || undefined : undefined,
           }))
       : [],
     chests: Array.isArray(obj.chests)

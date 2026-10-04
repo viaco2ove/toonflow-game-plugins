@@ -328,16 +328,6 @@ const __impl = async (agentName, args) => {
     const isAllyPrefix = npcId.startsWith("npc_ally_huo_kui") || npcId === "huokui";
     const isAlly = npcId.startsWith("npc_ally_");
     const DIALOGUE_MAP = {
-      // 「赦夜人冥夜走廊-第二季」故事角色（dev-host 拟真台词；真实宿主走大模型）
-      npc_ally_huo_kui: { options: ["（警觉地压低声音）别声张，这条走廊不对劲。", "（拍了拍你的肩膀）跟紧我，别走散。", "（若有所思）夜里的赦人…比传闻中更危险。"], speaker: "霍魁" },
-      huokui:           { options: ["（警觉地压低声音）别声张，这条走廊不对劲。", "（拍了拍你的肩膀）跟紧我，别走散。", "（若有所思）夜里的赦人…比传闻中更危险。"], speaker: "霍魁" },
-      npc_1_pei_yong:   { options: ["（低声）先摸清走廊的布局再说。", "（警惕环顾）有跟踪我们的气息。", "（沉吟）裴某伴你同行。"], speaker: "裴勇" },
-      chen_yan:         { options: ["（沉默地看着你）", "（低声交谈）…", "（叹了口气）…"], speaker: "陈彦" },
-      // 旧浆果镇模板 NPC（仅保留兜底，故事里已不再生成）
-      leonard:          { options: ["欢迎来到浆果镇。", "有什么需要帮忙的？", "最近镇上不太平…"], speaker: "镇长 Leonard" },
-      mayor_leonard:    { options: ["欢迎来到浆果镇。", "有什么需要帮忙的？", "最近镇上不太平…"], speaker: "镇长 Leonard" },
-      barkeep:          { options: ["来一杯？", "今天打烊了。", "别惹事。"], speaker: "酒馆老板" },
-      dwarf_bili:       { options: ["（擦着斧头）嗯？", "矮人我可是行家。", "别碰我的胡子。"], speaker: "矮人比利" },
     };
     // ★ 前缀兜底：npc_ally_huo_kui → huokui 组；npc_ally_* → 通用盟友组
     let dialogue = DIALOGUE_MAP[npcId];

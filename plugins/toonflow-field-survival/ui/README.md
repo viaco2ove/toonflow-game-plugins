@@ -319,3 +319,56 @@ FOV 不靠"自己写的采样判据"验收 —— 那玩意儿有量化误差（
   - 目标处脉冲标记；
   - 可达时叠加一条 A\* 虚线路径预览。
 
+
+# 实体与gid
+第一类：
+id	name	hp	str	morale	描述
+RAT	rat	3	1	1	A small, fat rat.
+BAT	bat	7	2	0.4	A creature of the night.
+SNAKE	snake	7	4	1	A sneaky, slithering reptile.
+WILD_GOAT	wild goat	8	2	0	A really pissed off goat!
+
+第二类：
+牛在哪、是什么
+public/maps/mulberryTown.json → objectgroup「Actors」→ 左下角栅栏农场里 3 个对象：
+
+对象 id	贴图 gid	长相	tile 坐标	行为
+190	2483	棕色的牛	(15,50)	NPC，wanders=true
+191	2481	黑白奶牛	(18,49)	NPC，wanders=true
+192	2482	黑白奶牛	(16,52)	NPC，wanders=true
+
+toonflow-field-survival 若要复刻城镇：实体贴图必须读 object.gid，而不是由 entity_type 决定 —— entity_type 只决定行为类（NPC/DOOR/CHEST…），
+外观由 gid 指向图集。目前插件实体加载如果只按 entity_type 配贴图，城镇动物会全部显示错误。
+
+
+mulberryTown.json 有多少个npc
+28 个。​ mulberryTown.json 的 objectgroup「Actors」里 entity_type=NPC 共 28 个，占全图实体（62 个）的 45%。
+
+按对象名分
+
+添加到对话
+对象名	数量	说明
+"NPC"	24	普通镇民（含 3 头农场动物）
+"Bar"	3	酒馆吧台，挂 dialog=BARTENDER
+"Mayor Leonard"	1	镇长
+合计	28	
+按行为分
+
+添加到对话
+wanders	数量
+true（会随机走动）	15
+false（站桩）	13
+6 个有对话的
+
+添加到对话
+对象 id	dialog	位置
+165	BARTENDER	(7,10) 酒馆内
+216 / 217 / 218	BARTENDER	(6,11) (7,11) (8,11) 吧台三个格
+169	DWARF_BILI	(8,13)
+225	MAYOR_LEONARD	(3,32)
+注意：28 个里有 3 个不是人
+id 190 / 191 / 192（gid 2483 / 2481 / 2482）是农场里的牛 —— 数据上是 NPC，视觉上是动物。​所以"人形 NPC"是 25 个。
+
+贴图去重后是 24 种 gid，没有两个 NPC 共用同一张图（除了 gid=3974×2、gid=5138×3 吧台、gid=8041×2）。
+
+顺带对比：mulberryForest.json 另有 7 个 NPC（全项目 31 个 name="NPC" 减去本图 24 个），所以两张图合计 35 个 NPC，只有 mulberryTown 有动物。

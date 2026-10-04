@@ -45,6 +45,8 @@ export interface Entity {
   entity_type?: string;
   /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」 */
   full_name?: string;
+  /** ★ 图集瓦片 gid（Tiled object.gid）：>0 时 drawEntity 按 gid-1 切图集出图（game.md：外观由 gid 决定，entity_type 只决定行为类）；缺省按 side 角色表 */
+  gid?: number;
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }

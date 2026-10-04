@@ -11,6 +11,7 @@ import tilesetUrl from "./assets/images/compiled_tileset_32x32.png?url";
 import playerUrl from "./assets/images/player_sprites/4334.png?url";
 import allyUrl from "./assets/images/player_sprites/3858.png?url";
 import enemyUrl from "./assets/images/player_sprites/4213.png?url";
+import { TILE_ANIM_ID } from "./assets/tilesetAnim";
 
 // import.meta.url 版本（Vite 构建时内联为 data URL）
 export const TILESET_URL = tilesetUrl;
@@ -82,6 +83,24 @@ export function spriteTileId(key: string, frameIdx: number): number {
   if (!cfg) return 144; // 兜底：空 tile
   // 永远 2 帧 walk 循环（与 Rotten-Soup 行为一致：实体始终在动画）
   return cfg.walk[Math.floor(frameIdx / 8) % 2];
+}
+
+/**
+ * ★ gid 驱动的 walk 帧：给定图集 tile id（= Tiled object.gid - 1），返回当前动画帧。
+ *
+ * game.md 约定：实体的 entity_type 只决定「行为类」（NPC/DOOR/CHEST…），
+ * 外观必须由 object.gid 指向图集。第二帧不再用「+8」猜测，而是读
+ * compiled_dawnlike.json 的 animated_id（见 assets/tilesetAnim.ts，
+ * 由 .cache/gen_tileset_anim.py 生成）——例如矮人比利 5172 的第二帧是 5180（+8），
+ * 而村民 1475 的第二帧是 1499（+24），猜测会抽帧。
+ *
+ * 无映射时回退 +8（DawnLike 人物动画的多数规律），与旧行为兼容。
+ */
+export function walkTileId(baseTile: number, frameIdx: number): number {
+  if (!Number.isFinite(baseTile) || baseTile <= 0) return 144;
+  const alt = TILE_ANIM_ID[baseTile];
+  const second = (typeof alt === "number" && alt > 0) ? alt : baseTile + 8;
+  return Math.floor(frameIdx / 8) % 2 === 0 ? baseTile : second;
 }
 
 /** 兼容旧代码：getAsset 环境下的路径解析（dev 时需要） */

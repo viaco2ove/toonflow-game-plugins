@@ -154,9 +154,8 @@ play-role-strip 和 play-inline-card
 点击后传送到改角色身边
 #### 角色位置问题
 如果没有角色位置信息，就默认生成到第一个图的可活动区域（不能在墙里、障碍物里）
-x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100+5)),
-y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100+5)),
-cb = clampToBound(s, PLAYER_SPAWN.x + Math.random() * 50, PLAYER_SPAWN.y + Math.random() * 50);
+x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 10+5)),
+y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 10+5)),
 
 ### 组队跟随（排除用户和敌对角色）
 每个角色下面都有给 组队跟随【checkbox】,打勾后将跟随用户帮用户打怪。取消打勾就脱离队伍。

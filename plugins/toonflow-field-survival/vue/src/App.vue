@@ -39,7 +39,7 @@ import {
   GROUND_SAND_MAX, GROUND_DIRT_MAX, GROUND_TONE_SPLIT,
   GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
-  spriteTileId, resolveAssetPath,
+  spriteTileId, walkTileId, resolveAssetPath,
 } from "./assets";
 import {
   TerrainScaleConfig, DEFAULT_SCALE,
@@ -1557,7 +1557,7 @@ function applyPixelPerfect(ctx: CanvasRenderingContext2D) {
 }
 
 // 地图装饰物（树木、水体、花木）位置 —— 优先从 mulberryTown.json 加载
-interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road" | "portal"; id: string; variant?: number; name?: string; tileId?: number; layer?: number }
+interface Decoration { x: number; y: number; kind: "tree" | "water" | "bush" | "mushroom" | "flower" | "pot" | "rock" | "dead_tree" | "building" | "npc" | "fence" | "furniture" | "farm" | "road" | "portal"; id: string; variant?: number; name?: string; tileId?: number; layer?: number; npcObjId?: number }
 const mapDecorations = ref<Decoration[]>([]);
 /** 装饰物按 chunk 索引（key = "cx,cz"）——按区域加载时只取当前 loaded_chunks 内的 */
 const decorationsByChunk = new Map<string, Decoration[]>();
@@ -1782,30 +1782,14 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
   // ★ 只注入玩家附近 50 米内的 NPC（地图 Tiled Actors 层常放几十个占位 NPC，
   //   全量注入会让地图刷出一堆"莫名奇妙"的 NPC）
   const NEAR_RADIUS = 50;
-  // ★ 故事角色白名单（第二道闸）：Tiled 地图是跨故事复用的模板（mulberryTown 里写死了
-  //   DWARF_BILI「矮人比利」/ BARTENDER「酒馆老板」/ Mayor Leonard 等旧浆果镇占位 NPC），
-  //   它们与当前故事的角色名单毫无关系 —— 「赦夜人冥夜走廊」里根本没有矮人比利。
-  //   规则：只有 displayName / name 能在故事角色卡（s.roles）里找到对应者，才允许注入；
-  //   找不到 → 视为"模板残留 NPC"，既不注入实体、也不画头像装饰（地图上彻底消失）。
-  //   英文 dialog key 的 NPC（BARTENDER/DWARF_BILI）没有中文名 → 永远匹配不上 → 自动被过滤。
-  const storyRoleNames = new Set<string>(
-    ((s as any).roles || [])
-      .map((r: any) => String(r?.name || "").trim())
-      .filter(Boolean),
-  );
-  // ★ 守卫：角色名单为空（非故事模式 / 宿主未推 roles）时不启用白名单过滤，
-  //   否则会把所有地图 NPC 全部误杀（白名单空集 → isStoryNpc 恒 false）。
-  const useWhitelist = storyRoleNames.size > 0;
-  const isStoryNpc = (npc: any): boolean => {
-    if (!useWhitelist) return true;
-    const names = [String(npc?.displayName || "").trim(), String(npc?.name || "").trim()];
-    return names.some((n) => n && storyRoleNames.has(n));
-  };
+  // 注：曾经在这里按「故事角色白名单」过滤地图 NPC——那是为 entry.js 里硬编码注入的
+  //   25 个旧浆果镇 NPC（矮人比利等）准备的第二道闸。硬编码注入已删除，地图 JSON 的
+  //   normalizeTiledMap 也已把「无名占位 NPC」提前跳过，白名单反而会误杀地图自带的
+  //   合法 NPC（DWARF_BILI 矮人比利 / BARTENDER 酒馆老板），故移除。
   let filtered = 0;
   for (const npc of cfg.npcs) {
     const npcEntityId = `mapnpc_${npc.id}`;
     if (s.entities.some((e) => e.id === npcEntityId)) continue;
-    if (!isStoryNpc(npc)) { filtered++; continue; }
     if (me && Math.hypot(npc.x - me.x, npc.y - me.y) > NEAR_RADIUS) continue;
     const pos = freeEnemySpot(npc.x, npc.y);
     s.entities.push({
@@ -1826,20 +1810,12 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       camp: "neutral",
       entity_type: "NPC",
       npc_wanders: npc.wanders,
+      // ★ game.md：外观由 object.gid 决定（drawEntity 按 gid 切图集），缺省回退 side 角色表
+      gid: npc.gid,
     } as any);
   }
-  // ★ 同步清掉装饰层里被过滤的模板残留 NPC 头像（kind=npc 且 name 不在故事角色名单）
-  if (useWhitelist) {
-    const decs = cfg.decorations as Array<any> | undefined;
-    if (Array.isArray(decs)) {
-      for (let i = decs.length - 1; i >= 0; i--) {
-        const d = decs[i];
-        if (d?.kind !== "npc") continue;
-        const nm = String(d?.name || "").trim();
-        if (!nm || !storyRoleNames.has(nm)) { decs.splice(i, 1); filtered++; }
-      }
-    }
-  }
+  // （装饰层无需再清理：normalizeTiledMap 已在解析时把「无名占位 NPC」提前跳过，
+  //   有名字/有 dialog 的地图 NPC 头像与实体一一对应，全部保留）
   if (opts.debugPullFirstNear) {
     // ★ 重新取 me：上面 inject 循环时 me 可能是 settleSpawn 之前的旧坐标，
     //   现在所有 NPC 都已入 state，玩家也是 settleSpawn 之后最新坐标
@@ -1906,7 +1882,13 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     portalLatchPending = true;
     // 清掉本图野怪（旧图的怪不跟过来）
-    if (s) s.entities = s.entities.filter((e) => e.side !== "enemy");
+    // ★ 旧图 NPC（mapnpc_*）同样不跟过来 —— 否则城镇→森林后，城镇 NPC 坐标恰好落在
+    //   新图出生点几十米内（坐标都是各自图内的米制），直接"串场"显示在森林里。
+    //   新图的 NPC 在下方从 next.npcs 重新注入（injectMapNpcsToState）。
+    if (s)
+      s.entities = s.entities.filter(
+        (e) => e.side !== "enemy" && !String(e.id).startsWith("mapnpc_"),
+      );
     // ★ ally 只在 start_map 出现：玩家离开起始地图后清除所有 allies，
     //   避免"所有地图都出现霍魁"的全图漫游 bug。
     //   获取 start_map 时用 DEFAULT_START_LEVEL 兜底（永不抛错）。
@@ -2927,12 +2909,17 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   // ★ v3：sprite 尺寸 = 米数 × ppm（与 zoom 关联，随 zoom 缩放）
   const pixelsPerMeter = (ppm ?? 20);
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
+  //   ★ game.md：外观由 object.gid 指向图集，entity_type/side 只决定行为类——
+  //     实体带 gid 时直接按 gid 出图（城镇 NPC 不再一律画成蓝袍法师、牛显示成牛），
+  //     无 gid 的实体（宿主下发的玩家/队友/敌人）回退按 side 选角色表。
   const key = e.side === "player" ? "player"
             : e.side === "ally"   ? "ally"
             : e.side === "neutral" ? "ally"     // ★ v4：城镇中立角色用友方 sprite，避免显示成敌人
             : "enemy_char";
-  // ★ 永远 walk 帧循环（与 Rotten-Soup 一致：sprite.animationSpeed=0.065）
-  const tileId = spriteTileId(key, _animTick);
+  const hasGid = Number.isFinite((e as any).gid) && (e as any).gid > 0;
+  const tileId = hasGid
+    ? walkTileId((e as any).gid - 1, _animTick)
+    : spriteTileId(key, _animTick);
   // ★ v5 修正：fitDim 返回的已是「屏幕像素」（格数 × sx），此处严禁再乘一次
   //   pixelsPerMeter（历史 bug：tile 数 × sx² 会把角色放大到 400~1024px）。
   //   与 drawMonster 的 dw = 格数 × ppm 保持完全一致的口径。
@@ -3935,6 +3922,30 @@ function render() {
   }
 }
 
+/**
+ * 装饰层 NPC 绘制：gid 贴图 + 2 帧 walk + wanders 游走。
+ * 仅在「实体层未接管该 NPC」（未生成 mapnpc_<id> 实体）时由装饰层调用：
+ *   - 纯环境 NPC（农场的牛等无名动物）：永远走这里，只有贴图没有名字；
+ *   - 可交互 NPC 距玩家 >50m 尚未注入实体时：也走这里，走近后切换到实体层渲染。
+ */
+function drawNpcDecoration(ctx: CanvasRenderingContext2D, dec: Decoration, px: number, py: number, sx: number): void {
+  const baseTile = dec.variant && dec.variant > 0 ? dec.variant : 4695; // 兜底 = 默认村民第一帧
+  const npcTile = walkTileId(baseTile, _animTick);
+  // 游走：wanders 的 NPC 绕出生点做平滑李萨如曲线漂移（±1.2 米），不走的原地踏步
+  const wanders = (dec as any).wanders === true;
+  const seed = (dec as any).seed || 0;
+  const t = _animTick * 0.012 + seed;
+  const dxW = wanders ? Math.sin(t) * 1.2 : 0;
+  const dyW = wanders ? Math.sin(t * 0.7 + 1.3) * 0.8 : 0;
+  // 面向：按水平漂移方向翻转（|sin|>0.15 才算在走）
+  const walking = wanders && Math.abs(Math.cos(t)) > 0.15;
+  const drawX = px + dxW * sx;
+  const drawY = py + dyW * sx;
+  // 走路时轻微上下起伏（1px 级别）
+  const bob = walking ? Math.abs(Math.sin(t * 6)) * sx * 0.06 : 0;
+  drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5, !walking);
+}
+
 /** 单个装饰物的渲染（按区域加载后调用） */
 function renderOneDecoration(
   ctx: CanvasRenderingContext2D,
@@ -4052,37 +4063,17 @@ function renderOneDecoration(
       ctx.restore();
     } else if (dec.kind === "npc" && SHEET_TILESET.ready) {
       // ★ NPC：真实精灵 tile + 2 帧走路动画 + 游走（Rotten-Soup 的 AnimatedSprite 等价）
-      //   Dawnlike 人物动画规律：第 2 帧 = 基础 tile + 8（与 player [4334, 4342] 一致）
-      // ★ 名字由 entity 层（drawEntity headLabel）负责统一渲染，装饰物层只画 sprite，
-      //   避免双重绘制 + 字号不一致。原逻辑保留作为 fallback（SHEET_TILESET 未就绪时启用）。
-      const npcName = (dec as any).name || "NPC";
-      const baseTile = dec.variant && dec.variant > 0 ? dec.variant : 4695; // 兜底 = 默认村民第一帧
-      const walkFrame = Math.floor((_animTick + (dec as any).seed || 0) / 14) % 2; // ~220ms 切帧，每个 NPC 相位不同
-      const npcTile = baseTile + walkFrame * 8;
-      // 游走：wanders 的 NPC 绕出生点做平滑李萨如曲线漂移（±1.2 米），不走的原地踏步
-      const wanders = (dec as any).wanders === true;
-      const seed = (dec as any).seed || 0;
-      const t = _animTick * 0.012 + seed;
-      const dxW = wanders ? Math.sin(t) * 1.2 : 0;
-      const dyW = wanders ? Math.sin(t * 0.7 + 1.3) * 0.8 : 0;
-      // 面向：按水平漂移方向翻转（|sin|>0.15 才算在走）
-      const walking = wanders && Math.abs(Math.cos(t)) > 0.15;
-      const drawX = px + dxW * sx;
-      const drawY = py + dyW * sx;
-      // 走路时轻微上下起伏（1px 级别）
-      const bob = walking ? Math.abs(Math.sin(t * 6)) * sx * 0.06 : 0;
-      drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5);
-      // ★ 不再在装饰物层绘制名字 — 实体层（mapnpc_* entity）的 drawEntity 统一负责
-      //   字体更大、与玩家/敌怪头顶一致、不会被墙体遮挡时遗漏。
-      //   Fallback 路径（SHEET_TILESET 未就绪）保留名称绘制，保证开发期可读性。
-      const _suppressName = false;
-      if (_suppressName) {
-        ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.78)";
-        ctx.font = "bold " + Math.max(6, Math.round(sx * 0.25)) + "px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(npcName, drawX, drawY + sx * 0.2);
-        ctx.restore();
+      //   动画第二帧不再用「+8」猜，而是读 compiled_dawnlike.json 的 animated_id
+      //   （walkTileId，见 assets/tilesetAnim.ts）——矮人 5172→5180(+8)、村民 1475→1499(+24)。
+      // ★ 去重：该 NPC 已生成 mapnpc_<id> 实体时由实体层绘制（带名字/聊天），装饰层跳过，
+      //   否则同一 NPC 会出现两个 sprite（装饰层 gid 贴图 + 实体层 ally 贴图）。
+      //   未注入实体的（距离 >50m 或纯环境 NPC，如农场的牛）由装饰层按 gid 出图。
+      if (dec.npcObjId != null) {
+        const entityId = `mapnpc_${dec.npcObjId}`;
+        const taken = (state.value?.entities ?? []).some((e) => e.id === entityId && e.alive !== false);
+        if (!taken) drawNpcDecoration(ctx, dec, px, py, sx);
+      } else {
+        drawNpcDecoration(ctx, dec, px, py, sx);
       }
     } else if (dec.kind === "npc") {
       // Fallback: 简化圆形 + 名字（entity 层未就绪时的兜底，正常路径下 entity 层统一绘制）
@@ -5033,12 +5024,17 @@ onMounted(async () => {
       );
       // ★ 客户端权威中立实体（mapnpc_*，地图 Actors 层的城镇 NPC）— 同样不在 incoming 里，
       //   必须按合并而非丢弃。规则与 mapmob_* 对齐。
-      const localNpcs = prevEntities.filter(
-        (e: any) =>
-          e?.side === "neutral" &&
-          typeof e?.id === "string" &&
-          e.id.startsWith("mapnpc_"),
-      );
+      // ★ 切图期间（switchingLevel）不回补任何 mapnpc_* —— switchLevel 已把旧图 NPC 清掉，
+      //   新图 NPC 尚未注入；此时回补 prevEntities 里的 mapnpc_* 会把旧图 NPC「复活」到新图
+      //   （城镇 NPC 坐标恰好在新图出生点几十米内，直接串场显示）。
+      const localNpcs = switchingLevel.value
+        ? []
+        : prevEntities.filter(
+            (e: any) =>
+              e?.side === "neutral" &&
+              typeof e?.id === "string" &&
+              e.id.startsWith("mapnpc_"),
+          );
       for (const e of localEnemies as any[]) {
         if (e.alive === false && !deadLocalEnemyIds.has(e.id)) deadLocalEnemyIds.add(e.id);
       }
@@ -5145,6 +5141,10 @@ onMounted(async () => {
       //   state.entities 里只有玩家/盟友，没有 enemy。在玩家 (0,0) 周围 30-100 米
       //   环形补 spawn 4-6 只野兽，保证开局立刻能看到怪物。
       setTimeout(() => spawnLocalMobsIfNeeded(), 300);
+      // ★ 竞态兜底：--conn 模式下 onMounted 注入时宿主 state 可能尚未推送（state.value=null
+      //   → injectMapNpcsToState early-return），表现为"开局后地图 NPC 全部缺失"。
+      //   这里在真正进入 playing 时再补一次注入（函数内部按 id 去重 + 50m 距离闸，幂等安全）。
+      setTimeout(() => injectMapNpcsToState(state.value, mapCfg.value, { debugPullFirstNear: true }), 320);
       // 成功进入战斗，清除 loading（★ fix③：同时清掉超时计时与提示）
       starting.value = false;
       clearStartTimers();
@@ -6033,7 +6033,7 @@ body {
 }
 
 .hud__left {
-  min-width: 200px;
+  min-width: 180px;
 }
 
 .hp {
