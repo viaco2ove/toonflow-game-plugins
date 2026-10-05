@@ -160,6 +160,10 @@ y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 10+5)),~~
 在组队的checkbox 增加召唤按钮 把角色召唤到用户旁边并 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
 取消组队时也要 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
 
+/browserskill 去到  mulberryForest 召唤一个 角色应该存储它的位置信息。
+用户回到城镇， 那个刚刚召唤的角色（取消组队的也是）应该依然在mulberryForest ，进入mulberryForest  应该看见他还在原地。其他角色默认在start_map，不应该出现在别的地图。 
+ally 实体出生默认不应该在原地扎堆。Clipboard_Screenshot.png
+
 ### 组队跟随（排除用户和敌对角色）
 每个角色下面都有给 组队跟随【checkbox】,打勾后将跟随用户帮用户打怪。取消打勾就脱离队伍。
 与用户组队的角色也会长经验和升级。

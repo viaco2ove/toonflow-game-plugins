@@ -2989,6 +2989,9 @@ export async function handle_action(
           (s.parked[mapName] as any[]) = (s.parked[mapName] as any[]).filter((x) => String(x.id) !== String(e.id));
           (s.parked[mapName] as any[]).push({ id: e.id, name: e.name, x: e.x, y: e.y, mapName });
           e.side = (e as any)._baseSide || "spectator";
+          // ★ 清零速度：取消组队后 tick 还会按残留 vx/vy 继续位移，必须归零才能就地停留
+          e.vx = 0; e.vy = 0;
+          (e as any).wanderTimer = 0;
         }
       }
       ensureNpcCards(s, s.levelName || "");
