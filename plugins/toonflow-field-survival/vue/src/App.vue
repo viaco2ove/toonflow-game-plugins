@@ -1812,6 +1812,8 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       npc_wanders: npc.wanders,
       // ★ game.md：外观由 object.gid 决定（drawEntity 按 gid 切图集），缺省回退 side 角色表
       gid: npc.gid,
+      // ★ 未具名 NPC（含农场动物）：可对话但头顶不画名字，避免整屏刷名字
+      unnamed: npc.unnamed === true,
     } as any);
   }
   // （装饰层无需再清理：normalizeTiledMap 已在解析时把「无名占位 NPC」提前跳过，
@@ -3020,6 +3022,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     : isMapNpc
       ? e.name.slice(0, 10)   // NPC：保留 10 字
       : e.name.slice(0, 4);
+  // ★ 未具名 NPC（unnamed）：可对话但头顶不画名字、不画血条（避免整屏刷名），
+  //   走近依然会出「💬 聊天」（updateNearChat 不看 unnamed）
+  if ((e as any).unnamed === true) return;
   const headY = hasAvatar ? avatarY - 4 : dy - 18;
   ctx.save();
   ctx.textAlign = "center";
@@ -3943,7 +3948,7 @@ function drawNpcDecoration(ctx: CanvasRenderingContext2D, dec: Decoration, px: n
   const drawY = py + dyW * sx;
   // 走路时轻微上下起伏（1px 级别）
   const bob = walking ? Math.abs(Math.sin(t * 6)) * sx * 0.06 : 0;
-  drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5, !walking);
+  drawTile(ctx, npcTile, drawX - sx / 2, drawY - sx * 1.5 + 4 - bob, sx, sx * 1.5);
 }
 
 /** 单个装饰物的渲染（按区域加载后调用） */
@@ -4445,63 +4450,86 @@ async function onChatStart() {
 }
 
 /**
+ * ★ 对话结果配对：sys_chat 由宿主代发给插件后端（entry.ts/entry.js），
+ *   后端调 ctx.tsApi.agent.run("task-speaker-agent") 真实请求大模型，
+ *   把结果写进 state.chatResult{reqId,...} 再随 state 回推。
+ *   HTTP 回包会被后续 tick 覆盖，所以前端必须按 reqId 在这里配对取回。
+ */
+const chatResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; timer: number }> = [];
+function waitChatResult(reqId: string, timeoutMs = 45000): Promise<any> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      const i = chatResultWaiters.findIndex((w) => w.reqId === reqId);
+      if (i >= 0) chatResultWaiters.splice(i, 1);
+      resolve({ ok: false, error: "对话超时（宿主未回推 chatResult，请确认后端已注册 task-speaker-agent）" });
+    }, timeoutMs);
+    chatResultWaiters.push({ reqId, resolve, timer });
+  });
+}
+function notifyChatResult(res: any): void {
+  const rid = String(res?.reqId || "");
+  if (!rid) return;
+  const i = chatResultWaiters.findIndex((w) => w.reqId === rid);
+  if (i < 0) return;
+  const w = chatResultWaiters[i];
+  chatResultWaiters.splice(i, 1);
+  window.clearTimeout(w.timer);
+  w.resolve(res);
+}
+
+/**
  * 调用角色发言器 agent（task-speaker-agent）
- * 插件侧直接调 agent，不走宿主 entry
+ * ★ 统一走宿主通道：iframe → sendTick("sys_chat") → 宿主 → /plugin/tick →
+ *   插件后端 ctx.tsApi.agent.run（真实大模型）→ state.chatResult 回推。
+ *   与「插件安装后」链路完全一致；--conn 拟真宿主桩也走同一条（桩把 agent 请求代理到后端）。
  * mode: "options" = 请求生成3个发言选项 | "response" = 请求角色继续发言
  */
 async function triggerChatSpeak(mode: "options" | "response" = "response", userText?: string) {
   if (!chatNpcId.value) return;
   chatPending.value = true;
   chatPhase.value = "pending";
+  chatError.value = "";
+  const reqId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   try {
-    // ★ 插件侧直接调 agent（window.__agentRun 由 dev-host 桩 / 真实宿主注入）
-    const fn = window.__agentRun as ((name: string, args: any) => Promise<{ ok: boolean; output?: { text: string } }>) | undefined;
-    if (!fn) throw new Error("agent 通道不可用");
-    const npcEntity = (state.value.entities || []).find((e: any) => e.id === chatNpcId.value);
-    const isNeutral = npcEntity?.side === "neutral";
-    const roleEntry = ((state.value as any).roles || []).find(
+    const npcEntity = (state.value?.entities || []).find((e: any) => e.id === chatNpcId.value);
+    const isNeutralSide = npcEntity?.side === "neutral";
+    const roleEntry = ((state.value as any)?.roles || []).find(
       (r: any) => String(r?.id) === chatNpcId.value || String(r?.name) === chatNpcId.value,
     );
-    const roleName = isNeutral ? "旁白" : (roleEntry?.name || chatNpcName.value);
-    const result = await fn("task-speaker-agent", {
+    const entityName = String(npcEntity?.name || "").trim();
+    // ★ 身份判定与 entry.ts 同口径：有角色卡 / 有实体名 → 用自己的身份说话；
+    //   只有「无卡无名的中立实体」才是旁白（城镇地图 NPC 不是旁白！）
+    const hasIdentity =
+      !!roleEntry?.name ||
+      (entityName !== "" && entityName !== "NPC") ||
+      (chatNpcName.value !== "" && chatNpcName.value !== "NPC");
+    const isNeutral = isNeutralSide && !hasIdentity;
+    const roleName = isNeutral ? "旁白" : (roleEntry?.name || entityName || chatNpcName.value);
+
+    sendTick("sys_chat", {
+      reqId,
       npcId: chatNpcId.value,
       npcName: roleName,
-      npcCard: isNeutral ? null : (roleEntry || null),
-      isNeutral,
       userText: userText ?? null,
-      lastResp: chatAgentResp.value || null,
+      lastResp: chatAgentResp.value || "",
       mode,
-      context: {
-        storyDigest: "",
-        playerLevel: ((state.value.entities || []).find((e: any) => e.side === "player") as any)?.level ?? 1,
-      },
     });
-    if (result?.ok && result?.output?.text) {
-      const raw = String(result.output.text).trim();
-      if (mode === "options") {
-        // 解析 agent 返回的 3 个选项
-        let options: string[] = [];
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) options = parsed.slice(0, 3);
-        } catch {
-          options = raw.split(/\n/).map((l: string) =>
-            l.replace(/^[0-9a-zA-Z零一二三四五六七八九十]+[.、)\uFF09]+/, "").trim()
-          ).filter(Boolean).slice(0, 3);
-        }
-        if (options.length === 0) throw new Error("agent 未返回有效选项");
-        chatOptions.value = options;
-        chatPhase.value = "options";
-      } else {
-        // 角色台词
-        chatMessages.value.push({ speaker: roleName, text: raw, avatar: roleEntry?.avatarPath });
-        chatAgentResp.value = raw;
-        chatPhase.value = "idle";
-        // 同步到宿主聊天框
-        (window as any).__sendChat?.(roleName, raw, roleEntry?.avatarPath);
-      }
+    const res = await waitChatResult(reqId);
+    if (!res?.ok) throw new Error(String(res?.error || "角色发言器调用失败"));
+    if (mode === "options") {
+      const options = Array.isArray(res.options) ? res.options.slice(0, 3).map((x: any) => String(x)) : [];
+      if (options.length === 0) throw new Error("agent 未返回有效选项");
+      chatOptions.value = options;
+      chatPhase.value = "options";
     } else {
-      throw new Error(result?.error || "agent 调用失败");
+      const raw = String(res.text || "").trim();
+      if (!raw) throw new Error("agent 返回空台词");
+      const speaker = String(res.speaker || roleName);
+      chatMessages.value.push({ speaker, text: raw, avatar: roleEntry?.avatarPath });
+      chatAgentResp.value = raw;
+      chatPhase.value = "idle";
+      // 同步到宿主聊天框
+      sendChat(speaker, raw, roleEntry?.avatarPath);
     }
   } catch (e: any) {
     // ★ 调用失败 → 显示红色错误提示，不兜底台词
@@ -4899,6 +4927,39 @@ let stopHost: (() => void) | null = null;
 onMounted(async () => {
   // ★ 调试句柄：standalone/dev-host 下可从控制台切图（window.__switchLevel("Mulberry Forest")）
   (window as any).__switchLevel = switchLevel;
+  // ★ 只读调试钩子：bsk/E2E 自动化巡检用（evaluate 里摸不到 Vue 内部实例，
+  //   生产构建下 __vue_app__._instance 在隔离世界不可读）。只读 getter，无副作用。
+  (window as any).__FS_DEBUG__ = {
+    get state() { return state.value; },
+    get mapCfg() { return mapCfg.value; },
+    /**
+     * ★ 对话 E2E 巡检入口（bsk / 浏览器控制台）：
+     *   __FS_DEBUG__.chat.open("<entityId>", "<名字>") → 发起一轮真实大模型对话
+     *   __FS_DEBUG__.chat.options()                    → 请求 3 个发言选项
+     *   结果读 __FS_DEBUG__.chat.messages / .options / .error / .pending
+     */
+    chat: {
+      open: (id: string, name?: string) => {
+        chatNpcId.value = String(id || "");
+        chatNpcName.value = String(name || "");
+        chatMessages.value = [];
+        chatOptions.value = [];
+        chatError.value = "";
+        chatAgentResp.value = "";
+        chatActive.value = true;
+        return triggerChatSpeak("response");
+      },
+      // ★ 注意：不能叫 options（与下面 get options 同名会被 getter 覆盖）
+      genOptions: () => triggerChatSpeak("options"),
+      say: (text: string) => triggerChatSpeak("response", text),
+      get messages() { return chatMessages.value; },
+      get options() { return chatOptions.value; },
+      get error() { return chatError.value; },
+      get pending() { return chatPending.value; },
+      get npcId() { return chatNpcId.value; },
+    },
+    get nearChat() { return nearChat.value; },
+  };
 
   // ★ --conn 模式（dev-host / 真实宿主）：Vue app 就绪后主动通知宿主推送 select state
   //   dev-host 的 PAGE 模板里注册了 window.__devHostPluginLoaded 监听，
@@ -4988,6 +5049,9 @@ onMounted(async () => {
 
   stopHost = onHostState((d) => {
     const prevPhase = state.value?.phase;
+    // ★ sys_chat 结果回推：后端把大模型结果写在 state.chatResult{reqId}，这里按 reqId 唤醒等待者
+    const incomingChat = (d.state as any)?.chatResult;
+    if (incomingChat && typeof incomingChat === "object") notifyChatResult(incomingChat);
     // ★ 宿主/ mock 推送前的本地实体快照：用于把 App 侧生成的地图怪物（mapmob_*）归并保留
     const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;

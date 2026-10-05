@@ -2538,9 +2538,114 @@ async function handle_action(action, params, state, context) {
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);
     }
     case "sys_chat": {
-      // ★ 对话功能已迁移到插件 App.vue（直接调 window.__agentRun）
-      // 此处只做占位，避免 entry.js 执行到这里
-      return okResp(JSON.stringify({ error: "sys_chat 由插件 App.vue 处理", fallback: false }));
+      // ★ 对话功能：插件前端把请求发到这里（sendTick("sys_chat")），
+      //   由宿主进程内 ctx.tsApi.agent.run("task-speaker-agent") 真实调用大模型；
+      //   结果写进 s.chatResult{reqId,...}，前端按 reqId 配对取回。
+      const npcId = str(params?.npcId, "");
+      const npcName = str(params?.npcName, "???");
+      const userText = params?.userText != null ? params.userText : null;
+      const lastResp = str(params?.lastResp, "");
+      const mode = str(params?.mode, "response");
+      const reqId = str(params?.reqId, "");
+      if (!npcId) return okResp("缺少角色标识");
+      const npcEntity = s.entities.find((e) => e.id === npcId);
+      const npcSide = npcEntity && npcEntity.side;
+      const roleEntry = (s.roles || []).find(
+        (r) => String(r && r.id) === npcId || String(r && r.name) === npcId,
+      );
+      const entityName = String((npcEntity && npcEntity.name) || "").trim();
+      // ★ 身份判定：有角色卡 / 有实体名 / 调用方传了真名 → 都以自己的身份说话。
+      //   只有「既无卡又无名的中立实体」才算旁白 —— 城镇地图 NPC（side=neutral）不是旁白！
+      const hasIdentity =
+        !!(roleEntry && roleEntry.name) ||
+        (entityName !== "" && entityName !== "NPC") ||
+        (npcName !== "" && npcName !== "???" && npcName !== "NPC");
+      const isNeutral = npcSide === "neutral" && !hasIdentity;
+      const roleName = isNeutral
+        ? "旁白"
+        : str((roleEntry && roleEntry.name) || entityName || npcName, npcName);
+      const npcCard = isNeutral
+        ? null
+        : (roleEntry || {
+            id: npcId,
+            name: roleName,
+            roleType: npcSide === "ally" ? "ally" : "npc",
+            description: String((npcEntity && (npcEntity.desc || npcEntity.dialog)) || ""),
+            level: (npcEntity && npcEntity.level) != null ? npcEntity.level : 1,
+            entity_type: npcEntity && npcEntity.entity_type,
+            gid: npcEntity && npcEntity.gid,
+            mapName: s.levelName || "",
+            x: npcEntity && npcEntity.x,
+            y: npcEntity && npcEntity.y,
+          });
+      try {
+        if (context && context.tsApi && context.tsApi.agent) {
+          const result = await context.tsApi.agent.run("task-speaker-agent", {
+            npcId,
+            npcName: roleName,
+            npcCard,
+            isNeutral,
+            userText: userText,
+            lastResp: lastResp || null,
+            mode,
+            context: {
+              storyDigest: context.sessionId ? `session:${context.sessionId}` : "",
+              playerLevel: (s.entities.find((e) => e.side === "player") || {}).level || 1,
+            },
+          });
+          if (result && result.ok && result.output && result.output.text) {
+            // ★ 模型常把内容包进 ```json 代码围栏 → 先剥围栏再解析/展示
+            const raw = String(result.output.text)
+              .replace(/^\s*```[a-zA-Z]*\s*/, "")
+              .replace(/\s*```\s*$/, "")
+              .trim();
+            if (mode === "options") {
+              let options = [];
+              try {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) options = parsed.slice(0, 3);
+              } catch (_e) {
+                options = raw
+                  .split(/\n/)
+                  .map((l) => l.replace(/^[0-9a-zA-Z一二三四五六七七八九十]+[.、)）]+/, "").trim())
+                  .filter(Boolean)
+                  .slice(0, 3);
+              }
+              if (options.length === 0) throw new Error("agent 未返回有效选项");
+              s.chatResult = { reqId, ok: true, mode, speaker: roleName, options };
+              await persistSys(context, s);
+              return okResp(JSON.stringify({ options }));
+            }
+            s.chatResult = { reqId, ok: true, mode, speaker: roleName, text: raw };
+            pushEvent(s, `${roleName}：${raw}`);
+            await persistSys(context, s);
+            return okResp(
+              JSON.stringify({
+                speaker: roleName,
+                text: raw,
+                avatar: roleEntry && roleEntry.avatarPath ? roleEntry.avatarPath : undefined,
+              }),
+            );
+          }
+          if (result && result.error) {
+            console.warn("[field-survival] sys_chat agent error:", result.error);
+            s.chatResult = { reqId, ok: false, mode, error: String(result.error) };
+            await persistSys(context, s);
+            return okResp(JSON.stringify({ error: String(result.error), mode, npcName: roleName }));
+          }
+        }
+      } catch (e) {
+        console.warn("[field-survival] sys_chat agent call failed:", e);
+        const msg = String((e && e.message) || e || "角色发言器调用异常");
+        s.chatResult = { reqId, ok: false, mode, error: msg };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ error: msg, mode, npcName: roleName }));
+      }
+      // ★ 角色发言器不可用时如实报错（不伪造台词）
+      const errMsg = `角色发言器 agent 未配置或调用失败（${mode}）`;
+      s.chatResult = { reqId, ok: false, mode, error: errMsg };
+      await persistSys(context, s);
+      return okResp(JSON.stringify({ error: errMsg, fallback: false, mode, npcName: roleName }));
     }
 
     case "page": {

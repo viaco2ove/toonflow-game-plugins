@@ -699,6 +699,28 @@ function install(): void {
 
     if (d.type === "tf_plugin_tick" && state.phase === "playing") {
       const { action, params } = d;
+      // ★ 对话功能（sys_chat）：standalone 模式没有宿主/后端，也就没有大模型通道。
+      //   为保证聊天面板不卡死，这里按同一份 chatResult 协议回一个「本地模拟」结果，
+      //   并在文本里明确标注是离线模拟——真实台词请走 --conn / 安装后的宿主链路。
+      if (action === "sys_chat") {
+        const reqId = String(params?.reqId || "");
+        const mode = String(params?.mode || "response");
+        const npcName = String(params?.npcName || "角色");
+        if (mode === "options") {
+          (state as any).chatResult = {
+            reqId, ok: true, mode, speaker: npcName,
+            options: ["（离线模拟）你是谁？", "（离线模拟）附近有什么传闻？", "（离线模拟）带我走一段路吧"],
+          };
+        } else {
+          const said = String(params?.userText || "").trim();
+          (state as any).chatResult = {
+            reqId, ok: true, mode, speaker: npcName,
+            text: `（离线模拟，未接大模型）${npcName}：${said ? "你说「" + said + "」……" : "……"}`,
+          };
+        }
+        push();
+        return;
+      }
       if (action === "start") {
         // 已经在 playing，忽略
         return;

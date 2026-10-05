@@ -124,6 +124,9 @@ export interface MapNpc {
   wanders: boolean;
   /** dialog key（如 BARTENDER / DWARF_BILI / MAYOR_LEONARD）— 留扩展位 */
   dialog?: string;
+  /** ★ 未具名 NPC（Tiled 里只有 entity_type=NPC，无 full_name/name/dialog，含农场动物）：
+   *  仍会生成可对话实体，但头顶不画名字（避免刷屏），聊天面板里显示「镇民#<id>」 */
+  unnamed?: boolean;
 }
 
 /**
@@ -448,19 +451,21 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             wanders: props.wanders === true,
             seed: (decIdx * 7919) % 1000,   // 每个 NPC 独立相位
           } as any);
-          // ★ 只有「可交互 NPC」才进 npcs[]：App.vue switchLevel 会用这个生成 side=neutral 实体
-          if (interactable) {
-            npcs.push({
-              id: obj.id,
-              name: objName || propName || "NPC",
-              displayName,
-              x: wx,
-              y: wz,
-              gid: obj.gid,
-              wanders: props.wanders === true,
-              dialog: typeof props.dialog === "string" ? props.dialog : undefined,
-            });
-          }
+          // ★ 全部 28 个 NPC（含无名镇民与农场动物）都进 npcs[] → App.vue 生成 mapnpc_* 实体，
+          //   走近即可「💬 聊天」（用户要求：地图 NPC 与 ally 一样都能对话）。
+          //   无名者 displayName 用「镇民#<Tiled id>」占位，并标 unnamed=true：
+          //   头顶不画名字（避免刷屏），但聊天面板里能显示身份，LLM 按其所在位置自行演绎。
+          npcs.push({
+            id: obj.id,
+            name: objName || propName || displayName,
+            displayName: interactable ? displayName : `镇民#${obj.id}`,
+            x: wx,
+            y: wz,
+            gid: obj.gid,
+            wanders: props.wanders === true,
+            dialog: typeof props.dialog === "string" ? props.dialog : undefined,
+            unnamed: !interactable,
+          });
         } else if (normalizeCamp(props.camp) !== "neutral"
                    && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities

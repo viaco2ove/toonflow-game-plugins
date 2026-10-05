@@ -496,17 +496,46 @@ function buildEntryCtx() {
       // 3001 桩没有插件 agent 的 LLM 通道（真实宿主走 runPluginAgent）：
       //   · 商城 agent → 走上面的拟真实现（世界书物资确定性生成），保证商城可端到端测试
       //   · 其它 agent（如 map-gener）→ 抛错让 entry.js 落到内置兜底，并在事件里提示「降级」
-      agent: {
-        run: async (agentName, args) => {
-          const n = String(agentName || "");
-          if (n.indexOf("shop") >= 0) {
-            await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
-            return runMockShopAgent(args);
-          }
-          log("⚠ entry.agent.run(" + n + ") 在 dev-host 桩不可用 → 使用内置兜底");
-          throw new Error("dev-host 桩无插件 agent 通道");
+        agent: {
+          run: async (agentName, args) => {
+            const n = String(agentName || "");
+            // ★ 角色发言器：--conn 拟真宿主必须走真实大模型，否则调不出真台词。
+            //   桩在浏览器里没有 LLM 通道 → 由后端 /plugin/agentRun 代跑 runPluginAgent，
+            //   与「插件安装后」entry.ts 里 ctx.tsApi.agent.run 是同一条执行链（同提示词、同模型配置）。
+            if (n.indexOf("speaker") >= 0 || n.indexOf("task-speaker") >= 0) {
+              try {
+                const headers = { "Content-Type": "application/json" };
+                if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+                  headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+                }
+                const r = await fetch("/toon-api/plugin/agentRun", {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({ agentName: n, input: args || {}, aiConfigKey: "storyMiniGameModel" }),
+                });
+                const j = await r.json();
+                if (j && j.code === 200 && j.data) {
+                  const txt = String((j.data.output && j.data.output.text) || "").slice(0, 120);
+                  log("✓ 角色发言器(真LLM) " + n + " mode=" + String((args||{}).mode || "response") + " → " + (j.data.ok ? txt : "失败 " + (j.data.error || "")));
+                  return j.data;
+                }
+                const msg = (j && (j.msg || j.message)) || "后端 agentRun 返回异常";
+                log("! 角色发言器调用失败：" + msg);
+                return { ok: false, error: String(msg) };
+              } catch (err) {
+                const msg = String((err && err.message) || err);
+                log("! 角色发言器请求异常：" + msg);
+                return { ok: false, error: msg };
+              }
+            }
+            if (n.indexOf("shop") >= 0) {
+              await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
+              return runMockShopAgent(args);
+            }
+            log("⚠ entry.agent.run(" + n + ") 在 dev-host 桩不可用 → 使用内置兜底");
+            throw new Error("dev-host 桩无插件 agent 通道");
+          },
         },
-      },
     },
   };
   return entryCtx;

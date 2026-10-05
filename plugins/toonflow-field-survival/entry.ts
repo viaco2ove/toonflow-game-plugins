@@ -272,6 +272,17 @@ export interface FieldSurvivalState {
   levelName?: string;
   /** ★ v5：纳戒（存物品与技能） */
   ring?: RingStore;
+  /** ★ 对话功能：最近一次 sys_chat 的结果（前端按 reqId 配对取回，走 state 通道而非 HTTP 回包）
+   *  结构：{ reqId, ok, mode, speaker, text, options, error } */
+  chatResult?: {
+    reqId: string;
+    ok: boolean;
+    mode: string;
+    speaker?: string;
+    text?: string;
+    options?: string[];
+    error?: string;
+  } | null;
   /** ★ v5：组队跟随的角色 id 列表 */
   partyIds?: string[];
   /** ★ v5：角色卡（含地图名与坐标，落 t_plugin_session_data） */
@@ -3000,18 +3011,44 @@ export async function handle_action(
       const userText = params?.userText as string | null | undefined;
       const lastResp = str(params?.lastResp, "");
       const mode = str(params?.mode, "response");
+      /** ★ 前端生成的请求 id：结果写进 state.chatResult，前端按它配对取回（HTTP 回包会被 tick 覆盖） */
+      const reqId = str(params?.reqId, "");
       if (!npcId) return okResp("缺少角色标识");
 
       // 查找角色
       const npcEntity = s.entities.find((e) => e.id === npcId);
-      const npcSide = npcEntity?.side;
-      const isNeutral = npcSide === "neutral";
+      // ★ 用 string 化：Entity.side 的联合类型不含 "neutral"（地图 NPC 是运行时扩展阵营），
+      //   直接比较会触发 TS2367（与既有基线同类），转 string 避免新增类型错误。
+      const npcSide = String(npcEntity?.side || "");
       const roleEntry = ((s.roles as any[]) || []).find(
         (r) => String(r?.id) === npcId || String(r?.name) === npcId,
       );
+      const entityName = String((npcEntity as any)?.name || "").trim();
+      /** ★ 身份判定：有角色卡 / 有实体名 / 调用方传了真名 → 都以自己的身份说话。
+       *   只有「既无卡又无名的中立实体」才算旁白 —— 城镇地图 NPC（side=neutral）不是旁白！ */
+      const hasIdentity =
+        !!roleEntry?.name ||
+        (entityName !== "" && entityName !== "NPC") ||
+        (npcName !== "" && npcName !== "???" && npcName !== "NPC");
+      const isNeutral = npcSide === "neutral" && !hasIdentity;
       const roleName = isNeutral
         ? "旁白"
-        : str(roleEntry?.name || npcName, npcName);
+        : str(roleEntry?.name || entityName || npcName, npcName);
+      /** ★ 角色卡：故事角色用动态卡；地图 NPC 用实体信息现拼（让 agent 知道它是谁、在哪） */
+      const npcCard = isNeutral
+        ? null
+        : (roleEntry || {
+            id: npcId,
+            name: roleName,
+            roleType: npcSide === "ally" ? "ally" : "npc",
+            description: String((npcEntity as any)?.desc || (npcEntity as any)?.dialog || ""),
+            level: (npcEntity as any)?.level ?? 1,
+            entity_type: (npcEntity as any)?.entity_type,
+            gid: (npcEntity as any)?.gid,
+            mapName: s.levelName || "",
+            x: (npcEntity as any)?.x,
+            y: (npcEntity as any)?.y,
+          });
 
       // 调用角色发言器 agent
       try {
@@ -3019,7 +3056,7 @@ export async function handle_action(
           const result = await context.tsApi.agent.run("task-speaker-agent", {
             npcId,
             npcName: roleName,
-            npcCard: isNeutral ? null : (roleEntry || null),
+            npcCard,
             isNeutral,
             userText: userText ?? null,
             lastResp: lastResp || null,
@@ -3030,8 +3067,11 @@ export async function handle_action(
             },
           });
           if (result?.ok && result?.output?.text) {
-            const raw = String(result.output.text).trim();
-            await persistSys(context, s);
+            // ★ 模型常把内容包进 ```json 代码围栏 → 先剥围栏再解析/展示
+            const raw = String(result.output.text)
+              .replace(/^\s*```[a-zA-Z]*\s*/, "")
+              .replace(/\s*```\s*$/, "")
+              .trim();
             // mode=options → 解析3个选项返回（agent 应返回 JSON array 或逗号分隔的3行）
             if (mode === "options") {
               let options: string[] = [];
@@ -3043,22 +3083,40 @@ export async function handle_action(
                 // 尝试每行一个选项（去掉编号前缀如 "1. " / "① " 等）
                 options = raw.split(/\n/).map((l: string) => l.replace(/^[0-9a-zA-Z一二三四五六七七八九十]+[.、)）]+/, "").trim()).filter(Boolean).slice(0, 3);
               }
-              if (options.length === 0) options = ["询问他的近况", "谈论当地传闻", "提出交易请求"];
+              if (options.length === 0) throw new Error("agent 未返回有效选项");
+              // ★ 写回 state：前端 watch state.chatResult 按 reqId 取回
+              s.chatResult = { reqId, ok: true, mode, speaker: roleName, options };
+              await persistSys(context, s);
               return okResp(JSON.stringify({ options }));
             }
             // mode=response → 返回角色台词
+            s.chatResult = { reqId, ok: true, mode, speaker: roleName, text: raw };
             pushEvent(s, `${roleName}：${raw}`);
+            await persistSys(context, s);
             return okResp(JSON.stringify({ speaker: roleName, text: raw, avatar: roleEntry?.avatarPath ?? undefined }));
           }
-          if (result?.error) console.warn("[field-survival] sys_chat agent error:", result.error);
+          if (result?.error) {
+            console.warn("[field-survival] sys_chat agent error:", result.error);
+            // ★ 失败也要回包，否则前端一直 pending
+            s.chatResult = { reqId, ok: false, mode, error: String(result.error) };
+            await persistSys(context, s);
+            return okResp(JSON.stringify({ error: String(result.error), mode, npcName: roleName }));
+          }
         }
       } catch (e) {
         console.warn("[field-survival] sys_chat agent call failed:", e);
+        const msg = String((e as any)?.message || e || "角色发言器调用异常");
+        s.chatResult = { reqId, ok: false, mode, error: msg };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ error: msg, mode, npcName: roleName }));
       }
 
       // ★ 角色发言器 agent 不可用时 → 直接报错，不兜底
+      const errMsg = `角色发言器 agent 未配置或调用失败（${mode}）`;
+      s.chatResult = { reqId, ok: false, mode, error: errMsg };
+      await persistSys(context, s);
       return okResp(JSON.stringify({
-        error: "角色发言器 agent 未配置或调用失败",
+        error: errMsg,
         fallback: false,
         mode,
         npcName: roleName,
