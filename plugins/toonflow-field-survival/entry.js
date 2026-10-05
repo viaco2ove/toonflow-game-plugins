@@ -322,16 +322,42 @@ function buildSkills(card, n = 8, meta) {
     }
     return out;
 }
-/** 从用户参数卡取物品，补足占位物品 */
+/** 从用户参数卡取物品，补足占位物品。
+ * ★ HUD 物品栏显示修复：原来直接把 "银鲳×16（钓鱼累积…）" 整串当 name + 写死 count=2，
+ *   导致 HUD 显示 "银鲳×16（…）×2"，且 useItem 拿带尾巴的字符串去 useBagItem.find(name)
+ *   匹配不到合并后的纯名 "银鲳" → 静默返回 "不在背包中" → 点击没反应、不消耗、无特效。
+ *   现在按 parseItemRaw 解析（剥注记/×N），用纯名 + 实际合并数量；同名多份合并到一格。 */
 function buildItems(card, n = 8) {
     const raw = Array.isArray(card?.items) ? card.items : [];
-    const names = raw
-        .map((s) => (typeof s === "string" ? s : str(s?.name)))
-        .filter(Boolean);
+    const parsed = raw.map(parseItemRaw).filter((p) => p && p.name && p.count > 0);
+    const seen = new Map();
+    const names = [];
+    const counts = [];
+    parsed.forEach((p) => {
+        const k = itemKey(p.name);
+        if (!k)
+            return;
+        const c = (seen.get(k) || 0) + 1;
+        seen.set(k, c);
+        // 第一条用纯名（同 useBagItem 的 bag 项一致），后续条目同名合并到 count
+        if (c === 1) {
+            names.push(p.name);
+            counts.push(p.count);
+        }
+        else {
+            counts[counts.length - 1] += p.count;
+        }
+    });
     const out = [];
     for (let i = 0; i < n; i++) {
-        const name = names[i] || (i < 4 ? `物品${i + 1}` : `备用物${i - 3}`);
-        out.push({ name, count: names[i] ? 2 : 1, heal: 20 });
+        if (names[i]) {
+            const kind = parsed.find((p) => itemKey(p.name) === itemKey(names[i]))?.kind || guessKind(names[i]);
+            const heal = parsed.find((p) => itemKey(p.name) === itemKey(names[i]))?.heal || defaultHeal(names[i], kind);
+            out.push({ name: names[i], count: counts[i], kind, heal });
+        }
+        else {
+            out.push({ name: i < 4 ? `物品${i + 1}` : `备用物${i - 3}`, count: 1, heal: 20 });
+        }
     }
     return out;
 }
@@ -1398,14 +1424,19 @@ function parseItemRaw(raw) {
     const text = str(raw).trim();
     if (!text)
         return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
-    const m = text.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
+    // ★ 物品字符串归一修复：先剥括号注记（含 "（钓鱼累积…）"、"（鲜美的河鱼）" 等自由文本尾注），
+    //   再用剥后剩下的字符串剥 ×N。原顺序反过来遇到 "银鲳×16（…）" 会因正则要求
+    //   ×N 紧接结尾而失败，最终 name 留下 "银鲳×16"、count=1 → HUD 显示错位 + useItem
+    //   拿带尾巴 name 找不到 bag 项 → 静默 "不在背包中"。两步法：剥括号 → 剥 ×N → 兜底空 desc。
+    const noParen = text.replace(/[（(][^）)]*[）)]\s*$/, "").trim() || text;
+    const m = noParen.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
     if (m) {
         const name = m[1].trim();
         const kind = guessKind(name);
         return { name, count: Math.max(1, parseInt(m[2], 10) || 1), kind, rarity: "common", heal: defaultHeal(name, kind), price: 0 };
     }
-    const p = text.match(/^(.*?)[（(](.*?)[)）]\s*$/);
-    const name = (p ? p[1] : text).trim();
+    const p = text.match(/[（(](.*?)[)）]\s*$/);
+    const name = noParen.trim();
     const kind = guessKind(name);
     return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[2] : undefined };
 }
@@ -2140,9 +2171,13 @@ function handleLevelChange(s, snapParty) {
           if (e2.isLocal || isLocalEnemyId(e2.id)) {
             return;
           }
-          stay.push(e2);
+          // ★ v111：非本地敌怪按「所属地图」管理，切图只保留当前图的，避免跨图累积（森林 11 → 回城仍 11 → 再进 22）
+          if (!e2.mapName)
+            e2.mapName = lv;
+          if (e2.mapName === lv)
+            stay.push(e2);
           return;
-        } // 非本地野怪保留；本地怪由前端按图管理
+        }
         if (!e2.mapName)
             e2.mapName = s.startMapName || START_MAP_NAME; // 未定位角色默认回 start_map，不随玩家跨图
         if (party.indexOf(String(e2.id)) >= 0) {
@@ -2858,66 +2893,83 @@ async function handle_action(action, params, state, context) {
                 s.ring = { items: [], skills: [] };
             const card = (s.playerCard || {});
             if (kind === "skill") {
+                // ★ 纳戒技能修复：参数卡 skills 是带「lv/括号」注记的字符串（"源之力（lv1，失控）（lv1）"），
+                //   前端 sendTick 上报的是 cleanSkillName 后的纯名"源之力"；原 indexOf 全等比对失败
+                //   → 静默 "技能「源之力」不在技能栏"。统一改归一键（skillKey）比对。
                 const skills = Array.isArray(card.skills)
                     ? card.skills.map((x) => (typeof x === "string" ? x : str(x?.name))).filter(Boolean)
                     : [];
                 const ringSkills = s.ring.skills || [];
                 if (to === "ring") {
-                    if (skills.indexOf(name) < 0)
+                    const nameKey = skillKey(name);
+                    const at = skills.findIndex((x) => skillKey(x) === nameKey);
+                    if (at < 0)
                         return okResp(`技能「${name}」不在技能栏`);
-                    s.ring.skills = Array.from(new Set([...ringSkills, name]));
-                    patchCard(s, { skills: skills.filter((x) => x !== name) });
-                    pushEvent(s, `技能 ${name} 已存入纳戒`);
+                    const realName = cleanSkillName(skills[at]) || name;
+                    s.ring.skills = Array.from(new Set([...ringSkills, realName]));
+                    patchCard(s, { skills: skills.filter((_, i) => i !== at) });
+                    pushEvent(s, `技能 ${realName} 已存入纳戒`);
+                    await persistSys(context, s);
+                    return okResp(`已存入纳戒：${realName}`);
                 }
                 else {
-                    if (ringSkills.indexOf(name) < 0)
+                    const nameKey = skillKey(name);
+                    const at = ringSkills.findIndex((x) => skillKey(x) === nameKey);
+                    if (at < 0)
                         return okResp(`纳戒里没有技能「${name}」`);
-                    s.ring.skills = ringSkills.filter((x) => x !== name);
-                    patchCard(s, { skills: Array.from(new Set([...skills, name])) });
-                    pushEvent(s, `技能 ${name} 已从纳戒取出`);
+                    const realName = cleanSkillName(ringSkills[at]) || name;
+                    s.ring.skills = ringSkills.filter((_, i) => i !== at);
+                    patchCard(s, { skills: Array.from(new Set([...skills, realName])) });
+                    pushEvent(s, `技能 ${realName} 已从纳戒取出`);
+                    await persistSys(context, s);
+                    return okResp(`已取出：${realName}`);
                 }
-                await persistSys(context, s);
-                return okResp(to === "ring" ? `已存入纳戒：${name}` : `已取出：${name}`);
             }
+            // 物品走归一键（itemKey），应对参数卡「银鲳×16（钓鱼累积…）」剥完的纯名 + bagMeta 元数据别名
             const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
+            const nameKey = itemKey(name);
             if (to === "ring") {
-                const it = bag.find((x) => x.name === name);
-                if (!it)
+                const at = bag.findIndex((x) => itemKey(x.name) === nameKey);
+                if (at < 0)
                     return okResp(`背包里没有「${name}」`);
+                const it = bag[at];
+                const realName = it.name;
                 const moved = Math.min(ask, it.count);
                 const ringItems = s.ring.items || [];
-                const exist = ringItems.find((x) => x.name === name);
+                const exist = ringItems.find((x) => itemKey(x.name) === nameKey);
                 if (exist)
                     exist.count += moved;
                 else
                     ringItems.push({ ...it, count: moved });
                 s.ring.items = ringItems;
                 const nextBag = bag
-                    .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
+                    .map((x, i) => (i === at ? { ...x, count: x.count - moved } : x))
                     .filter((x) => x.count > 0);
                 patchCard(s, { items: serializeBag(nextBag, card.items) });
-                pushEvent(s, `${name}×${moved} 已存入纳戒`);
+                pushEvent(s, `${realName}×${moved} 已存入纳戒`);
+                await persistSys(context, s);
+                return okResp(`已存入纳戒：${realName}`);
             }
             else {
                 const ringItems = s.ring.items || [];
-                const it = ringItems.find((x) => x.name === name);
-                if (!it)
+                const at = ringItems.findIndex((x) => itemKey(x.name) === nameKey);
+                if (at < 0)
                     return okResp(`纳戒里没有「${name}」`);
+                const it = ringItems[at];
+                const realName = it.name;
                 const moved = Math.min(ask, it.count);
-                const exist = bag.find((x) => x.name === name);
+                const exist = bag.find((x) => itemKey(x.name) === nameKey);
                 if (exist)
                     exist.count += moved;
                 else
                     bag.push({ ...it, count: moved });
-                s.ring.items = ringItems
-                    .map((x) => (x.name === name ? { ...x, count: x.count - moved } : x))
-                    .filter((x) => x.count > 0);
-                s.bagMeta = { ...(s.bagMeta || {}), [it.name]: { ...it, count: 0 } };
+                s.ring.items = ringItems.filter((_, i) => i !== at);
+                s.bagMeta = { ...(s.bagMeta || {}), [realName]: { ...it, count: 0 } };
                 patchCard(s, { items: serializeBag(bag, card.items) });
-                pushEvent(s, `${name}×${moved} 已从纳戒取出`);
+                pushEvent(s, `${realName}×${moved} 已从纳戒取出`);
+                await persistSys(context, s);
+                return okResp(`已取出：${realName}`);
             }
-            await persistSys(context, s);
-            return okResp(to === "ring" ? `已存入纳戒：${name}` : `已取出：${name}`);
         }
         case "sys_rest": {
             // ★ game.md 5：睡觉 / 住宿 / 休息过夜 → 直接满血满蓝，恢复描述写入角色卡 other
