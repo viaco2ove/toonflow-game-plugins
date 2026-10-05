@@ -51,3 +51,6 @@ npm run debug          # debug 模式下运行
 ## 不允许随意放置测试和临时文档
 测试脚本和文档和临时文档
 只允许放置在.cache 文件夹下。
+
+# vite.config.ts
+要不让vite.config.ts 支持 \n 要不就不要写\n 

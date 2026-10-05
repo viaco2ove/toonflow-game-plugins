@@ -630,14 +630,14 @@ function onSysTravel(mapName: string) {
 function onSysFollow(id: string, on: boolean) {
   sysNotice.value = on ? "已加入队伍" : "已离开队伍";
   runSysCmd("sys_party", { roleId: id, follow: !!on });
-  saveAllyPositionsNextTick = true;
+  scheduleAllyPositionsSave();
 }
 
 /** 召唤：把角色召唤到用户旁边（不加入队伍、不跟随，仅传送到身边设为友方） */
 function onSysSummon(card: any) {
   sysNotice.value = `正在召唤 ${card.name} 到身边…`;
   runSysCmd("sys_party", { roleId: card.id, follow: false, summon: true });
-  saveAllyPositionsNextTick = true;
+  scheduleAllyPositionsSave();
 }
 
 /** 保存所有已上场 ally 的位置信息到 t_plugin_session_data */
@@ -645,17 +645,22 @@ function saveAllyPositionsToSession() {
   const s = state.value;
   if (!s) return;
   const me = s.entities.find((e) => e.side === "player");
-  const allies = (s.entities || []).filter((e) => e.side === "ally");
   const positions: Record<string, { mapName: string; x: number; y: number }> = {};
-  for (const ally of allies) {
-    if (ally.id && ally.id !== me?.id) {
-      positions[ally.id] = {
-        mapName: (ally as any).mapName || s.levelName || "",
-        x: ally.x,
-        y: ally.y,
-      };
-    }
-  }
+  const collect = (e: any, fallbackMap: string) => {
+    if (!e || !e.id || String(e.id) === String(me?.id)) return;
+    positions[String(e.id)] = {
+      mapName: e.mapName || fallbackMap || "",
+      x: e.x,
+      y: e.y,
+    };
+  };
+  // 当前图实体
+  (s.entities || []).filter((e) => e.side === "ally").forEach((e: any) => collect(e, s.levelName || ""));
+  // ★ v111：驻留在其它地图的角色（s.parked）也要落库，否则离图后位置丢失
+  const parked = (s as any).parked && typeof (s as any).parked === "object" ? (s as any).parked : {};
+  Object.keys(parked).forEach((k) => {
+    (Array.isArray(parked[k]) ? parked[k] : []).forEach((e: any) => collect(e, k));
+  });
   toonflowJsApi.pluginData
     .set("ally_positions", positions)
     .then(() => console.info("[field-survival] ally_positions 已存 t_plugin_session_data"))

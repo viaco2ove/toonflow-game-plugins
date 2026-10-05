@@ -2166,18 +2166,89 @@ function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
 /** ★ game.md 角色位置：角色驻留地图 —— 他在哪个地图就在哪个地图，不因玩家切图而改变。
  *  只有组队中的角色跟随玩家跨图（落点 = 玩家身边）；脱离队伍就地留下。
  *  非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。 */
+const START_MAP_NAME = "Mulberry Town";
+/** 角色唯一键：id 优先，退化到 name */
+function roleKeyOf(e: any): string {
+  return String((e && (e.id || e.name)) || "");
+}
+/** 从所有地图的 parked 中摘除指定角色，返回首个命中实体（全图去重） */
+function unparkRole(s: any, rid: any): any {
+  if (!s || !s.parked || typeof s.parked !== "object") return null;
+  const key = String(rid || "");
+  if (!key) return null;
+  let hit: any = null;
+  Object.keys(s.parked).forEach((k) => {
+    const arr = Array.isArray(s.parked[k]) ? s.parked[k] : [];
+    s.parked[k] = arr.filter((x) => {
+      const same = String(x && ((x as any).id || (x as any).name)) === key;
+      if (same && !hit) hit = x;
+      return !same;
+    });
+  });
+  return hit;
+}
+/** 把角色停进指定地图的 parked：先全图去重，再做坐标有效性兜底（越界/NaN 用 home 或原点） */
+function parkRole(s: any, e: any, mapName: string): void {
+  if (!s || !e) return;
+  const key = String(mapName || e.mapName || s.levelName || "");
+  if (!key) return;
+  if (!s.parked || typeof s.parked !== "object") s.parked = {};
+  unparkRole(s, roleKeyOf(e));
+  let x = num(e.x, NaN), y = num(e.y, NaN);
+  if (!isFinite(x) || !isFinite(y) || Math.abs(x) > 1000 || Math.abs(y) > 1000) {
+    x = num(e.homeX, 0);
+    y = num(e.homeY, 0);
+    if (!isFinite(x) || !isFinite(y)) { x = 0; y = 0; }
+  }
+  e.x = x;
+  e.y = y;
+  e.mapName = key;
+  if (!Array.isArray(s.parked[key])) s.parked[key] = [];
+  (s.parked[key] as any[]).push(e);
+}
+/** 归一化：entities 内同 id 去重；parked 与 entities 互斥、parked 跨图去重（历史脏数据收敛） */
+function dedupeRoles(s: any): void {
+  if (!s) return;
+  const seen = new Set<string>();
+  if (Array.isArray(s.entities)) {
+    s.entities = s.entities.filter((e: any) => {
+      if (!e) return false;
+      if (String((e as any).side) === "enemy") return true; // 野怪由前端按图管理，不参与角色去重
+      const k = roleKeyOf(e);
+      if (!k) return true;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+  if (s.parked && typeof s.parked === "object") {
+    Object.keys(s.parked).forEach((k) => {
+      const arr = Array.isArray(s.parked[k]) ? s.parked[k] : [];
+      s.parked[k] = arr.filter((e: any) => {
+        if (!e) return false;
+        const key = roleKeyOf(e);
+        if (!key) return false;
+        if (seen.has(key)) return false; // 当前图已有 → 丢弃停车副本，避免双份
+        seen.add(key);
+        return true;
+      });
+    });
+  }
+}
 function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
   if (!Array.isArray(s.entities)) return;
   const lv = s.levelName || "";
   const parkedAny = s as any;
   parkedAny.parked = parkedAny.parked && typeof parkedAny.parked === "object" ? parkedAny.parked : {};
-  const party = s.partyIds || [];
+  dedupeRoles(s); // ★ 先收敛历史脏数据（分身 / 跨图双份）
+  const party = (s.partyIds || []).map((x) => String(x));
   const player = s.entities.find((e2) => e2.side === "player");
+  const seen = new Set<string>();
   const stay: Entity[] = [];
   (s.entities || []).forEach((e2) => {
-    if (e2.side === "player") { (e2 as any).mapName = lv; stay.push(e2); return; }
+    if (e2.side === "player") { (e2 as any).mapName = lv; stay.push(e2); seen.add(roleKeyOf(e2)); return; }
     if (String(e2.side) === "enemy") { stay.push(e2); return; } // 野怪由前端 localEnemies 按图管理，不动
-    if (!(e2 as any).mapName) (e2 as any).mapName = lv; // 存量实体兜底：视为当前图
+    if (!(e2 as any).mapName) (e2 as any).mapName = (s as any).startMapName || START_MAP_NAME; // 未定位角色默认回 start_map，不随玩家跨图
     if (party.indexOf(String(e2.id)) >= 0) {
       // 组队：跟随玩家到当前图，落在玩家身边
       (e2 as any).mapName = lv;
@@ -2188,20 +2259,24 @@ function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
         e2.y = cb.y;
       }
       stay.push(e2);
+      seen.add(roleKeyOf(e2));
     } else if ((e2 as any).mapName === lv) {
       stay.push(e2);
+      seen.add(roleKeyOf(e2));
     } else {
-      (parkedAny.parked[(e2 as any).mapName] = parkedAny.parked[(e2 as any).mapName] || []).push(e2);
+      parkRole(s, e2, (e2 as any).mapName); // 角色驻留原图（含坐标校验与全图去重）
     }
   });
-  const back = parkedAny.parked[lv];
-  if (Array.isArray(back) && back.length) {
-    back.forEach((e2: any) => { e2.mapName = lv; });
-    s.entities = stay.concat(back);
-    parkedAny.parked[lv] = [];
-  } else {
-    s.entities = stay;
-  }
+  const back = Array.isArray(parkedAny.parked[lv]) ? parkedAny.parked[lv] : [];
+  back.forEach((e2: any) => {
+    const k = roleKeyOf(e2);
+    if (k && seen.has(k)) return; // 当前图已存在同 id → 丢弃停车副本
+    e2.mapName = lv;
+    stay.push(e2);
+    seen.add(k);
+  });
+  parkedAny.parked[lv] = [];
+  s.entities = stay;
 }
 
 /** 组队角色随击杀获得经验并升级 */
@@ -2351,7 +2426,38 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (str(d.level)) s.levelName = str(d.level, "");
     // ★ 角色驻留地图：恢复 s.parked（ally/spectator 角色停在别的地图的位置）
     if (d.parked && typeof d.parked === "object") (s as any).parked = d.parked;
+    // ★ 角色位置权威（ai_story_roles）：上次会话每个角色停在哪张图、哪个坐标。
+    //   开局必须按这份数据就位——否则角色会被强行拉回 start_map，上一局的驻留全丢。
+    try {
+      const rd = await api.get(AI_STORY_ROLES_KEY);
+      if (rd && Array.isArray((rd as any).roles)) {
+        const m: Record<string, { x: number; y: number; mapName: string; name: string }> = {};
+        for (const r of (rd as any).roles) {
+          const k = String((r as any)?.id || (r as any)?.name || "");
+          const nm = String((r as any)?.name || "");
+          if (!k && !nm) continue;
+          const rec = {
+            x: num((r as any).x, 0),
+            y: num((r as any).y, 0),
+            mapName: str((r as any).mapName, ""),
+            name: nm || k,
+          };
+          // 同一角色多条记录（库里可能存在重复 id）→ 后写覆盖前写，取最新位置
+          if (k) m[k] = rec;
+          if (nm) m["name:" + nm] = rec;
+        }
+        (s as any)._savedRolePos = m;
+        if (!s.levelName && str((rd as any).level)) s.levelName = str((rd as any).level, "");
+      }
+    } catch { /* 读取失败走默认 spawn */ }
   } catch { /* 读取失败走默认 */ }
+}
+
+/** 从库里（ai_story_roles）取该角色上次保存的位置/地图；库里没有则返回 null（走默认 spawn） */
+function savedRolePos(s: FieldSurvivalState, r: any): { x: number; y: number; mapName: string; name: string } | null {
+  const m = (s as any)?._savedRolePos;
+  if (!m || typeof m !== "object" || !r) return null;
+  return m[String(r.id || "")] || m["name:" + String(r.name || "")] || null;
 }
 
 /** 商城：商城 agent（故事动态数据 + 常驻世界书）→ 商品；失败/为空则用插件自带物资 */
@@ -2447,9 +2553,20 @@ export async function handle_action(
       const playerRole = roles.find((r) => String((r as any).roleType) === "player") || roles[0];
 
       s.selections = { participants, spectators, enemies };
+      // ★ 必须在生成实体「之前」恢复库数据：要拿到上局的 level 与每个角色的位置/地图，
+      //   否则 ally 会先按 start_map 默认落点生成，库里的驻留位置被覆盖（上一局白玩）。
+      await restoreSys(context, s);
+      (s as any)._sysRestored = true;
+      if (!(s as any).parked || typeof (s as any).parked !== "object") (s as any).parked = {};
+      // ★ 本局关卡：库里上局 level 优先（按库恢复），其次前端上报，最后兜底 start_map
+      const curLv = str(str((params as any)?.levelName) || s.levelName || "", "") || "Mulberry Town";
+      s.levelName = curLv;
       s.entities = [];
-      // ★ v3: 玩家出生在 origin (0, 0)，与 map_config.json 一致
-      s.entities.push(makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0));
+      // ★ fix: 玩家/ally/spectator 统一归属 start_map（固定 "Mulberry Town"），不依赖 map?.theme
+      const startMapName = "Mulberry Town";
+      const playerEnt = makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
+      (playerEnt as any).mapName = curLv;
+      s.entities.push(playerEnt);
       // ★ game.md 等级系统：等级/经验取参数卡，四维按公式重算（HP/MP 取卡面值并夹进满值上限）
       initPlayerFromCard(s, playerRole as any);
       participants.forEach((id, i) => {
@@ -2458,20 +2575,36 @@ export async function handle_action(
         // ★ fix④（缺口②）：参展列表里若混入玩家本人（宿主 roles 含用户角色、前端默认 push 玩家 id），
         //   不再生成一份同名友方 —— 否则开局即出现"另一个我"跟着自己跑
         if (isPlayerRole(r, playerRole)) return;
-        // ★ v3: 盟友环绕半径 = 2.5 米 + 随机 0~50 米（避开 5 米内挤堆）
+        // ★ fix: 盟友环绕半径 = 2.5 米 + 随机 1.5~3.5 米（收紧防止扎堆）
         const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
-        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 10);
-        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 10);
+        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 2);
+        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 2);
         const allyEntity = makeEntity(r, "ally", rawAllyX, rawAllyY, i);
-        // ★ navNearestFree 兜底：落墙时推最近可走格；enemyNav 在 start 时为 null → clampToBound 保底
-        if (enemyNav) {
-          const free = navNearestFree(enemyNav, rawAllyX, rawAllyY, 0.4, 8);
-          if (free) { allyEntity.x = free.x; allyEntity.y = free.y; }
+        // ★ 按库恢复位置：库里记着该角色上局停在哪张图、哪个坐标 → 直接就位。
+        //   库里没有记录的新角色才走默认的「环绕玩家出生点」落点。
+        const savedPos = savedRolePos(s, r);
+        if (savedPos) {
+          allyEntity.x = savedPos.x;
+          allyEntity.y = savedPos.y;
+          (allyEntity as any).mapName = savedPos.mapName || startMapName;
         } else {
-          const cb = clampToBound(s, rawAllyX, rawAllyY);
-          allyEntity.x = cb.x; allyEntity.y = cb.y;
+          (allyEntity as any).mapName = startMapName; // fix: ally belongs to start_map, NOT follow player across maps
+          // ★ navNearestFree 兜底：落墙时推最近可走格；enemyNav 在 start 时为 null → clampToBound 保底
+          if (enemyNav) {
+            const free = navNearestFree(enemyNav, rawAllyX, rawAllyY, 0.4, 8);
+            if (free) { allyEntity.x = free.x; allyEntity.y = free.y; }
+          } else {
+            const cb = clampToBound(s, rawAllyX, rawAllyY);
+            allyEntity.x = cb.x; allyEntity.y = cb.y;
+          }
         }
-        s.entities.push(allyEntity);
+        // ★ 角色停在别的地图 → 进 parked，玩家切到那张图才看得见他们（在原地）
+        if ((allyEntity as any).mapName !== curLv) {
+          const pk = String((allyEntity as any).mapName);
+          ((s as any).parked[pk] = (s as any).parked[pk] || []).push(allyEntity);
+        } else {
+          s.entities.push(allyEntity);
+        }
       });
       // ★ v4：敌对角色落在「最近的野区」内
       //   （玩家出生于城镇安全区，若沿用"围绕玩家 30~60 米"的落点会落进城镇内部）
@@ -2492,7 +2625,16 @@ export async function handle_action(
       });
       spectators.forEach((id) => {
         const r = byId(id);
-        if (r) s.entities.push({ ...makeEntity(r, "spectator", -40, -40 + s.entities.length * 4, 0), alive: true });
+        if (!r) return;
+        const se: any = { ...makeEntity(r, "spectator", -40, -40 + s.entities.length * 4, 0), alive: true, mapName: startMapName };
+        const sp = savedRolePos(s, r);
+        if (sp) { se.x = sp.x; se.y = sp.y; se.mapName = sp.mapName || startMapName; }
+        if (se.mapName !== curLv) {
+          (s as any).parked[String(se.mapName)] = (s as any).parked[String(se.mapName)] || [];
+          (s as any).parked[String(se.mapName)].push(se);
+        } else {
+          s.entities.push(se);
+        }
       });
       // ★ 不再自动 spawn 无明确阵营的 AI 故事角色（避免地图上冒出莫名 NPC）；
       //   玩家自己 / participants / spectators / enemies 已在上方生成；
@@ -2550,12 +2692,45 @@ export async function handle_action(
         });
       }
       // ★ v5：恢复系统面板持久化数据（纳戒 / 队伍 / 角色卡 / 背包顺序 / 商城）
-      await restoreSys(context, s);
+      // ★ 已在实体生成前恢复过一次（要拿角色位置）；这里不再重复，
+      //   否则库里的旧 parked 会覆盖刚按 ai_story_roles 归位好的驻留数据。
+      if (!(s as any)._sysRestored) await restoreSys(context, s);
       syncCardFromContext(s, context); // ★ start 也同步参数卡
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
-      if (!s.levelName) s.levelName = str((s.map as any)?.theme, "");
+      // ★ fix：开局 levelName 与前端对齐（前端 DEFAULT_START_LEVEL = "Mulberry Town"）。
+      //   不再用 map.theme（如"野外·清晨"）兜底——theme 与前端关卡名分属两套命名，
+      //   混用会让 ally.mapName 对齐到 theme，第一个 tick 上报 "Mulberry Town" 时
+      //   handleLevelChange 把 ally park 进 theme 名下的错误地图（ally 凭空消失）。
+      if (!s.levelName) s.levelName = startMapName;
+      // ★ 库里 sys_state.parked 与 ai_story_roles 可能同时记录了同一角色，
+      //   归位后先去重再落库，否则开局即出现分身（原本要等到第一次切图才收敛）。
+      dedupeRoles(s);
       // ★ game.md 对话功能：AI 故事角色 spawn 完毕 → 立即把位置/地图信息写入 t_plugin_session_data
       await persistSys(context, s);
+      // fix: _levelAt 必须初始化为当前 levelName，防止残留旧值导致 tick 误触发 handleLevelChange
+      (s as any)._levelAt = s.levelName || startMapName;
+      // ★ 按数据库权威：库里记录的上局地图与前端开局地图（DEFAULT_START_LEVEL）不一致时，
+      //   通过 teleportTarget 通道让前端跟着切过去（前端 watch 它 → switchLevel）。
+      //   否则前端停在 start_map、宿主 levelName 是上局的图 → 第一个 tick 上报的
+      //   levelName 与 ally.mapName 不符 → 全员被 park 出当前图（开局看不到 ally）。
+      if (s.levelName && s.levelName !== startMapName) {
+        const me0 = s.entities.find((e2: any) => e2.side === "player");
+        s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+        (s as any).teleportTarget = {
+          mapName: s.levelName,
+          x: me0 ? (me0 as any).x : 0,
+          y: me0 ? (me0 as any).y : 0,
+          name: s.levelName,
+          rev: s.sysRevision,
+        };
+      }
+      // fix: entity mapName 对齐到最终 levelName（ally/spectator 用 startMapName 初始化，
+      //   但 levelName 可能是 "MulberryTown" 或其他值，handleLevelChange 依赖精确匹配）
+      const finalStartMap = s.levelName || startMapName;
+      (s.entities || []).forEach((e: any) => {
+        if (e.side === "enemy") return;
+        if (!e.mapName || e.mapName === startMapName) e.mapName = finalStartMap;
+      });
       // ★ game.md 组队跟随：开局默认【不】组队——只有角色卡面板勾选「组队跟随」的角色
       //   才会跟随用户帮打怪（未组队角色原地待命，绝不自动跟随）
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
@@ -2585,7 +2760,26 @@ export async function handle_action(
       // ★ 敌人碰撞：前端只在切图那一次带上可行走网格（tileset 属性只有 iframe 侧解过）
       applyEnemyNavPayload((params as any)?.walkGrid);
       // ★ v5：同步系统面板（当前地图名 / 参数卡外部改动 / 角色卡位置 / 队伍）
-      if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
+      // fix: tick levelName 来自前端 currentLevelName ref，只有 switchLevel 完成后才会更新。
+      //   sys_travel 设置了 s.levelName=target 但前端还没切图 → levelName 还是旧值。
+      //   不加 guard 会把 target 覆盖回旧值，导致 handleLevelChange 错误触发，entities 全消失。
+      if (str((params as any)?.levelName)) {
+        const incomingLv = str((params as any).levelName);
+        const ackLv = (s as any)._levelAt || "";
+        if ((s as any)._travelPending) {
+          // sys_travel 发起、前端尚未完成切图：忽略前端旧地图名，
+          // 直到前端上报目标名才解除 pending（防止 pending target 被旧值覆盖）
+          if (incomingLv === s.levelName) (s as any)._travelPending = false;
+        } else {
+          // 无 pending 传送：前端上报即权威（含走路穿传送门的 switchLevel——
+          // ★ fix：此前三条件 guard 在"走路切图"时全部不匹配 → levelName 永不更新
+          //   → handleLevelChange 永不触发 → 未组队 ally 不进 parked，两张图都画同一批角色）
+          s.levelName = incomingLv;
+          void ackLv;
+        }
+        // else: keep s.levelName as-is (sys_travel's pending target); front will switchLevel
+        // and the next tick will carry the new value (matches s.levelName) → safe to adopt.
+      }
       syncCardFromContext(s, context);
       applyBagAttributes(s); // ★ game.md 背包被动属性加成（Defense/Attack/Life/Blue）
       syncPlayerCardStats(s); // ★ game.md 等级系统：等级/经验/HP/MP → 动态角色卡（变化才回写）
@@ -3065,9 +3259,13 @@ export async function handle_action(
       const target = str(params?.mapName);
       if (!target) return okResp("缺少目标地图");
       s.levelName = target;
-      // ★ 清空 _levelAt：让 tick 的 levelName !== _levelAt 检测能触发 handleLevelChange，
-      //   保证 parked 实体正确归队
-      (s as any)._levelAt = "";
+      // ★ fix：_levelAt 必须设为 target（不是 ""），否则下一 tick 的 levelName guard
+      //   会因为 !ackLv=true 把前端旧 levelName 写回 state，覆盖掉 target，
+      //   导致 handleLevelChange 用错误地图触发，entities 全部从 entities[] 消失。
+      (s as any)._levelAt = target;
+      // ★ 标记"传送中"：前端切图完成前会上报旧地图名，tick guard 据此忽略旧值，
+      //   直到前端上报 target 才解除（走路穿传送门的前端自主切图不走此标记）
+      (s as any)._travelPending = true;
       handleLevelChange(s, false);
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;

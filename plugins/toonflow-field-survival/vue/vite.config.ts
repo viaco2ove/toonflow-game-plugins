@@ -544,11 +544,37 @@ function buildEntryCtx() {
 async function loadEntryModule() {
   if (entryMod) return entryMod;
   const url = "/@fs/" + ENTRY_PATH;
-  const mod = await import(/* @vite-ignore */ url);
-  if (!mod || typeof mod.handle_action !== "function") throw new Error("entry.js 未导出 handle_action");
-  entryMod = mod;
-  log("✓ 已加载真实插件入口 entry.js（薄宿主模式）");
-  return mod;
+  // ★ 优先尝试 ESM 原生加载
+  try {
+    const mod = await import(/* @vite-ignore */ url);
+    if (mod && typeof mod.handle_action === "function") {
+      entryMod = mod;
+      log("✓ 已加载真实插件入口 entry.js（ESM 原生路径）");
+      return mod;
+    }
+    throw new Error("entry.js 未导出 handle_action");
+  } catch (e) {
+    log("! ESM import failed (" + (e && e.message ? e.message : String(e)) + ") → 尝试 CJS 兼容加载");
+  }
+  // ★ CJS-shim fallback：浏览器里没有 module.exports，用 Function 构造一个
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const code = await res.text();
+    const module = { exports: {} };
+    // 注意：code 末尾用 "\\n" 转义 —— 模板字符串会把单反斜杠转义字面替换成真实换行，
+    // 真实换行把注释切碎会让后面的 return 语句变成顶层语句 → SyntaxError: 'return' outside of function
+    const fn = new Function("module", "exports", "require", code + "\\n;module.exports = exports;");
+    fn(module, module.exports, () => ({}));
+    if (!module.exports || typeof module.exports.handle_action !== "function") {
+      throw new Error("CJS-shim 加载后仍无 handle_action");
+    }
+    entryMod = module.exports;
+    log("✓ 已加载真实插件入口 entry.js（薄宿主模式/CJS-shim）");
+    return entryMod;
+  } catch (e2) {
+    throw new Error("CJS-shim 加载失败：" + (e2 && e2.message ? e2.message : String(e2)));
+  }
 }
 
 /** 把 action 交给 entry.js 执行；成功返回 true，失败（只报一次）返回 false 交给旧逻辑兜底 */
