@@ -118,6 +118,7 @@ const activeTab = ref<TabId>("bag");
         :current-map="currentMap"
         @teleport="(c: any) => emit('teleport', c)"
         @follow="(id: string, on: boolean) => emit('follow', id, on)"
+        @summon="(c: any) => emit('summon', c)"
       />
     </div>
 

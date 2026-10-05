@@ -90,11 +90,15 @@ const __agentRunFallback = async (_agentName: string, _args: any) => {
 try {
   Object.defineProperty(window, "__agentRun", {
     get() {
-      const top = window.top ?? window;
+      // ★ 安装后跨域：game.html（60002端口）与外层 Web 前端不同源，
+      //   访问 window.top 会抛出 SecurityError。try/catch 保证安全降级。
+      let top = window;
+      try { top = window.top ?? window; } catch (_) { /* cross-origin → 降级用 window */ }
       return (top as any).__agentRun_impl ?? __agentRunFallback;
     },
     set(v) {
-      const top = window.top ?? window;
+      let top = window;
+      try { top = window.top ?? window; } catch (_) { /* cross-origin → 降级用 window */ }
       (top as any).__agentRun_impl = v;
     },
     configurable: true,
@@ -626,6 +630,36 @@ function onSysTravel(mapName: string) {
 function onSysFollow(id: string, on: boolean) {
   sysNotice.value = on ? "已加入队伍" : "已离开队伍";
   runSysCmd("sys_party", { roleId: id, follow: !!on });
+  saveAllyPositionsNextTick = true;
+}
+
+/** 召唤：把角色召唤到用户旁边（不加入队伍、不跟随，仅传送到身边设为友方） */
+function onSysSummon(card: any) {
+  sysNotice.value = `正在召唤 ${card.name} 到身边…`;
+  runSysCmd("sys_party", { roleId: card.id, follow: false, summon: true });
+  saveAllyPositionsNextTick = true;
+}
+
+/** 保存所有已上场 ally 的位置信息到 t_plugin_session_data */
+function saveAllyPositionsToSession() {
+  const s = state.value;
+  if (!s) return;
+  const me = s.entities.find((e) => e.side === "player");
+  const allies = (s.entities || []).filter((e) => e.side === "ally");
+  const positions: Record<string, { mapName: string; x: number; y: number }> = {};
+  for (const ally of allies) {
+    if (ally.id && ally.id !== me?.id) {
+      positions[ally.id] = {
+        mapName: (ally as any).mapName || s.levelName || "",
+        x: ally.x,
+        y: ally.y,
+      };
+    }
+  }
+  toonflowJsApi.pluginData
+    .set("ally_positions", positions)
+    .then(() => console.info("[field-survival] ally_positions 已存 t_plugin_session_data"))
+    .catch((e) => console.warn("[field-survival] 存 ally_positions 失败:", e));
 }
 
 watch(showSystemPanel, (on) => {
@@ -888,6 +922,8 @@ let mapUploadDoneTimer = 0;
 /** ★ ★ 防抖：玩家实体/物品/技能变更后写入 t_plugin_session_data，
  *   关掉小游戏 → AI 聊天窗口继续看得到最新值。 */
 let saveDebounce = 0;
+/** 标记：下次 tick 时需要保存 ally 位置（组队/取消组队/召唤后触发） */
+let saveAllyPositionsNextTick = false;
 /** ★ fix③：开始游戏后的状态提示（宿主 /plugin/tick 响应慢时给出可解释的反馈） */
 const startHint = ref("");
 let startTimerSlow = 0;
@@ -4418,6 +4454,8 @@ interface ChatMessage { speaker: string; avatar?: string; text: string; mine?: b
 const chatActive = ref(false);
 const chatMessages = ref<ChatMessage[]>([]);
 const chatInputText = ref("");
+const chatListening = ref(false);    // 语音识别中
+const chatVoiceError = ref("");      // 语音识别错误信息
 const chatPending = ref(false);          // 等 agent 响应（角色发言中）
 const chatPhase = ref<"idle" | "options" | "pending">("idle"); // 对话阶段
 const chatNpcId = ref("");
@@ -4437,6 +4475,8 @@ async function onChatStart() {
   chatOptions.value = [];
   chatPhase.value = "idle";
   chatError.value = "";
+  chatVoiceError.value = "";
+  stopChatVoice();
   chatActive.value = true;
   // ★ game.md 对话功能：开场自动让角色先发言（用户进入对话默认看 AI 角色开腔）
   await triggerChatSpeak("response");
@@ -4577,8 +4617,37 @@ async function onChatContinue() {
   await triggerChatSpeak();
 }
 
+/** Web Speech API 语音识别 */
+let chatRecognition: any = null;
+function startChatVoice() {
+  const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+  if (!SR) { chatVoiceError.value = "当前浏览器不支持语音识别"; return; }
+  if (chatListening.value) { stopChatVoice(); return; }
+  chatVoiceError.value = "";
+  chatRecognition = new SR();
+  chatRecognition.lang = "zh-CN";
+  chatRecognition.continuous = false;
+  chatRecognition.interimResults = false;
+  chatRecognition.onstart = () => { chatListening.value = true; };
+  chatRecognition.onend = () => { chatListening.value = false; };
+  chatRecognition.onerror = (e: any) => {
+    chatListening.value = false;
+    chatVoiceError.value = e.error === "not-allowed" ? "请允许麦克风权限" : `语音识别错误: ${e.error}`;
+  };
+  chatRecognition.onresult = (e: any) => {
+    const transcript = e.results[0][0].transcript;
+    chatInputText.value = transcript;
+  };
+  chatRecognition.start();
+}
+function stopChatVoice() {
+  if (chatRecognition) { chatRecognition.stop(); chatRecognition = null; }
+  chatListening.value = false;
+}
+
 /** 离开：关闭聊天 */
 function onChatLeave() {
+  stopChatVoice();
   chatActive.value = false;
   chatMessages.value = [];
   chatInputText.value = "";
@@ -5281,6 +5350,14 @@ const playerSnapshot = computed(() => {
 watch(playerSnapshot, () => {
   if (state.value?.phase === "playing") schedulePlayerCardSave();
 });
+
+/** saveAllyPositionsNextTick 触发：下次 onHostState 收到 playing 状态时保存 ally 位置 */
+watch(() => state.value?.phase, (p) => {
+  if (saveAllyPositionsNextTick && p === "playing") {
+    saveAllyPositionsNextTick = false;
+    saveAllyPositionsToSession();
+  }
+});
 </script>
 
 <template>
@@ -5454,8 +5531,22 @@ watch(playerSnapshot, () => {
             :disabled="chatPending"
             @keyup.enter="onChatSend"
           />
+          <button
+            class="chat-panel__mic"
+            :class="{ 'chat-panel__mic--on': chatListening }"
+            :disabled="chatPending"
+            :title="chatListening ? '停止录音' : '语音识别'"
+            @click="startChatVoice"
+          >{{ chatListening ? '⏹' : '🎤' }}</button>
+          <button
+            v-if="chatInputText"
+            class="chat-panel__clear"
+            title="清除"
+            @click="chatInputText = ''"
+          >✕</button>
           <button class="chat-panel__send" :disabled="chatPending || !chatInputText.trim()" @click="onChatSend">发送</button>
         </div>
+        <div v-if="chatVoiceError" class="chat-panel__voice-error">{{ chatVoiceError }}</div>
         <div class="chat-panel__actions">
           <!-- ★ 发言：点击重新生成 AI 推荐选项（进入对话已自动出 3 选项，可点击重新生成） -->
           <button class="chat-action-btn" :disabled="chatPending" @click="onChatSpeak" title="让 AI 重新生成 3 个发言选项">🔄 换选项</button>
@@ -5615,6 +5706,7 @@ watch(playerSnapshot, () => {
         @teleport="onSysTeleport"
         @travel="onSysTravel"
         @follow="onSysFollow"
+        @summon="onSysSummon"
         @close="showSystemPanel = false"
       />
     </div>
@@ -6394,11 +6486,33 @@ body {
 }
 .chat-panel__input:focus { border-color: #5a8abf; }
 .chat-panel__input::placeholder { color: #5a7a9f; }
+.chat-panel__mic {
+  background: rgba(30, 40, 60, 0.8); border: 1px solid #3a5a8a; border-radius: 3px;
+  color: #9ac8ff; font-size: 12px; cursor: pointer; padding: 3px 6px; min-width: 28px;
+}
+.chat-panel__mic:hover { border-color: #5a8abf; background: rgba(40, 60, 100, 0.8); }
+.chat-panel__mic--on {
+  background: rgba(180, 30, 30, 0.5); border-color: #ff6666; color: #ff9999;
+  animation: voicePulse 1s ease-in-out infinite;
+}
+.chat-panel__mic:disabled { opacity: 0.4; cursor: not-allowed; }
+@keyframes voicePulse {
+  0%, 100% { opacity: 1; } 50% { opacity: 0.6; }
+}
+.chat-panel__clear {
+  background: rgba(30, 40, 60, 0.8); border: 1px solid #3a5a8a; border-radius: 3px;
+  color: #7a9abf; font-size: 11px; cursor: pointer; padding: 3px 5px; min-width: 24px;
+}
+.chat-panel__clear:hover { border-color: #5a8abf; color: #dceeff; }
 .chat-panel__send {
   background: #2a5a9a; border: 1px solid #4a7abf; border-radius: 3px;
   color: #c8e4ff; font-size: 11px; cursor: pointer; padding: 3px 8px;
 }
 .chat-panel__send:disabled { opacity: 0.4; cursor: not-allowed; }
+.chat-panel__voice-error {
+  padding: 2px 8px 4px;
+  color: #ff6b6b; font-size: 10px; text-align: center;
+}
 
 .chat-panel__actions {
   display: flex;

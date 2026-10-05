@@ -136,7 +136,7 @@ const ALLY_ATK_M = 0.5;
 /** ★ game.md：野怪发起攻击的距离 = 4 米 —— 怪不打进玩家身边 4m 内友军不动手；
  *  友军索敌锚点是「玩家」而非友军自身（此前锚在友军身上 → 打远的）。 */
 const ALLY_ENGAGE_M = 4;
-/** 友军跟随阵位半径 2.5m（此前 12m，站位散开是「打远的」帮凶） */
+/** 友军跟随阵位半径（围玩家一圈的半径）2.5m（此前 12m，站位散开是「打远的」帮凶） */
 const ALLY_FOLLOW_GAP_M = 2.5;
 const CHEST_PICKUP_M = 2;
 const POTION_PICKUP_M = 2;
@@ -688,9 +688,11 @@ function mapBound(s) {
   if (b && num(b.lx, 0) > 0 && num(b.ly, 0) > 0) return { lx: num(b.lx, 0), ly: num(b.ly, 0) };
   return { lx: WORLD_X_RANGE[1] - 10, ly: WORLD_Z_RANGE[1] - 10 };
 }
+/** 把坐标夹进世界边界（±1490 米，与前端 WORLD_LIMIT_M 一致）；
+ *  ★ 注意：不能用 mapBound —— 它是敌人专属 small bounds（mulberryTown ~2 米），
+ *  ally 走 mapBound 会被夹回原点 ±2m 出现「扎堆」 */
 function clampToBound(s, x, y) {
-  const b = mapBound(s);
-  return { x: clamp(x, -b.lx, b.lx), y: clamp(y, -b.ly, b.ly) };
+  return { x: clamp(x, -WORLD_X_RANGE[1] + 10, WORLD_X_RANGE[1] - 10), y: clamp(y, -WORLD_Z_RANGE[1] + 10, WORLD_Z_RANGE[1] - 10) };
 }
 function regionOutOfMap(s, r) {
   const b = s.mapBounds;
@@ -1751,9 +1753,10 @@ function spawnRoleEntity(s, role) {
   };
   // 边界钳制
   target = clampToBound(s, target.x, target.y);
-  // 优先 enemyNav 避障，没拿到网格就退而求其次
+  // 优先 enemyNav 避障；搜不到时加大半径重试（maxRing=8 对 50 米外随机落点太容易漏）
   if (enemyNav) {
-    const free = navNearestFree(enemyNav, target.x, target.y, 0.4, 8);
+    const free = navNearestFree(enemyNav, target.x, target.y, 0.4, 8)
+      || navNearestFree(enemyNav, target.x, target.y, 0.4, 20);
     if (free) target = free;
   }
   const e = makeEntity(role, side, target.x, target.y, s.entities.length);
@@ -2000,13 +2003,21 @@ async function handle_action(action, params, state, context) {
         if (!r) return;
         if (isPlayerRole(r, playerRole)) return;
         const angle = i / Math.max(1, participants.length) * Math.PI * 2;
-        s.entities.push(makeEntity(
-          r,
-          "ally",
-          PLAYER_SPAWN.x + Math.cos(angle) * ALLY_FOLLOW_GAP_M,
-          PLAYER_SPAWN.y + Math.sin(angle) * ALLY_FOLLOW_GAP_M,
-          i
-        ));
+        // ★ v6：盟友 = 玩家 50 米半径随机（避开 5 米内挤堆）；落墙时 navNearestFree 兜底推最近可走格
+        const ring = ALLY_FOLLOW_GAP_M + Math.random() * 50;
+        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * ring;
+        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * ring;
+        const allyEntity = makeEntity(r, "ally", rawAllyX, rawAllyY, i);
+        if (enemyNav) {
+          const free = navNearestFree(enemyNav, rawAllyX, rawAllyY, 0.4, 8)
+            || navNearestFree(enemyNav, rawAllyX, rawAllyY, 0.4, 20);
+          if (free) { allyEntity.x = free.x; allyEntity.y = free.y; }
+        } else {
+          // start 时 enemyNav 为 null → clampToBound 保底，避免全部卡在 PLAYER_SPAWN 周围 2.5m
+          const cb = clampToBound(s, rawAllyX, rawAllyY);
+          allyEntity.x = cb.x; allyEntity.y = cb.y;
+        }
+        s.entities.push(allyEntity);
       });
       const startRegion = nearestWildRegion(PLAYER_SPAWN.x, PLAYER_SPAWN.y);
       enemies.forEach((id, i) => {
@@ -2450,13 +2461,14 @@ async function handle_action(action, params, state, context) {
     case "sys_party": {
       const rid = str(params?.roleId);
       if (!rid) return okResp("\u7F3A\u5C11\u89D2\u8272");
+      const summon = !!params?.summon;
       const flag = params?.follow;
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
       const e0 = s.entities.find((x) => x.id === rid || x.name === rid);
       if (e0 && e0.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
-      // ★ 组队跟随：角色停在别的地图（s.parked）→ 先接回当前图
+      // ★ 组队/召唤：角色停在别的地图（s.parked）→ 先接回当前图
       let e = e0;
-      if (!e && follow) {
+      if (!e && (follow || summon)) {
         const parked = s.parked || {};
         for (const k of Object.keys(parked)) {
           const arr = Array.isArray(parked[k]) ? parked[k] : [];
@@ -2468,12 +2480,37 @@ async function handle_action(action, params, state, context) {
           }
         }
       }
-      // ★ game.md 组队跟随：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
-      if (!e && follow) {
+      // ★ game.md 组队/召唤：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
+      if (!e && (follow || summon)) {
         const role = (s.roles || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
         e = spawnRoleEntity(s, role);
       }
-      if (e && follow) e.mapName = s.levelName || e.mapName;
+      if (e && (follow || summon)) e.mapName = s.levelName || e.mapName;
+
+      // ★ 召唤模式：只把角色传到玩家旁边并设为友方，不入队、不跟随
+      if (summon) {
+        if (e) {
+          if (!e._baseSide) e._baseSide = e.side;
+          e.side = "ally";
+          if (!e.alive) {
+            e.alive = true;
+            e.hp = e.maxHp;
+          }
+          const me = playerEntity(s);
+          if (me) {
+            const p = clampToBound(s, me.x + 40, me.y + 40);
+            e.x = p.x;
+            e.y = p.y;
+            e.homeX = e.x;
+            e.homeY = e.y;
+          }
+        }
+        ensureNpcCards(s, s.levelName || "");
+        pushEvent(s, `${e?.name || rid} \u5DF2\u53EC\u5524\u5230\u4F60\u8EAB\u8FBEBD\uFF08\u4E0D\u52A0\u5165\u961F\u4F0D\uFF09`);
+        await persistSys(context, s);
+        return okResp(`\u5DF2\u53EC\u5524 ${e?.name || rid} \u5230\u8EAB\u8FBEBD`);
+      }
+
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid);
       else set.delete(rid);
@@ -2488,6 +2525,12 @@ async function handle_action(action, params, state, context) {
             e.hp = e.maxHp;
           }
         } else {
+          // ★ 取消组队：保存角色当前位置到 parked，下次召唤/入队时可以恢复位置
+          const mapName = e.mapName || s.levelName || "";
+          if (!s.parked) s.parked = {};
+          if (!s.parked[mapName]) s.parked[mapName] = [];
+          s.parked[mapName] = s.parked[mapName].filter((x) => String(x.id) !== String(e.id));
+          s.parked[mapName].push({ id: e.id, name: e.name, x: e.x, y: e.y, mapName });
           e.side = e._baseSide || "spectator";
         }
       }

@@ -157,6 +157,9 @@ play-role-strip 和 play-inline-card
 ~~x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 10+5)),
 y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 10+5)),~~
 
+在组队的checkbox 增加召唤按钮 把角色召唤到用户旁边并 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
+取消组队时也要 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
+
 ### 组队跟随（排除用户和敌对角色）
 每个角色下面都有给 组队跟随【checkbox】,打勾后将跟随用户帮用户打怪。取消打勾就脱离队伍。
 与用户组队的角色也会长经验和升级。
