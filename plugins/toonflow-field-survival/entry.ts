@@ -2129,16 +2129,15 @@ function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
   else if (inSel(sel.participants)) side = "ally";
   else if (roleType === "npc" || roleType === "system" || roleType === "general") side = "ally";
   else side = "spectator";
-  // ★ 默认落点：以玩家为中心、50 米半径内随机分布（避开 5 米内挤堆）
+  // ★ 默认落点：以玩家为中心、2~6 米内随机分布（玩家视野 13m，保证可见）
   const player0 = s.entities.find((e) => e.side === "player");
   const pcx = player0?.x ?? PLAYER_SPAWN.x;
   const pcy = player0?.y ?? PLAYER_SPAWN.y;
   const ang = rnd(0, Math.PI * 2);
-  const dist_x = 100 + Math.random() * 50;
-  const dist_y = 100 + Math.random() * 50;
+  const dist = 2 + Math.random() * 4;
   let target: { x: number; y: number } = {
-    x: pcx + Math.cos(ang) * dist_x,
-    y: pcy + Math.sin(ang) * dist_y
+    x: pcx + Math.cos(ang) * dist,
+    y: pcy + Math.sin(ang) * dist
   };
   // 边界钳制
   target = clampToBound(s, target.x, target.y);
@@ -2255,6 +2254,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       level: s.levelName || "",
       skillMeta: s.skillMeta || {},
       itemMeta: s.itemMeta || {},
+      // ★ 角色驻留地图：ally/spectator 角色停在别的地图（s.parked）→ 持久化到 t_plugin_session_data
+      parked: (s as any).parked || {},
     });
     // ★ game.md 对话功能：AI 故事角色位置/地图信息单独持久化（dataKey=ai_story_roles → t_plugin_session_data），
     //   后续开新局时 AI 聊天窗口能直接读到「陈彦现在在 mulberry_forest 地图 (12.3, -5.6)」，不用再遍历 entities。
@@ -2267,7 +2268,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
   } catch { /* 落库失败不阻断玩法 */ }
 }
 
-/** ★ game.md 对话功能：收集所有 AI 故事角色的位置/地图信息（写入 t_plugin_session_data） */
+/** ★ game.md 对话功能：收集所有 AI 故事角色的位置/地图信息（写入 t_plugin_session_data）
+ *  包括 s.entities 中可见的 + s.parked 中驻留在别的地图的 */
 function collectAiStoryRoles(s: FieldSurvivalState): Array<{
   id: string; name: string; roleType: string; side: string;
   x: number; y: number; mapName: string; alive: boolean; updatedAt: number;
@@ -2297,6 +2299,30 @@ function collectAiStoryRoles(s: FieldSurvivalState): Array<{
       updatedAt: Date.now(),
     });
   }
+  // ★ 角色驻留地图：parked 中的角色也要加入 AI 故事角色列表（即使停在别的地图）
+  const parkedObj: any = (s as any).parked || {};
+  const roleMap = new Map((Array.isArray(s.roles) ? s.roles : []).map((r: any) => [String(r.id), r]));
+  Object.keys(parkedObj).forEach((k) => {
+    (Array.isArray(parkedObj[k]) ? parkedObj[k] : []).forEach((pe: any) => {
+      if (!pe || !pe.id) return;
+      const role = roleMap.get(String(pe.id)) || roleMap.get(String(pe.name));
+      const rt2 = role ? String(role.roleType || "") : "";
+      if (!rt2) return;
+      // parked 实体没有 side，用 _baseSide 兜底
+      const side2 = String(pe._baseSide || pe.side || "ally");
+      arr.push({
+        id: String(pe.id),
+        name: String(pe.name || pe.id),
+        roleType: rt2,
+        side: side2,
+        x: Math.round(num(pe.x, 0) * 100) / 100,
+        y: Math.round(num(pe.y, 0) * 100) / 100,
+        mapName: String(pe.mapName || k || ""),
+        alive: pe.alive !== false,
+        updatedAt: Date.now(),
+      });
+    });
+  });
   return arr;
 }
 
@@ -2323,6 +2349,8 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
     if (Array.isArray(d.shop) && d.shop.length) s.shopGoods = d.shop;
     if (str(d.level)) s.levelName = str(d.level, "");
+    // ★ 角色驻留地图：恢复 s.parked（ally/spectator 角色停在别的地图的位置）
+    if (d.parked && typeof d.parked === "object") (s as any).parked = d.parked;
   } catch { /* 读取失败走默认 */ }
 }
 
@@ -2954,11 +2982,14 @@ export async function handle_action(
           if (!(e as any)._baseSide) (e as any)._baseSide = e.side;
           e.side = "ally";
           if (!e.alive) { e.alive = true; e.hp = e.maxHp; }
-          // TP 到玩家身边
+          // TP 到玩家身边（角度均分分布，避免多个 ally 扎堆）
           const me = playerEntity(s);
           if (me) {
-            // ★ 紧贴玩家身边（约 2 米，玩家视野 13m 能直接看到）
-            const p = clampToBound(s, me.x + 2, me.y + 2);
+            // 统计已存在的 ally 数量，用于角度均分（0-index）
+            const allyCount = s.entities.filter((ee) => ee.side === "ally" && ee.id !== e.id).length;
+            const ang = (allyCount / Math.max(1, allyCount + 1)) * Math.PI * 2 + rnd(0, Math.PI * 0.5);
+            const dist = 2 + Math.random() * 2;
+            const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
             e.x = p.x;
             e.y = p.y;
             (e as any).homeX = e.x;
@@ -3034,8 +3065,10 @@ export async function handle_action(
       const target = str(params?.mapName);
       if (!target) return okResp("缺少目标地图");
       s.levelName = target;
+      // ★ 清空 _levelAt：让 tick 的 levelName !== _levelAt 检测能触发 handleLevelChange，
+      //   保证 parked 实体正确归队
+      (s as any)._levelAt = "";
       handleLevelChange(s, false);
-      (s as any)._levelAt = s.levelName;
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
       // ★ 大地图传送统一走 teleportTarget 通道（前端只 watch 它；travelTarget 从无人消费，是死代码）
