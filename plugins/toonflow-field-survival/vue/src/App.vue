@@ -5778,8 +5778,8 @@ body {
 .sys-panel {
   position: fixed;
   z-index: 9997;
-  width: 420px;
-  height: 560px;
+  width: 80%;
+  height: 80%;
   background: #1e1f1f;
   border: 2px solid #4f4f4f;
   border-radius: 4px;
@@ -6194,11 +6194,11 @@ body {
 }
 
 .hud__left {
-  min-width: 180px;
+  min-width: 8rem;
 }
 
 .hp {
-  width: 180px;
+  width: 8rem;
   height: 9px;
   border: 2px solid #4f4f4f;
   background: #1e0e0e;
@@ -6221,7 +6221,7 @@ body {
 }
 
 .mp {
-  width: 180px;
+  width: 8rem;
   height: 8px;
   border: 2px solid #4f4f4f;
   background: #0e0e1e;
@@ -6237,7 +6237,7 @@ body {
 }
 
 .exp {
-  width: 180px;
+  width: 8rem;
   height: 6px;
   border: 1px solid #4f4f4f;
   background: #1e1e0e;
@@ -6282,7 +6282,7 @@ body {
 .hud__map {
   color: #ffe79e !important;
   font-weight: 600;
-  max-width: 180px;
+  max-width: 8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
