@@ -594,6 +594,9 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         data_key = "map_data:" + (story or "default")
         value_file = upload_tbg
         op = "set"
+        # ★ -u 走 set 快捷路径，直接跳到 SET 分支（不要让后面 ops 推断把它覆盖成 get）
+        # ↓↓↓ 关键：跳过后面的 ops 推断逻辑，避免 data_key 非 None 时被覆盖成 "get"
+        op_get = False; op_set = True; op_list = False; op_remove = False
     # ★ -build 只构建 .tbg 文件到目录同级（不写 t_plugin_session_data）
     if build_tbg:
         if upload_tbg:
