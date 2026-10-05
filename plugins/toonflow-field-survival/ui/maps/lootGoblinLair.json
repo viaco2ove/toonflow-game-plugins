@@ -4247,7 +4247,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 2
+              "value": 25
             }
           ],
           "rotation": 0,

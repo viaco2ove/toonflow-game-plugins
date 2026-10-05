@@ -1541,7 +1541,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 10
             }
           ],
           "rotation": 0,
@@ -1565,7 +1565,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 12
             }
           ],
           "rotation": 0,
@@ -1589,7 +1589,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 15
             }
           ],
           "rotation": 0,
@@ -1613,7 +1613,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 18
             }
           ],
           "rotation": 0,
@@ -1637,7 +1637,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 20
             }
           ],
           "rotation": 0,

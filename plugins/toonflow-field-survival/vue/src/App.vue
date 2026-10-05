@@ -6078,7 +6078,7 @@ body {
   gap: 1px;
   margin-left: 1px;
   padding: 3px 3px;
-  font-size: 12px;
+  font-size: 7px;
   line-height: 1.2;
   color: #e8e2d0;
   background: rgba(0, 0, 0, 0.42);

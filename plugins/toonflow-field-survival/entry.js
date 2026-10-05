@@ -869,10 +869,19 @@ function applyLocalEnemies(s, payload) {
     const list = Array.isArray(payload.list) ? payload.list : [];
     // ② 清旧（幂等：重建前先清，避免跨图 / 跨世代残留）
     s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
-    // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」中已经落到本图界外的那些：
-    //     前端权威清单已代表当前关卡的敌怪，界外的宿主怪在小地图里既看不到也打不到
+    // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」：
+    //     前端上报了 bounds（小地图关卡）→ 前端权威清单代表当前关卡的敌怪，
+    //     宿主 mob_ 怪必须**全清**（不能只清界外——野区半径 240m、边缘可延伸到 0，
+    //     落在小地图 bounds 内的宿主怪会残留在安全区/城镇里，表现为"城里一堆野怪"）。
+    //     非 mob_ 的宿主敌怪（如用户选择的敌对角色）仍只清界外的，防误删。
     if (lx > 0 && ly > 0) {
-        s.entities = s.entities.filter((e) => !(e.side === "enemy" && !isLocalEnemyId(e.id) && (Math.abs(e.x) > lx || Math.abs(e.y) > ly)));
+        s.entities = s.entities.filter((e) => {
+            if (e.side !== "enemy" || isLocalEnemyId(e.id))
+                return true;
+            return String(e.id).startsWith("mob_")
+                ? false
+                : (Math.abs(e.x) <= lx && Math.abs(e.y) <= ly);
+        });
     }
     // ③ 重建
     let built = 0;
@@ -997,6 +1006,10 @@ function spawnRegionMobs(s, region, n) {
 }
 /** 区域刷新计时器：玩家离开某区域 → 该区域 45 秒后刷新一次（补满配额） */
 function regionTick(s, player) {
+    // ★ 前端已接管敌怪管理（localEnemies 权威清单）→ 宿主世界野区排刷全部停用：
+    //   否则宿主会把世界坐标的 mob_ 怪刷进小地图 bounds 内，城镇安全区也会出现野怪
+    if (num(s.localMobsEpoch, 0) > 0)
+        return;
     if (!Array.isArray(s.regions) || !s.regions.length)
         initRegions(s);
     if (!s.town || !s.town.buildings)

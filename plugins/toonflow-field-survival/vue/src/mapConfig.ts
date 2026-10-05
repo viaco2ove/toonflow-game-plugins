@@ -762,6 +762,36 @@ export function listLevelNames(): string[] {
 }
 
 /**
+ * ★ 地图野怪等级区间（文件名 → [lo, hi]），地图面板在地图名旁显示「Lv.lo-hi」。
+ *
+ * 与 .cache/set_map_mob_levels.py 的 MAP_LEVEL_RANGE 同源维护：改地图 level 后
+ * 两边要同步（脚本负责改 JSON，这里只管显示）。表里没有的关卡（无野怪，如城镇）
+ * 返回空字符串，不显示标签。
+ */
+export const MAP_MOB_LEVEL_RANGE: Record<string, [number, number]> = {
+  mulberryForest: [1, 10],
+  mulberryGraveyard: [10, 20],
+  forestDungeon1: [10, 20],
+  forestDungeon2: [20, 30],
+  lootGoblinLair: [20, 30],
+  forestDungeon3: [30, 40],
+  forestDungeon4: [40, 50],
+  forestDungeon5: [50, 60],
+  mulberryDungeon1: [60, 70],
+  mulberryDungeon2: [70, 80],
+  mulberryDungeon3: [80, 90],
+  mulberryDungeon4: [90, 100],
+  mulberryDungeon5: [100, 110],
+};
+
+/** 关卡显示名 → 等级范围标签（如 "Lv.10-20"）；无野怪/未登记返回 ""。 */
+export function levelRangeLabel(levelName: string): string {
+  const file = levelNameToFile(levelName);
+  const r = file ? MAP_MOB_LEVEL_RANGE[file] : undefined;
+  return r ? `Lv.${r[0]}-${r[1]}` : "";
+}
+
+/**
  * 关卡名 → 文件名："Mulberry Graveyard" → "mulberryGraveyard"。
  * 先查 LEVEL_FILES（权威表），查不到再按命名规则推导——保证新地图只要命名一致即可加载，
  * 不再出现"表里没登记就静默不切图"的隐性失效。

@@ -1865,7 +1865,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 30
             }
           ],
           "rotation": 0,
@@ -1889,7 +1889,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 32
             }
           ],
           "rotation": 0,
@@ -1913,7 +1913,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 33
             }
           ],
           "rotation": 0,
@@ -1937,7 +1937,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 35
             }
           ],
           "rotation": 0,
@@ -1961,7 +1961,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 37
             }
           ],
           "rotation": 0,
@@ -1985,7 +1985,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 38
             }
           ],
           "rotation": 0,
@@ -2009,7 +2009,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 1
+              "value": 40
             }
           ],
           "rotation": 0,

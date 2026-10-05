@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
+import { levelRangeLabel } from "../mapConfig";
 
 const props = defineProps<{
   nodes: any[];
@@ -93,6 +94,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
           @click="emit('travel', n.name)"
         >
           {{ n.name }}
+          <span v-if="levelRangeLabel(n.name)" class="mp-node__lv">{{ levelRangeLabel(n.name) }}</span>
         </button>
       </div>
       <div class="mp-legend">连线为入口相邻关系；金色为当前所在地图，点击其它节点可传送</div>
@@ -102,6 +104,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
       <div class="mp-list__head">全部地图（{{ mapPts.length }}）</div>
       <div v-for="n in mapPts" :key="'row' + n.name" class="mp-row" :class="{ 'mp-row--cur': n.name === currentMap }">
         <span class="mp-row__name">{{ n.name }}</span>
+        <span v-if="levelRangeLabel(n.name)" class="mp-row__lv">{{ levelRangeLabel(n.name) }}</span>
         <span v-if="n.name === currentMap" class="mp-row__tag">当前</span>
         <button class="mp-row__btn" :disabled="n.name === currentMap" @click="emit('travel', n.name)">传送</button>
       </div>
@@ -124,6 +127,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
 .mp-dot__label { position: absolute; left: 12px; top: -2px; font-size: 10px; color: #cfd8e3; white-space: nowrap; }
 .mp-node { position: absolute; transform: translate(-50%, -50%); padding: 3px 8px; border-radius: 12px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(30, 40, 55, 0.9); color: #cfd8e3; font-size: 10px; cursor: pointer; }
 .mp-node--cur { border-color: #ffd76a; color: #ffd76a; background: rgba(90, 70, 20, 0.9); }
+.mp-node__lv { display: block; font-size: 8px; color: #ffd76a; opacity: 0.8; line-height: 1.2; }
 .mp-legend { margin-top: 4px; font-size: 10px; color: #6d7c8c; }
 .mp-list { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; background: rgba(0, 0, 0, 0.2); padding: 6px; max-height: 180px; overflow-y: auto; }
 .mp-list__head { font-size: 11px; color: #9fd0ff; margin-bottom: 4px; }
@@ -131,6 +135,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
 .mp-row:hover { background: rgba(255, 255, 255, 0.06); }
 .mp-row--cur .mp-row__name { color: #ffd76a; }
 .mp-row__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mp-row__lv { flex: none; font-size: 9px; color: #ffd76a; opacity: 0.85; white-space: nowrap; }
 .mp-row__tag { font-size: 9px; color: #ffd76a; border: 1px solid rgba(255, 215, 106, 0.5); border-radius: 3px; padding: 0 3px; }
 .mp-row__btn { padding: 2px 10px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.22); background: rgba(90, 155, 255, 0.18); color: #cfe3ff; font-size: 10px; cursor: pointer; }
 .mp-row__btn:hover:not(:disabled) { background: rgba(90, 155, 255, 0.35); }

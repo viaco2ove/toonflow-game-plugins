@@ -2676,7 +2676,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 7
+              "value": 20
             }
           ],
           "rotation": 0,
@@ -2757,7 +2757,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 2
+              "value": 10
             }
           ],
           "rotation": 0,
@@ -2781,7 +2781,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 2
+              "value": 13
             }
           ],
           "rotation": 0,
@@ -2901,7 +2901,7 @@
             {
               "name": "level",
               "type": "int",
-              "value": 3
+              "value": 17
             }
           ],
           "rotation": 0,
