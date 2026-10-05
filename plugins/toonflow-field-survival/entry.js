@@ -2135,9 +2135,14 @@ function handleLevelChange(s, snapParty) {
             return;
         }
         if (String(e2.side) === "enemy") {
-            stay.push(e2);
+          // 本地怪（mapmob_/localmob_/zone_）由前端 localEnemies 按当前地图重建；
+          // 切图时若不丢弃，会被带入下一张图（如 Town 出现 Dungeon 的怪）。
+          if (e2.isLocal || isLocalEnemyId(e2.id)) {
             return;
-        } // 野怪由前端 localEnemies 按图管理，不动
+          }
+          stay.push(e2);
+          return;
+        } // 非本地野怪保留；本地怪由前端按图管理
         if (!e2.mapName)
             e2.mapName = s.startMapName || START_MAP_NAME; // 未定位角色默认回 start_map，不随玩家跨图
         if (party.indexOf(String(e2.id)) >= 0) {

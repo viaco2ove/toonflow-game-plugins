@@ -2281,7 +2281,13 @@ function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
   const stay: Entity[] = [];
   (s.entities || []).forEach((e2) => {
     if (e2.side === "player") { (e2 as any).mapName = lv; stay.push(e2); seen.add(roleKeyOf(e2)); return; }
-    if (String(e2.side) === "enemy") { stay.push(e2); return; } // 野怪由前端 localEnemies 按图管理，不动
+    if (String(e2.side) === "enemy") {
+      // 本地怪（mapmob_/localmob_/zone_）由前端 localEnemies 按当前地图重建；
+      // 切图时若不丢弃，会被带入下一张图（如 Town 出现 Dungeon 的怪）。
+      if ((e2 as any).isLocal || isLocalEnemyId(e2.id)) return;
+      stay.push(e2);
+      return;
+    } // 非本地野怪保留；本地怪由前端按图管理
     if (!(e2 as any).mapName) (e2 as any).mapName = (s as any).startMapName || START_MAP_NAME; // 未定位角色默认回 start_map，不随玩家跨图
     if (party.indexOf(String(e2.id)) >= 0) {
       // 组队：跟随玩家到当前图，落在玩家身边
