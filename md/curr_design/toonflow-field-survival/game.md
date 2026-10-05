@@ -154,23 +154,8 @@ play-role-strip 和 play-inline-card
 点击后传送到改角色身边
 #### 角色位置问题
 如果没有角色位置信息，就默认生成到第一个图的可活动区域（不能在墙里、障碍物里）
-~~x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 10+5)),
-y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 10+5)),~~
-非常凌乱的默认位置。ai 自己都不知道他在几个地方写了影响位置的代码
-`    const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 20);
-    const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 20);`
-
-`const dist = 2 + Math.random() * 20;
-      ents.push({
-        id: r.id, name: r.name, side: "ally",
-        x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, vx: 0, vy: 0,
-        hp: Math.floor(100 * s), maxHp: Math.floor(100 * s),
-        mp: Math.floor(30 + lv * 5), maxMp: Math.floor(30 + lv * 5),
-        exp: 0, expToNext: Math.floor(50 * Math.pow(1.5, lv - 1)),
-        level: lv, atk: 25, def: 8, facing: 0, cooldown: 0, alive: true, avatarPath: r.avatarPath,
-      });
-    });`
-
+[ally角色位置.md](ally%E8%A7%92%E8%89%B2%E4%BD%8D%E7%BD%AE.md)
+##### 召唤按钮
 在组队的checkbox 增加召唤按钮 把角色召唤到用户旁边并 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
 取消组队时也要 储存一下角色的【位置信息和所在地图信息】到 "t_plugin_session_data"
 [game_data.md](game_data.md)

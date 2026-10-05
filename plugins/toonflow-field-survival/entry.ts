@@ -1025,6 +1025,39 @@ function clampToBound(s: FieldSurvivalState, x: number, y: number): { x: number;
   return { x: clamp(x, -b.lx, b.lx), y: clamp(y, -b.ly, b.ly) };
 }
 
+/**
+ * ★ 默认落点（库里没有该角色位置信息时才用）：在第一张图的可活动区域按索引均分分散，
+ *   不再围着玩家出生点扎堆。只保证落在地图边界内；
+ *   「不在墙里 / 障碍物里」由拿到前端 walkGrid 后的 fixSpawnWithNav 兜底校正。
+ */
+function defaultSpawnPoint(s: FieldSurvivalState, i: number, n: number): { x: number; y: number } {
+  // 原点 (0,0) 为中心，20 米半径内按索引均分角度 + 随机半径 → 零散分布
+  const cnt = Math.max(1, n | 0);
+  const ang = ((i % cnt) / cnt) * Math.PI * 2 + rnd(0, Math.PI * 0.35);
+  const rad = 6 + Math.random() * 14; // 6~20 米
+  return clampToBound(s, Math.cos(ang) * rad, Math.sin(ang) * rad);
+}
+
+/**
+ * ★ 拿到前端 walkGrid 后，把「未经碰撞校正」的落点推到最近可走格（防落进墙里 / 障碍物里）。
+ *   start 那一刻必然没有 nav（网格来自前端上报），所以采用两段式：先落点 + 打标，后校正。
+ */
+function fixSpawnWithNav(s: FieldSurvivalState): void {
+  if (!enemyNav || !Array.isArray(s.entities)) return;
+  for (const e of s.entities) {
+    if (!e || !(e as any)._needNavFix) continue;
+    const free = navNearestFree(enemyNav, e.x, e.y, 0.4, 12)
+      || navNearestFree(enemyNav, e.x, e.y, 0.4, 24);
+    if (free) {
+      e.x = free.x;
+      e.y = free.y;
+      (e as any).homeX = free.x;
+      (e as any).homeY = free.y;
+    }
+    delete (e as any)._needNavFix;
+  }
+}
+
 /** 某野区是否完全落在当前关卡之外（是 → 本图不存在该野区，不排刷，避免"每张图都有野怪"） */
 function regionOutOfMap(s: FieldSurvivalState, r: RegionDef): boolean {
   const b = s.mapBounds;
@@ -2129,18 +2162,10 @@ function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
   else if (inSel(sel.participants)) side = "ally";
   else if (roleType === "npc" || roleType === "system" || roleType === "general") side = "ally";
   else side = "spectator";
-  // ★ 默认落点：以玩家为中心、2~6 米内随机分布（玩家视野 13m，保证可见）
-  const player0 = s.entities.find((e) => e.side === "player");
-  const pcx = player0?.x ?? PLAYER_SPAWN.x;
-  const pcy = player0?.y ?? PLAYER_SPAWN.y;
-  const ang = rnd(0, Math.PI * 2);
-  const dist = 2 + Math.random() * 4;
-  let target: { x: number; y: number } = {
-    x: pcx + Math.cos(ang) * dist,
-    y: pcy + Math.sin(ang) * dist
-  };
-  // 边界钳制
-  target = clampToBound(s, target.x, target.y);
+  // ★ 默认落点：第一张图可活动区域按索引均分分散（不再围着玩家出生点扎堆）
+  const allyCount0 = s.entities.filter((x) => x.side === "ally").length;
+  const dp = defaultSpawnPoint(s, allyCount0, Math.max(6, allyCount0 + 1));
+  let target: { x: number; y: number } = { x: dp.x, y: dp.y };
   // 优先 enemyNav 避障；搜不到时加大半径重试（maxRing=8 对 50 米外随机落点太容易漏）
   if (enemyNav) {
     const free = navNearestFree(enemyNav, target.x, target.y, 0.4, 8)
@@ -2575,13 +2600,11 @@ export async function handle_action(
         // ★ fix④（缺口②）：参展列表里若混入玩家本人（宿主 roles 含用户角色、前端默认 push 玩家 id），
         //   不再生成一份同名友方 —— 否则开局即出现"另一个我"跟着自己跑
         if (isPlayerRole(r, playerRole)) return;
-        // ★ fix: 盟友环绕半径 = 2.5 米 + 随机 1.5~3.5 米（收紧防止扎堆）
-        const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
-        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 2);
-        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + 1.5 + Math.random() * 2);
-        const allyEntity = makeEntity(r, "ally", rawAllyX, rawAllyY, i);
+        // ★ 默认落点：第一张图可活动区域按索引均分分散（不再围着玩家出生点扎堆）
+        const dp = defaultSpawnPoint(s, i, participants.length);
+        const allyEntity = makeEntity(r, "ally", dp.x, dp.y, i);
         // ★ 按库恢复位置：库里记着该角色上局停在哪张图、哪个坐标 → 直接就位。
-        //   库里没有记录的新角色才走默认的「环绕玩家出生点」落点。
+        //   库里没有记录的新角色才走默认落点。
         const savedPos = savedRolePos(s, r);
         if (savedPos) {
           allyEntity.x = savedPos.x;
@@ -2589,13 +2612,13 @@ export async function handle_action(
           (allyEntity as any).mapName = savedPos.mapName || startMapName;
         } else {
           (allyEntity as any).mapName = startMapName; // fix: ally belongs to start_map, NOT follow player across maps
-          // ★ navNearestFree 兜底：落墙时推最近可走格；enemyNav 在 start 时为 null → clampToBound 保底
+          // ★ start 时 enemyNav 必然为 null（网格来自前端上报）→ 先落点打标，
+          //   拿到 walkGrid 后由 fixSpawnWithNav 推到最近可走格，保证不在墙里 / 障碍物里
           if (enemyNav) {
-            const free = navNearestFree(enemyNav, rawAllyX, rawAllyY, 0.4, 8);
+            const free = navNearestFree(enemyNav, dp.x, dp.y, 0.4, 8);
             if (free) { allyEntity.x = free.x; allyEntity.y = free.y; }
           } else {
-            const cb = clampToBound(s, rawAllyX, rawAllyY);
-            allyEntity.x = cb.x; allyEntity.y = cb.y;
+            (allyEntity as any)._needNavFix = true;
           }
         }
         // ★ 角色停在别的地图 → 进 parked，玩家切到那张图才看得见他们（在原地）
@@ -2759,6 +2782,8 @@ export async function handle_action(
       const localBuilt = applyLocalEnemies(s, (params as any)?.localEnemies);
       // ★ 敌人碰撞：前端只在切图那一次带上可行走网格（tileset 属性只有 iframe 侧解过）
       applyEnemyNavPayload((params as any)?.walkGrid);
+      // ★ 拿到本图碰撞网格后，把开局 / 动态生成的未校正落点推到最近可走格（防卡墙 / 卡障碍）
+      fixSpawnWithNav(s);
       // ★ v5：同步系统面板（当前地图名 / 参数卡外部改动 / 角色卡位置 / 队伍）
       // fix: tick levelName 来自前端 currentLevelName ref，只有 switchLevel 完成后才会更新。
       //   sys_travel 设置了 s.levelName=target 但前端还没切图 → levelName 还是旧值。
@@ -3183,7 +3208,10 @@ export async function handle_action(
             const allyCount = s.entities.filter((ee) => ee.side === "ally" && ee.id !== e.id).length;
             const ang = (allyCount / Math.max(1, allyCount + 1)) * Math.PI * 2 + rnd(0, Math.PI * 0.5);
             const dist = 2 + Math.random() * 2;
-            const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
+            const allyXBase =0;
+            const allyYBase =0;
+            // const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
+            const p = clampToBound(s, allyXBase + Math.cos(ang) * dist, allyYBase + Math.sin(ang) * dist);
             e.x = p.x;
             e.y = p.y;
             (e as any).homeX = e.x;

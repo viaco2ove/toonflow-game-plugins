@@ -952,7 +952,7 @@ window.addEventListener("message", async (e) => {
       const s = 1 + (lv - 1) * 0.3;
       // ★ 玩家中心 50 米半径随机（避开 5 米内）
       const ang = Math.random() * Math.PI * 2;
-      const dist = 1 + Math.random() * 20;
+      const dist = -20 + Math.random() * 20;
       ents.push({
         id: r.id, name: r.name, side: "ally",
         x: Math.cos(ang) * dist, y: Math.sin(ang) * dist, vx: 0, vy: 0,
