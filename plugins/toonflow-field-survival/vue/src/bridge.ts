@@ -109,7 +109,18 @@ export function onHostState(handler: (data: HostState) => void): () => void {
     if (!d || typeof d !== "object") return;
     if (d.type === "tf_plugin_state" && d.state) {
       hostReady = true;
-      handler(d as HostState);
+      // ★ 响应修复：宿主 postMessage 把 response 放在顶层 message 上（toonflow-game-web ScenePlay.vue:1647
+      //   / vite.config.ts:311），state.value 收不到 → App.vue 行 501 的 watch(() => state.value?.response)
+      //   永远拿不到值 → sysNotice 永远显示前端自己设的"正在刷新货源…"而看不到插件 response。
+      //   把顶层 response 镜像到 state.response 上，watch 即能命中。
+      const data: HostState = {
+        state: typeof d.response === "string" && d.response
+          ? { ...(d.state as any), response: d.response }
+          : (d.state as GameState),
+        actions: d.actions,
+        response: d.response,
+      };
+      handler(data);
     }
   };
   window.addEventListener("message", listener);

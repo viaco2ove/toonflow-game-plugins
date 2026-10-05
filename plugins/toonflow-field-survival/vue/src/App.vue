@@ -929,6 +929,17 @@ let mapUploadDoneTimer = 0;
 let saveDebounce = 0;
 /** 标记：下次 tick 时需要保存 ally 位置（组队/取消组队/召唤后触发） */
 let saveAllyPositionsNextTick = false;
+/** ally 位置落盘定时器（独立于 playerCard 的 saveDebounce，避免互相 clearTimeout） */
+let allySaveTimer = 0;
+/** 组队/取消组队/召唤后：等 1200ms（宿主 tick 回来更新实体位置）再落盘 ally 位置 */
+function scheduleAllyPositionsSave() {
+  saveAllyPositionsNextTick = true;
+  if (allySaveTimer) window.clearTimeout(allySaveTimer);
+  allySaveTimer = window.setTimeout(() => {
+    allySaveTimer = 0;
+    saveAllyPositionsToSession();
+  }, 1200);
+}
 /** ★ fix③：开始游戏后的状态提示（宿主 /plugin/tick 响应慢时给出可解释的反馈） */
 const startHint = ref("");
 let startTimerSlow = 0;
