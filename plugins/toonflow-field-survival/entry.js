@@ -2498,7 +2498,8 @@ async function handle_action(action, params, state, context) {
           }
           const me = playerEntity(s);
           if (me) {
-            const p = clampToBound(s, me.x + 40, me.y + 40);
+            // ★ 紧贴玩家身边（约 2 米，玩家视野 13m 能直接看到）
+            const p = clampToBound(s, me.x + 2, me.y + 2);
             e.x = p.x;
             e.y = p.y;
             e.homeX = e.x;
@@ -2506,9 +2507,9 @@ async function handle_action(action, params, state, context) {
           }
         }
         ensureNpcCards(s, s.levelName || "");
-        pushEvent(s, `${e?.name || rid} \u5DF2\u53EC\u5524\u5230\u4F60\u8EAB\u8FBEBD\uFF08\u4E0D\u52A0\u5165\u961F\u4F0D\uFF09`);
+        pushEvent(s, `${e?.name || rid} \u5DF2\u53EC\u5524\u5230\u4F60\u8EAB\u8FB9\uFF08\u4E0D\u52A0\u5165\u961F\u4F0D\uFF09`);
         await persistSys(context, s);
-        return okResp(`\u5DF2\u53EC\u5524 ${e?.name || rid} \u5230\u8EAB\u8FBEBD`);
+        return okResp(`\u5DF2\u53EC\u5524 ${e?.name || rid} \u5230\u8EAB\u8FB9`);
       }
 
       const set = new Set(s.partyIds || []);

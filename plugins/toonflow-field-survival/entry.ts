@@ -2432,8 +2432,8 @@ export async function handle_action(
         if (isPlayerRole(r, playerRole)) return;
         // ★ v3: 盟友环绕半径 = 2.5 米 + 随机 0~50 米（避开 5 米内挤堆）
         const angle = (i / Math.max(1, participants.length)) * Math.PI * 2;
-        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 50);
-        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 50);
+        const rawAllyX = PLAYER_SPAWN.x + Math.cos(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 10);
+        const rawAllyY = PLAYER_SPAWN.y + Math.sin(angle) * (ALLY_FOLLOW_GAP_M + Math.random() * 10);
         const allyEntity = makeEntity(r, "ally", rawAllyX, rawAllyY, i);
         // ★ navNearestFree 兜底：落墙时推最近可走格；enemyNav 在 start 时为 null → clampToBound 保底
         if (enemyNav) {
@@ -2957,7 +2957,8 @@ export async function handle_action(
           // TP 到玩家身边
           const me = playerEntity(s);
           if (me) {
-            const p = clampToBound(s, me.x + 40, me.y + 40);
+            // ★ 紧贴玩家身边（约 2 米，玩家视野 13m 能直接看到）
+            const p = clampToBound(s, me.x + 2, me.y + 2);
             e.x = p.x;
             e.y = p.y;
             (e as any).homeX = e.x;
