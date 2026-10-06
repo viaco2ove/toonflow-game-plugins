@@ -95,6 +95,9 @@ bsk click --session uiqp @e9
 ```
 
 ---
+### 3.4 鼠标点击
+1. evaluate 在主文档注入 <div id="__click_target_" style="position:fixed;left:Xpx;top:Ypx;width:2px;height:2px;pointer-events:none;z-index:99999">
+2. click --selector #_click_target → bsk 找到 div 中心坐标 (X,Y) → CDP 在 (X,Y) 派发真实鼠标事件 → 命中 canvas → 游戏寻路
 
 ## 四、消息协议——两条通道
 
