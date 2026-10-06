@@ -4735,6 +4735,9 @@ function loop(ts: number) {
   _animTick++;
   const s = state.value;
   if (!s || s.phase !== "playing") return;
+  // ★ 409 连击防护：宿主通知游戏已结束（如聊天框 #退出 指针被清），
+  //   停止上报 tick（否则每帧 409 刷屏 + UI 冻结）。收到新宿主状态会自动解除。
+  if (tickHalted.value) return;
   // ★ fix①（性能）：页面切到后台（锁屏 / 切走）时既不应渲染也不应上报 tick
   if (typeof document !== "undefined" && document.hidden) return;
   // ★ fix①（性能）：手机端把渲染帧率封顶 30fps（渲染内已按 dt 归一，速度不受影响）
@@ -5152,7 +5155,20 @@ onMounted(async () => {
     requestAnimationFrame(fitCanvas);
   })
 
+  /** ★ 409 连击防护：宿主通知「游戏已结束/无活跃状态」后置 true，
+   *   loop() 据此停发 tick；收到任何宿主回包（tf_plugin_state）即解除。 */
+  const tickHalted = ref(false);
+  window.addEventListener("message", (ev: MessageEvent) => {
+    const d: any = ev?.data;
+    if (d?.type === "tf_plugin_tick_halted") {
+      tickHalted.value = true;
+      sysNotice.value = "小游戏已结束（可在聊天框重新进入）";
+    }
+  });
+
   stopHost = onHostState((d) => {
+    // 收到宿主回包说明链路恢复（后端指针自愈 / 用户重进游戏）→ 解除 halt
+    if (tickHalted.value) tickHalted.value = false;
     const prevPhase = state.value?.phase;
     // ★ sys_chat 结果回推：后端把大模型结果写在 state.chatResult{reqId}，这里按 reqId 唤醒等待者
     const incomingChat = (d.state as any)?.chatResult;

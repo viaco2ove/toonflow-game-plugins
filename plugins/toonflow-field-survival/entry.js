@@ -227,14 +227,7 @@ const WORLD_REGIONS = [
     { id: "wild", name: "东南荒原", short: "东南", kind: "wild", x: 240, y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "开阔荒原，成群野兽巡行" },
 ];
 function str(v, d = "") {
-    if (typeof v === "string")
-        return v;
-    if (v == null)
-        return d;
-    if (typeof v === "number" || typeof v === "boolean")
-        return String(v);
-    // ★ 对象 / 数组 / Symbol / Function 等一律视为无效值，返回默认值避免「[object Object]」泄漏
-    return d;
+    return typeof v === "string" ? v : v == null ? d : String(v);
 }
 function num(v, d = 0) {
     const n = Number(v);
@@ -346,7 +339,6 @@ function buildItems(card, n = 8) {
             return;
         const c = (seen.get(k) || 0) + 1;
         seen.set(k, c);
-        // 第一条用纯名（同 useBagItem 的 bag 项一致），后续条目同名合并到 count
         if (c === 1) {
             names.push(p.name);
             counts.push(p.count);
@@ -358,8 +350,9 @@ function buildItems(card, n = 8) {
     const out = [];
     for (let i = 0; i < n; i++) {
         if (names[i]) {
-            const kind = parsed.find((p) => itemKey(p.name) === itemKey(names[i]))?.kind || guessKind(names[i]);
-            const heal = parsed.find((p) => itemKey(p.name) === itemKey(names[i]))?.heal || defaultHeal(names[i], kind);
+            const meta = parsed.find((p) => itemKey(p.name) === itemKey(names[i]));
+            const kind = meta?.kind || guessKind(names[i]);
+            const heal = meta?.heal ?? defaultHeal(names[i], kind);
             out.push({ name: names[i], count: counts[i], kind, heal });
         }
         else {
@@ -842,9 +835,6 @@ function clampToBound(s, x, y) {
  * ★ 默认落点（库里没有该角色位置信息时才用）：在第一张图的可活动区域按索引均分分散，
  *   不再围着玩家出生点扎堆。只保证落在地图边界内；
  *   「不在墙里 / 障碍物里」由拿到前端 walkGrid 后的 fixSpawnWithNav 兜底校正。
- *   s: 当前关卡数据
- *   i: 当前角色索引（同关卡同种野怪的索引，从 0 开始）
- *   n: 该种野怪数量（同关卡同种野怪数量）
  */
 function defaultSpawnPoint(s, i, n) {
     // 原点 (0,0) 为中心，20 米半径内按索引均分角度 + 随机半径 → 零散分布
@@ -913,7 +903,7 @@ function applyLocalEnemies(s, payload) {
                 return true;
             return String(e.id).startsWith("mob_")
                 ? false
-                : (Math.abs(e.x) <= lx && Math.abs(e.y) <= ly);
+                : Math.abs(e.x) <= lx && Math.abs(e.y) <= ly;
         });
     }
     // ③ 重建
@@ -1416,21 +1406,8 @@ function sameName(a, b) {
 }
 function parseItemRaw(raw) {
     if (raw && typeof raw === "object") {
-        // ★ 物品对象 name 字段兜底：raw.name 可能是 { cn, en, label, ... } 等嵌套对象，
-        //   直接 str() 会得到 "[object Object]" → HUD 显示错位 + useItem 找不到。
-        //   按常见字段顺序抽字符串，抽不到就视为无效物品（让 buildItems filter 丢掉）。
-        let name = "";
-        const nm = raw.name ?? raw.item ?? raw.label ?? raw.title;
-        if (typeof nm === "string") {
-            name = nm;
-        }
-        else if (nm && typeof nm === "object") {
-            name = str(nm.cn ?? nm.zh ?? nm.chinese ?? nm.name ?? nm.label ?? nm.title ?? "", "");
-        }
+        const name = str(raw.name ?? raw.item ?? "");
         const kind = KIND_LIST.indexOf(String(raw.kind)) >= 0 ? String(raw.kind) : guessKind(name);
-        // 无 name 的对象视为无效物品（让 buildItems filter 丢掉，避免 [object Object] 污染 HUD）
-        if (!name)
-            return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
         return {
             name,
             count: Math.max(1, Math.round(num(raw.count, 1))),
@@ -1444,21 +1421,26 @@ function parseItemRaw(raw) {
     const text = str(raw).trim();
     if (!text)
         return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
-    // ★ 物品字符串归一修复：先剥括号注记（含 "（钓鱼累积…）"、"（鲜美的河鱼）" 等自由文本尾注），
+    // ★ 物品字符串归一修复：先剥括号注记（"（钓鱼累积…）"/"（鲜美的河鱼）" 等自由文本尾注），
     //   再用剥后剩下的字符串剥 ×N。原顺序反过来遇到 "银鲳×16（…）" 会因正则要求
     //   ×N 紧接结尾而失败，最终 name 留下 "银鲳×16"、count=1 → HUD 显示错位 + useItem
     //   拿带尾巴 name 找不到 bag 项 → 静默 "不在背包中"。两步法：剥括号 → 剥 ×N → 兜底空 desc。
     const noParen = text.replace(/[（(][^）)]*[）)]\s*$/, "").trim() || text;
     const m = noParen.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
     if (m) {
-        const name = m[1].trim();
+        // ★ 同下：清除 "[object Object]" 残留（带 ×N 后缀的脏条目）
+        const name = m[1].replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
+        if (!name)
+            return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
         const kind = guessKind(name);
         return { name, count: Math.max(1, parseInt(m[2], 10) || 1), kind, rarity: "common", heal: defaultHeal(name, kind), price: 0 };
     }
     const p = text.match(/[（(](.*?)[)）]\s*$/);
-    const name = noParen.trim();
+    // ★ 清除 "[object Object]" 残留（历史脏数据经 String(obj) 写入参数卡）：
+    //   清空后 name 为空 → itemsFromCard/serializeBag 过滤掉 → 下次背包重写自动清除脏条目
+    const name = noParen.replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
     const kind = guessKind(name);
-    return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[2] : undefined };
+    return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[1] : undefined };
 }
 function itemsFromCard(card) {
     const arr = Array.isArray(card?.items) ? card.items : [];
@@ -2077,9 +2059,7 @@ function spawnRoleEntity(s, role) {
 }
 /** ★ game.md 角色位置：角色驻留地图 —— 他在哪个地图就在哪个地图，不因玩家切图而改变。
  *  只有组队中的角色跟随玩家跨图（落点 = 玩家身边）；脱离队伍就地留下。
- *  非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。
- *  ★ v111 修复：同一角色 id 在同一时刻只允许存在于「当前图 entities」或「某一张图的 parked」，
- *  且 parked 各图之间不得重复 —— 否则同一角色会在两张图同时出现（双份实体）。 */
+ *  非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。 */
 const START_MAP_NAME = "Mulberry Town";
 /** 角色唯一键：id 优先，退化到 name */
 function roleKeyOf(e) {
@@ -2171,8 +2151,8 @@ function handleLevelChange(s, snapParty) {
     if (!Array.isArray(s.entities))
         return;
     const lv = s.levelName || "";
-    if (!s.parked || typeof s.parked !== "object")
-        s.parked = {};
+    const parkedAny = s;
+    parkedAny.parked = parkedAny.parked && typeof parkedAny.parked === "object" ? parkedAny.parked : {};
     dedupeRoles(s); // ★ 先收敛历史脏数据（分身 / 跨图双份）
     const party = (s.partyIds || []).map((x) => String(x));
     const player = s.entities.find((e2) => e2.side === "player");
@@ -2186,18 +2166,13 @@ function handleLevelChange(s, snapParty) {
             return;
         }
         if (String(e2.side) === "enemy") {
-          // 本地怪（mapmob_/localmob_/zone_）由前端 localEnemies 按当前地图重建；
-          // 切图时若不丢弃，会被带入下一张图（如 Town 出现 Dungeon 的怪）。
-          if (e2.isLocal || isLocalEnemyId(e2.id)) {
-            return;
-          }
-          // ★ v111：非本地敌怪按「所属地图」管理，切图只保留当前图的，避免跨图累积（森林 11 → 回城仍 11 → 再进 22）
-          if (!e2.mapName)
-            e2.mapName = lv;
-          if (e2.mapName === lv)
+            // 本地怪（mapmob_/localmob_/zone_）由前端 localEnemies 按当前地图重建；
+            // 切图时若不丢弃，会被带入下一张图（如 Town 出现 Dungeon 的怪）。
+            if (e2.isLocal || isLocalEnemyId(e2.id))
+                return;
             stay.push(e2);
-          return;
-        }
+            return;
+        } // 非本地野怪保留；本地怪由前端按图管理
         if (!e2.mapName)
             e2.mapName = s.startMapName || START_MAP_NAME; // 未定位角色默认回 start_map，不随玩家跨图
         if (party.indexOf(String(e2.id)) >= 0) {
@@ -2220,7 +2195,7 @@ function handleLevelChange(s, snapParty) {
             parkRole(s, e2, e2.mapName); // 角色驻留原图（含坐标校验与全图去重）
         }
     });
-    const back = Array.isArray(s.parked[lv]) ? s.parked[lv] : [];
+    const back = Array.isArray(parkedAny.parked[lv]) ? parkedAny.parked[lv] : [];
     back.forEach((e2) => {
         const k = roleKeyOf(e2);
         if (k && seen.has(k))
@@ -2229,7 +2204,7 @@ function handleLevelChange(s, snapParty) {
         stay.push(e2);
         seen.add(k);
     });
-    s.parked[lv] = [];
+    parkedAny.parked[lv] = [];
     s.entities = stay;
 }
 /** 组队角色随击杀获得经验并升级 */
@@ -2434,7 +2409,7 @@ async function restoreSys(context, s) {
 }
 /** 从库里（ai_story_roles）取该角色上次保存的位置/地图；库里没有则返回 null（走默认 spawn） */
 function savedRolePos(s, r) {
-    const m = s && s._savedRolePos;
+    const m = s?._savedRolePos;
     if (!m || typeof m !== "object" || !r)
         return null;
     return m[String(r.id || "")] || m["name:" + String(r.name || "")] || null;
@@ -2454,7 +2429,7 @@ async function refreshShop(context, s, forceAgent = false) {
                 playerCard: s.playerCard || {},
             }), 20000, "shop agent timeout");
             console.log("[商城] agent 返回原始数据:", JSON.stringify(r).slice(0, 300));
-const goods = r?.output?.goods;
+            const goods = r?.output?.goods;
             if (Array.isArray(goods) && goods.length > 0) {
                 story = goods.slice(0, 14).map((g, i) => {
                     // ★ fix：g.name 可能是对象 {cn/zh/name/label/title}，必须走 str() 兜底
@@ -2468,11 +2443,12 @@ const goods = r?.output?.goods;
                         rarity: normRarity(g?.rarity),
                         heal: Math.max(0, Math.round(num(g?.heal, defaultHeal(rawName, kind)))),
                         desc: str(g?.desc, "").slice(0, 60),
-                        from: r?.ok === false ? "fallback" : "story",
+                        from: "story",
                     };
                 });
                 console.log("[商城] agent 故事物资生成成功，共", story.length, "件:", story.map((x) => x.name).join(", "));
-            } else {
+            }
+            else {
                 const errMsg = r?.error ? String(r.error).slice(0, 60) : (goods ? "agent 返回空数组" : "agent 未返回 goods 字段");
                 console.log("[商城] agent 返回异常:", errMsg);
                 notes.push(errMsg);
@@ -2483,12 +2459,12 @@ const goods = r?.output?.goods;
             console.error("[商城] agent 调用异常:", msg);
             notes.push(msg);
         }
-    } else {
+    }
+    else {
         console.warn("[商城] context.tsApi.agent.run 不存在，商城 agent 不可用，降级为内置物资");
     }
     s.shopGoods = [...story, ...builtin];
     s.shopSource = story.length ? "agent" : "builtin";
-    console.log(`[商城] 最终 shopSource=${s.shopSource}, story 长度=${story.length}, builtin 长度=${builtin.length}, 总=${s.shopGoods.length}, 故事物资 from 标签:`, story.map((x) => `${x.name}(${x.from})`).join(", "));
     if (notes.length)
         pushEvent(s, `商城生成降级：${notes[0]}`);
     return notes;
@@ -2542,7 +2518,6 @@ async function handle_action(action, params, state, context) {
             s.levelName = curLv;
             s.entities = [];
             // ★ fix: 玩家/ally/spectator 统一归属 start_map（固定 "Mulberry Town"），不依赖 map?.theme
-            //   map?.theme 可能为 undefined（map 加载失败）→ undefined+""="undefined" 字符串，导致 mapName 错误
             const startMapName = "Mulberry Town";
             const playerEnt = makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
             playerEnt.mapName = curLv;
@@ -2584,11 +2559,13 @@ async function handle_action(action, params, state, context) {
                     }
                 }
                 // ★ 角色停在别的地图 → 进 parked，玩家切到那张图才看得见他们（在原地）
-                //   parkRole 内部会全图去重（sys_state.parked 与 ai_story_roles 双份记录不会变成分身）
-                if (allyEntity.mapName !== curLv)
-                    parkRole(s, allyEntity, allyEntity.mapName);
-                else
+                if (allyEntity.mapName !== curLv) {
+                    const pk = String(allyEntity.mapName);
+                    (s.parked[pk] = s.parked[pk] || []).push(allyEntity);
+                }
+                else {
                     s.entities.push(allyEntity);
+                }
             });
             // ★ v4：敌对角色落在「最近的野区」内
             //   （玩家出生于城镇安全区，若沿用"围绕玩家 30~60 米"的落点会落进城镇内部）
@@ -2619,10 +2596,13 @@ async function handle_action(action, params, state, context) {
                     se.y = sp.y;
                     se.mapName = sp.mapName || startMapName;
                 }
-                if (se.mapName !== curLv)
-                    parkRole(s, se, se.mapName);
-                else
+                if (se.mapName !== curLv) {
+                    s.parked[String(se.mapName)] = s.parked[String(se.mapName)] || [];
+                    s.parked[String(se.mapName)].push(se);
+                }
+                else {
                     s.entities.push(se);
+                }
             });
             // ★ 不再自动 spawn 无明确阵营的 AI 故事角色（避免地图上冒出莫名 NPC）；
             //   玩家自己 / participants / spectators / enemies 已在上方生成；
@@ -2685,8 +2665,6 @@ async function handle_action(action, params, state, context) {
             if (!s._sysRestored)
                 await restoreSys(context, s);
             syncCardFromContext(s, context); // ★ start 也同步参数卡
-            // ★ 按数据库权威：restoreSys 已恢复上局的 s.parked，不再清空。
-            //   game.md「角色驻留地图」：角色上局停在哪张图，本局就还在那张图。
             if (str(params?.levelName))
                 s.levelName = str(params.levelName, s.levelName || "");
             // ★ fix：开局 levelName 与前端对齐（前端 DEFAULT_START_LEVEL = "Mulberry Town"）。
@@ -2753,8 +2731,6 @@ async function handle_action(action, params, state, context) {
             if (s.teleportTarget)
                 s.teleportTarget = null;
             s.tick += 1;
-            if (s.tick % 20 === 0)
-                dedupeRoles(s); // ★ v111：周期收敛角色位置脏数据（同 id 分身 / 跨图双份）
             // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
             const localBuilt = applyLocalEnemies(s, params?.localEnemies);
             // ★ 敌人碰撞：前端只在切图那一次带上可行走网格（tileset 属性只有 iframe 侧解过）
@@ -3179,7 +3155,6 @@ async function handle_action(action, params, state, context) {
             // ★ 前端传 agent:true 时强制走 agent（不清空旧 story 列表）；否则仅 agent 成功时保留
             const forceAgent = params?.agent === true;
             if (forceAgent) {
-                // 强制走 agent：清空旧 story，让 refreshShop 重新从 agent 获取
                 s.shopGoods = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
                 s.shopSource = "builtin";
             }
@@ -3230,16 +3205,18 @@ async function handle_action(action, params, state, context) {
             let e = s.entities.find((x) => x.id === rid || x.name === rid);
             if (e && e.side === "enemy")
                 return okResp("敌对角色无法组队");
-            // ★ 组队/召唤：角色停在别的地图（s.parked）→ 先接回当前图（全图去重，避免留副本）
+            // ★ 组队/召唤：角色停在别的地图（s.parked）→ 先接回当前图
             if (!e && (follow || summon)) {
-                e = unparkRole(s, rid) || undefined;
-                if (e)
-                    s.entities.push(e);
-            }
-            else if (e && (follow || summon)) {
-                unparkRole(s, rid); // ★ 清掉该角色在其它地图的残留副本，确保同 id 唯一
-                dedupeRoles(s);
-                e = s.entities.find((x) => String(x.id) === String(e.id) || x.name === e.name) || e;
+                const parkedObj = s.parked || {};
+                for (const k of Object.keys(parkedObj)) {
+                    const arr = Array.isArray(parkedObj[k]) ? parkedObj[k] : [];
+                    const idx = arr.findIndex((x) => String(x.id) === rid || String(x.name) === rid);
+                    if (idx >= 0) {
+                        e = arr.splice(idx, 1)[0];
+                        s.entities.push(e);
+                        break;
+                    }
+                }
             }
             // ★ game.md 组队/召唤：角色还没上场（无实体）时，先按角色位置规则生成到可活动区域
             if (!e && (follow || summon)) {
@@ -3262,10 +3239,13 @@ async function handle_action(action, params, state, context) {
                     const me = playerEntity(s);
                     if (me) {
                         // 统计已存在的 ally 数量，用于角度均分（0-index）
-                        const allyCount = s.entities.filter(ee => ee.side === "ally" && ee.id !== e.id).length;
+                        const allyCount = s.entities.filter((ee) => ee.side === "ally" && ee.id !== e.id).length;
                         const ang = (allyCount / Math.max(1, allyCount + 1)) * Math.PI * 2 + rnd(0, Math.PI * 0.5);
                         const dist = 2 + Math.random() * 2;
-                        const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
+                        const allyXBase = 0;
+                        const allyYBase = 0;
+                        // const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
+                        const p = clampToBound(s, allyXBase + Math.cos(ang) * dist, allyYBase + Math.sin(ang) * dist);
                         e.x = p.x;
                         e.y = p.y;
                         e.homeX = e.x;

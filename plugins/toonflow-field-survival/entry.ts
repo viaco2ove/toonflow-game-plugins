@@ -1653,14 +1653,18 @@ function parseItemRaw(raw: any): BagItem {
   const noParen = text.replace(/[（(][^）)]*[）)]\s*$/, "").trim() || text;
   const m = noParen.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
   if (m) {
-    const name = m[1].trim();
+    // ★ 同下：清除 "[object Object]" 残留（带 ×N 后缀的脏条目）
+    const name = m[1].replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
+    if (!name) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
     const kind = guessKind(name);
     return { name, count: Math.max(1, parseInt(m[2], 10) || 1), kind, rarity: "common", heal: defaultHeal(name, kind), price: 0 };
   }
   const p = text.match(/[（(](.*?)[)）]\s*$/);
-  const name = noParen.trim();
+  // ★ 清除 "[object Object]" 残留（历史脏数据经 String(obj) 写入参数卡）：
+  //   清空后 name 为空 → itemsFromCard/serializeBag 过滤掉 → 下次背包重写自动清除脏条目
+  const name = noParen.replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
   const kind = guessKind(name);
-  return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[2] : undefined };
+  return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[1] : undefined };
 }
 
 function itemsFromCard(card: any): BagItem[] {
