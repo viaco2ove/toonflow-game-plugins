@@ -1040,6 +1040,8 @@ function startGame() {
 
 /* ---------------- 操作输入 ---------------- */
 const input = ref({ dx: 0, dy: 0, moveTo: null as null | { x: number; y: number } });
+/** ★ 方案一：当前正在自动逼近的怪物目标（null = 无自动逼近） */
+const autoApproachTarget = ref<null | { id: string; x: number; y: number; skillIdx: number }>(null);
 const keys = new Set<string>();
 
 function onKeyDown(e: KeyboardEvent) {
@@ -1059,7 +1061,10 @@ function syncKeys() {
   if (keys.has("arrowdown") || keys.has("s")) dy += 1;
   input.value.dx = dx;
   input.value.dy = dy;
-  if (dx || dy) input.value.moveTo = null;
+  if (dx || dy) {
+    input.value.moveTo = null;
+    autoApproachTarget.value = null;  // ★ 方案一：摇杆/键盘接管 → 取消自动逼近
+  }
 }
 
 /* 虚拟摇杆 */
@@ -1083,7 +1088,10 @@ function stickMove(e: PointerEvent) {
   const ny = y / STICK_R;
   input.value.dx = Math.abs(nx) > 0.18 ? nx : 0;
   input.value.dy = Math.abs(ny) > 0.18 ? ny : 0;
-  if (input.value.dx || input.value.dy) input.value.moveTo = null;
+  if (input.value.dx || input.value.dy) {
+    input.value.moveTo = null;
+    autoApproachTarget.value = null;  // ★ 方案一：摇杆接管 → 取消自动逼近
+  }
 }
 function stickEnd() {
   stick.value.active = false;
@@ -1330,6 +1338,8 @@ async function toggleOrientation_android_app_h5() {
 function onCanvasClick(e: MouseEvent) {
   const c = canvasEl.value;
   if (!c) return;
+  const s = state.value;
+  if (!s || !s.entities) return;
   const r = c.getBoundingClientRect();
 
   // 屏幕点 → canvas 内部像素
@@ -1367,14 +1377,73 @@ function onCanvasClick(e: MouseEvent) {
     x: Math.max(-lim, Math.min(lim, tx)),
     y: Math.max(-lim, Math.min(lim, ty)),
   };
-  input.value.moveTo = tgt;
-  input.value.dx = 0;
-  input.value.dy = 0;
 
-  // ★ 点下即跑 A*：既给出"能不能到"的即时反馈（特效颜色），也直接填好路点队列，
-  //   避免 localTick 首帧再算一次。
-  const reachable = recomputeMoveToPath(tgt.x, tgt.y);
-  pushClickFx(tgt.x, tgt.y, reachable);
+  // ★ 方案一：优先检测是否点中怪物（用世界米坐标 vs entity 位置）
+  //   ★ 阈值放宽到 2.5m（之前 1.5m 在 zoom 大、sx 大的画面里几乎点不到野怪）
+  const enemyList = s.entities.filter((e) => e.side === "enemy" && e.alive !== false);
+  const enemyWithDist = enemyList.map((e) => ({ e, d: Math.hypot(e.x - tx, e.y - ty) }));
+  const clickedEnemy = enemyWithDist.filter(({ d }) => d < 2.5).sort((a, b) => a.d - b.d)[0]?.e;
+
+  if (clickedEnemy) {
+    // ★ 点怪 → 发 goto_enemy，告知后端「正在逼近这个目标」
+    autoApproachTarget.value = { id: clickedEnemy.id, x: clickedEnemy.x, y: clickedEnemy.y, skillIdx: 0 };
+    sendTick("goto_enemy", { targetId: clickedEnemy.id, skillIdx: 0 });
+  } else {
+    // ★ 方案一 v2：点空地时，如果附近（<5m）有敌，仍自动锁定最近的一只做逼近
+    //   ——「玩家想打眼前野怪但点偏了」是最常见的挫败感来源，让 click 永远管用
+    const nearEnemy = enemyWithDist.sort((a, b) => a.d - b.d)[0]?.e;
+    if (nearEnemy && enemyWithDist[0].d < 5) {
+      autoApproachTarget.value = { id: nearEnemy.id, x: nearEnemy.x, y: nearEnemy.y, skillIdx: 0 };
+      sendTick("goto_enemy", { targetId: nearEnemy.id, skillIdx: 0 });
+      // 同时把点击位置记为临时视觉目标
+      pushClickFx(nearEnemy.x, nearEnemy.y, true);
+    } else {
+      // ★ 真的点空地 → 取消自动逼近，清 moveTo，设新目标
+      autoApproachTarget.value = null;
+      input.value.moveTo = tgt;
+      input.value.dx = 0;
+      input.value.dy = 0;
+      // ★ 点下即跑 A*：既给出"能不能到"的即时反馈（特效颜色），也直接填好路点队列
+      const reachable = recomputeMoveToPath(tgt.x, tgt.y);
+      pushClickFx(tgt.x, tgt.y, reachable);
+    }
+  }
+}
+
+/** ★ 方案三：右键 / 双击 普攻（@contextmenu.prevent 触发）
+ *  复用 onCanvasClick 的点击检测逻辑：找最近点中的怪物，发 attack */
+function onRightClick(e: MouseEvent) {
+  const c = canvasEl.value;
+  if (!c) return;
+  const s = state.value;
+  if (!s || !s.entities) return;
+  const r = c.getBoundingClientRect();
+  const cssX = e.clientX - r.left;
+  const cssY = e.clientY - r.top;
+  const ratioX = c.width / r.width;
+  const ratioY = c.height / r.height;
+  const px = cssX * ratioX;
+  const py = cssY * ratioY;
+  const ts = terrainScale.value;
+  const [vw, vh] = ts.viewSizeMeters(zoom.value);
+  const kInv = renderScale.value > 0 ? renderScale.value : 1;
+  const Wl = Math.round(c.width / kInv);
+  const Hl = Math.round(c.height / kInv);
+  const sxInv = Math.max(4, Math.round(Math.max(Wl / vw, Hl / (vh * DEPTH))));
+  const dx = (px / kInv - Wl / 2) / sxInv;
+  const dy = (py / kInv - Hl / 2) / (sxInv * DEPTH);
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) return;
+  const tx = me.x + dx;
+  const ty = me.y + dy;
+  // 找点击位置 1.5m 内最近的活敌人
+  const clicked = s.entities
+    .filter((e) => e.side === "enemy" && e.alive !== false)
+    .map((e) => ({ e, d: Math.hypot(e.x - tx, e.y - ty) }))
+    .filter(({ d }) => d < 1.5)
+    .sort((a, b) => a.d - b.d)[0]?.e;
+  if (clicked) sendTick("attack", { targetId: clicked.id });
+  else sendTick("attack", {});   // 无目标时让后端就近找（entry.ts 会返回"附近没有敌人"）
 }
 
 /** 点击地面特效入队（超出上限则丢弃最旧的，避免连点导致数组无限增长） */
@@ -2335,6 +2404,7 @@ function clearMoveTo(): void {
   moveToPathKey = "";
   moveToUnreachable = false;
   moveToBlockedTicks = 0;
+  autoApproachTarget.value = null;  // ★ 方案一：取消 moveTo 时同步取消自动逼近
 }
 
 /** 目标 + 关卡名 → 路径缓存键（换图 / 换目标才重算） */
@@ -2710,6 +2780,33 @@ function localTick(): void {
         }
       }
     }
+
+    // ★ 方案一：自动逼近（点击怪物后，localTick 持续驱动玩家走向目标，进入射程后自动发 skill）
+    const aa = autoApproachTarget.value;
+    if (aa) {
+      // 找到当前帧怪物位置（可能已移动）
+      const target = s.entities.find((e) => e.id === aa.id && e.alive !== false);
+      if (!target) {
+        // 目标已死/消失 → 取消逼近
+        autoApproachTarget.value = null;
+      } else {
+        const d2 = Math.hypot(target.x - me.x, target.y - me.y);
+        if (d2 < 4.5) {
+          // ★ 进入射程（4.5m，留 0.5m 余量）→ 自动施放当前选中的技能
+          autoApproachTarget.value = null;
+          castSkill(aa.skillIdx);
+        } else {
+          // ★ 未到射程 → 设 moveTo 走过去（复用已有的 A* 寻路）
+          input.value.dx = 0;
+          input.value.dy = 0;
+          input.value.moveTo = { x: target.x, y: target.y };
+          // 目标变了 → 重算路径（用 live entity 最新坐标）
+          const key = `${currentLevelName.value}|${target.x.toFixed(2)},${target.y.toFixed(2)}`;
+          if (key !== moveToPathKey) recomputeMoveToPath(target.x, target.y);
+        }
+      }
+    }
+
     // 松手立即停止：清空速度，宿主侧不会再产生余速滑行
     me.vx = 0;
     me.vy = 0;
@@ -3951,6 +4048,20 @@ function render() {
       const ey = wz2py(drawY);
       if (e.side === "enemy" && !roleIds.has(e.id)) {
         drawMonster(ctx, e, ex, ey, sx);
+        // ★ 方案一：攻击范围提示环——怪物脚下画射程圆（红=玩家够得着，灰=太远）
+        const me = s.entities.find((p) => p.side === "player");
+        if (me) {
+          const d2m = Math.hypot(e.x - me.x, e.y - me.y);
+          const inRange = d2m < 4.5;  // 4.5m = 玩家技能射程（含余量）
+          ctx.save();
+          ctx.strokeStyle = inRange ? "rgba(255, 60, 60, 0.6)" : "rgba(150, 150, 150, 0.35)";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash(inRange ? [] : [4, 4]);
+          ctx.beginPath();
+          ctx.arc(ex, ey + 4, 4.5 * sx, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
       } else {
         drawEntity(ctx, e, getEntityAvatar(e), ex, ey, sx);
       }
@@ -3961,6 +4072,24 @@ function render() {
 
   // —— ★ 点击寻路可视化：A* 路径虚线 + 目标标记 + 点击涟漪 ——
   drawClickFxLayer(ctx, wx2px, wz2py, sx);
+
+  // ★ 方案一：自动逼近目标高亮（玩家正在走过去时，怪物脚下画脉冲红圈）
+  const aaTarget = autoApproachTarget.value;
+  if (aaTarget) {
+    const aaEnt = s.entities.find((e) => e.id === aaTarget.id);
+    if (aaEnt) {
+      const ax = wx2px(aaEnt.x);
+      const ay = wz2py(aaEnt.y);
+      const pulse = 0.6 + 0.4 * Math.sin(_animTick * 0.15);  // 脉冲呼吸
+      ctx.save();
+      ctx.strokeStyle = `rgba(255, 80, 80, ${pulse})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ax, ay + 4, 14 + pulse * 4, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 
   // —— 飘字（屏幕像素）——
   s.floaters.forEach((f) => {
@@ -5653,6 +5782,7 @@ watch(() => state.value?.phase, (p) => {
             :width="canvas_w_ref"
             :height="canvas_h_ref"
           @click="onCanvasClick"
+          @contextmenu.prevent="onRightClick"
         ></canvas>
       </div>
 

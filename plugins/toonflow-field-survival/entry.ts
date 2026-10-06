@@ -302,6 +302,8 @@ export interface FieldSurvivalState {
   travelTarget?: TeleportTarget | null;
   /** ★ v5：回写宿主的用户动态参数卡补丁（items / skills / money），宿主消费后清空 */
   writeback?: Record<string, any> | null;
+  /** ★ 方案一：点击自动逼近目标（玩家点击怪物后写入，localTick 消费后清空） */
+  autoApproach?: { targetId: string; skillIdx: number; phase: "moving" | "casting" } | null;
   // 结算
   exp: number;
   money: number;
@@ -347,14 +349,16 @@ const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
    ★ 修复：原注释写作"3 米/帧"，与前端 3 米/秒 相差 10 倍，是位移异常/瞬移的根因之一
    ★ v4：敌人探测半径 = MOB_DETECT_M = 10 米（此前 MOB_VIEW_M=80 从未被敌人分支引用，
          野怪无视距离全图直线追击 —— 现在 10 米探测 → 追击 → 12 米脱战归位）
-   mob 攻击 = 2 米；盟友视野 = 80 米；盟友跟随 = 12 米；盟友攻击 = 2 米
+   mob 攻击 = 1 米（进入攻击位）；盟友视野 = 80 米；盟友跟随 = 2.5 米；盟友攻击 = 0.5 米
    开箱/拾血瓶 = 2 米；技能作用范围 = 30 米
    */
 const MOVE_SPEED_M = 3.0;      // 米/秒
 const TICK_DT_S = 0.1;         // 一次 tick = 100ms（与前端 TICK_MS 对齐）
 const MOB_VIEW_M   = 80;       // ★ v4：仅盟友 AI 追击射程兜底用（敌人改用 MOB_DETECT_M）
-/** ★ game.md《野怪和攻击机制》：近战距离 0.5 米（玩家/其他角色/野怪通用） */
-const MOB_ATK_M    = 0.5;
+/** ★ game.md《野怪和攻击机制》：近战距离 1.0 米（从 0.5m 调大，消除视觉死区——
+ *  0.5m 时怪停在玩家身边但模型体积导致实际距离 0.8~1m，看起来"呆着不打"；
+ *  1.0m 让怪继续逼近直到真正贴身，攻击环同步告知玩家何时可打） */
+const MOB_ATK_M    = 1.0;
 const ALLY_ATK_M   = 0.5;
 /** ★ game.md：野怪发起攻击的距离 = 4 米 —— 怪不打进玩家身边 4m 内，友军（护卫）不动手，
  *  且友军索敌锚点是「玩家」而不是友军自身（此前锚在友军身上，友军阵位散开 12m 后
@@ -2920,6 +2924,35 @@ export async function handle_action(
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
       pushEvent(s, `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标`);
       return okResp(`${skill.name}`);
+    }
+
+    /* ============ ★ 方案一 + 三：点击自动逼近 & 普攻 ============ */
+    case "goto_enemy": {
+      if (s.phase !== "playing") return okResp("");
+      const targetId = str(params?.targetId, "");
+      const skillIdx = num(params?.skillIdx, 0);
+      const target = s.entities.find((e) => e.id === targetId && e.alive !== false);
+      if (!target) return okResp("目标已消失");
+      s.autoApproach = { targetId, skillIdx, phase: "moving" };
+      return okResp(`正在接近 ${target.name}…`);
+    }
+
+    case "attack": {
+      if (s.phase !== "playing") return okResp("");
+      const player = s.entities.find((e) => e.side === "player");
+      if (!player || !player.alive) return okResp("");
+      // ★ 方案三：普攻——在 SKILL_RANGE_M 内找最近活敌，短冷却无消耗
+      const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive !== false);
+      const inRange = enemies.filter((e) => dist(player, e) < SKILL_RANGE_M);
+      if (!inRange.length) return okResp("附近没有敌人");
+      const target = inRange.reduce((best, e) => (!best || dist(player, e) < dist(player, best) ? e : best), inRange[0]);
+      const dmg = Math.max(1, Math.round(player.atk * 0.6));
+      (player as any).actionBobMs = 200;
+      floater(s, "普攻", player.x, player.y - 34);
+      pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: "#fff", size: 1.2 });
+      damage(s, target, dmg);
+      pushEvent(s, `普攻命中 ${target.name}，伤害 ${dmg}`);
+      return okResp(`普攻 → ${target.name} -${dmg}`);
     }
 
     case "item": {

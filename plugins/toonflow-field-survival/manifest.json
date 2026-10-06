@@ -1,7 +1,7 @@
 {
   "id": "com.toonflow.minigame-field-survival",
   "name": "野外生存",
-  "version": "1.0.7",
+  "version": "1.0.9",
   "author": "Toonflow Team",
   "description": "在荒野中生存，寻找食物和水源，抵御野兽袭击，挑战极限生存天数。",
   "main": "entry.ts",
