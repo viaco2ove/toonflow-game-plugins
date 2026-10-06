@@ -2529,13 +2529,14 @@ function savedRolePos(s: FieldSurvivalState, r: any): { x: number; y: number; ma
 }
 
 /** 商城：商城 agent（故事动态数据 + 常驻世界书）→ 商品；失败/为空则用插件自带物资 */
-async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<string[]> {
+async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvivalState, forceAgent = false): Promise<string[]> {
   const notes: string[] = [];
   const builtin = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
   let story: ShopGood[] = [];
   const run = context?.tsApi?.agent?.run;
   if (run) {
     try {
+      console.log("[商城] 调用 field-survival-shop-gener agent, context.tsApi.agent.run 存在:", typeof run);
       const r: any = await withTimeout(
         run("field-survival-shop-gener", {
           storyDigest: buildStoryDigest(context),
@@ -2545,10 +2546,12 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
         20000,
         "shop agent timeout",
       );
+      console.log("[商城] agent 返回原始数据:", JSON.stringify(r).slice(0, 300));
       const goods = r?.output?.goods;
-      if (Array.isArray(goods)) {
+      if (Array.isArray(goods) && goods.length > 0) {
         story = goods.slice(0, 14).map((g: any, i: number): ShopGood => {
-          const rawName = String(g?.name || `物资${i + 1}`).slice(0, 20);
+          // ★ fix：g.name 可能是对象 {cn/zh/name/label/title}，必须走 str() 兜底
+          const rawName = str(g?.name, `物资${i + 1}`).slice(0, 20);
           const kind = KIND_LIST.indexOf(String(g?.kind)) >= 0 ? String(g.kind) : guessKind(rawName);
           return {
             id: `s_${i}_${rawName}`,
@@ -2557,15 +2560,23 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
             kind,
             rarity: normRarity(g?.rarity),
             heal: Math.max(0, Math.round(num(g?.heal, defaultHeal(rawName, kind)))),
-            desc: String(g?.desc || "").slice(0, 60),
+            desc: str(g?.desc, "").slice(0, 60),
             from: "story",
           };
         });
+        console.log("[商城] agent 故事物资生成成功，共", story.length, "件:", story.map((x) => x.name).join(", "));
+      } else {
+        const errMsg = r?.error ? String(r.error).slice(0, 60) : (goods ? "agent 返回空数组" : "agent 未返回 goods 字段");
+        console.log("[商城] agent 返回异常:", errMsg);
+        notes.push(errMsg);
       }
-      if (!story.length && r?.error) notes.push(String(r.error).slice(0, 60));
     } catch (err) {
-      notes.push(err instanceof Error ? err.message.slice(0, 60) : "shop agent failed");
+      const msg = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
+      console.error("[商城] agent 调用异常:", msg);
+      notes.push(msg);
     }
+  } else {
+    console.warn("[商城] context.tsApi.agent.run 不存在，商城 agent 不可用，降级为内置物资");
   }
   s.shopGoods = [...story, ...builtin];
   s.shopSource = story.length ? "agent" : "builtin";
@@ -3193,7 +3204,13 @@ export async function handle_action(
     }
 
     case "sys_shop_refresh": {
-      await refreshShop(context, s);
+      // ★ 前端传 agent:true 时强制走 agent（不清空旧 story 列表）；否则仅 agent 成功时保留
+      const forceAgent = params?.agent === true;
+      if (forceAgent) {
+        s.shopGoods = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
+        s.shopSource = "builtin";
+      }
+      await refreshShop(context, s, forceAgent);
       await persistSys(context, s);
       const src = s.shopSource === "agent" ? "商城agent·故事物资" : "插件常备物资";
       // ★ 回复带时间戳：连续两次刷新若货源一致，文本不同才能触发前端 response watch
