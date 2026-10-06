@@ -1832,8 +1832,22 @@ function useBagItem(s, name) {
     let nextBag = bag;
     if (consumed) {
         const dur = Math.round(num(it.durability, -1));
-        let left = Math.round(num(it.durabilityLeft, dur));
-        if (dur > 0) {
+        if (dur < 0) {
+            // ★ 永久（durability=-1）：不扣物品，不扣耐久，剩余继续用
+            //   历史 bug：dur<=0 走统一 count-1 → 永久品被当成一次性消耗，用一次就没了
+            //   现在明确三档语义：
+            //     dur < 0  → 永久（不消耗）
+            //     dur = 0  → 一次性物品（每次使用 count -1）
+            //     dur > 0  → 有限耐久（同一件内 left 递减，left 用尽才 count -1 换新）
+            nextBag = bag;
+        }
+        else if (dur === 0) {
+            nextBag = bag
+                .map((x) => (x.name === it.name ? { ...x, count: x.count - 1 } : x))
+                .filter((x) => x.count > 0);
+        }
+        else {
+            let left = Math.round(num(it.durabilityLeft, dur));
             left -= 1;
             if (left <= 0) {
                 nextBag = bag
@@ -1846,11 +1860,6 @@ function useBagItem(s, name) {
                 setItemDurLeft(s, it.name, left);
                 pushEvent(s, `${it.name} 耐久 ${left}/${dur}`);
             }
-        }
-        else {
-            nextBag = bag
-                .map((x) => (x.name === it.name ? { ...x, count: x.count - 1 } : x))
-                .filter((x) => x.count > 0);
         }
     }
     patchCard(s, { items: serializeBag(nextBag, card.items) });

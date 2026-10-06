@@ -2639,6 +2639,10 @@ function settleSpawn(mx: number, mz: number): { x: number; z: number } {
  */
 const LOCAL_MOVE_SPEED_M = 3;     // 米/秒（与 entry.ts MOVE_SPEED_M 一致）
 const TICK_DT = 0.1;              // 与 loop() 的 TICK_MS=100 对应
+/** ★ 409 连击防护：宿主通知「游戏已结束/无活跃状态」后置 true，
+ *   loop() 据此停发 tick；收到任何宿主回包（tf_plugin_state）即解除。
+ *   必须在 script setup 顶层（与 loop 同级）声明，否则 loop() 闭包访问不到 onMounted 内部的 const。 */
+const tickHalted = ref(false);
 // ★ 按地图实际大小自适应 WORLD_LIMIT（不再硬编码 ±1500）
 let worldLimitCache = { w: 0, h: 0, limit: 0 };
 function worldLimitM(): number {
@@ -5156,8 +5160,8 @@ onMounted(async () => {
   })
 
   /** ★ 409 连击防护：宿主通知「游戏已结束/无活跃状态」后置 true，
-   *   loop() 据此停发 tick；收到任何宿主回包（tf_plugin_state）即解除。 */
-  const tickHalted = ref(false);
+   *   loop() 据此停发 tick；收到任何宿主回包（tf_plugin_state）即解除。
+   *   tickHalted 已在 script setup 顶层声明（与 loop 同级），此处直接引用。 */
   window.addEventListener("message", (ev: MessageEvent) => {
     const d: any = ev?.data;
     if (d?.type === "tf_plugin_tick_halted") {
