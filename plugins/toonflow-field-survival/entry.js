@@ -227,7 +227,14 @@ const WORLD_REGIONS = [
     { id: "wild", name: "东南荒原", short: "东南", kind: "wild", x: 240, y: -416, r: 240, safe: false, lv: 3, mobs: 5, desc: "开阔荒原，成群野兽巡行" },
 ];
 function str(v, d = "") {
-    return typeof v === "string" ? v : v == null ? d : String(v);
+    if (typeof v === "string")
+        return v;
+    if (v == null)
+        return d;
+    if (typeof v === "number" || typeof v === "boolean")
+        return String(v);
+    // ★ 对象 / 数组 / Symbol / Function 等一律视为无效值，返回默认值避免「[object Object]」泄漏
+    return d;
 }
 function num(v, d = 0) {
     const n = Number(v);
@@ -1409,8 +1416,21 @@ function sameName(a, b) {
 }
 function parseItemRaw(raw) {
     if (raw && typeof raw === "object") {
-        const name = str(raw.name ?? raw.item ?? "");
+        // ★ 物品对象 name 字段兜底：raw.name 可能是 { cn, en, label, ... } 等嵌套对象，
+        //   直接 str() 会得到 "[object Object]" → HUD 显示错位 + useItem 找不到。
+        //   按常见字段顺序抽字符串，抽不到就视为无效物品（让 buildItems filter 丢掉）。
+        let name = "";
+        const nm = raw.name ?? raw.item ?? raw.label ?? raw.title;
+        if (typeof nm === "string") {
+            name = nm;
+        }
+        else if (nm && typeof nm === "object") {
+            name = str(nm.cn ?? nm.zh ?? nm.chinese ?? nm.name ?? nm.label ?? nm.title ?? "", "");
+        }
         const kind = KIND_LIST.indexOf(String(raw.kind)) >= 0 ? String(raw.kind) : guessKind(name);
+        // 无 name 的对象视为无效物品（让 buildItems filter 丢掉，避免 [object Object] 污染 HUD）
+        if (!name)
+            return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
         return {
             name,
             count: Math.max(1, Math.round(num(raw.count, 1))),

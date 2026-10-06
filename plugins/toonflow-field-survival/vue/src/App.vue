@@ -304,7 +304,15 @@ const sysBagItems = computed<SysItem[]>(() => {
       rawPrice = p.price;
       note = p.desc;
     } else if (it && typeof it === "object") {
-      name = String(it.name || "物品");
+      // ★ 物品对象 name 兜底：it.name 可能是 { cn, en, label, ... } 等嵌套对象，
+      //   直接 String(it.name) 会得到 "[object Object]" 污染 HUD。按常见字段顺序抽字符串。
+      const nm = (it as any).name ?? (it as any).item ?? (it as any).label ?? (it as any).title;
+      if (typeof nm === "string") {
+        name = nm;
+      }
+      else if (nm && typeof nm === "object") {
+        name = String((nm as any).cn || (nm as any).zh || (nm as any).chinese || (nm as any).name || (nm as any).label || (nm as any).title || "");
+      }
       count = Math.max(1, Number(it.count || 1));
       rawPrice = Number((it as any).price || 0);
       note = String((it as any).desc || "");
@@ -382,16 +390,28 @@ const sysSkills = computed<SysSkill[]>(() => {
 /** 纳戒（插件落盘在 t_plugin_session_data） */
 const sysRing = computed<{ items: SysItem[]; skills: string[] }>(() => {
   const r = (((state.value as any)?.ring || {}) as any);
-  const items = (Array.isArray(r.items) ? r.items : []).map((it: any) => ({
-    id: String(it.name || ""),
-    name: String(it.name || "物品"),
-    count: Math.max(1, Number(it.count || 1)),
-    kind: String(it.kind || "material"),
-    rarity: String(it.rarity || "common"),
-    heal: Number(it.heal || 0),
-    price: Number(it.price || 0),
-    desc: it.desc,
-  }));
+  const items = (Array.isArray(r.items) ? r.items : []).map((it: any) => {
+    // ★ 物品对象 name 兜底：it.name 可能是 { cn, en, label, ... } 等嵌套对象，
+    //   直接 String(it.name) 会得到 "[object Object]" 污染 HUD。按常见字段顺序抽字符串。
+    let nm = "";
+    const raw = it?.name ?? it?.item ?? it?.label ?? it?.title;
+    if (typeof raw === "string") {
+      nm = raw;
+    }
+    else if (raw && typeof raw === "object") {
+      nm = String(raw.cn || raw.zh || raw.chinese || raw.name || raw.label || raw.title || "");
+    }
+    return {
+      id: nm,
+      name: nm || "物品",
+      count: Math.max(1, Number(it.count || 1)),
+      kind: String(it.kind || "material"),
+      rarity: String(it.rarity || "common"),
+      heal: Number(it.heal || 0),
+      price: Number(it.price || 0),
+      desc: it.desc,
+    };
+  });
   const skills = (Array.isArray(r.skills) ? r.skills : []).map((n: any) => String(n));
   return { items, skills };
 });
