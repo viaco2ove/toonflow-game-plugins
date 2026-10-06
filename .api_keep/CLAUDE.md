@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 项目概述
 
 Toonflow Game 是一个 AI 故事游戏后端，使用 Node.js + Express + TypeScript 开发。
-da
-
+toonflow-game-plugins 是 Toonflow Game 的插件仓库。
 ## 常用命令
 
 ```bash
@@ -52,3 +51,6 @@ npm run debug          # debug 模式下运行
 ## 不允许随意放置测试和临时文档
 测试脚本和文档和临时文档
 只允许放置在.cache 文件夹下。
+
+# vite.config.ts
+要不让vite.config.ts 支持 \n 要不就不要写\n 

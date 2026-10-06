@@ -1,25 +1,3 @@
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-var entry_exports = {};
-__export(entry_exports, {
-  handle_action: () => handle_action
-});
-module.exports = __toCommonJS(entry_exports);
 const TERRAIN_BLOCK_SIZE_M = 0.5;
 const CHUNK_SIZE_BLOCKS = 32;
 const CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M;
@@ -2002,7 +1980,7 @@ function isPlayerRole(cand, playerRole) {
   if (pname && cname && cname === pname) return true;
   return false;
 }
-async function handle_action(action, params, state, context) {
+export async function handle_action(action, params, state, context) {
   var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
   const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4) ? state : emptyState(context);
   const okResp = (msg) => ({ code: 0, message: "ok", state: s, response: msg });
