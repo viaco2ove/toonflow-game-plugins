@@ -1110,7 +1110,15 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
     return 0;
   }
   const epoch = num((payload as any).epoch, 0);
-  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;      // 该世代已接管，忽略回推
+  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) {
+    // ★ fix⑦：该世代"已接管"的前提是本地怪实体还在。start 重建 / restoreSys 恢复 /
+    //   handleLevelChange 等路径会清空 entities 却保留 localMobsEpoch 标记 →
+    //   此后前端永远发同一 epoch，后端永远 return 0 → 敌怪表死锁为空、AI 空跑
+    //   （实测：tick 正常推进、events 显示"接入 11 只"但 entities 0 敌人）。
+    //   怪还在 → 正常忽略回推；怪丢了 → fallthrough 幂等重建（1120 行先清残留再建）。
+    const alive = s.entities.filter((e) => e.side === "enemy" && isLocalEnemyId(e.id)).length;
+    if (alive > 0) return 0;
+  }
   const b = ((payload as any).bounds || {}) as Record<string, unknown>;
   const lx = num(b.lx, 0);
   const ly = num(b.ly, 0);
@@ -2665,6 +2673,10 @@ export async function handle_action(
       const curLv = str(str((params as any)?.levelName) || s.levelName || "", "") || "Mulberry Town";
       s.levelName = curLv;
       s.entities = [];
+      // ★ fix⑦：新开局清空实体后必须同时清 localMobsEpoch——restoreSys 会把上局的
+      //   epoch 一并恢复，若不清，前端继续发同一 epoch 会被 applyLocalEnemies 当作
+      //   "已接管"忽略 → 敌怪表死锁为空（配合 fix⑦ 的丢失重建兜底，双保险）。
+      s.localMobsEpoch = 0;
       // ★ fix: 玩家/ally/spectator 统一归属 start_map（固定 "Mulberry Town"），不依赖 map?.theme
       const startMapName = "Mulberry Town";
       const playerEnt = makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);

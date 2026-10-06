@@ -32,8 +32,8 @@ function fallbackMap() {
 }
 function buildStoryDigest(ctx) {
   const parts = [];
-  const card = (ctx == null ? void 0 : ctx.playerCard) || {};
-  const roles = Array.isArray(ctx == null ? void 0 : ctx.roles) ? ctx.roles : [];
+  const card = ctx?.playerCard || {};
+  const roles = Array.isArray(ctx?.roles) ? ctx.roles : [];
   const roleLines = roles.slice(0, 12).map((r) => {
     const rr = r || {};
     const skills = Array.isArray(rr.skills) ? rr.skills.map(String).slice(0, 4).join("/") : "";
@@ -41,8 +41,8 @@ function buildStoryDigest(ctx) {
   });
   parts.push("[\u53C2\u6218/\u5019\u9009\u89D2\u8272]\n" + (roleLines.join("\n") || "\uFF08\u65E0\uFF09"));
   const playerName = String(card.name || "");
-  const cardSkills = Array.isArray(card.skills) ? card.skills.map((s) => String(typeof s === "string" ? s : s == null ? void 0 : s.name)).filter(Boolean) : [];
-  const cardItems = Array.isArray(card.items) ? card.items.map((s) => String(typeof s === "string" ? s : s == null ? void 0 : s.name)).filter(Boolean) : [];
+  const cardSkills = Array.isArray(card.skills) ? card.skills.map((s) => String(typeof s === "string" ? s : s?.name)).filter(Boolean) : [];
+  const cardItems = Array.isArray(card.items) ? card.items.map((s) => String(typeof s === "string" ? s : s?.name)).filter(Boolean) : [];
   parts.push(
     `[\u7528\u6237\u53C2\u6570\u5361]
 \u540D\u79F0:${playerName || "\uFF08\u65E0\u540D\uFF09"} lv${Number(card.level || 1)} hp${Number(card.hp || 100)} \u91D1\u94B1${Number(card.money || 0)} \u7ECF\u9A8C${Number(card.exp || 0)}
@@ -64,9 +64,8 @@ function withTimeout(p, ms, msg) {
   ]);
 }
 async function ensureMapData(ctx) {
-  var _a, _b;
-  const tsApi = ctx == null ? void 0 : ctx.tsApi;
-  if (!((_a = tsApi == null ? void 0 : tsApi.agent) == null ? void 0 : _a.run) || !((_b = tsApi == null ? void 0 : tsApi.pluginData) == null ? void 0 : _b.set)) return fallbackMap();
+  const tsApi = ctx?.tsApi;
+  if (!tsApi?.agent?.run || !tsApi?.pluginData?.set) return fallbackMap();
   try {
     const stored = await tsApi.pluginData.get("map_data");
     if (stored && Array.isArray(stored.enemy_archetypes) && stored.enemy_archetypes.length) {
@@ -82,7 +81,7 @@ async function ensureMapData(ctx) {
       MAP_AGENT_TIMEOUT_MS,
       `map agent \u8D85\u65F6\uFF08>${MAP_AGENT_TIMEOUT_MS}ms\uFF09`
     );
-    const map = (r == null ? void 0 : r.output) || fallbackMap();
+    const map = r?.output || fallbackMap();
     if (!Array.isArray(map.enemy_archetypes) || !map.enemy_archetypes.length) {
       map.enemy_archetypes = fallbackMap().enemy_archetypes;
     }
@@ -141,8 +140,7 @@ function num(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 function cleanSkillName(v) {
-  var _a, _b;
-  let n = v && typeof v === "object" ? str((_b = (_a = v.name) != null ? _a : v.skill) != null ? _b : "") : str(v);
+  let n = v && typeof v === "object" ? str(v.name ?? v.skill ?? "") : str(v);
   n = n.replace(/\[object Object\]/g, " ");
   n = n.replace(/[（(][^）)]*[）)]/g, " ");
   n = n.replace(/\s+/g, " ").trim();
@@ -182,7 +180,7 @@ function splitSkillList(raw) {
   return out;
 }
 function buildSkills(card, n = 8, meta) {
-  const raw = Array.isArray(card == null ? void 0 : card.skills) ? card.skills : [];
+  const raw = Array.isArray(card?.skills) ? card.skills : [];
   const seen = /* @__PURE__ */ new Map();
   const names = [];
   const lvs = [];
@@ -191,7 +189,7 @@ function buildSkills(card, n = 8, meta) {
     parts.forEach((p) => {
       const nm = cleanSkillName(p).slice(0, 12);
       if (!nm) return;
-      const lvM = String(typeof p === "string" ? p : str(p == null ? void 0 : p.name)).match(/lv\s*(\d+)/i);
+      const lvM = String(typeof p === "string" ? p : str(p?.name)).match(/lv\s*(\d+)/i);
       const lv = lvM ? Math.max(1, Math.round(Number(lvM[1]))) : 1;
       const c = (seen.get(nm) || 0) + 1;
       seen.set(nm, c);
@@ -206,21 +204,20 @@ function buildSkills(card, n = 8, meta) {
     const m = meta && meta[skillKey(name)];
     out.push({
       name,
-      power: num(m == null ? void 0 : m.power, 12 + i * 3),
-      cost: num(m == null ? void 0 : m.cost, 0),
-      cd: num(m == null ? void 0 : m.cd, 24 + i * 6),
+      power: num(m?.power, 12 + i * 3),
+      cost: num(m?.cost, 0),
+      cd: num(m?.cd, 24 + i * 6),
       cdLeft: 0,
-      type: (m == null ? void 0 : m.type) || base.type,
-      range: (m == null ? void 0 : m.range) || base.range,
-      lv: num(m == null ? void 0 : m.lv, lvs[i] || 1),
-      buff_type: (m == null ? void 0 : m.buff_type) || ""
+      type: m?.type || base.type,
+      range: m?.range || base.range,
+      lv: num(m?.lv, lvs[i] || 1),
+      buff_type: m?.buff_type || ""
     });
   }
   return out;
 }
 function buildItems(card, n = 8) {
-  var _a;
-  const raw = Array.isArray(card == null ? void 0 : card.items) ? card.items : [];
+  const raw = Array.isArray(card?.items) ? card.items : [];
   const parsed = raw.map(parseItemRaw).filter((p) => p && p.name && p.count > 0);
   const seen = /* @__PURE__ */ new Map();
   const names = [];
@@ -241,8 +238,8 @@ function buildItems(card, n = 8) {
   for (let i = 0; i < n; i++) {
     if (names[i]) {
       const meta = parsed.find((p) => itemKey(p.name) === itemKey(names[i]));
-      const kind = (meta == null ? void 0 : meta.kind) || guessKind(names[i]);
-      const heal = (_a = meta == null ? void 0 : meta.heal) != null ? _a : defaultHeal(names[i], kind);
+      const kind = meta?.kind || guessKind(names[i]);
+      const heal = meta?.heal ?? defaultHeal(names[i], kind);
       out.push({ name: names[i], count: counts[i], kind, heal });
     } else {
       out.push({ name: i < 4 ? `\u7269\u54C1${i + 1}` : `\u5907\u7528\u7269${i - 3}`, count: 1, heal: 20 });
@@ -251,10 +248,10 @@ function buildItems(card, n = 8) {
   return out;
 }
 function makeEntity(role, side, x, y, idx) {
-  const hp = num(role == null ? void 0 : role.hp, side === "enemy" ? 60 : 100) || 100;
+  const hp = num(role?.hp, side === "enemy" ? 60 : 100) || 100;
   return {
-    id: str(role == null ? void 0 : role.id, `${side}_${idx}`),
-    name: str(role == null ? void 0 : role.name, side === "enemy" ? `\u91CE\u517D${idx + 1}` : `\u89D2\u8272${idx + 1}`),
+    id: str(role?.id, `${side}_${idx}`),
+    name: str(role?.name, side === "enemy" ? `\u91CE\u517D${idx + 1}` : `\u89D2\u8272${idx + 1}`),
     side,
     x,
     y,
@@ -263,8 +260,8 @@ function makeEntity(role, side, x, y, idx) {
     hp,
     maxHp: hp,
     atk: side === "enemy" ? 8 : 14,
-    level: num(role == null ? void 0 : role.level, 1) || 1,
-    avatarPath: str(role == null ? void 0 : role.avatarPath) || void 0,
+    level: num(role?.level, 1) || 1,
+    avatarPath: str(role?.avatarPath) || void 0,
     facing: 0,
     // 角度制：0=右 90=下 180=左 270=上
     cooldown: 0,
@@ -272,7 +269,7 @@ function makeEntity(role, side, x, y, idx) {
   };
 }
 function emptyState(ctx) {
-  const card = (ctx == null ? void 0 : ctx.playerCard) || {};
+  const card = ctx?.playerCard || {};
   return {
     phase: "select",
     version: 3,
@@ -292,7 +289,7 @@ function emptyState(ctx) {
       x_range: [...WORLD_X_RANGE],
       z_range: [...WORLD_Z_RANGE]
     },
-    roles: Array.isArray(ctx == null ? void 0 : ctx.roles) ? ctx.roles : [],
+    roles: Array.isArray(ctx?.roles) ? ctx.roles : [],
     selections: { participants: [], spectators: [], enemies: [] },
     /** ★ fix⑤：前端 localEnemies 状态（开局未上报 bounds 时按世界边界处理） */
     mapBounds: null,
@@ -333,13 +330,12 @@ function spawnAnchor(s, minM, maxM) {
   return { x: clampX(cx + Math.cos(angle) * distM), y: clampY(cy + Math.sin(angle) * distM) };
 }
 function spawnWave(s, wave) {
-  var _a, _b, _c, _d, _e, _f;
   const player = s.entities.find((e) => e.side === "player");
-  const px = (_a = player == null ? void 0 : player.x) != null ? _a : PLAYER_SPAWN.x;
-  const py = (_b = player == null ? void 0 : player.y) != null ? _b : PLAYER_SPAWN.y;
-  const archs = ((_c = s.map) == null ? void 0 : _c.enemy_archetypes) && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
+  const px = player?.x ?? PLAYER_SPAWN.x;
+  const py = player?.y ?? PLAYER_SPAWN.y;
+  const archs = s.map?.enemy_archetypes && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
   if (archs) {
-    const wavesCfg = ((_d = s.map) == null ? void 0 : _d.waves) && s.map.waves.length ? s.map.waves : [{ archetype: archs[0].id, count: 3, interval: 600 }];
+    const wavesCfg = s.map?.waves && s.map.waves.length ? s.map.waves : [{ archetype: archs[0].id, count: 3, interval: 600 }];
     const pick = wavesCfg[Math.min(wave - 1, wavesCfg.length - 1)] || wavesCfg[0];
     const arch = archs.find((a) => a.id === pick.archetype) || archs[0];
     const count2 = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
@@ -359,10 +355,10 @@ function spawnWave(s, wave) {
       s.entities.push(e);
     }
     if (wave === 1) {
-      (((_e = s.map) == null ? void 0 : _e.chests) || []).forEach((c, i) => {
+      (s.map?.chests || []).forEach((c, i) => {
         s.chests.push({ id: `chest_map_${i}`, x: clampX(c.x), y: clampY(c.y), opened: false, ...c });
       });
-      (((_f = s.map) == null ? void 0 : _f.potions) || []).forEach((p, i) => {
+      (s.map?.potions || []).forEach((p, i) => {
         s.potions.push({ id: `potion_map_${i}`, x: clampX(p.x), y: clampY(p.y), heal: num(p.heal, 40) });
       });
     }
@@ -407,11 +403,11 @@ function pushVfx(s, p) {
   if (s.vfx.length > 60) s.vfx = s.vfx.slice(-60);
 }
 function skillFxKind(skill) {
-  const t = String((skill == null ? void 0 : skill.type) || "");
+  const t = String(skill?.type || "");
   if (t === "heal") return "heal";
   if (t === "buff") return "buff";
-  if (t === "atk") return str(skill == null ? void 0 : skill.range, "melee") === "ranged" ? "ranged" : "melee";
-  const n = String((skill == null ? void 0 : skill.name) || "");
+  if (t === "atk") return str(skill?.range, "melee") === "ranged" ? "ranged" : "melee";
+  const n = String(skill?.name || "");
   if (/治|疗|愈|回复|恢复|回春|奶|复苏/.test(n)) return "heal";
   if (/盾|护|祝福|增益|强化|加攻|加防|buff/i.test(n)) return "buff";
   if (/球|箭|弹|术|咒|射|火|冰|雷|电|风|毒|远程/.test(n)) return "ranged";
@@ -431,8 +427,8 @@ function damage(s, target, amount, attacker) {
     if (target.side === "enemy") {
       s.kills += 1;
       const bounty = target.bounty;
-      const expGain = (bounty == null ? void 0 : bounty.exp) != null ? Math.round(num(bounty.exp, 10)) : 8 + target.level * 4;
-      const moneyGain = (bounty == null ? void 0 : bounty.money) != null ? Math.round(num(bounty.money, 8)) : 5 + target.level * 3;
+      const expGain = bounty?.exp != null ? Math.round(num(bounty.exp, 10)) : 8 + target.level * 4;
+      const moneyGain = bounty?.money != null ? Math.round(num(bounty.money, 8)) : 5 + target.level * 3;
       gainPlayerExp(s, expGain);
       s.money += moneyGain;
       if (Math.random() < 0.5) {
@@ -524,7 +520,7 @@ function applyEnemyNavPayload(payload) {
   if (!(cols > 0) || !(rows > 0) || total > 4e6) return;
   const bytes = b64ToBytes(str(pkt.blocked, ""));
   if (!bytes || bytes.length !== total) {
-    console.warn("[field-survival] walkGrid \u8F7D\u8377\u89E3\u7801\u5931\u8D25\uFF0C\u4FDD\u6301\u4E0A\u4E00\u4EFD\u7F51\u683C\uFF1A", bytes == null ? void 0 : bytes.length, total);
+    console.warn("[field-survival] walkGrid \u8F7D\u8377\u89E3\u7801\u5931\u8D25\uFF0C\u4FDD\u6301\u4E0A\u4E00\u4EFD\u7F51\u683C\uFF1A", bytes?.length, total);
     return;
   }
   enemyNav = { cols, rows, blocked: bytes };
@@ -668,17 +664,15 @@ function regionOutOfMap(s, r) {
   return Math.abs(r.x) - r.r >= num(b.lx, 0) || Math.abs(r.y) - r.r >= num(b.ly, 0);
 }
 function applyLocalEnemies(s, payload) {
-  // ★ fix⑥（缺口②）：前端 sendTick 只在 localMobsEpoch 变化时才发 localEnemies，
-  //   但后端 applyLocalEnemies 假设每次 tick 都带。导致首次上报后后续 tick 永远收不到
-  //   → entities 被清空 → AI 永远空跑 → 玩家永远不被攻击。
-  //   修复：当本次 payload 为空（epoch 未变化），保留现有的本地敌怪不清空。
   if (!payload || typeof payload !== "object") {
-    // 有已上线的本地敌怪 → 保持不动（别把上次建好的敌人又清掉）
-    if (num(s.localMobsEpoch, 0) > 0) return -1; // -1 = 保留
+    if (num(s.localMobsEpoch, 0) > 0) return -1;
     return 0;
   }
   const epoch = num(payload.epoch, 0);
-  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;
+  if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) {
+    const alive = s.entities.filter((e) => e.side === "enemy" && isLocalEnemyId(e.id)).length;
+    if (alive > 0) return 0;
+  }
   const b = payload.bounds || {};
   const lx = num(b.lx, 0);
   const ly = num(b.ly, 0);
@@ -786,9 +780,8 @@ function regionSpawnPoint(s, region) {
   return { x, y };
 }
 function spawnRegionMobs(s, region, n) {
-  var _a;
   const names = REGION_MOB_NAMES[region.id] || ["\u8352\u91CE\u6E38\u8361\u8005"];
-  const archs = ((_a = s.map) == null ? void 0 : _a.enemy_archetypes) && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
+  const archs = s.map?.enemy_archetypes && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
   const lv = Math.max(1, region.lv);
   for (let i = 0; i < n; i++) {
     const name = names[(_mobSeq + i) % names.length];
@@ -878,7 +871,7 @@ function step(s, input, poseHint) {
   const speed = MOVE_SPEED_M;
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
-  const pose = poseHint || (input == null ? void 0 : input.player);
+  const pose = poseHint || input?.player;
   if (pose && Number.isFinite(num(pose.x, NaN)) && Number.isFinite(num(pose.y, NaN))) {
     player.x = clampX(num(pose.x, player.x));
     player.y = clampY(num(pose.y, player.y));
@@ -886,14 +879,14 @@ function step(s, input, poseHint) {
     player.vx = 0;
     player.vy = 0;
   } else {
-    const dx = num(input == null ? void 0 : input.dx, 0);
-    const dy = num(input == null ? void 0 : input.dy, 0);
+    const dx = num(input?.dx, 0);
+    const dy = num(input?.dy, 0);
     if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
       const len = Math.hypot(dx, dy) || 1;
       player.vx = dx / len * speed;
       player.vy = dy / len * speed;
       player.facing = dx > 0 ? 0 : dx < 0 ? 180 : dy > 0 ? 90 : 270;
-    } else if (input == null ? void 0 : input.moveTo) {
+    } else if (input?.moveTo) {
       const tx = num(input.moveTo.x, player.x);
       const ty = num(input.moveTo.y, player.y);
       if (dist(player, { x: tx, y: ty }) > 1) moveTowards(player, tx, ty, speed);
@@ -1023,9 +1016,9 @@ function step(s, input, poseHint) {
     if (dist(player, c) < CHEST_PICKUP_M) {
       c.opened = true;
       const loot = c.loot;
-      const expGain = (loot == null ? void 0 : loot.exp) != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
-      const moneyGain = (loot == null ? void 0 : loot.money) != null ? Math.round(num(loot.money, 12)) : 15 + Math.floor(rnd(0, 20));
-      const drop = (loot == null ? void 0 : loot.item) || ["\u751F\u9508\u7684\u94A5\u5319", "\u5E72\u7CAE", "\u8367\u5149\u77F3"][Math.floor(Math.random() * 3)];
+      const expGain = loot?.exp != null ? Math.round(num(loot.exp, 15)) : 12 + Math.floor(rnd(0, 10));
+      const moneyGain = loot?.money != null ? Math.round(num(loot.money, 12)) : 15 + Math.floor(rnd(0, 20));
+      const drop = loot?.item || ["\u751F\u9508\u7684\u94A5\u5319", "\u5E72\u7CAE", "\u8367\u5149\u77F3"][Math.floor(Math.random() * 3)];
       gainPlayerExp(s, expGain);
       s.money += moneyGain;
       s.drops.push(drop);
@@ -1073,7 +1066,7 @@ const BUILTIN_SHOP_GOODS = [
   { id: "b_xinde", name: "\u57FA\u7840\u6280\u80FD\u5FC3\u5F97", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "\u4E60\u5F97\u4E00\u9879\u57FA\u7840\u6280\u80FD", from: "builtin" }
 ];
 function normRarity(v) {
-  const r = String(v != null ? v : "").toLowerCase().trim();
+  const r = String(v ?? "").toLowerCase().trim();
   return RARITY_LIST.indexOf(r) >= 0 ? r : "common";
 }
 function guessKind(name) {
@@ -1092,8 +1085,7 @@ function defaultHeal(name, kind) {
   return 20;
 }
 function cleanName(v) {
-  var _a, _b, _c;
-  let n = v && typeof v === "object" ? str((_c = (_b = (_a = v.name) != null ? _a : v.item) != null ? _b : v.itemName) != null ? _c : "") : str(v);
+  let n = v && typeof v === "object" ? str(v.name ?? v.item ?? v.itemName ?? "") : str(v);
   n = n.replace(/\[object Object\]/g, " ");
   n = n.replace(/[（(][^）)]*[）)]/g, " ");
   n = n.replace(/[×xX*]\s*\d+\s*(个|件|尾|份|瓶|颗|张|本)?/g, " ");
@@ -1111,9 +1103,8 @@ function sameName(a, b) {
   return !!ka && ka === itemKey(b);
 }
 function parseItemRaw(raw) {
-  var _a, _b;
   if (raw && typeof raw === "object") {
-    const name2 = str((_b = (_a = raw.name) != null ? _a : raw.item) != null ? _b : "");
+    const name2 = str(raw.name ?? raw.item ?? "");
     const kind2 = KIND_LIST.indexOf(String(raw.kind)) >= 0 ? String(raw.kind) : guessKind(name2);
     return {
       name: name2,
@@ -1141,7 +1132,7 @@ function parseItemRaw(raw) {
   return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[1] : void 0 };
 }
 function itemsFromCard(card) {
-  const arr = Array.isArray(card == null ? void 0 : card.items) ? card.items : [];
+  const arr = Array.isArray(card?.items) ? card.items : [];
   return arr.map(parseItemRaw).filter((i) => i.name && i.count > 0);
 }
 function mergeBag(raw, meta, order, imeta) {
@@ -1163,19 +1154,19 @@ function mergeBag(raw, meta, order, imeta) {
       rarity: it.rarity !== "common" || !m ? it.rarity : m.rarity,
       heal: it.heal || (m ? m.heal : 0) || defaultHeal(it.name, it.kind),
       price: it.price || (m ? m.price : 0),
-      desc: (im == null ? void 0 : im.description) || it.desc || (m ? m.desc : void 0),
-      power: num(im == null ? void 0 : im.power, it.kind === "equipment" ? 10 : 0),
-      cost: num(im == null ? void 0 : im.cost, 0),
-      cd: Math.max(0, num(im == null ? void 0 : im.cd, 0)),
+      desc: im?.description || it.desc || (m ? m.desc : void 0),
+      power: num(im?.power, it.kind === "equipment" ? 10 : 0),
+      cost: num(im?.cost, 0),
+      cd: Math.max(0, num(im?.cd, 0)),
       cdLeft: 0,
-      type: (im == null ? void 0 : im.type) || bt.type,
-      range: (im == null ? void 0 : im.range) || bt.range,
-      lv: Math.max(1, num(im == null ? void 0 : im.lv, 1)),
-      buff_type: (im == null ? void 0 : im.buff_type) || "",
-      durability: num(im == null ? void 0 : im.durability, -1),
-      durabilityLeft: num(im == null ? void 0 : im.durabilityLeft, num(im == null ? void 0 : im.durability, -1)),
+      type: im?.type || bt.type,
+      range: im?.range || bt.range,
+      lv: Math.max(1, num(im?.lv, 1)),
+      buff_type: im?.buff_type || "",
+      durability: num(im?.durability, -1),
+      durabilityLeft: num(im?.durabilityLeft, num(im?.durability, -1)),
       attribute_type: im && "attribute_type" in im ? im.attribute_type : inferItemAttrType(it.name),
-      attribute_value: num(im == null ? void 0 : im.attribute_value, defaultItemAttrValue(it.name))
+      attribute_value: num(im?.attribute_value, defaultItemAttrValue(it.name))
     });
   });
   const list = Array.from(map.values());
@@ -1284,7 +1275,7 @@ function permAttributeBonus(s) {
 }
 function playerMaxStats(s, level) {
   const me = playerEntity(s);
-  const lv = Math.max(1, Math.round(num(level, num(me == null ? void 0 : me.level, 1))));
+  const lv = Math.max(1, Math.round(num(level, num(me?.level, 1))));
   const bag = bagAttributeBonus(s);
   const perm = permAttributeBonus(s);
   const sum = (k) => Math.round(num(bag[k], 0) + num(perm[k], 0));
@@ -1310,11 +1301,10 @@ function refreshPlayerExpFields(s) {
 }
 const LEVEL_DESC_MAP_KEYS = ["level_desc_map", "level_titles", "level_title_map", "level_desc_table", "\u7B49\u7EA7\u79F0\u53F7\u8868"];
 function resolveLevelDesc(card, level) {
-  var _a;
   for (const key of LEVEL_DESC_MAP_KEYS) {
-    const m = card == null ? void 0 : card[key];
+    const m = card?.[key];
     if (m && typeof m === "object") {
-      const v = (_a = m[String(level)]) != null ? _a : m[level];
+      const v = m[String(level)] ?? m[level];
       return v == null ? "" : String(v);
     }
   }
@@ -1383,9 +1373,9 @@ function restorePlayerFull(s, reason) {
 function initPlayerFromCard(s, playerRole) {
   const me = playerEntity(s);
   if (!me) return;
-  const card = (s.playerCard && Object.keys(s.playerCard).length ? s.playerCard : (playerRole == null ? void 0 : playerRole.parameterCardJson) || (playerRole == null ? void 0 : playerRole.parameter_card_json) || {}) || {};
+  const card = (s.playerCard && Object.keys(s.playerCard).length ? s.playerCard : playerRole?.parameterCardJson || playerRole?.parameter_card_json || {}) || {};
   if (!s.playerCard || !Object.keys(s.playerCard).length) s.playerCard = { ...card };
-  me.level = Math.max(1, Math.round(num(card.level, num(playerRole == null ? void 0 : playerRole.initial_level, num(me.level, 1)))));
+  me.level = Math.max(1, Math.round(num(card.level, num(playerRole?.initial_level, num(me.level, 1)))));
   s.exp = Math.max(0, Math.round(num(card.exp, num(s.exp, 0))));
   const st = playerMaxStats(s, me.level);
   me.maxHp = st.maxHp;
@@ -1406,7 +1396,7 @@ function applyBagAttributes(s, opts) {
   me.maxMp = st.maxMp;
   me.atk = st.atk;
   me.def = st.def;
-  if (opts == null ? void 0 : opts.full) {
+  if (opts?.full) {
     me.hp = me.maxHp;
     me.mp = st.maxMp;
   } else {
@@ -1491,22 +1481,19 @@ function patchCard(s, patch) {
   if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8, s.skillMeta);
 }
 function syncCardFromContext(s, ctx) {
-  const card = (ctx == null ? void 0 : ctx.playerCard) || {};
+  const card = ctx?.playerCard || {};
   if (!card || !Object.keys(card).length) return;
   const cur = s.playerCard || {};
-  const sig = (c) => {
-    var _a, _b, _c, _d, _e, _f, _g;
-    return JSON.stringify([
-      (_a = c == null ? void 0 : c.items) != null ? _a : null,
-      (_b = c == null ? void 0 : c.money) != null ? _b : null,
-      (_c = c == null ? void 0 : c.skills) != null ? _c : null,
-      (_d = c == null ? void 0 : c.level) != null ? _d : null,
-      (_e = c == null ? void 0 : c.exp) != null ? _e : null,
-      (_f = c == null ? void 0 : c.hp) != null ? _f : null,
-      (_g = c == null ? void 0 : c.mp) != null ? _g : null
-      // ★ 等级系统字段
-    ]);
-  };
+  const sig = (c) => JSON.stringify([
+    c?.items ?? null,
+    c?.money ?? null,
+    c?.skills ?? null,
+    c?.level ?? null,
+    c?.exp ?? null,
+    c?.hp ?? null,
+    c?.mp ?? null
+    // ★ 等级系统字段
+  ]);
   if (sig(card) === sig(cur)) return;
   s.playerCard = card;
   s.items = buildItems(card, 8);
@@ -1548,7 +1535,6 @@ function ensureNpcCards(s, levelName) {
     return "neutral";
   };
   const buildCard = (role, forcedSide) => {
-    var _a, _b;
     const e = entByKey.get(String(role.id)) || entByKey.get(String(role.name)) || null;
     const old = prev.get(String(role.id));
     const side = forcedSide || sideOfRole(role);
@@ -1565,11 +1551,11 @@ function ensureNpcCards(s, levelName) {
         pc.maxMp = Math.round(num(e.maxMp, num(pc.maxMp, pc.mp)));
       }
       if (side === "player") {
-        pc.money = num((_a = s.playerCard) == null ? void 0 : _a.money, num(pc.money, 0));
-        pc.exp = Math.round(num((_b = s.playerCard) == null ? void 0 : _b.exp, num(s.exp, 0)));
+        pc.money = num(s.playerCard?.money, num(pc.money, 0));
+        pc.exp = Math.round(num(s.playerCard?.exp, num(s.exp, 0)));
         pc.level = Math.max(1, Math.round(num(e ? e.level : pc.level, 1)));
       } else if (e) {
-        pc.exp = Math.round(num(old == null ? void 0 : old.exp, num(pc.exp, 0)));
+        pc.exp = Math.round(num(old?.exp, num(pc.exp, 0)));
       }
       pc.next_level_exp = pc.level * 100;
     }
@@ -1578,14 +1564,14 @@ function ensureNpcCards(s, levelName) {
       name: role.name,
       side,
       enemy: side === "enemy",
-      level: Math.max(1, Math.round(num(e ? e.level : num(role.initial_level, num(old == null ? void 0 : old.level, 1)), 1))),
-      hp: Math.round(e ? e.hp : num(old == null ? void 0 : old.hp, num(pc == null ? void 0 : pc.hp, 0))),
-      maxHp: Math.round(e ? e.maxHp : num(old == null ? void 0 : old.maxHp, num(pc == null ? void 0 : pc.maxHp, 0))),
-      exp: Math.round(num(old == null ? void 0 : old.exp, 0)),
+      level: Math.max(1, Math.round(num(e ? e.level : num(role.initial_level, num(old?.level, 1)), 1))),
+      hp: Math.round(e ? e.hp : num(old?.hp, num(pc?.hp, 0))),
+      maxHp: Math.round(e ? e.maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
+      exp: Math.round(num(old?.exp, 0)),
       alive: e ? !!e.alive : old ? old.alive !== false : true,
-      mapName: side === "player" ? levelName || (old == null ? void 0 : old.mapName) || "" : e && e.mapName || (old == null ? void 0 : old.mapName) || "",
-      x: Math.round(e ? e.x : num(old == null ? void 0 : old.x, Math.random() * 100)),
-      y: Math.round(e ? e.y : num(old == null ? void 0 : old.y, Math.random() * 100)),
+      mapName: side === "player" ? levelName || old?.mapName || "" : e && e.mapName || old?.mapName || "",
+      x: Math.round(e ? e.x : num(old?.x, Math.random() * 100)),
+      y: Math.round(e ? e.y : num(old?.y, Math.random() * 100)),
       inParty: party.indexOf(String(role.id)) >= 0,
       avatarPath: e && e.avatarPath || role.avatarPath || old && old.avatarPath || void 0,
       parameterCardJson: pc
@@ -1600,7 +1586,7 @@ function ensureNpcCards(s, levelName) {
     cards.push(buildCard(role, forcedSide));
   };
   if (roles.length) {
-    const playerRole = roles.find((r) => String(r == null ? void 0 : r.roleType) === "player") || null;
+    const playerRole = roles.find((r) => String(r?.roleType) === "player") || null;
     if (playerRole) pushCard(playerRole, "player");
     roles.forEach((r) => pushCard(r));
   } else {
@@ -1615,7 +1601,7 @@ function spawnRoleEntity(s, role) {
   if (exist) return exist;
   const sel = s.selections || {};
   const inSel = (arr) => Array.isArray(arr) && arr.some((x) => String(x) === String(role.id) || String(x) === String(role.name));
-  const roleType = str(role == null ? void 0 : role.roleType);
+  const roleType = str(role?.roleType);
   let side;
   if (roleType === "player") side = "player";
   else if (inSel(sel.enemies)) side = "enemy";
@@ -1801,9 +1787,8 @@ function grantPartyExp(s, expGain) {
   if (lead) floater(s, `\u961F\u4F0D +${share}exp`, lead.x, lead.y - 26);
 }
 async function persistSys(context, s) {
-  var _a;
-  const api = (_a = context == null ? void 0 : context.tsApi) == null ? void 0 : _a.pluginData;
-  if (!(api == null ? void 0 : api.set)) return;
+  const api = context?.tsApi?.pluginData;
+  if (!api?.set) return;
   try {
     await api.set(SYS_DATA_KEY, {
       ring: s.ring || { items: [], skills: [] },
@@ -1874,9 +1859,8 @@ function collectAiStoryRoles(s) {
   return arr;
 }
 async function restoreSys(context, s) {
-  var _a;
-  const api = (_a = context == null ? void 0 : context.tsApi) == null ? void 0 : _a.pluginData;
-  if (!(api == null ? void 0 : api.get)) return;
+  const api = context?.tsApi?.pluginData;
+  if (!api?.get) return;
   try {
     const d = await api.get(SYS_DATA_KEY);
     if (!d || typeof d !== "object") return;
@@ -1900,8 +1884,8 @@ async function restoreSys(context, s) {
       if (rd && Array.isArray(rd.roles)) {
         const m = {};
         for (const r of rd.roles) {
-          const k = String((r == null ? void 0 : r.id) || (r == null ? void 0 : r.name) || "");
-          const nm = String((r == null ? void 0 : r.name) || "");
+          const k = String(r?.id || r?.name || "");
+          const nm = String(r?.name || "");
           if (!k && !nm) continue;
           const rec = {
             x: num(r.x, 0),
@@ -1921,48 +1905,47 @@ async function restoreSys(context, s) {
   }
 }
 function savedRolePos(s, r) {
-  const m = s == null ? void 0 : s._savedRolePos;
+  const m = s?._savedRolePos;
   if (!m || typeof m !== "object" || !r) return null;
   return m[String(r.id || "")] || m["name:" + String(r.name || "")] || null;
 }
 async function refreshShop(context, s, forceAgent = false) {
-  var _a, _b, _c;
   const notes = [];
   const builtin = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
   let story = [];
-  const run = (_b = (_a = context == null ? void 0 : context.tsApi) == null ? void 0 : _a.agent) == null ? void 0 : _b.run;
+  const run = context?.tsApi?.agent?.run;
   if (run) {
     try {
       console.log("[\u5546\u57CE] \u8C03\u7528 field-survival-shop-gener agent, context.tsApi.agent.run \u5B58\u5728:", typeof run);
       const r = await withTimeout(
         run("field-survival-shop-gener", {
           storyDigest: buildStoryDigest(context),
-          worldBookDigest: str(context == null ? void 0 : context.worldBookDigest, ""),
+          worldBookDigest: str(context?.worldBookDigest, ""),
           playerCard: s.playerCard || {}
         }),
         2e4,
         "shop agent timeout"
       );
       console.log("[\u5546\u57CE] agent \u8FD4\u56DE\u539F\u59CB\u6570\u636E:", JSON.stringify(r).slice(0, 300));
-      const goods = (_c = r == null ? void 0 : r.output) == null ? void 0 : _c.goods;
+      const goods = r?.output?.goods;
       if (Array.isArray(goods) && goods.length > 0) {
         story = goods.slice(0, 14).map((g, i) => {
-          const rawName = str(g == null ? void 0 : g.name, `\u7269\u8D44${i + 1}`).slice(0, 20);
-          const kind = KIND_LIST.indexOf(String(g == null ? void 0 : g.kind)) >= 0 ? String(g.kind) : guessKind(rawName);
+          const rawName = str(g?.name, `\u7269\u8D44${i + 1}`).slice(0, 20);
+          const kind = KIND_LIST.indexOf(String(g?.kind)) >= 0 ? String(g.kind) : guessKind(rawName);
           return {
             id: `s_${i}_${rawName}`,
             name: rawName,
-            price: Math.max(1, Math.round(num(g == null ? void 0 : g.price, 50))),
+            price: Math.max(1, Math.round(num(g?.price, 50))),
             kind,
-            rarity: normRarity(g == null ? void 0 : g.rarity),
-            heal: Math.max(0, Math.round(num(g == null ? void 0 : g.heal, defaultHeal(rawName, kind)))),
-            desc: str(g == null ? void 0 : g.desc, "").slice(0, 60),
+            rarity: normRarity(g?.rarity),
+            heal: Math.max(0, Math.round(num(g?.heal, defaultHeal(rawName, kind)))),
+            desc: str(g?.desc, "").slice(0, 60),
             from: "story"
           };
         });
         console.log("[\u5546\u57CE] agent \u6545\u4E8B\u7269\u8D44\u751F\u6210\u6210\u529F\uFF0C\u5171", story.length, "\u4EF6:", story.map((x) => x.name).join(", "));
       } else {
-        const errMsg = (r == null ? void 0 : r.error) ? String(r.error).slice(0, 60) : goods ? "agent \u8FD4\u56DE\u7A7A\u6570\u7EC4" : "agent \u672A\u8FD4\u56DE goods \u5B57\u6BB5";
+        const errMsg = r?.error ? String(r.error).slice(0, 60) : goods ? "agent \u8FD4\u56DE\u7A7A\u6570\u7EC4" : "agent \u672A\u8FD4\u56DE goods \u5B57\u6BB5";
         console.log("[\u5546\u57CE] agent \u8FD4\u56DE\u5F02\u5E38:", errMsg);
         notes.push(errMsg);
       }
@@ -1980,40 +1963,40 @@ async function refreshShop(context, s, forceAgent = false) {
   return notes;
 }
 function isPlayerRole(cand, playerRole) {
-  const cid = str(cand == null ? void 0 : cand.id);
-  const cname = str(cand == null ? void 0 : cand.name);
-  const pid = str(playerRole == null ? void 0 : playerRole.id);
-  const pname = str(playerRole == null ? void 0 : playerRole.name);
+  const cid = str(cand?.id);
+  const cname = str(cand?.name);
+  const pid = str(playerRole?.id);
+  const pname = str(playerRole?.name);
   if (pid && cid && cid === pid) return true;
   if (pname && cname && cname === pname) return true;
   return false;
 }
 export async function handle_action(action, params, state, context) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
   const s = state && Object.keys(state).length > 0 && (state.version === 2 || state.version === 3 || state.version === 4) ? state : emptyState(context);
   const okResp = (msg) => ({ code: 0, message: "ok", state: s, response: msg });
   switch (action) {
     case "init":
     case "start_init": {
       const fresh = emptyState(context);
-      fresh.roles = Array.isArray(context == null ? void 0 : context.roles) ? context.roles : [];
+      fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "\u8BF7\u9009\u62E9\u53CB\u65B9 / \u89C2\u6218 / \u654C\u5BF9\u89D2\u8272\u540E\u5F00\u59CB" };
     }
     case "start": {
-      const sel = (params == null ? void 0 : params.selections) || params || {};
+      const sel = params?.selections || params || {};
       const participants = Array.isArray(sel.participants) ? sel.participants.map(String) : [];
       const spectators = Array.isArray(sel.spectators) ? sel.spectators.map(String) : [];
       const enemies = Array.isArray(sel.enemies) ? sel.enemies.map(String) : [];
-      const roles = Array.isArray(context == null ? void 0 : context.roles) ? context.roles : [];
+      const roles = Array.isArray(context?.roles) ? context.roles : [];
       const byId = (id) => roles.find((r) => String(r.id) === id || String(r.name) === id);
       const playerRole = roles.find((r) => String(r.roleType) === "player") || roles[0];
       s.selections = { participants, spectators, enemies };
       await restoreSys(context, s);
       s._sysRestored = true;
       if (!s.parked || typeof s.parked !== "object") s.parked = {};
-      const curLv = str(str(params == null ? void 0 : params.levelName) || s.levelName || "", "") || "Mulberry Town";
+      const curLv = str(str(params?.levelName) || s.levelName || "", "") || "Mulberry Town";
       s.levelName = curLv;
       s.entities = [];
+      s.localMobsEpoch = 0;
       const startMapName = "Mulberry Town";
       const playerEnt = makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
       playerEnt.mapName = curLv;
@@ -2079,7 +2062,7 @@ export async function handle_action(action, params, state, context) {
         }
       });
       s.map = await ensureMapData(context);
-      s.mapSource = (((_a = s.map) == null ? void 0 : _a.notes) || "").includes("fallback") ? "fallback" : "agent";
+      s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
       if (s.map) {
         s.map.zones = WORLD_REGIONS.map((r) => ({
           name: r.name,
@@ -2096,7 +2079,7 @@ export async function handle_action(action, params, state, context) {
         if (!r.safe && r.mobs > 0) spawnRegionMobs(s, r, r.mobs);
       });
       if (!s.chests.length) {
-        (((_b = s.map) == null ? void 0 : _b.chests) || []).forEach((c, i) => {
+        (s.map?.chests || []).forEach((c, i) => {
           s.chests.push({
             ...c,
             id: `chest_map_${i}`,
@@ -2107,7 +2090,7 @@ export async function handle_action(action, params, state, context) {
         });
       }
       if (!s.potions.length) {
-        (((_c = s.map) == null ? void 0 : _c.potions) || []).forEach((p, i) => {
+        (s.map?.potions || []).forEach((p, i) => {
           s.potions.push({
             id: `potion_map_${i}`,
             x: clampX(num(p.x, 0)),
@@ -2132,7 +2115,7 @@ export async function handle_action(action, params, state, context) {
       }
       if (!s._sysRestored) await restoreSys(context, s);
       syncCardFromContext(s, context);
-      if (str(params == null ? void 0 : params.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       if (!s.levelName) s.levelName = startMapName;
       dedupeRoles(s);
       await persistSys(context, s);
@@ -2159,8 +2142,8 @@ export async function handle_action(action, params, state, context) {
       s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
-      const theme = str((_d = s.map) == null ? void 0 : _d.theme, "\u91CE\u5916");
-      const narration = str((_e = s.map) == null ? void 0 : _e.narration, "");
+      const theme = str(s.map?.theme, "\u91CE\u5916");
+      const narration = str(s.map?.narration, "");
       s.events = [
         narration || `\u8FDB\u5165\u300C${theme}\u300D\uFF1A\u64CD\u4F5C\u4F60\u7684\u89D2\u8272\uFF0C\u51FB\u6740\u654C\u4EBA\u3001\u5F00\u542F\u5B9D\u7BB1\u3001\u62FE\u53D6\u8840\u74F6\u3002`
       ];
@@ -2171,10 +2154,10 @@ export async function handle_action(action, params, state, context) {
       s.writeback = null;
       if (s.teleportTarget) s.teleportTarget = null;
       s.tick += 1;
-      const localBuilt = applyLocalEnemies(s, params == null ? void 0 : params.localEnemies);
-      applyEnemyNavPayload(params == null ? void 0 : params.walkGrid);
+      const localBuilt = applyLocalEnemies(s, params?.localEnemies);
+      applyEnemyNavPayload(params?.walkGrid);
       fixSpawnWithNav(s);
-      if (str(params == null ? void 0 : params.levelName)) {
+      if (str(params?.levelName)) {
         const incomingLv = str(params.levelName);
         const ackLv = s._levelAt || "";
         if (s._travelPending) {
@@ -2189,7 +2172,7 @@ export async function handle_action(action, params, state, context) {
       syncPlayerCardStats(s);
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
-      step(s, (params == null ? void 0 : params.input) || params, params == null ? void 0 : params.player);
+      step(s, params?.input || params, params?.player);
       if (s.levelName && s.levelName !== s._levelAt) {
         handleLevelChange(s, true);
         s._levelAt = s.levelName;
@@ -2200,7 +2183,7 @@ export async function handle_action(action, params, state, context) {
     }
     case "skill": {
       if (s.phase !== "playing") return okResp("");
-      const idx = num(params == null ? void 0 : params.index, 0);
+      const idx = num(params?.index, 0);
       const slotIdx = s.skillPage * 4 + idx;
       const skill = s.skills[slotIdx];
       const player = s.entities.find((e) => e.side === "player");
@@ -2224,11 +2207,11 @@ export async function handle_action(action, params, state, context) {
         pushVfx(s, {
           kind: "fireball",
           entityId: player.id,
-          targetEntityId: t0 == null ? void 0 : t0.id,
+          targetEntityId: t0?.id,
           x: player.x,
           y: player.y,
-          targetX: (_f = t0 == null ? void 0 : t0.x) != null ? _f : player.x,
-          targetY: (_g = t0 == null ? void 0 : t0.y) != null ? _g : player.y,
+          targetX: t0?.x ?? player.x,
+          targetY: t0?.y ?? player.y,
           facing: player.facing,
           life: 16,
           total: 16,
@@ -2245,8 +2228,8 @@ export async function handle_action(action, params, state, context) {
     /* ============ ★ 方案一 + 三：点击自动逼近 & 普攻 ============ */
     case "goto_enemy": {
       if (s.phase !== "playing") return okResp("");
-      const targetId = str(params == null ? void 0 : params.targetId, "");
-      const skillIdx = num(params == null ? void 0 : params.skillIdx, 0);
+      const targetId = str(params?.targetId, "");
+      const skillIdx = num(params?.skillIdx, 0);
       const target = s.entities.find((e) => e.id === targetId && e.alive !== false);
       if (!target) return okResp("\u76EE\u6807\u5DF2\u6D88\u5931");
       s.autoApproach = { targetId, skillIdx, phase: "moving" };
@@ -2270,7 +2253,7 @@ export async function handle_action(action, params, state, context) {
     }
     case "item": {
       if (s.phase !== "playing") return okResp("");
-      const idx = num(params == null ? void 0 : params.index, 0);
+      const idx = num(params?.index, 0);
       const slotIdx = s.itemPage * 4 + idx;
       const item = s.items[slotIdx];
       if (!item) return okResp("");
@@ -2278,11 +2261,11 @@ export async function handle_action(action, params, state, context) {
     }
     /* ============ ★ v5：系统面板（背包 / 纳戒 / 商城 / 技能 / 地图 / 角色卡）============ */
     case "sys": {
-      const levels = Array.isArray(params == null ? void 0 : params.levels) ? params.levels.map(String).filter(Boolean) : [];
+      const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
       if (levels.length) {
         s.mapNodes = levels.map((n, i) => ({ name: n, x: 160 + i % 4 * 260, y: 140 + Math.floor(i / 4) * 200 }));
       }
-      if (str(params == null ? void 0 : params.levelName)) s.levelName = str(params.levelName, s.levelName || "");
+      if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       if (!s.ring) s.ring = { items: [], skills: [] };
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
       if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
@@ -2291,8 +2274,8 @@ export async function handle_action(action, params, state, context) {
       return okResp("");
     }
     case "sys_sell": {
-      const name = str(params == null ? void 0 : params.name);
-      const ask = Math.max(1, Math.round(num(params == null ? void 0 : params.count, 1)));
+      const name = str(params?.name);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
       const card = s.playerCard || {};
       const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder);
       const it = bag.find((x) => x.name === name);
@@ -2308,13 +2291,13 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u5356\u51FA ${name}\xD7${sold}\uFF08+${gain} \u91D1\uFF09`);
     }
     case "sys_use_item": {
-      const name = str(params == null ? void 0 : params.name);
+      const name = str(params?.name);
       const msg = useBagItem(s, name);
       await persistSys(context, s);
       return okResp(msg);
     }
     case "sys_sort": {
-      const order = Array.isArray(params == null ? void 0 : params.order) ? params.order.map(String) : [];
+      const order = Array.isArray(params?.order) ? params.order.map(String) : [];
       const card = s.playerCard || {};
       const bag = mergeBag(itemsFromCard(card), s.bagMeta, order.length ? order : s.bagOrder);
       s.bagOrder = bag.map((x) => x.name);
@@ -2323,15 +2306,15 @@ export async function handle_action(action, params, state, context) {
       return okResp("\u80CC\u5305\u987A\u5E8F\u5DF2\u66F4\u65B0");
     }
     case "sys_ring_move": {
-      const kind = str(params == null ? void 0 : params.kind, "item");
-      const name = str(params == null ? void 0 : params.name);
-      const to = str(params == null ? void 0 : params.to, "ring") === "bag" ? "bag" : "ring";
-      const ask = Math.max(1, Math.round(num(params == null ? void 0 : params.count, 1)));
+      const kind = str(params?.kind, "item");
+      const name = str(params?.name);
+      const to = str(params?.to, "ring") === "bag" ? "bag" : "ring";
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
       if (!name) return okResp("\u7F3A\u5C11\u540D\u79F0");
       if (!s.ring) s.ring = { items: [], skills: [] };
       const card = s.playerCard || {};
       if (kind === "skill") {
-        const skills = Array.isArray(card.skills) ? card.skills.map((x) => typeof x === "string" ? x : str(x == null ? void 0 : x.name)).filter(Boolean) : [];
+        const skills = Array.isArray(card.skills) ? card.skills.map((x) => typeof x === "string" ? x : str(x?.name)).filter(Boolean) : [];
         const ringSkills = s.ring.skills || [];
         if (to === "ring") {
           const nameKey2 = skillKey(name);
@@ -2396,12 +2379,12 @@ export async function handle_action(action, params, state, context) {
       const meRest = playerEntity(s);
       if (!meRest || !meRest.alive) return okResp("\u89D2\u8272\u4E0D\u53EF\u7528");
       meRest.actionBobMs = 300;
-      restorePlayerFull(s, str(params == null ? void 0 : params.reason, "\u4F11\u606F"));
+      restorePlayerFull(s, str(params?.reason, "\u4F11\u606F"));
       return okResp(`\u{1F389} \u606D\u559C\u60A8\u5DF2\u6062\u590D\u5230\u6700\u4F73\u72B6\u6001\uFF01HP ${Math.round(meRest.hp)}/${Math.round(meRest.maxHp)}\uFF0CMP ${Math.round(num(meRest.mp, 0))}/${Math.round(num(meRest.maxMp, 0))}`);
     }
     case "sys_use_skill": {
-      const skName = str(params == null ? void 0 : params.name);
-      const skIdx = num(params == null ? void 0 : params.index, -1);
+      const skName = str(params?.name);
+      const skIdx = num(params?.index, -1);
       const meSk = playerEntity(s);
       if (!meSk || !meSk.alive) return okResp("\u89D2\u8272\u4E0D\u53EF\u7528");
       const si = skIdx >= 0 ? skIdx : s.skills.findIndex((k) => k.name === skName);
@@ -2422,11 +2405,11 @@ export async function handle_action(action, params, state, context) {
         pushVfx(s, {
           kind: "fireball",
           entityId: meSk.id,
-          targetEntityId: _t0 == null ? void 0 : _t0.id,
+          targetEntityId: _t0?.id,
           x: meSk.x,
           y: meSk.y,
-          targetX: (_h = _t0 == null ? void 0 : _t0.x) != null ? _h : meSk.x,
-          targetY: (_i = _t0 == null ? void 0 : _t0.y) != null ? _i : meSk.y,
+          targetX: _t0?.x ?? meSk.x,
+          targetY: _t0?.y ?? meSk.y,
           facing: meSk.facing,
           life: 16,
           total: 16,
@@ -2445,19 +2428,19 @@ export async function handle_action(action, params, state, context) {
       return okResp(`${sk.name}`);
     }
     case "sys_skill_edit": {
-      const idx = Math.round(num(params == null ? void 0 : params.index, -1));
+      const idx = Math.round(num(params?.index, -1));
       const sk = s.skills[idx];
       if (!sk) return okResp("\u6280\u80FD\u4E0D\u5B58\u5728");
       const oldKey = skillKey(sk.name);
-      const nm = cleanSkillName(str(params == null ? void 0 : params.name, sk.name)).slice(0, 12) || sk.name;
+      const nm = cleanSkillName(str(params?.name, sk.name)).slice(0, 12) || sk.name;
       sk.name = nm;
-      sk.power = Math.max(0, Math.round(num(params == null ? void 0 : params.power, sk.power)));
-      sk.cost = Math.max(0, Math.round(num(params == null ? void 0 : params.cost, sk.cost)));
-      sk.cd = Math.max(1, Math.round(num(params == null ? void 0 : params.cd, sk.cd)));
-      sk.type = ["atk", "heal", "buff"].includes(params == null ? void 0 : params.type) ? str(params == null ? void 0 : params.type) : sk.type || "atk";
-      sk.range = str(params == null ? void 0 : params.range) === "ranged" ? "ranged" : "melee";
-      sk.lv = Math.max(1, Math.round(num(params == null ? void 0 : params.lv, sk.lv || 1)));
-      sk.buff_type = BUFF_TYPES.includes(str(params == null ? void 0 : params.buff_type)) ? str(params == null ? void 0 : params.buff_type) : "";
+      sk.power = Math.max(0, Math.round(num(params?.power, sk.power)));
+      sk.cost = Math.max(0, Math.round(num(params?.cost, sk.cost)));
+      sk.cd = Math.max(1, Math.round(num(params?.cd, sk.cd)));
+      sk.type = ["atk", "heal", "buff"].includes(params?.type) ? str(params?.type) : sk.type || "atk";
+      sk.range = str(params?.range) === "ranged" ? "ranged" : "melee";
+      sk.lv = Math.max(1, Math.round(num(params?.lv, sk.lv || 1)));
+      sk.buff_type = BUFF_TYPES.includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
       s.skillMeta = { ...s.skillMeta || {}, [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type } };
       const card = s.playerCard || {};
       const flat = [];
@@ -2466,7 +2449,7 @@ export async function handle_action(action, params, state, context) {
           if (cleanSkillName(p)) flat.push(p.trim());
         });
         else {
-          const n = str(x == null ? void 0 : x.name);
+          const n = str(x?.name);
           if (n) flat.push(n);
         }
       });
@@ -2481,31 +2464,31 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u300C${nm}\u300D\u5DF2\u4FDD\u5B58\uFF08${tLabel}\xB7lv${sk.lv}\uFF09`);
     }
     case "sys_item_edit": {
-      const idx = Math.round(num(params == null ? void 0 : params.index, -1));
+      const idx = Math.round(num(params?.index, -1));
       const card = s.playerCard || {};
       const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
-      const it = idx >= 0 ? bag[idx] : bag.find((x) => x.name === str(params == null ? void 0 : params.name));
+      const it = idx >= 0 ? bag[idx] : bag.find((x) => x.name === str(params?.name));
       if (!it) return okResp("\u7269\u54C1\u4E0D\u5B58\u5728");
       const oldName = it.name;
-      const nm = str(params == null ? void 0 : params.name, it.name).trim().slice(0, 20) || it.name;
+      const nm = str(params?.name, it.name).trim().slice(0, 20) || it.name;
       it.name = nm;
-      it.power = Math.max(0, Math.round(num(params == null ? void 0 : params.power, it.power || 0)));
-      it.cost = Math.max(0, Math.round(num(params == null ? void 0 : params.cost, it.cost || 0)));
-      it.cd = Math.max(0, Math.round(num(params == null ? void 0 : params.cd, it.cd || 0)));
-      it.type = ITEM_TYPES.includes(str(params == null ? void 0 : params.type)) ? str(params == null ? void 0 : params.type) : it.type || "heal";
-      it.range = str(params == null ? void 0 : params.range) === "ranged" ? "ranged" : "melee";
-      it.lv = Math.max(1, Math.round(num(params == null ? void 0 : params.lv, it.lv || 1)));
-      it.buff_type = BUFF_TYPES.includes(str(params == null ? void 0 : params.buff_type)) ? str(params == null ? void 0 : params.buff_type) : "";
-      it.durability = clamp(Math.round(num(params == null ? void 0 : params.durability, it.durability == null ? -1 : it.durability)), -1, 99999);
-      it.attribute_type = ITEM_ATTR_TYPES.includes(str(params == null ? void 0 : params.attribute_type)) ? str(params == null ? void 0 : params.attribute_type) : "";
-      it.attribute_value = Math.round(num(params == null ? void 0 : params.attribute_value, it.attribute_value || 0));
+      it.power = Math.max(0, Math.round(num(params?.power, it.power || 0)));
+      it.cost = Math.max(0, Math.round(num(params?.cost, it.cost || 0)));
+      it.cd = Math.max(0, Math.round(num(params?.cd, it.cd || 0)));
+      it.type = ITEM_TYPES.includes(str(params?.type)) ? str(params?.type) : it.type || "heal";
+      it.range = str(params?.range) === "ranged" ? "ranged" : "melee";
+      it.lv = Math.max(1, Math.round(num(params?.lv, it.lv || 1)));
+      it.buff_type = BUFF_TYPES.includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
+      it.durability = clamp(Math.round(num(params?.durability, it.durability == null ? -1 : it.durability)), -1, 99999);
+      it.attribute_type = ITEM_ATTR_TYPES.includes(str(params?.attribute_type)) ? str(params?.attribute_type) : "";
+      it.attribute_value = Math.round(num(params?.attribute_value, it.attribute_value || 0));
       const flat = [];
       (Array.isArray(card.items) ? card.items : []).forEach((x) => {
         if (typeof x === "string") splitSkillList(x).forEach((p) => {
           if (p.trim()) flat.push(p.trim());
         });
         else {
-          const n2 = str(x == null ? void 0 : x.name);
+          const n2 = str(x?.name);
           if (n2) flat.push(n2);
         }
       });
@@ -2520,8 +2503,8 @@ export async function handle_action(action, params, state, context) {
         if (p.desc && !desc) desc = p.desc;
       });
       if (!total) total = it.count;
-      const qty = (params == null ? void 0 : params.quantity) != null ? Math.max(1, Math.round(num(params.quantity, total))) : total;
-      const descNew = str(params == null ? void 0 : params.description, "");
+      const qty = params?.quantity != null ? Math.max(1, Math.round(num(params.quantity, total))) : total;
+      const descNew = str(params?.description, "");
       const descFinal = descNew || desc;
       const metaEntry = {
         power: it.power,
@@ -2554,7 +2537,7 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u300C${nm}\u300D\u5DF2\u4FDD\u5B58\uFF08${tLabel2}\xB7${dLabel}\xB7\xD7${qty}\uFF09`);
     }
     case "sys_shop_refresh": {
-      const forceAgent = (params == null ? void 0 : params.agent) === true;
+      const forceAgent = params?.agent === true;
       if (forceAgent) {
         s.shopGoods = BUILTIN_SHOP_GOODS.map((g) => ({ ...g }));
         s.shopSource = "builtin";
@@ -2566,8 +2549,8 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u5546\u57CE\u5DF2\u5237\u65B0 ${ts}\uFF08${(s.shopGoods || []).length} \u4EF6\u5546\u54C1\uFF0C\u8D27\u6E90\uFF1A${src}\uFF09`);
     }
     case "sys_shop_buy": {
-      const id = str(params == null ? void 0 : params.id);
-      const ask = Math.max(1, Math.round(num(params == null ? void 0 : params.count, 1)));
+      const id = str(params?.id);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
       const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id);
       if (!good) return okResp("\u5546\u54C1\u4E0D\u5B58\u5728");
       const card = s.playerCard || {};
@@ -2590,10 +2573,10 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u8D2D\u4E70 ${good.name}\xD7${ask}`);
     }
     case "sys_party": {
-      const rid = str(params == null ? void 0 : params.roleId);
+      const rid = str(params?.roleId);
       if (!rid) return okResp("\u7F3A\u5C11\u89D2\u8272");
-      const summon = !!(params == null ? void 0 : params.summon);
-      const flag = params == null ? void 0 : params.follow;
+      const summon = !!params?.summon;
+      const flag = params?.follow;
       const follow = !(flag === false || flag === 0 || flag === "0" || flag === "false");
       let e = s.entities.find((x) => x.id === rid || x.name === rid);
       if (e && e.side === "enemy") return okResp("\u654C\u5BF9\u89D2\u8272\u65E0\u6CD5\u7EC4\u961F");
@@ -2610,7 +2593,7 @@ export async function handle_action(action, params, state, context) {
         }
       }
       if (!e && (follow || summon)) {
-        const role = (s.roles || []).find((r) => String(r == null ? void 0 : r.id) === rid || String(r == null ? void 0 : r.name) === rid);
+        const role = (s.roles || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
         e = spawnRoleEntity(s, role) || void 0;
       }
       if (e && (follow || summon)) e.mapName = s.levelName || e.mapName;
@@ -2637,9 +2620,9 @@ export async function handle_action(action, params, state, context) {
           }
         }
         ensureNpcCards(s, s.levelName || "");
-        pushEvent(s, `${(e == null ? void 0 : e.name) || rid} \u5DF2\u53EC\u5524\u5230\u4F60\u8EAB\u8FB9\uFF08\u4E0D\u52A0\u5165\u961F\u4F0D\uFF09`);
+        pushEvent(s, `${e?.name || rid} \u5DF2\u53EC\u5524\u5230\u4F60\u8EAB\u8FB9\uFF08\u4E0D\u52A0\u5165\u961F\u4F0D\uFF09`);
         await persistSys(context, s);
-        return okResp(`\u5DF2\u53EC\u5524 ${(e == null ? void 0 : e.name) || rid} \u5230\u8EAB\u8FB9`);
+        return okResp(`\u5DF2\u53EC\u5524 ${e?.name || rid} \u5230\u8EAB\u8FB9`);
       }
       const set = new Set(s.partyIds || []);
       if (follow) set.add(rid);
@@ -2666,17 +2649,17 @@ export async function handle_action(action, params, state, context) {
         }
       }
       ensureNpcCards(s, s.levelName || "");
-      pushEvent(s, `${(e == null ? void 0 : e.name) || rid} ${follow ? "\u52A0\u5165\u961F\u4F0D\uFF0C\u5F00\u59CB\u8DDF\u968F\u4F60\u6218\u6597" : "\u5DF2\u8131\u79BB\u961F\u4F0D"}`);
+      pushEvent(s, `${e?.name || rid} ${follow ? "\u52A0\u5165\u961F\u4F0D\uFF0C\u5F00\u59CB\u8DDF\u968F\u4F60\u6218\u6597" : "\u5DF2\u8131\u79BB\u961F\u4F0D"}`);
       await persistSys(context, s);
       return okResp(follow ? "\u5DF2\u7EC4\u961F\u8DDF\u968F" : "\u5DF2\u53D6\u6D88\u8DDF\u968F");
     }
     case "sys_teleport": {
-      const rid = str(params == null ? void 0 : params.roleId);
+      const rid = str(params?.roleId);
       ensureNpcCards(s, s.levelName || "");
       let c = (s.npcCards || []).find((x) => x.id === rid || x.name === rid);
       if (!c) return okResp("\u89D2\u8272\u4E0D\u5B58\u5728");
       if (!c.onMap) {
-        const role = (s.roles || []).find((r) => String(r == null ? void 0 : r.id) === String(c.id) || String(r == null ? void 0 : r.name) === String(c.name));
+        const role = (s.roles || []).find((r) => String(r?.id) === String(c.id) || String(r?.name) === String(c.name));
         const e = spawnRoleEntity(s, role);
         if (e) {
           ensureNpcCards(s, s.levelName || "");
@@ -2697,7 +2680,7 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u5DF2\u4F20\u9001\u5230 ${c.name} \u8EAB\u8FB9`);
     }
     case "sys_travel": {
-      const target = str(params == null ? void 0 : params.mapName);
+      const target = str(params?.mapName);
       if (!target) return okResp("\u7F3A\u5C11\u76EE\u6807\u5730\u56FE");
       s.levelName = target;
       s._levelAt = target;
@@ -2711,50 +2694,50 @@ export async function handle_action(action, params, state, context) {
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);
     }
     case "sys_chat": {
-      const npcId = str(params == null ? void 0 : params.npcId, "");
-      const npcName = str(params == null ? void 0 : params.npcName, "???");
-      const userText = params == null ? void 0 : params.userText;
-      const lastResp = str(params == null ? void 0 : params.lastResp, "");
-      const mode = str(params == null ? void 0 : params.mode, "response");
-      const reqId = str(params == null ? void 0 : params.reqId, "");
+      const npcId = str(params?.npcId, "");
+      const npcName = str(params?.npcName, "???");
+      const userText = params?.userText;
+      const lastResp = str(params?.lastResp, "");
+      const mode = str(params?.mode, "response");
+      const reqId = str(params?.reqId, "");
       if (!npcId) return okResp("\u7F3A\u5C11\u89D2\u8272\u6807\u8BC6");
       const npcEntity = s.entities.find((e) => e.id === npcId);
-      const npcSide = String((npcEntity == null ? void 0 : npcEntity.side) || "");
+      const npcSide = String(npcEntity?.side || "");
       const roleEntry = (s.roles || []).find(
-        (r) => String(r == null ? void 0 : r.id) === npcId || String(r == null ? void 0 : r.name) === npcId
+        (r) => String(r?.id) === npcId || String(r?.name) === npcId
       );
-      const entityName = String((npcEntity == null ? void 0 : npcEntity.name) || "").trim();
-      const hasIdentity = !!(roleEntry == null ? void 0 : roleEntry.name) || entityName !== "" && entityName !== "NPC" || npcName !== "" && npcName !== "???" && npcName !== "NPC";
+      const entityName = String(npcEntity?.name || "").trim();
+      const hasIdentity = !!roleEntry?.name || entityName !== "" && entityName !== "NPC" || npcName !== "" && npcName !== "???" && npcName !== "NPC";
       const isNeutral = npcSide === "neutral" && !hasIdentity;
-      const roleName = isNeutral ? "\u65C1\u767D" : str((roleEntry == null ? void 0 : roleEntry.name) || entityName || npcName, npcName);
+      const roleName = isNeutral ? "\u65C1\u767D" : str(roleEntry?.name || entityName || npcName, npcName);
       const npcCard = isNeutral ? null : roleEntry || {
         id: npcId,
         name: roleName,
         roleType: npcSide === "ally" ? "ally" : "npc",
-        description: String((npcEntity == null ? void 0 : npcEntity.desc) || (npcEntity == null ? void 0 : npcEntity.dialog) || ""),
-        level: (_j = npcEntity == null ? void 0 : npcEntity.level) != null ? _j : 1,
-        entity_type: npcEntity == null ? void 0 : npcEntity.entity_type,
-        gid: npcEntity == null ? void 0 : npcEntity.gid,
+        description: String(npcEntity?.desc || npcEntity?.dialog || ""),
+        level: npcEntity?.level ?? 1,
+        entity_type: npcEntity?.entity_type,
+        gid: npcEntity?.gid,
         mapName: s.levelName || "",
-        x: npcEntity == null ? void 0 : npcEntity.x,
-        y: npcEntity == null ? void 0 : npcEntity.y
+        x: npcEntity?.x,
+        y: npcEntity?.y
       };
       try {
-        if ((_k = context == null ? void 0 : context.tsApi) == null ? void 0 : _k.agent) {
+        if (context?.tsApi?.agent) {
           const result = await context.tsApi.agent.run("task-speaker-agent", {
             npcId,
             npcName: roleName,
             npcCard,
             isNeutral,
-            userText: userText != null ? userText : null,
+            userText: userText ?? null,
             lastResp: lastResp || null,
             mode,
             context: {
-              storyDigest: (context == null ? void 0 : context.sessionId) ? `session:${context.sessionId}` : "",
-              playerLevel: (_m = (_l = s.entities.find((e) => e.side === "player")) == null ? void 0 : _l.level) != null ? _m : 1
+              storyDigest: context?.sessionId ? `session:${context.sessionId}` : "",
+              playerLevel: s.entities.find((e) => e.side === "player")?.level ?? 1
             }
           });
-          if ((result == null ? void 0 : result.ok) && ((_n = result == null ? void 0 : result.output) == null ? void 0 : _n.text)) {
+          if (result?.ok && result?.output?.text) {
             const raw = String(result.output.text).replace(/^\s*```[a-zA-Z]*\s*/, "").replace(/\s*```\s*$/, "").trim();
             if (mode === "options") {
               let options = [];
@@ -2772,9 +2755,9 @@ export async function handle_action(action, params, state, context) {
             s.chatResult = { reqId, ok: true, mode, speaker: roleName, text: raw };
             pushEvent(s, `${roleName}\uFF1A${raw}`);
             await persistSys(context, s);
-            return okResp(JSON.stringify({ speaker: roleName, text: raw, avatar: (_o = roleEntry == null ? void 0 : roleEntry.avatarPath) != null ? _o : void 0 }));
+            return okResp(JSON.stringify({ speaker: roleName, text: raw, avatar: roleEntry?.avatarPath ?? void 0 }));
           }
-          if (result == null ? void 0 : result.error) {
+          if (result?.error) {
             console.warn("[field-survival] sys_chat agent error:", result.error);
             s.chatResult = { reqId, ok: false, mode, error: String(result.error) };
             await persistSys(context, s);
@@ -2783,7 +2766,7 @@ export async function handle_action(action, params, state, context) {
         }
       } catch (e) {
         console.warn("[field-survival] sys_chat agent call failed:", e);
-        const msg = String((e == null ? void 0 : e.message) || e || "\u89D2\u8272\u53D1\u8A00\u5668\u8C03\u7528\u5F02\u5E38");
+        const msg = String(e?.message || e || "\u89D2\u8272\u53D1\u8A00\u5668\u8C03\u7528\u5F02\u5E38");
         s.chatResult = { reqId, ok: false, mode, error: msg };
         await persistSys(context, s);
         return okResp(JSON.stringify({ error: msg, mode, npcName: roleName }));
@@ -2799,8 +2782,8 @@ export async function handle_action(action, params, state, context) {
       }));
     }
     case "page": {
-      const kind = str(params == null ? void 0 : params.kind, "skill");
-      const delta = num(params == null ? void 0 : params.delta, 1);
+      const kind = str(params?.kind, "skill");
+      const delta = num(params?.delta, 1);
       if (kind === "item") {
         const pages = Math.ceil(s.items.length / 4) || 1;
         s.itemPage = (s.itemPage + delta + pages) % pages;
