@@ -6928,6 +6928,8 @@ body {
   border: 2px solid #4f4f4f;
   border-radius: 4px;
   min-width: 280px;
+  overflow-y: auto;
+  height: 15rem;
 }
 
 .over ul li {
