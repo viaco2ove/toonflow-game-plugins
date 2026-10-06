@@ -1100,7 +1100,15 @@ function regionOutOfMap(s: FieldSurvivalState, r: RegionDef): boolean {
  * 返回实际重建数量。
  */
 function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
-  if (!payload || typeof payload !== "object") return 0;
+  // ★ fix⑥（缺口②）：前端 sendTick 只在 localMobsEpoch 变化时才发 localEnemies，
+  //   但后端 applyLocalEnemies 假设每次 tick 都带。导致首次上报后后续 tick 永远收不到
+  //   → entities 被清空 → AI 永远空跑 → 玩家永远不被攻击。
+  //   修复：当本次 payload 为空（epoch 未变化），保留现有的本地敌怪不清空。
+  if (!payload || typeof payload !== "object") {
+    // 有已上线的本地敌怪 → 保持不动（别把上次建好的敌人又清掉）
+    if (num(s.localMobsEpoch, 0) > 0) return -1; // -1 表示"保留"
+    return 0;
+  }
   const epoch = num((payload as any).epoch, 0);
   if (epoch > 0 && num(s.localMobsEpoch, 0) === epoch) return 0;      // 该世代已接管，忽略回推
   const b = ((payload as any).bounds || {}) as Record<string, unknown>;

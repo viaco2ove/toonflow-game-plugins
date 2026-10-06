@@ -1378,36 +1378,17 @@ function onCanvasClick(e: MouseEvent) {
     y: Math.max(-lim, Math.min(lim, ty)),
   };
 
-  // ★ 方案一：优先检测是否点中怪物（用世界米坐标 vs entity 位置）
-  //   ★ 阈值放宽到 2.5m（之前 1.5m 在 zoom 大、sx 大的画面里几乎点不到野怪）
-  const enemyList = s.entities.filter((e) => e.side === "enemy" && e.alive !== false);
-  const enemyWithDist = enemyList.map((e) => ({ e, d: Math.hypot(e.x - tx, e.y - ty) }));
-  const clickedEnemy = enemyWithDist.filter(({ d }) => d < 2.5).sort((a, b) => a.d - b.d)[0]?.e;
-
-  if (clickedEnemy) {
-    // ★ 点怪 → 发 goto_enemy，告知后端「正在逼近这个目标」
-    autoApproachTarget.value = { id: clickedEnemy.id, x: clickedEnemy.x, y: clickedEnemy.y, skillIdx: 0 };
-    sendTick("goto_enemy", { targetId: clickedEnemy.id, skillIdx: 0 });
-  } else {
-    // ★ 方案一 v2：点空地时，如果附近（<5m）有敌，仍自动锁定最近的一只做逼近
-    //   ——「玩家想打眼前野怪但点偏了」是最常见的挫败感来源，让 click 永远管用
-    const nearEnemy = enemyWithDist.sort((a, b) => a.d - b.d)[0]?.e;
-    if (nearEnemy && enemyWithDist[0].d < 5) {
-      autoApproachTarget.value = { id: nearEnemy.id, x: nearEnemy.x, y: nearEnemy.y, skillIdx: 0 };
-      sendTick("goto_enemy", { targetId: nearEnemy.id, skillIdx: 0 });
-      // 同时把点击位置记为临时视觉目标
-      pushClickFx(nearEnemy.x, nearEnemy.y, true);
-    } else {
-      // ★ 真的点空地 → 取消自动逼近，清 moveTo，设新目标
-      autoApproachTarget.value = null;
-      input.value.moveTo = tgt;
-      input.value.dx = 0;
-      input.value.dy = 0;
-      // ★ 点下即跑 A*：既给出"能不能到"的即时反馈（特效颜色），也直接填好路点队列
-      const reachable = recomputeMoveToPath(tgt.x, tgt.y);
-      pushClickFx(tgt.x, tgt.y, reachable);
-    }
-  }
+  // ★ fix⑦：左键点击 = 纯移动到点击处。
+  //   旧逻辑「点中怪(2.5m)自动逼近 + 点空地5m内有怪自动锁敌去打」导致玩家
+  //   想点地面走人时被迫跑去打野怪——全部砍掉。
+  //   攻击入口只保留：右键普攻（onRightClick）/ 技能按钮（castSkill）。
+  autoApproachTarget.value = null;
+  input.value.moveTo = tgt;
+  input.value.dx = 0;
+  input.value.dy = 0;
+  // 点下即跑 A*：给出"能不能到"的即时反馈（特效颜色），并填好路点队列
+  const reachable = recomputeMoveToPath(tgt.x, tgt.y);
+  pushClickFx(tgt.x, tgt.y, reachable);
 }
 
 /** ★ 方案三：右键 / 双击 普攻（@contextmenu.prevent 触发）
