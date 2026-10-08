@@ -7190,4 +7190,71 @@ body {
     height: 30px;
   }
 }
+
+/* ============================================================
+ * 📐 全局响应式（HUD/事件/右栏/技能栏/横竖切换按钮/比例尺）
+ * ------------------------------------------------------------
+ * 触发场景：5175 剧场宿主下 iframe 被 flex 父容器压到 ~500-700px 高，
+ * 默认的"竖屏 padding"导致 events/HUD/右栏/技能栏互相挤压甚至重叠。
+ * 这里按"iframe 实际高度"分级收紧：
+ *   - < 700px（5175 中段）：events 内嵌 HUD、scale-ruler/坐标盒缩小
+ *   - < 560px（5175 短屏）：技能栏与物品栏合并右栏、横竖切换按钮靠近摇杆
+ *   - < 460px（极短）：全部 mini-map/比例尺隐藏，仅保留摇杆+技能栏+HUD
+ * ============================================================ */
+
+/* 中等高度（5175 iframe ≈ 560-700px）：events 上移到 HUD 下方紧贴、HUD 紧凑化 */
+@media (max-height: 700px) {
+  .hud {
+    font-size: 11px;
+    line-height: 10px;
+    padding: 0px 1px;
+    gap: 0;
+  }
+  .hp { width: 6rem; height: 7px; }
+  .mp { width: 6rem; height: 6px; }
+  .exp { width: 6rem; height: 5px; }
+  .hud__left { min-width: 6rem; }
+  .events {
+    top: 95px;          /* 跟 HUD 下方紧贴（HUD 高约 95px） */
+    font-size: 7px;
+    padding: 4px 6px;
+    max-width: 220px;
+  }
+  .btn--rotate { top: 105px; width: 32px; height: 32px; font-size: 16px; }
+  .scale-ruler { right: 8px; top: 36px; font-size: 5px; padding: 3px 4px; }
+  .scale-ruler__bar { width: 60px; height: 5px; }
+  .scale-ruler__lbl { font-size: 5px; }
+}
+
+/* 短屏（5175 iframe ≈ 460-560px）：进一步缩，物品栏合并右栏 */
+@media (max-height: 560px) {
+  .hud { font-size: 10px; line-height: 9px; }
+  .hp { width: 5rem; height: 6px; }
+  .mp { width: 5rem; height: 5px; }
+  .exp { width: 5rem; height: 4px; }
+  .hud__left { min-width: 5rem; }
+  .events { top: 75px; font-size: 6px; padding: 3px 5px; max-width: 180px; }
+  .btn--rotate { top: 80px; width: 28px; height: 28px; font-size: 14px; }
+  .right-col { top: 95px; }
+  .minimap { width: 80px; }
+  .minimap__cv { width: 80px; height: 80px; }
+  .coord-box { min-width: 56px; padding: 3px 6px; font-size: 5px; }
+  .scale-ruler { display: none; }     /* 比例尺让位给 minimap */
+}
+
+/* 极短（iframe < 460px，如 5175 横屏 iframe）：最关键操作保留，其余隐藏 */
+@media (max-height: 460px) {
+  .events { display: none; }          /* 事件提示让位 */
+  .scale-ruler { display: none; }
+  .coord-box { display: none; }
+  .minimap__legend { display: none; } /* 仅留小地图本体 */
+  .minimap { width: 60px; }
+  .minimap__cv { width: 60px; height: 60px; }
+  .btn--rotate { top: 70px; width: 24px; height: 24px; font-size: 12px; }
+  .hud { font-size: 9px; }
+  .hp { width: 4rem; height: 5px; }
+  .mp { width: 4rem; height: 4px; }
+  .exp { width: 4rem; height: 4px; }
+  .hud__left { min-width: 4rem; }
+}
 </style>
