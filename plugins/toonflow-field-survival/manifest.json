@@ -11,7 +11,7 @@
       "type": "field_survival",
       "title": "野外生存",
       "width": 480,
-      "height": 640,
+      "height": 720,
       "entry": "ui/game.html"
     },
     "sidebar": [

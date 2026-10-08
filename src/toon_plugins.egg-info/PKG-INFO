@@ -4,9 +4,10 @@ Version: 0.1.0
 Summary: Toonflow Game Plugin CLI — manage plugins without touching disk
 Requires-Python: >=3.8
 Description-Content-Type: text/markdown
-Requires-plugins_tbg: click>=8.0.0
+Requires-Dist: click>=8.0.0
 
 # toon_plugins — Toonflow Game Plugin CLI
+https://github.com/viaco2ove/toonflow-game-plugins.git
 
 类 `tavo_plugins` 的 Toonflow 版 CLI，无需落盘，直接 base64 上传插件。
 
@@ -105,3 +106,13 @@ toonflow-game-plugins/
 │   └── toonflow-field-survival/
 └── plugins_tbg/                       # --no-tpg=False 时保存的 .tpg 文件
 ```
+
+
+# vue
+适合复杂插件开发。 Vue 框架 自带脚本验证能力。
+而且有较好的组件拆分能力。
+vue/src/App.vue   ←  你在改这里
+        ↓
+    yarn vite build
+        ↓
+ui/game.html    ←  iframe 加载，其他形式的嵌入，事件响应等
