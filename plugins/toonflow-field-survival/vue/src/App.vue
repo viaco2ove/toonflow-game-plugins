@@ -7194,16 +7194,16 @@ body {
 /* ============================================================
  * 📐 全局响应式（HUD/事件/右栏/技能栏/横竖切换按钮/比例尺）
  * ------------------------------------------------------------
- * 触发场景：5175 剧场宿主下 iframe 被 flex 父容器压到 ~500-700px 高，
- * 默认的"竖屏 padding"导致 events/HUD/右栏/技能栏互相挤压甚至重叠。
- * 这里按"iframe 实际高度"分级收紧：
- *   - < 700px（5175 中段）：events 内嵌 HUD、scale-ruler/坐标盒缩小
- *   - < 560px（5175 短屏）：技能栏与物品栏合并右栏、横竖切换按钮靠近摇杆
- *   - < 460px（极短）：全部 mini-map/比例尺隐藏，仅保留摇杆+技能栏+HUD
+ * 触发场景：真机/微信 iframe 高 752px（已验证），Chrome devtools 小窗口会到 500-700px。
+ * 默认布局设计给 ≥ 600px 高（完整版）；< 600 / < 480 / < 380 才逐级收紧。
+ *   - ≥ 600px：完整版（真机 6.7 寸、Chrome 大窗口都走这条）
+ *   - < 600px（短屏）：HUD 紧凑化、events 上移
+ *   - < 480px（中段）：minimap/coord-box 缩小，scale-ruler 让位
+ *   - < 380px（极短）：events / coord-box / scale-ruler 隐藏，仅留摇杆+技能栏+mini HUD
  * ============================================================ */
 
-/* 中等高度（5175 iframe ≈ 560-700px）：events 上移到 HUD 下方紧贴、HUD 紧凑化 */
-@media (max-height: 700px) {
+/* 短屏（iframe < 600px，如 iPhone SE / Chrome 小窗口）：events 上移到 HUD 下方紧贴、HUD 紧凑化 */
+@media (max-height: 600px) {
   .hud {
     font-size: 11px;
     line-height: 10px;
@@ -7226,8 +7226,8 @@ body {
   .scale-ruler__lbl { font-size: 5px; }
 }
 
-/* 短屏（5175 iframe ≈ 460-560px）：进一步缩，物品栏合并右栏 */
-@media (max-height: 560px) {
+/* 中段屏（iframe < 480px）：进一步缩 */
+@media (max-height: 480px) {
   .hud { font-size: 10px; line-height: 9px; }
   .hp { width: 5rem; height: 6px; }
   .mp { width: 5rem; height: 5px; }
@@ -7242,8 +7242,8 @@ body {
   .scale-ruler { display: none; }     /* 比例尺让位给 minimap */
 }
 
-/* 极短（iframe < 460px，如 5175 横屏 iframe）：最关键操作保留，其余隐藏 */
-@media (max-height: 460px) {
+/* 极短（iframe < 380px，如 5175 横屏 iframe）：最关键操作保留，其余隐藏 */
+@media (max-height: 380px) {
   .events { display: none; }          /* 事件提示让位 */
   .scale-ruler { display: none; }
   .coord-box { display: none; }
