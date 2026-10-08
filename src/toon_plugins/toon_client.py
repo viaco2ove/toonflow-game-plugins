@@ -165,6 +165,12 @@ class ToonClient:
     def uninstall_plugin(self, plugin_id):
         return self._post("/plugin/uninstall", {"pluginId": plugin_id})
 
+    def rebuild_entry(self, plugin_id, reason=""):
+        """触发后端一致性保证（esbuild entry.ts → 清 entryModuleCache）。
+        装完插件后调用——保证后端下一次 tick 走新代码。
+        失败不抛异常（用 stderr 提示），让安装本身的成功不因此被遮盖。"""
+        return self._post("/plugin/rebuild", {"pluginId": plugin_id, "reason": reason or "cli:install"})
+
     def set_plugin_enabled(self, plugin_id, enabled=True):
         return self._post("/plugin/setEnabled", {"pluginId": plugin_id, "enabled": enabled})
 

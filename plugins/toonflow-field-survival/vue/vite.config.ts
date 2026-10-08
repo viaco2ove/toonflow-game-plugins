@@ -2,6 +2,7 @@ import { defineConfig, loadEnv, Plugin } from "vite";
 import { resolve } from "path";
 import { readFileSync, existsSync } from "fs";
 import http from "http";
+import { spawnSync } from "child_process";
 // @ts-ignore
 import vue from "@vitejs/plugin-vue";
 import { viteSingleFile } from "vite-plugin-singlefile";
@@ -88,6 +89,52 @@ function devHostPlugin(conn: string, story: string): Plugin {
       //   桩只负责「网络代理 + 传参 + 回推 state」，游戏/系统面板全部逻辑走 entry.js，
       //   保证 --conn 调试链路与「插件安装后」链路行为一致。
       const ENTRY_PATH = resolve(__dirname, "../entry.js");
+      // ★ 一致性保证（2026-10-08 优化方案）：vite 启动时调后端 /plugin/rebuild
+      //   触发 esbuild 现编 entry.ts → 清 entryModuleCache。
+      //   失败仅 log，不阻塞 vite 启动。
+      //   补：仓库侧的 entry.js 也要现编（dev-host 直接 import 它，不重编就
+      //   跟 user-side 的安装副本脱节）。失败仅 log，不阻塞 vite 启动。
+      try {
+        const repoEntryTs = resolve(__dirname, "../entry.ts");
+        const repoEntryJs = resolve(__dirname, "../entry.js");
+        if (existsSync(repoEntryTs)) {
+          const r = spawnSync(
+            "npx", ["--no-install", "esbuild", repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"],
+            { stdio: ["ignore", "pipe", "pipe"], timeout: 30000 },
+          );
+          if (r.status === 0) console.log("[dev-host] 仓库 entry.js 现编完成（" + repoEntryJs + "）");
+          else console.log("[dev-host] 仓库 entry.js 现编失败（不影响启动）: " + (r.stderr?.toString().slice(0, 200) ?? r.error?.message ?? ""));
+        }
+      } catch (e: any) {
+        console.log("[dev-host] 仓库 entry.js 现编异常（不影响启动）: " + (e?.message ?? e));
+      }
+      try {
+        const u = new URL("/plugin/rebuild", SERVICE_URL);
+        const body = JSON.stringify({
+          userId: 0,            // 后端 60002 路由会从 req.user 取（CLI 装的回退路径）
+          pluginId: "com.toonflow.minigame-field-survival",
+          reason: "vite:dev-host:startup",
+        });
+        const req = http.request({
+          method: "POST",
+          hostname: u.hostname,
+          port: u.port || 80,
+          path: u.pathname,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(body),
+            ...(AUTH_TOKEN ? { Authorization: "Bearer " + AUTH_TOKEN } : {}),
+          },
+          timeout: 15000,
+        }, (res) => {
+          if (res.statusCode === 200) console.log("[dev-host] 插件入口一致性已保证（esbuild + 清缓存）");
+          else console.log("[dev-host] /plugin/rebuild 返回 " + res.statusCode + "（不影响启动）");
+        });
+        req.on("error", (e) => console.log("[dev-host] rebuild 失败（不影响启动）: " + e.message));
+        req.write(body); req.end();
+      } catch (e: any) {
+        console.log("[dev-host] rebuild 异常（不影响启动）: " + (e?.message ?? e));
+      }
       // 通用代理：/toon-asset/<path> → {SERVICE_URL}/<path>（图片/音频等静态资源）
       server.middlewares.use("/toon-asset", (req, res, next) => {
         try {

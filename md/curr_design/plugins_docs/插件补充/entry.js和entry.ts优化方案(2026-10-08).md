@@ -299,7 +299,7 @@ npm run dev or npm run debug  or npm run debug -- --story 赦夜人冥夜走廊-
 
 | 阶段 | 动作 | 预期收益                        | 工期 |
 |---|---|---------------------------------|---|
-| **第一阶段：止血** | 方案 A.1（文档）+ A.2（git hook）+ A.3（设计文档修订） | 阻止进一步漂移 + 新人理解一致 +一致性的强制保证 | 1-2 天 |
+| **第一阶段：止血** | 方案 A.1（文档）+ A.2（git hook）+ A.3（设计文档修订）+ **三个入口的一致性强制保证** | 阻止进一步漂移 + 新人理解一致 + 一致性程序性保证 | 1-2 天 |
 | **第二阶段：自动化** | 方案 B 全部（esbuild + sync + mtime + dev-host 同源） | 改 entry.ts 一行 = 链路生效     | 3-5 天 |
 | **第三阶段：演进** | 方案 C 或 D（选一个，作为插件设计层面决策） | 角色统一，长期可维护            | 视插件数量决定 |
 
@@ -310,7 +310,99 @@ npm run dev or npm run debug  or npm run debug -- --story 赦夜人冥夜走廊-
 - [x] 写 `entry.js和entry.ts 的关系和说明.md`（10-07 已写）
 - [x] 写 `插件工作机制.md`（10-08 已写）
 - [x] 写本优化方案（10-08）
+- [x] **一致性的强制保证（程序性，10-08 已落代码）**
+  - [x] `toonflow-game-app/src/lib/pluginEntryConsistency.ts` 新建：esbuild 现编 + 清 entryModuleCache 统一函数
+  - [x] `toonflow-game-app/src/lib/PluginExecutor.ts` 改 mtime 失效 + 导出 `clearEntryCache()`
+  - [x] `toonflow-game-app/src/routes/plugin/rebuild.ts` 新建：`POST /plugin/rebuild`
+  - [x] `toonflow-game-app/src/router.ts` 注册路由
+  - [x] `toonflow-game-app/src/routes/plugin/install.ts` 网页装后调 ensureEntryConsistency
+  - [x] `toonflow-game-plugins/src/toon_plugins/toon_client.py` 加 `rebuild_entry()`
+  - [x] `toonflow-game-plugins/src/toon_plugins/cli.py` install_cmd 装完调 rebuild_entry
+  - [x] `toonflow-game-plugins/plugins/toonflow-field-survival/vue/vite.config.ts` dev 启动时 fetch /plugin/rebuild
 - [ ] 修订 `toonflow-game-app/md/curr_design/插件设计/插件设计.md` § 2.1/4/5.1/6.1 的 entry.js 表述
-- [ ] 在 `toonflow-game-plugins` 仓库加 `.git/hooks/pre-commit` 校验 entry.js 一致性
+- [ ] 在 `toonflow-game-plugins` 仓库加 `.git/hooks/pre-commit` 校验 entry.js 一致性（防止 CI 之外的人手编）
 - [ ] 把 `entry.js.bak_*` / `entry.js.new` 归档到 `archive/`
 - [ ] 文档纳入 PR review checklist：任何提到 entry.js 的 commit 必须附"为什么"理由
+
+## 第一阶段三个入口的一致性保证（已实现）
+
+| 入口 | 触发时机 | 实现 | 失败处理 |
+|---|---|---|---|
+| **CLI 装** `python -m toon_plugins plugins -i xxx` | 装完返回 OK 之后 | `cli.py install_cmd()` → `client.rebuild_entry()` → `POST /plugin/rebuild` → `ensureEntryConsistency()` | 警告不阻塞 |
+| **网页装**（5175 上传 .tbg） | 路由 `/plugin/install` 解压后 | 直接调 `ensureEntryConsistency()`（同进程，无需 HTTP） | 警告写入 `result.consistencyWarning` |
+| **vue 启动** `npm run dev/debug/--conn` | vite `configureServer` 时 | `http.request('/plugin/rebuild')`（跨进程到 60002） | console.log 不阻塞 vite |
+
+三处都走同一个 `ensureEntryConsistency(userId, pluginId, opts)`，统一做两件事：
+1. `npx esbuild entry.ts --outfile=entry.js --format=esm --target=es2020`（如果 entry.ts 存在）
+2. `clearEntryCache(pluginDir)`（如果 clearEntryCache 已导出则调；否则 60002 进程级 entryModuleCache Map.delete）
+
+**额外**：PluginExecutor.loadEntryModule 改成 mtime 失效——esbuild 重建后即使没调 clearEntryCache，下一次 tick 也会自动重 import（因为 sourcePath 相同但 mtimeMs 变了）。三道保险：
+
+- mtime 失效（自动，最快生效）
+- `clearEntryCache()`（手动，跨进程路由调用）
+- 进程重启（兜底，永远有效）
+
+---
+
+## 已完成 vs 未完成（2026-10-08 现状盘点）
+
+### ✅ 第一阶段（止血 + 一致性保证）几乎全完成
+
+**必要核心全到位**：
+
+| 项目 | 状态 |
+|---|---|
+| 写明现状（3 份文档） | ✅ |
+| 修订插件设计.md（§ 2.1/4/5.1/6.1 + 附录 C） | ✅ |
+| 程序性一致性保证（3 入口） | ✅ CLI 装 / 网页装 / vue 启动都调统一 `ensureEntryConsistency()` |
+| PluginExecutor mtime 失效 | ✅ esbuild 重建后**自动重 import，无需重启 60002** |
+| `clearEntryCache()` 导出 | ✅ |
+| `POST /plugin/rebuild` 路由 | ✅ |
+| 仓库 entry.js 现编（vite 启动时） | ✅ 避免 dev-host 与 user-side 脱节 |
+
+**这条最关键的——改 entry.ts → 三个入口任何一个触发 → 下一帧后端跑新代码——已实现。**
+
+### ⚠️ 第一阶段未完成项（次要 / 加固层）
+
+| 项目 | 必要吗 | 建议 |
+|---|---|---|
+| git hook 校验 entry.js | **次要** | 程序性保证已落，git hook 是"防 CI 之外的人手编"的最后围栏。**没有也行**，加 15 行 bash 更稳 |
+| 归档 `entry.js.bak_*` | **可做可不做** | mtime 失效后"手编 entry.js"已不会导致生产错误，归档价值降低 |
+| PR review checklist | **文档性** | 对 AI / 新人有利，没也行 |
+
+**这三项的共同点**：mtime 失效 + 三入口 + clearEntryCache 落地的**当前架构下**，从"防手编"退化成"防意外手编"——价值还在但**不是核心瓶颈**。
+
+### ❌ 第二阶段（自动化）— 未启动
+
+方案 B 全部：sync-plugin.sh 脚本、predev 钩子、dev-host 同源改造。
+
+**核心已通过"三入口主动 rebuild"解决**：
+- B.3 缓存失效 = 方案精华，**已实现**
+- B.4 dev-host 同源未做但三入口 rebuild 间接保证了 B.2 的同步
+- sync-plugin.sh 手动同步等价为"`python -m toon_plugins plugins --install-all`一键重装"——更省事
+
+**第二阶段剩余价值**：**多账号同步**（user 7/8 与 user 1 不一致）。可以靠 install-all 一行解决。
+
+### ❌ 第三阶段（演进 C/D）— 未启动且建议不做
+
+- **D（后端读 .ts，删 entry.js）**：值得做但**不在 toonflow-field-survival 单插件上推**——它影响所有插件的部署形态。应作为插件设计演进讨论的结论。
+- **C（前端入口迁移）**：工作量大、收益模糊（vue/ 100+ 组件要拆出来），**不做**。
+
+---
+
+## 结论：继续做还是停
+
+**建议停**——第一阶段已经解决了**实际会出问题的核心场景**：
+
+1. 改 entry.ts → 三个入口触发 → esbuild 现编 + 清缓存 → 下一帧后端跑新代码（**关键，已实现**）
+2. 文档口径统一——新人/AI 不会再把 entry.js 误读为"前端入口"（**已实现**）
+
+**剩余 3 项**（git hook / 归档 / checklist）是**防御性**而非**功能性**——核心矛盾已通过程序性保证不再发生。
+
+**真正还应该做的**（按优先级）：
+
+1. **多账号同步**（如果测试时 user 7/8 还要用）：`python -m toon_plugins plugins --install-all`
+2. **回归验证**：改 entry.ts 一行 → 走三入口 → 观察实际生效
+3. **CI hook**（如果想长期保证）：加 `.husky/pre-commit` 跑 9 行 bash
+
+**不需要做的**：方案 C（前端入口迁移）/ 方案 B.4（dev-host 同源，三入口 rebuild 已隐含）/ 方案 D（跨插件影响大，不在单点推动）

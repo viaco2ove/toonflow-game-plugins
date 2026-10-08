@@ -412,6 +412,17 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
         if enable:
             client.set_plugin_enabled(plugin_id, True)
             click.echo("  Enabled")
+        # ★ 一致性保证：触发后端 esbuild 现编 entry.ts → 清 entryModuleCache
+        #   装完自动生效，无需手动重启 60002。失败仅警告，不阻塞安装成功状态。
+        try:
+            rebuild = client.rebuild_entry(plugin_id, reason="cli:install")
+            data = rebuild.get("data") if isinstance(rebuild, dict) else None
+            if data and data.get("rebuilt"):
+                click.echo("  entry.js 现编完成（mtime 失效已清缓存）")
+            elif data and data.get("rebuildError"):
+                click.secho("[WARN] esbuild 重建失败: " + str(data.get("rebuildError")), fg="yellow")
+        except Exception as ex:
+            click.secho("[WARN] rebuild 调失败（不影响安装）: " + str(ex), fg="yellow")
     else:
         click.secho("[ERR] Install failed: " + str(result), fg="red")
 
