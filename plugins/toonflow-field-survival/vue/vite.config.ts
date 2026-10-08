@@ -208,9 +208,10 @@ function devHostPlugin(conn: string, story: string): Plugin {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>dev-host（拟真宿主桩）— ${STORY || "(no story)"}</title>
 <style>
-  body{margin:0;padding:0;font-family:system-ui,sans-serif;background:#1a1a1a;color:#eee}
+  html,body{height:100%;margin:0;padding:0;font-family:system-ui,sans-serif;background:#1a1a1a;color:#eee}
   #wrap{position:fixed;inset:0}
   iframe{width:100%;height:100%;border:0;display:block}
   #log{position:fixed;left:8px;bottom:8px;background:#000a;padding:0;border-radius:6px;font:12px monospace;max-width:60%;max-height:60vh;overflow:hidden;z-index:9;line-height:1.5;box-shadow:0 2px 12px #0006;user-select:none}

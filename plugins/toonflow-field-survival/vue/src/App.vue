@@ -1261,26 +1261,29 @@ function calcCanvasDirection() {
 
   const aspect = DESIGN_W / DESIGN_H; // 1.6
 
-  // 横屏：宽>高，比例 1.6
-  let hW: number, hH: number;
+  // ★ bug 修复（10-08）：原代码算出 hW/hH（横屏）和 vW/vH（竖屏）两套尺寸，
+  //   但返回时只用 hW/hH → 竖屏设备永远拿到横屏尺寸，画布跟实际屏幕比例不符。
+  //   现在按实际比例 (screenW/screenH) 决定使用哪一套，aspect-ratio 接近时用横屏套。
+  let canvas_w: number, canvas_h: number;
   if (screenW / screenH >= aspect) {
-    hH = Math.min(screenH, MAX_LONG / aspect);
-    hW = hH * aspect;
+    // 真横屏：宽>高 * 1.6
+    const hH = Math.min(screenH, MAX_LONG / aspect);
+    canvas_w = Math.round(hH * aspect);
+    canvas_h = Math.round(hH);
+  } else if (screenW / screenH <= 1 / aspect) {
+    // 真竖屏：高>宽 * 1.6
+    const vW = Math.min(screenW, MAX_LONG * (1 / aspect));
+    canvas_w = Math.round(vW);
+    canvas_h = Math.round(vW * aspect);
   } else {
-    hW = Math.min(screenW, MAX_LONG);
-    hH = hW / aspect;
-  }
-
-  // 竖屏：宽<高，比例 0.625（横屏宽高互换）
-  let vW: number, vH: number;
-  if (screenW / screenH <= 1 / aspect) {
-    vW = Math.min(screenW, MAX_LONG * (1 / aspect));
-  } else {
-    vH = Math.min(screenH, MAX_LONG);
+    // 接近方形（介于横竖之间），用横屏套作 fallback
+    const hH = Math.min(screenH, MAX_LONG / aspect);
+    canvas_w = Math.round(hH * aspect);
+    canvas_h = Math.round(hH);
   }
 
   return {
-    screen: { canvas_w: Math.round(hW), canvas_h: Math.round(hH) }
+    screen: { canvas_w, canvas_h }
   };
 }
 
