@@ -1712,6 +1712,23 @@ let localMobsEpoch = 1;        // 本地敌怪集合的版本号（每次重建 
 let localMobsSentEpoch = 0;    // 已上报给宿主的版本号（避免每帧重复上报）
 /** 已在前端阵亡、等待宿主确认删除的本地敌怪（防止宿主整份推送把它们原地复活） */
 const deadLocalEnemyIds = new Set<string>();
+/**
+ * ★ fix⑧：本图野怪世代时间戳（mapmob_<TiledId>_<ts> 的第三段 ts）。
+ *   switchLevel 建新图怪时写入；合并宿主回推 / 上报 localEnemies 时只认本世代——
+ *   后端回流的怪 id 同为 mapmob_* 前缀（它们当初就是前端上报的），仅凭前缀无法
+ *   区分"新图刚建的怪"和"后端在途的旧图怪"。切图瞬间后端还在推旧图 state，
+ *   旧图怪被 onHostState 合并塞回 state.entities → localEnemiesPayload 又把它们
+ *   上报 → 后端 fix⑦ 又重建 → 反复切图怪越积越多（城镇也出现森林怪）。
+ *   以本图世代 ts 过滤后，旧图怪一律视为宿主在途残留，既不合并也不上报。
+ */
+let currentMapMobTs = "";
+/** id 是否本图世代（mapmob_<TiledId>_<ts>，后缀 ts === currentMapMobTs） */
+function isCurrentMapMob(id: unknown): boolean {
+  const v = String(id ?? "");
+  if (!v.startsWith("mapmob_")) return false;
+  if (!currentMapMobTs) return true;   // 无世代标记（旧存档/异常态）→ 退回旧行为
+  return v.endsWith("_" + currentMapMobTs);
+}
 function bumpLocalMobsEpoch(): void {
   localMobsEpoch += 1;
   deadLocalEnemyIds.clear();
@@ -1794,11 +1811,16 @@ function publishLocalMapMobs(): void {
 function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: number }; list: any[] } {
   // ★ 每帧都发（宿主按 epoch 变化才重建敌怪表，不会重复刷）。
   //   即使本帧 mapmob 数量为 0（城镇）也发空清单，dev-host 必须收到才清空 server 侧残留。
+  // ★ fix⑧：mapmob_ 只认本图世代（isCurrentMapMob）——切图瞬间后端在途的旧图怪
+  //   会经 onHostState 合并回流进 state.entities（id 同为 mapmob_* 前缀），若不过滤
+  //   会被再上报 → 后端重建 → 反复切图怪越积越多（城镇也出现森林怪）。
+  //   zone_/localmob_ 仍按前缀（它们不在 mapmob 世代体系内，但同样可能被回流——
+  //   一并在切图过渡期由 switchingLevel 分支丢弃，见 onHostState）。
   const list = ((state.value?.entities || []) as Array<any>).filter(
     (e) =>
       e?.side === "enemy" &&
       typeof e?.id === "string" &&
-      (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
+      (isCurrentMapMob(e.id) || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
   );
   // ★ 修复（bounds 恒为 0）：此前写的是 clampToMapBounds(0, 0) —— 那是把「点 (0,0)」
   //   夹进边界后返回的点，永远是 {x:0,y:0}，于是上报的 bounds 恒为 {lx:0,ly:0}，
@@ -2060,6 +2082,9 @@ async function switchLevel(levelName: string): Promise<void> {
     publishMapBounds(next);
     // ★ 从 Tiled 地图 Actors 层加载野怪（mulberryForest 的 GOBLIN / ORC 等）
     console.info("[field-survival] 加载关卡：", levelName, "mobs:", next.mobs?.length, next.mobs);
+    // ★ fix⑧：先翻本图世代号——本帧建的怪 id 都带这个 ts，onHostState 合并与
+    //   localEnemiesPayload 上报只认本世代，宿主在途的旧图怪（回流 mapmob_*）不认。
+    currentMapMobTs = String(Date.now());
     if (s && next.mobs?.length) {
       for (const mob of next.mobs) {
         // ★ 档案表统一取自 mapConfig.MOB_ARCHETYPES（与地图白名单同一份数据）：
@@ -2091,7 +2116,7 @@ async function switchLevel(levelName: string): Promise<void> {
         //   switchLevel 上面的"记忆死亡怪"段写入）。这是按图记忆，不依赖 host。
         const revived = pendingDeadMobIds.has(String(mob.id));
         if (revived) pendingDeadMobIds.delete(String(mob.id));
-        const enemyId = `mapmob_${mob.id}_${Date.now()}`;
+        const enemyId = `mapmob_${mob.id}_${currentMapMobTs}`;   // fix⑧：世代统一 ts（原来循环内 Date.now() 每只不同，无法按世代过滤）
         s.entities.push({
           id: enemyId,
           name: mobLabel,
@@ -5315,12 +5340,28 @@ onMounted(async () => {
       const incomingIds = new Set(
         incoming.entities.map((e: any) => e?.id).filter((v: any) => typeof v === "string"),
       );
+      // ★ fix⑧：本地图合并基准 = 本图世代的客户端权威怪。后端在途旧图怪回流时
+      //   id 同为 mapmob_* 前缀，只有"世代 ts == currentMapMobTs"的才是本图刚建的；
+      //   旧世代怪一律视为宿主在途残留：不合并（下面各分支都不再放行）、由 incoming
+      //   整份替换自然丢弃。localmob_/zone_ 不在世代体系内，仍按前缀识别。
       const localEnemies = prevEntities.filter(
         (e: any) =>
           e?.side === "enemy" &&
           typeof e?.id === "string" &&
-          (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
+          (isCurrentMapMob(e.id) || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
       );
+      // ★ fix⑧：incoming 里混进的宿主回流旧世代怪直接剔除（切图在途窗口的残留），
+      //   否则它们与后端重建表叠加，反复切图越积越多（城镇出现森林怪）。
+      const staleBackflow = incoming.entities.filter(
+        (e: any) =>
+          e?.side === "enemy" &&
+          typeof e?.id === "string" &&
+          e.id.startsWith("mapmob_") && !isCurrentMapMob(e.id),
+      );
+      if (staleBackflow.length) {
+        const staleIds = new Set(staleBackflow.map((e: any) => e.id));
+        incoming.entities = incoming.entities.filter((e: any) => !staleIds.has(e?.id));
+      }
       // ★ 客户端权威中立实体（mapnpc_*，地图 Actors 层的城镇 NPC）— 同样不在 incoming 里，
       //   必须按合并而非丢弃。规则与 mapmob_* 对齐。
       // ★ 切图期间（switchingLevel）不回补任何 mapnpc_* —— switchLevel 已把旧图 NPC 清掉，
@@ -5339,10 +5380,12 @@ onMounted(async () => {
       }
       // ★ 切图过渡期：丢弃所有旧图怪（zone_/localmob_），只保留新图的 mapmob_ 怪。
       //   否则从森林/墓地切进 mulberryTown 时，上张图的 zone_ 怪会跟进来追玩家。
+      //   ★ fix⑧：mapmob_ 同样只认本图世代（isCurrentMapMob）——合并基准 localEnemies
+      //   已按世代过滤，此处再显式断言一次，防止基准被旁路改动后旧图怪混进新图。
       if (switchingLevel.value) {
-        // 只允许 mapmob_（新图刚加载的 Tiled 怪）通过；zone_/localmob_ 一律过滤掉
+        // 只允许本图世代 mapmob_（新图刚加载的 Tiled 怪）通过；zone_/localmob_/旧世代一律过滤掉
         const validMapMobs = localEnemies.filter(
-          (e: any) => e.id.startsWith("mapmob_") && e.alive !== false && !deadLocalEnemyIds.has(e.id),
+          (e: any) => isCurrentMapMob(e.id) && e.alive !== false && !deadLocalEnemyIds.has(e.id),
         );
         if (validMapMobs.length) incoming.entities = [...incoming.entities, ...validMapMobs];
       } else {
