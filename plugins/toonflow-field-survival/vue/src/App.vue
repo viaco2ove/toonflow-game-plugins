@@ -1070,6 +1070,19 @@ function syncKeys() {
 /* 虚拟摇杆 */
 const stick = ref<{ active: boolean; x: number; y: number }>({ active: false, x: 0, y: 0 });
 const STICK_R = 52;
+/** 摇杆朝向 class（响应式 CSS 用）：
+ *  - "pad--portrait"  竖屏（视口高 > 宽）—— 默认，摇杆左下角
+ *  - "pad--landscape" 横屏（视口宽 > 高）—— 摇杆挪左下角更贴底
+ *  - "pad--square"    方形（宽高接近）—— 居中
+ * 视觉差异交给 @media 写：viewport 尺寸 + orientation。
+ */
+const padOrientClass = computed(() => {
+  if (typeof window === "undefined") return "pad--portrait";
+  const w = window.innerWidth, h = window.innerHeight;
+  if (w > h * 1.2) return "pad--landscape";
+  if (h > w * 1.2) return "pad--portrait";
+  return "pad--square";
+});
 function stickStart(e: PointerEvent) {
   stick.value.active = true;
   stickMove(e);
@@ -5815,7 +5828,7 @@ watch(() => state.value?.phase, (p) => {
       </div>
 
       <!-- 半透明控制层 -->
-      <div class="pad" @pointerdown="stickStart" @pointermove="stickMove"
+      <div class="pad" :class="padOrientClass" @pointerdown="stickStart" @pointermove="stickMove"
            @pointerup="stickEnd" @pointercancel="stickEnd" @pointerleave="stickEnd">
         <div class="pad__knob" :style="{ transform: `translate(${stick.x}px, ${stick.y}px)` }"></div>
       </div>
@@ -6930,32 +6943,7 @@ body {
   font-weight: 600;
 }
 
-/* 摇杆 */
-.pad {
-  position: absolute;
-  left: 18px;
-  bottom: 100px;
-  z-index: 6;
-  width: 73px;
-  height: 73px;
-  border-radius: 50%;
-  background: rgba(30, 31, 31, 0.7);
-  border: 3px solid #4f4f4f;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
-  touch-action: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pad__knob {
-  width: 46px;
-  height: 46px;
-  border-radius: 50%;
-  background: #d4a13e;
-  border: 2px solid #ffe79e;
-  box-shadow: 0 0 0 2px #6a4f1f;
-}
+/* 摇杆全部样式（基础 + 横/竖屏 @media）在文件末尾"📱 响应式（横/竖屏）"专区统一管理 */
 
 /* 技能 / 物品 */
 .slots {
@@ -7118,5 +7106,88 @@ body {
 
 .over__exit:hover:not(:disabled) {
   background: #4a4b4b;
+}
+/* ============================================================
+ * 📱 响应式专区：虚拟摇杆（横/竖屏差异）—— 置于 style 块末尾，不被上方覆盖
+ * ------------------------------------------------------------
+ * 设计原则：
+ *  - 摇杆是"屏幕空间"控件，不随世界旋转（世界用 stage-rotate 旋转 90°），
+ *    所以 .pad 用 viewport 像素定位（left/bottom），不用 transform。
+ *  - 竖屏 portrait：73px + bottom 100px 的舒适触达区（默认）。
+ *  - 横屏 landscape：视口高度 372px 级别，摇杆贴底缩小，不遮世界视野。
+ *  - 方形 square：介于两者之间。
+ *  - 极矮横屏（高 < 480px）：再缩、贴角。
+ *  - 模板侧由 padOrientClass 计算 pad--portrait/landscape/square 配合切换。
+ *  - 其他控件（HUD/技能栏/小地图）的响应式按需在本专区续写。
+ * ============================================================ */
+
+/* —— 基础（默认竖屏 portrait）—— */
+.pad {
+  position: absolute;
+  left: 18px;
+  bottom: 100px;
+  z-index: 6;
+  width: 73px;
+  height: 73px;
+  border-radius: 50%;
+  background: rgba(30, 31, 31, 0.7);
+  border: 3px solid #4f4f4f;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pad__knob {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: #d4a13e;
+  border: 2px solid #ffe79e;
+  box-shadow: 0 0 0 2px #6a4f1f;
+}
+
+/* —— 横屏（landscape）—— 视口矮而宽，摇杆贴底缩小 */
+@media (orientation: landscape) {
+  .pad--landscape {
+    /* bottom 收窄；left 离左边 12px 留出 HUD HP 条 */
+    left: 12px;
+    bottom: 18px;
+    width: 56px;
+    height: 56px;
+    border-width: 2px;
+  }
+  .pad--landscape .pad__knob {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+/* —— 方形（square，~1:1）—— 摇杆左下抬高，半径介于竖/横之间 */
+@media (min-aspect-ratio: 0.85) and (max-aspect-ratio: 1.18) {
+  .pad--square {
+    left: 24px;
+    bottom: 60px;
+    width: 64px;
+    height: 64px;
+  }
+  .pad--square .pad__knob {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+/* —— 极矮横屏（高 < 480px，如 iPhone SE 横屏）—— 再缩、贴角 */
+@media (max-height: 480px) and (orientation: landscape) {
+  .pad--landscape {
+    left: 8px;
+    bottom: 8px;
+    width: 48px;
+    height: 48px;
+  }
+  .pad--landscape .pad__knob {
+    width: 30px;
+    height: 30px;
+  }
 }
 </style>
