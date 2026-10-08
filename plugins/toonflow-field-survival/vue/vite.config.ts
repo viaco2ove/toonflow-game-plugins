@@ -222,7 +222,7 @@ function devHostPlugin(conn: string, story: string): Plugin {
   #log.collapsed #log-body{display:none}
   #log.collapsed{max-height:none}
   #log.collapsed #log-header{border-radius:6px}
-  #badge{position:fixed;right:8px;top:8px;background:#f33;color:#fff;padding:4px 10px;border-radius:4px;font:12px monospace;z-index:9;max-width:60%;text-align:right}
+  #badge{position:fixed;right:8px;top:8px;background:#f33;color:#fff;padding:4px 10px;border-radius:4px;font:0.5rem monospace;z-index:9;max-width:60%;text-align:right}
   #error{position:fixed;inset:30px;display:none;align-items:center;justify-content:center;background:#1a1a1a;color:#f88;font:14px monospace;z-index:10;text-align:center;padding:40px;line-height:2}
 </style>
 </head>

@@ -6954,7 +6954,7 @@ body {
   bottom: 18px;
   z-index: 6;
   display: flex;
-  gap: 2px;
+  gap: 0px;
 }
 
 .slots--skill {
@@ -6963,12 +6963,12 @@ body {
 
 .slots--item {
   right: 2px;
-  bottom: 70px;
+  bottom: 4rem;
 }
 
 .slot {
   width: 2.5rem;
-  height: 2rem;
+  height: 3rem;
   border-radius: 0;
   cursor: pointer;
   border: 2px solid #4f4f4f;
@@ -7191,6 +7191,19 @@ body {
   .pad--landscape .pad__knob {
     width: 30px;
     height: 30px;
+  }
+
+  .pad {
+        left: 2.5rem;
+        bottom: 2.5rem;
+  }
+
+  .slots--item {
+    right: 2px;
+    bottom: 4rem;
+  }
+  .slots--skill {
+    right: 2px;
   }
 }
 
