@@ -974,7 +974,7 @@ function install(): void {
           state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "atk") {
-          // 攻击技能：找最近的敌人，50 米内
+          // 攻击技能：找最近的敌人，50 米内；★ 空放：无目标也放特效 + 飘字
           let target: Entity | null = null;
           let minD = Infinity;
           state.entities.forEach((e) => {
@@ -1001,7 +1001,21 @@ function install(): void {
               if (me.exp >= me.expToNext) levelUpEntity(me);
             }
           } else {
-            state.events.push("[mock] " + slot.name + "，但周围没有敌人");
+            // ★ 空放：特效照放（slash_arc 或朝向面前的 fireball）、CD 已进、MP 已扣
+            const angle = (me as any).facing ?? 0;
+            pushVfx({
+              id: "vfb" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
+              kind: slot.range === "ranged" ? "fireball" : "slash_arc",
+              x: me.x, y: me.y,
+              targetX: me.x + Math.cos(angle * Math.PI / 180) * 3,
+              targetY: me.y + Math.sin(angle * Math.PI / 180) * 3,
+              life: slot.range === "ranged" ? 12 : 10, total: slot.range === "ranged" ? 12 : 10,
+              color: effectColor((slot as any).effects_type, slot.range === "ranged" ? "#ff8c3a" : "#ffffff"),
+              angle,
+            });
+            bobEntity(me);
+            state.floaters.push({ id: "f" + state.tick, text: slot.name, x: me.x, y: me.y - 10, life: 20, kind: "text", color: "#cfd8e3" });
+            state.events.push("[mock] " + slot.name + "（空放，无目标）");
           }
         } else if (slot.type === "buff") {
           // 护盾：临时加 def（持续 60 tick ≈ 6 秒）

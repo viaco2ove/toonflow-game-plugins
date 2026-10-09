@@ -60,7 +60,7 @@ export interface Potion { id: string; x: number; y: number; heal: number; mp?: n
 /** ★ VFX 粒子（屏幕像素空间：x/y 都是已转换的屏幕像素） */
 export interface VfxParticle {
   id: string;
-  kind: "slash_arc" | "fireball" | "heal_ring" | "buff_ring" | "explosion" | "spark";
+  kind: "slash_arc" | "fireball" | "heal_ring" | "buff_ring" | "explosion" | "spark" | "icon_burst";
   x: number;
   y: number;
   life: number;
@@ -72,6 +72,8 @@ export interface VfxParticle {
   scale?: number;
   /** ★ 弧形斩波朝向（度数，0=右 90=下 180=左 270=上），缺省=右 */
   angle?: number;
+  /** ★ P2.5 属性法术图标（相对 ui/ 的路径，如 images/spells/fire/fireball.png）；有值时在特效中心叠加图标 */
+  icon?: string;
 }
 /** ★ 飘字（伤害 / 治疗 / 补蓝 / 增益），按 kind 决定颜色 */
 export interface Floater {

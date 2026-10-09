@@ -3454,12 +3454,20 @@ function drawVfxLayer(
         const tx = baseTx != null ? wx2px(baseTx) : px;
         const ty = baseTy != null ? wz2py(baseTy) : py;
         drawFireballPx(ctx, px, py, tx, ty, progress, p.color || "#ff8c3a");
+        // ★ P2.5：法术图标叠在弹体当前位置
+        if (p.icon) drawIconBurst(ctx, p.icon, px + (tx - px) * progress, py + (ty - py) * progress, progress, p.color || "#ff8c3a");
         break;
       }
       case "heal_ring":  drawHealRing(ctx, px, py, progress, p.color || "#5fe57a"); break;
       case "buff_ring":  drawBuffRing(ctx, px, py, progress, p.color || "#f5c542"); break;
       case "explosion":  drawExplosion(ctx, px, py, progress, p.color || "#ff8c3a"); break;
       case "spark":      drawSpark(ctx, px, py, progress, p.color || "#fff"); break;
+      // ★ P2.5：纯图标特效（icon_burst）——无弹体/无弧，只放图标 + 光环
+      case "icon_burst": if (p.icon) drawIconBurst(ctx, p.icon, px, py, progress, p.color || "#fff"); break;
+    }
+    // ★ P2.5：近战/治疗/Buff 类特效图标叠在施放者位置（fireball 已在 case 内叠加到弹道上）
+    if (p.icon && (p.kind === "slash_arc" || p.kind === "heal_ring" || p.kind === "buff_ring")) {
+      drawIconBurst(ctx, p.icon, px, py, progress, p.color || "#fff");
     }
   }
 }
@@ -3702,6 +3710,68 @@ function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: num
   ctx.beginPath();
   ctx.arc(px, py - 12, 3, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
+}
+
+/* ============================================================
+   ★ P2.5 属性法术图标特效（public/images/spells 26×26 像素图标）
+   ============================================================ */
+
+/** 法术图标缓存（路径 → HTMLImageElement）；20 张上限，LRU 语义（Map 保序） */
+const spellIconCache = new Map<string, HTMLImageElement>();
+
+/** 取法术图标；未加载时触发异步加载，本帧返回 null（下一帧自然就绪） */
+function spellIcon(src: string): HTMLImageElement | null {
+  let img = spellIconCache.get(src);
+  if (img) {
+    // LRU：命中后挪到末尾
+    spellIconCache.delete(src);
+    spellIconCache.set(src, img);
+    return (img.complete && img.naturalWidth > 0) ? img : null;
+  }
+  if (spellIconCache.size > 20) {
+    const oldest = spellIconCache.keys().next().value;
+    if (oldest) spellIconCache.delete(oldest);
+  }
+  img = new Image();
+  img.onload = () => { /* 下一帧 drawVfxLayer 自然取到 */ };
+  img.src = src;
+  spellIconCache.set(src, img);
+  return null;
+}
+
+/** 属性特效图标叠加：图标 0.7×→1.5× 放大 + 同色光环淡出（叠在斩波/火球/环之上） */
+function drawIconBurst(
+  ctx: CanvasRenderingContext2D,
+  iconSrc: string,
+  px: number,
+  py: number,
+  p: number,
+  color: string,
+): void {
+  const img = spellIcon(iconSrc);
+  // 同色光环（图标未加载时也有反馈）
+  ctx.save();
+  const ringR = 10 + p * 20;
+  ctx.globalAlpha = Math.max(0, 1 - p) * 0.7;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(px, py - 12, ringR, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+  if (!img) return;
+  // 图标：0.7× → 1.5× 放大，前 70% 时间显示
+  const scale = 0.7 + p * 0.8;
+  const size = 26 * scale;
+  const alpha = Math.max(0, 1 - p * 1.2);
+  if (alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.imageSmoothingEnabled = false;  // 像素图标保持锐利
+  ctx.drawImage(img, px - size / 2, py - 12 - size / 2, size, size);
   ctx.restore();
 }
 /* ---------------- 地表噪声（多样化地表，模块级纯函数） ---------------- */

@@ -1617,6 +1617,26 @@ function effectColor(effectsType: unknown, fallback: string): string {
   return c || fallback;
 }
 
+/** ★ P2.5 属性法术图标：effects_type → public/images/spells 下的 26×26 像素图标（前端 drawIconBurst 叠加渲染） */
+const EFFECT_ICON: Record<string, string> = {
+  normal:  "images/spells/enchantment/sure_blade.png",
+  fire:    "images/spells/fire/fireball.png",
+  water:   "images/spells/ice/freeze.png",
+  thunder: "images/spells/air/lightning_bolt.png",
+  wind:    "images/spells/air/tornado.png",
+  earth:   "images/spells/earth/iron_shot.png",
+  metal:   "images/spells/earth/iron_shot.png",
+  wood:    "images/spells/poison/poison_arrow.png",
+  light:   "images/spells/restoration/minor_heal.png",
+  dark:    "images/spells/necromancy/agony.png",
+  poison:  "images/spells/poison/alistairs_intoxication.png",
+  bleed:   "images/spells/necromancy/bolt_of_draining.png",
+};
+/** 解析 effects_type 法术图标路径；缺省/未知 → ""（不叠图标） */
+function effectIcon(effectsType: unknown): string {
+  return EFFECT_ICON[String(effectsType || "")] || "";
+}
+
 /** 稀有度 → 基础估价（卖出按 40% 折算） */
 const RARITY_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
 const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
@@ -2053,18 +2073,18 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
     const heal = it.heal || defaultHeal(it.name, it.kind);
     const before = me.hp;
     if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
-    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), size: 1.0 });
+    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), icon: effectIcon(it.effects_type), size: 1.0 });
     if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
   } else if (t === "buff") {
-    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), size: 1.0 });
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), icon: effectIcon(it.effects_type), size: 1.0 });
     if (it.buff_type) msg += `（${it.buff_type}）`;
   } else {
     // atk / attribute：普攻效果；attribute 是纯属性点，使用不消耗但有小跳 + 普攻特效
     const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(me, e) < SKILL_RANGE_M);
     if ((it.range || "melee") === "ranged" && targets[0]) {
-      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), size: 1.0 });
+      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), icon: effectIcon(it.effects_type), size: 1.0 });
     } else {
-      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), size: 1.6 });
+      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), icon: effectIcon(it.effects_type), size: 1.6 });
     }
     if (num(it.power, 0) > 0 && targets.length) {
       damage(s, targets[0], num(it.power, 0), me);
@@ -2950,8 +2970,8 @@ export async function handle_action(
       const player = s.entities.find((e) => e.side === "player");
       if (!skill || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
+      // ★ 空放：无目标也正常施放（特效/CD 照常），只是没有伤害结算
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
-      if (!targets.length) { damage(s, s.entities.filter(e=>e.side==="enemy"&&e.alive)[0] || player, 0); return okResp(`${skill.name} 未命中`); }
       skill.cdLeft = skill.cd;
       // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
       (player as any).actionBobMs = 300;
@@ -2959,22 +2979,22 @@ export async function handle_action(
       // ★ game.md 技能特效：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const fx = skillFxKind(skill);
       if (fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor((skill as any).effects_type, "#7CFFB2"), size: 1.0 });
+        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor((skill as any).effects_type, "#7CFFB2"), icon: effectIcon((skill as any).effects_type), size: 1.0 });
       } else if (fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor((skill as any).effects_type, "#9CCFFF"), size: 1.0 });
+        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor((skill as any).effects_type, "#9CCFFF"), icon: effectIcon((skill as any).effects_type), size: 1.0 });
       } else if (fx === "ranged") {
         const t0 = targets[0];
         pushVfx(s, {
           kind: "fireball", entityId: player.id, targetEntityId: t0?.id,
           x: player.x, y: player.y, targetX: t0?.x ?? player.x, targetY: t0?.y ?? player.y,
-          facing: player.facing, life: 16, total: 16, color: effectColor((skill as any).effects_type, "#ff6a00"), size: 1.0,
+          facing: player.facing, life: 16, total: 16, color: effectColor((skill as any).effects_type, "#ff6a00"), icon: effectIcon((skill as any).effects_type), size: 1.0,
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor((skill as any).effects_type, "#fff"), size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor((skill as any).effects_type, "#fff"), icon: effectIcon((skill as any).effects_type), size: 1.6 });
       }
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
-      pushEvent(s, `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标`);
-      return okResp(`${skill.name}`);
+      pushEvent(s, targets.length ? `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标` : `施放 ${skill.name}`);
+      return okResp(targets.length ? `${skill.name}` : `${skill.name}（空放）`);
     }
 
     /* ============ ★ 方案一 + 三：点击自动逼近 & 普攻 ============ */
@@ -3180,22 +3200,22 @@ export async function handle_action(
       // ★ game.md 技能特效（与「skill」共用一套归类）：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const _fx = skillFxKind(sk);
       if (_fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor((sk as any).effects_type, "#7CFFB2"), size: 1.0 });
+        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor((sk as any).effects_type, "#7CFFB2"), icon: effectIcon((sk as any).effects_type), size: 1.0 });
       } else if (_fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor((sk as any).effects_type, "#9CCFFF"), size: 1.0 });
+        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor((sk as any).effects_type, "#9CCFFF"), icon: effectIcon((sk as any).effects_type), size: 1.0 });
       } else if (_fx === "ranged") {
         const _t0 = skTargets[0];
         pushVfx(s, {
           kind: "fireball", entityId: meSk.id, targetEntityId: _t0?.id,
           x: meSk.x, y: meSk.y, targetX: _t0?.x ?? meSk.x, targetY: _t0?.y ?? meSk.y,
-          facing: meSk.facing, life: 16, total: 16, color: effectColor((sk as any).effects_type, "#ff6a00"), size: 1.0,
+          facing: meSk.facing, life: 16, total: 16, color: effectColor((sk as any).effects_type, "#ff6a00"), icon: effectIcon((sk as any).effects_type), size: 1.0,
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: effectColor((sk as any).effects_type, "#fff"), size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: effectColor((sk as any).effects_type, "#fff"), icon: effectIcon((sk as any).effects_type), size: 1.6 });
       }
       if (!skTargets.length) {
-        pushEvent(s, `施放 ${sk.name}，未命中目标`);
-        return okResp(`${sk.name} 未命中`);
+        pushEvent(s, `施放 ${sk.name}（空放，无目标）`);
+        return okResp(`${sk.name}（空放）`);
       }
       skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
       pushEvent(s, `施放 ${sk.name}，命中 ${Math.min(3, skTargets.length)} 个目标`);

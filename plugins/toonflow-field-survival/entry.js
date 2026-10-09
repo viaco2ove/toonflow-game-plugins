@@ -1071,6 +1071,23 @@ function effectColor(effectsType, fallback) {
   const c = EFFECT_COLOR[String(effectsType || "")];
   return c || fallback;
 }
+const EFFECT_ICON = {
+  normal: "images/spells/enchantment/sure_blade.png",
+  fire: "images/spells/fire/fireball.png",
+  water: "images/spells/ice/freeze.png",
+  thunder: "images/spells/air/lightning_bolt.png",
+  wind: "images/spells/air/tornado.png",
+  earth: "images/spells/earth/iron_shot.png",
+  metal: "images/spells/earth/iron_shot.png",
+  wood: "images/spells/poison/poison_arrow.png",
+  light: "images/spells/restoration/minor_heal.png",
+  dark: "images/spells/necromancy/agony.png",
+  poison: "images/spells/poison/alistairs_intoxication.png",
+  bleed: "images/spells/necromancy/bolt_of_draining.png"
+};
+function effectIcon(effectsType) {
+  return EFFECT_ICON[String(effectsType || "")] || "";
+}
 const RARITY_PRICE = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
 const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
 const KIND_LIST = ["consumable", "material", "equipment", "skill_book", "quest"];
@@ -1441,20 +1458,20 @@ function useBagItem(s, name) {
     const heal = it.heal || defaultHeal(it.name, it.kind);
     const before = me.hp;
     if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
-    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), size: 1 });
+    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), icon: effectIcon(it.effects_type), size: 1 });
     if (heal > 0) {
       floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52);
       msg += `\uFF0C\u6062\u590D ${Math.round(me.hp - before)} \u751F\u547D`;
     }
   } else if (t === "buff") {
-    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), size: 1 });
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), icon: effectIcon(it.effects_type), size: 1 });
     if (it.buff_type) msg += `\uFF08${it.buff_type}\uFF09`;
   } else {
     const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(me, e) < SKILL_RANGE_M);
     if ((it.range || "melee") === "ranged" && targets[0]) {
-      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), size: 1 });
+      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), icon: effectIcon(it.effects_type), size: 1 });
     } else {
-      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), size: 1.6 });
+      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), icon: effectIcon(it.effects_type), size: 1.6 });
     }
     if (num(it.power, 0) > 0 && targets.length) {
       damage(s, targets[0], num(it.power, 0), me);
@@ -2211,18 +2228,14 @@ async function handle_action(action, params, state, context) {
       if (!skill || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} \u51B7\u5374\u4E2D`);
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
-      if (!targets.length) {
-        damage(s, s.entities.filter((e) => e.side === "enemy" && e.alive)[0] || player, 0);
-        return okResp(`${skill.name} \u672A\u547D\u4E2D`);
-      }
       skill.cdLeft = skill.cd;
       player.actionBobMs = 300;
       floater(s, skill.name, player.x, player.y - 34);
       const fx = skillFxKind(skill);
       if (fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor(skill.effects_type, "#7CFFB2"), size: 1 });
+        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor(skill.effects_type, "#7CFFB2"), icon: effectIcon(skill.effects_type), size: 1 });
       } else if (fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor(skill.effects_type, "#9CCFFF"), size: 1 });
+        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor(skill.effects_type, "#9CCFFF"), icon: effectIcon(skill.effects_type), size: 1 });
       } else if (fx === "ranged") {
         const t0 = targets[0];
         pushVfx(s, {
@@ -2237,14 +2250,15 @@ async function handle_action(action, params, state, context) {
           life: 16,
           total: 16,
           color: effectColor(skill.effects_type, "#ff6a00"),
+          icon: effectIcon(skill.effects_type),
           size: 1
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor(skill.effects_type, "#fff"), size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor(skill.effects_type, "#fff"), icon: effectIcon(skill.effects_type), size: 1.6 });
       }
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
-      pushEvent(s, `\u65BD\u653E ${skill.name}\uFF0C\u547D\u4E2D ${Math.min(3, targets.length)} \u4E2A\u76EE\u6807`);
-      return okResp(`${skill.name}`);
+      pushEvent(s, targets.length ? `\u65BD\u653E ${skill.name}\uFF0C\u547D\u4E2D ${Math.min(3, targets.length)} \u4E2A\u76EE\u6807` : `\u65BD\u653E ${skill.name}`);
+      return okResp(targets.length ? `${skill.name}` : `${skill.name}\uFF08\u7A7A\u653E\uFF09`);
     }
     /* ============ ★ 方案一 + 三：点击自动逼近 & 普攻 ============ */
     case "goto_enemy": {
@@ -2419,9 +2433,9 @@ async function handle_action(action, params, state, context) {
       const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(meSk, e) < SKILL_RANGE_M);
       const _fx = skillFxKind(sk);
       if (_fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor(sk.effects_type, "#7CFFB2"), size: 1 });
+        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor(sk.effects_type, "#7CFFB2"), icon: effectIcon(sk.effects_type), size: 1 });
       } else if (_fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor(sk.effects_type, "#9CCFFF"), size: 1 });
+        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor(sk.effects_type, "#9CCFFF"), icon: effectIcon(sk.effects_type), size: 1 });
       } else if (_fx === "ranged") {
         const _t0 = skTargets[0];
         pushVfx(s, {
@@ -2436,14 +2450,15 @@ async function handle_action(action, params, state, context) {
           life: 16,
           total: 16,
           color: effectColor(sk.effects_type, "#ff6a00"),
+          icon: effectIcon(sk.effects_type),
           size: 1
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: effectColor(sk.effects_type, "#fff"), size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: effectColor(sk.effects_type, "#fff"), icon: effectIcon(sk.effects_type), size: 1.6 });
       }
       if (!skTargets.length) {
-        pushEvent(s, `\u65BD\u653E ${sk.name}\uFF0C\u672A\u547D\u4E2D\u76EE\u6807`);
-        return okResp(`${sk.name} \u672A\u547D\u4E2D`);
+        pushEvent(s, `\u65BD\u653E ${sk.name}\uFF08\u7A7A\u653E\uFF0C\u65E0\u76EE\u6807\uFF09`);
+        return okResp(`${sk.name}\uFF08\u7A7A\u653E\uFF09`);
       }
       skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
       pushEvent(s, `\u65BD\u653E ${sk.name}\uFF0C\u547D\u4E2D ${Math.min(3, skTargets.length)} \u4E2A\u76EE\u6807`);
