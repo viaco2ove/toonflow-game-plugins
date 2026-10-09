@@ -4197,7 +4197,7 @@ function render() {
   s.entities.forEach((e) => { if (e.alive !== false) aliveIds.add(e.id); });
   Array.from(displayPos.keys()).forEach((id) => { if (!aliveIds.has(id)) displayPos.delete(id); });
   [...s.entities]
-    .filter((e) => e.alive !== false)
+    .filter((e) => e.alive !== false || (e as any).deathMs > 0)   // deathMs>0 时 alive=false 也渲染（死亡淡出）
     // ★ 迷雾过滤：玩家永远可见；其余单位只在"当前可见格"上才画
     //   （躲进墙后 / 视野外的怪不应该被看到，否则迷雾只是装饰）
     .filter((e) => e.side === "player" || isVisibleAt(e.x, e.y))
@@ -5029,6 +5029,17 @@ function onSleep() {
 function loop(ts: number) {
   raf = requestAnimationFrame(loop);
   _animTick++;
+  // ★ P1 打击感：真游戏模式下从 state 同步震屏/顿帧（entry.ts 驱动），同步后清除避免重复触发
+  const s0 = state.value as any;
+  if (s0?.screenShake != null) {
+    shakeFrames = s0.screenShake; shakeIntensity = s0.screenShakeIntensity ?? 0; s0.screenShake = undefined;
+    // ★ P1 验证计数（dev 专用）：消费一次记一次
+    (window as any).__p1Consume = ((window as any).__p1Consume || 0) + 1;
+  }
+  if (s0?.hitStopFrames != null) {
+    hitStopFrames = s0.hitStopFrames; s0.hitStopFrames = undefined;
+    (window as any).__p1HitStopConsume = ((window as any).__p1HitStopConsume || 0) + 1;
+  }
   // ★ 打击感：每帧衰减震屏和顿帧（在所有条件判断之前，保证状态始终更新）
   tickScreenEffects();
   const s = state.value;

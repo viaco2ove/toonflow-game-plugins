@@ -287,6 +287,12 @@ export interface FieldSurvivalState {
   partyIds?: string[];
   /** ★ v5：角色卡（含地图名与坐标，落 t_plugin_session_data） */
   npcCards?: NpcCard[];
+  /** ★ P1 打击感：震屏剩余帧数（>0 时前端 canvas 随机偏移） */
+  screenShake?: number;
+  /** ★ P1 打击感：震屏强度（像素）；screenShake 归零时同步清零 */
+  screenShakeIntensity?: number;
+  /** ★ P1 打击感：顿帧剩余帧数（>0 时前端跳过本次渲染） */
+  hitStopFrames?: number;
   /** ★ v5：背包物品展示元数据（稀有度 / 类型 / 恢复量 / 估价） */
   bagMeta?: Record<string, BagItem>;
   /** ★ v5：背包自定义排列顺序（物品名数组） */
@@ -756,9 +762,19 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
     pushVfx(s, { kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
     if (attacker) (attacker as any).actionBobMs = 300;
     floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+    // ★ P1 打击感：震屏 + 顿帧 + 击退（entry.ts 驱动，通过 state 传前端）
+    s.screenShake = 6; s.screenShakeIntensity = 4;
+    s.hitStopFrames = 3;
+    if (attacker) {
+      const dx = target.x - attacker.x, dy = target.y - attacker.y;
+      const d = Math.hypot(dx, dy) || 1;
+      (target as any).knockbackVx = (dx / d) * 0.4;
+      (target as any).knockbackVy = (dy / d) * 0.4;
+    }
   }
     if (target.hp <= 0 && target.alive) {
-    target.alive = false;
+    (target as any).deathMs = 400;   // ★ P1 打击感：死亡淡出 400ms（alive 不清，等淡出结束后 tick 循环清）
+    // target.alive = false;           // ← 不清！alive=false 会让前端不渲染实体，看不到淡出
     if (target.side === "enemy") {
       s.kills += 1;
       // 优先地图 archetype 的赏金（map-gener agent 产出）
@@ -1471,6 +1487,20 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     // ★ 打击特效衰减：hitFlashMs / actionBobMs 每 tick -100ms（与 dev-host 同步）
     if ((e as any).hitFlashMs > 0) (e as any).hitFlashMs = Math.max(0, (e as any).hitFlashMs - 100);
     if ((e as any).actionBobMs > 0) (e as any).actionBobMs = Math.max(0, (e as any).actionBobMs - 100);
+    // ★ P1 打击感：击退速度每 tick ×0.75 衰减，归零后清除
+    if ((e as any).knockbackVx != null || (e as any).knockbackVy != null) {
+      e.vx += (e as any).knockbackVx || 0;
+      e.vy += (e as any).knockbackVy || 0;
+      (e as any).knockbackVx = ((e as any).knockbackVx || 0) * 0.75;
+      (e as any).knockbackVy = ((e as any).knockbackVy || 0) * 0.75;
+      if (Math.abs((e as any).knockbackVx) < 0.001) (e as any).knockbackVx = undefined;
+      if (Math.abs((e as any).knockbackVy) < 0.001) (e as any).knockbackVy = undefined;
+    }
+    // ★ P1 打击感：死亡淡出衰减（每 tick -100ms，归零后标记 alive=false 移除）
+    if ((e as any).deathMs != null && (e as any).deathMs > 0) {
+      (e as any).deathMs = Math.max(0, (e as any).deathMs - 100);
+      if ((e as any).deathMs === 0) e.alive = false;
+    }
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
     if (e.side === "enemy" && (e as any).isLocal) {
@@ -2914,6 +2944,12 @@ export async function handle_action(
 
     case "tick": {
       if (s.phase !== "playing") return okResp("");
+      // ★ P1 打击感：震屏/顿帧衰减（每 tick -1 帧）
+      if (s.screenShake !== undefined && s.screenShake > 0) {
+        s.screenShake -= 1;
+        if (s.screenShake === 0) s.screenShakeIntensity = 0;
+      }
+      if (s.hitStopFrames !== undefined && s.hitStopFrames > 0) s.hitStopFrames -= 1;
       s.writeback = null;          // ★ v5：上一帧回写已由宿主消费，清空避免重复写
       // ★ teleportTarget 一次性：下发一拍后立刻清除，否则每次 tick 响应都会
       //   重新触发前端传送 watch，把玩家反复拉回目标点（表现 = 被绑住）

@@ -1,9 +1,33 @@
-const TERRAIN_BLOCK_SIZE_M = 0.5;
-const CHUNK_SIZE_BLOCKS = 32;
-const CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M;
-const TERRAIN_GROUND_SIZE_M = 3e3;
-const TERRAIN_GROUND_HEIGHT_M = 100;
-const TERRAIN_SCALE_METER = 1;
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// entry.ts
+var entry_exports = {};
+__export(entry_exports, {
+  handle_action: () => handle_action
+});
+module.exports = __toCommonJS(entry_exports);
+var TERRAIN_BLOCK_SIZE_M = 0.5;
+var CHUNK_SIZE_BLOCKS = 32;
+var CHUNK_SIZE_M = CHUNK_SIZE_BLOCKS * TERRAIN_BLOCK_SIZE_M;
+var TERRAIN_GROUND_SIZE_M = 3e3;
+var TERRAIN_GROUND_HEIGHT_M = 100;
+var TERRAIN_SCALE_METER = 1;
 function fallbackMap() {
   return {
     theme: "\u91CE\u5916\xB7\u6E05\u6668",
@@ -51,7 +75,7 @@ function buildStoryDigest(ctx) {
   );
   return parts.join("\n\n");
 }
-const MAP_AGENT_TIMEOUT_MS = 12e3;
+var MAP_AGENT_TIMEOUT_MS = 12e3;
 function withTimeout(p, ms, msg) {
   let timer = null;
   return Promise.race([
@@ -96,34 +120,31 @@ async function ensureMapData(ctx) {
     return map;
   }
 }
-const WORLD_X_RANGE = [-1500, 1500];
-const WORLD_Z_RANGE = [-1500, 1500];
-const PLAYER_SPAWN = { x: 13, y: 4 };
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const rnd = (a, b) => a + Math.random() * (b - a);
-const clampX = (v) => clamp(v, WORLD_X_RANGE[0] + 10, WORLD_X_RANGE[1] - 10);
-const clampY = (v) => clamp(v, WORLD_Z_RANGE[0] + 10, WORLD_Z_RANGE[1] - 10);
-const rndX = () => rnd(WORLD_X_RANGE[0] + 80, WORLD_X_RANGE[1] - 80);
-const rndY = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
-const MOVE_SPEED_M = 3;
-const TICK_DT_S = 0.1;
-const MOB_VIEW_M = 80;
-const MOB_ATK_M = 1;
-const ALLY_ATK_M = 0.5;
-const ALLY_ENGAGE_M = 4;
-const ALLY_FOLLOW_GAP_M = 2.5;
-const CHEST_PICKUP_M = 2;
-const POTION_PICKUP_M = 2;
-const SKILL_RANGE_M = 4;
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-const REGION_RESPAWN_SEC = 45;
-const REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;
-const MOB_DETECT_M = 4;
-const MOB_DISENGAGE_M = 4;
-const MOB_LEASH_R_M = 4;
-const MOB_WANDER_R_M = 3;
-const TOWN_SPAWN_BUFFER_M = 20;
-const WORLD_REGIONS = [
+var WORLD_X_RANGE = [-1500, 1500];
+var WORLD_Z_RANGE = [-1500, 1500];
+var PLAYER_SPAWN = { x: 13, y: 4 };
+var clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+var rnd = (a, b) => a + Math.random() * (b - a);
+var clampX = (v) => clamp(v, WORLD_X_RANGE[0] + 10, WORLD_X_RANGE[1] - 10);
+var clampY = (v) => clamp(v, WORLD_Z_RANGE[0] + 10, WORLD_Z_RANGE[1] - 10);
+var MOVE_SPEED_M = 3;
+var TICK_DT_S = 0.1;
+var MOB_ATK_M = 1;
+var ALLY_ATK_M = 0.5;
+var ALLY_ENGAGE_M = 4;
+var ALLY_FOLLOW_GAP_M = 2.5;
+var CHEST_PICKUP_M = 2;
+var POTION_PICKUP_M = 2;
+var SKILL_RANGE_M = 4;
+var dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+var REGION_RESPAWN_SEC = 45;
+var REGION_RESPAWN_TICKS = REGION_RESPAWN_SEC * 10;
+var MOB_DETECT_M = 4;
+var MOB_DISENGAGE_M = 4;
+var MOB_LEASH_R_M = 4;
+var MOB_WANDER_R_M = 3;
+var TOWN_SPAWN_BUFFER_M = 20;
+var WORLD_REGIONS = [
   { id: "town", name: "\u6668\u66E6\u9547", short: "\u6668\u66E6", kind: "safe", x: 0, y: 0, r: 160, safe: true, lv: 0, mobs: 0, desc: "\u73A9\u5BB6\u51FA\u751F\u7684\u57CE\u9547\uFF08\u5B89\u5168\u533A\uFF09\uFF1A\u5546\u94FA\u3001\u6C11\u5C45\u3001\u6C34\u4E95\u4E0E\u4E2D\u7ACB\u5C45\u6C11\uFF0C\u4E0D\u5237\u65B0\u91CE\u602A" },
   { id: "wood", name: "\u4E1C\u5CAD\u6797\u573A", short: "\u4E1C\u5CAD", kind: "forest", x: 480, y: 0, r: 240, safe: false, lv: 1, mobs: 4, desc: "\u4F4E\u77EE\u6797\u5730\uFF0C\u72FC\u7FA4\u4E0E\u54E5\u5E03\u6797\u65A5\u5019\u6E38\u8361" },
   { id: "shore", name: "\u4E1C\u5317\u6D45\u6EE9", short: "\u4E1C\u5317", kind: "shore", x: 240, y: 416, r: 240, safe: false, lv: 1, mobs: 3, desc: "\u6C34\u8FB9\u6EE9\u5730\uFF0C\u6BD2\u86C7\u4E0E\u8759\u8760\u51FA\u6CA1" },
@@ -150,10 +171,6 @@ function cleanSkillName(v) {
 function skillKey(v) {
   return cleanSkillName(v).toLowerCase();
 }
-function sameSkill(a, b) {
-  const ka = skillKey(a);
-  return !!ka && ka === skillKey(b);
-}
 function inferSkillType(name) {
   const n = String(name || "");
   if (/治|疗|愈|回复|恢复|回春|奶|复苏/.test(n)) return { type: "heal", range: "melee" };
@@ -161,7 +178,7 @@ function inferSkillType(name) {
   if (/球|箭|弹|术|咒|射|火|冰|雷|电|风|毒|远程/.test(n)) return { type: "atk", range: "ranged" };
   return { type: "atk", range: "melee" };
 }
-const BUFF_TYPES = ["Defense", "Attack", "Sustained_Damage", "Stunning", "Invincible", "Accelerate"];
+var BUFF_TYPES = ["Defense", "Attack", "Sustained_Damage", "Stunning", "Invincible", "Accelerate"];
 function splitSkillList(raw) {
   const out = [];
   let buf = "";
@@ -322,74 +339,6 @@ function emptyState(ctx) {
     result: null
   };
 }
-function spawnAnchor(s, minM, maxM) {
-  const p = s.entities.find((e) => e.side === "player");
-  const cx = p ? p.x : PLAYER_SPAWN.x;
-  const cy = p ? p.y : PLAYER_SPAWN.y;
-  const angle = rnd(0, Math.PI * 2);
-  const distM = minM + rnd(0, maxM - minM);
-  return { x: clampX(cx + Math.cos(angle) * distM), y: clampY(cy + Math.sin(angle) * distM) };
-}
-function spawnWave(s, wave) {
-  const player = s.entities.find((e) => e.side === "player");
-  const px = player?.x ?? PLAYER_SPAWN.x;
-  const py = player?.y ?? PLAYER_SPAWN.y;
-  const archs = s.map?.enemy_archetypes && s.map.enemy_archetypes.length ? s.map.enemy_archetypes : null;
-  if (archs) {
-    const wavesCfg = s.map?.waves && s.map.waves.length ? s.map.waves : [{ archetype: archs[0].id, count: 3, interval: 600 }];
-    const pick = wavesCfg[Math.min(wave - 1, wavesCfg.length - 1)] || wavesCfg[0];
-    const arch = archs.find((a) => a.id === pick.archetype) || archs[0];
-    const count2 = Math.max(1, Math.min(6, num(pick.count, 3) + Math.floor(wave / 3)));
-    for (let i = 0; i < count2; i++) {
-      const angle = rnd(0, Math.PI * 2);
-      const dist2 = 30 + rnd(0, 70);
-      const e = makeEntity(
-        { id: `${arch.id}_${wave}_${i}`, name: arch.name, hp: Math.round(arch.hp + (wave - 1) * 8), level: arch.lv },
-        "enemy",
-        clampX(px + Math.cos(angle) * dist2),
-        clampY(py + Math.sin(angle) * dist2),
-        i
-      );
-      e.atk = Math.round(arch.atk + (wave - 1) * 1.5);
-      e.bounty = { ...arch.bounty };
-      e.def = arch.def;
-      s.entities.push(e);
-    }
-    if (wave === 1) {
-      (s.map?.chests || []).forEach((c, i) => {
-        s.chests.push({ id: `chest_map_${i}`, x: clampX(c.x), y: clampY(c.y), opened: false, ...c });
-      });
-      (s.map?.potions || []).forEach((p, i) => {
-        s.potions.push({ id: `potion_map_${i}`, x: clampX(p.x), y: clampY(p.y), heal: num(p.heal, 40) });
-      });
-    }
-    return;
-  }
-  const count = Math.min(2 + wave, 6);
-  for (let i = 0; i < count; i++) {
-    const angle = rnd(0, Math.PI * 2);
-    const dist2 = 30 + rnd(0, 70);
-    const e = makeEntity(
-      { id: `enemy_${s.tick}_${i}`, name: `\u91CE\u517D ${i + 1}`, hp: 45 + wave * 12, level: wave },
-      "enemy",
-      clampX(px + Math.cos(angle) * dist2),
-      clampY(py + Math.sin(angle) * dist2),
-      i
-    );
-    e.atk = 7 + wave * 2;
-    s.entities.push(e);
-  }
-  for (let i = 0; i < 2; i++) {
-    const angle = rnd(0, Math.PI * 2);
-    const dist2 = 25 + rnd(0, 30);
-    s.chests.push({ id: `chest_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist2), y: clampY(py + Math.sin(angle) * dist2), opened: false });
-  }
-  for (let i = 0; i < 3; i++) {
-    const angle = rnd(0, Math.PI * 2);
-    const dist2 = 20 + rnd(0, 25);
-    s.potions.push({ id: `potion_${s.tick}_${i}`, x: clampX(px + Math.cos(angle) * dist2), y: clampY(py + Math.sin(angle) * dist2), heal: 18 });
-  }
-}
 function pushEvent(s, text) {
   s.events.push(text);
   if (s.events.length > 40) s.events = s.events.slice(-40);
@@ -422,9 +371,18 @@ function damage(s, target, amount, attacker) {
     pushVfx(s, { kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
     if (attacker) attacker.actionBobMs = 300;
     floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+    s.screenShake = 6;
+    s.screenShakeIntensity = 4;
+    s.hitStopFrames = 3;
+    if (attacker) {
+      const dx = target.x - attacker.x, dy = target.y - attacker.y;
+      const d = Math.hypot(dx, dy) || 1;
+      target.knockbackVx = dx / d * 0.4;
+      target.knockbackVy = dy / d * 0.4;
+    }
   }
   if (target.hp <= 0 && target.alive) {
-    target.alive = false;
+    target.deathMs = 400;
     if (target.side === "enemy") {
       s.kills += 1;
       const bounty = target.bounty;
@@ -480,15 +438,15 @@ function nearestWildRegion(x, y) {
   }
   return best;
 }
-const LOCAL_ENEMY_PREFIXES = ["mapmob_", "localmob_", "zone_"];
+var LOCAL_ENEMY_PREFIXES = ["mapmob_", "localmob_", "zone_"];
 function isLocalEnemyId(id) {
   const v = str(id);
   return LOCAL_ENEMY_PREFIXES.some((p) => v.startsWith(p));
 }
-let enemyNav = null;
-let enemyNavEpoch = "";
-const ENEMY_NAV_R = 0.38;
-const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+var enemyNav = null;
+var enemyNavEpoch = "";
+var ENEMY_NAV_R = 0.38;
+var B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 function b64ToBytes(b64) {
   const clean = String(b64 || "").replace(/[^A-Za-z0-9+/]/g, "");
   if (!clean) return null;
@@ -549,7 +507,7 @@ function navResolve(g, x, y, nx, ny, r) {
   if (navFree(g, outX, ny, r)) outY = ny;
   return { x: outX, y: outY };
 }
-const NAV_DIRS = [
+var NAV_DIRS = [
   [1, 0],
   [1, 1],
   [0, 1],
@@ -718,7 +676,7 @@ function applyLocalEnemies(s, payload) {
   s.localMobsEpoch = epoch > 0 ? epoch : num(s.localMobsEpoch, 0);
   return built;
 }
-const REGION_MOB_NAMES = {
+var REGION_MOB_NAMES = {
   wood: ["\u5DE8\u72FC", "\u54E5\u5E03\u6797\u65A5\u5019"],
   shore: ["\u6BD2\u86C7", "\u8759\u8760"],
   mine: ["\u9AB7\u9AC5\u5175", "\u54E5\u5E03\u6797\u65A5\u5019"],
@@ -726,7 +684,7 @@ const REGION_MOB_NAMES = {
   marsh: ["\u6BD2\u86C7", "\u5DE8\u72FC"],
   wild: ["\u54E5\u5E03\u6797\u65A5\u5019", "\u5DE8\u72FC", "\u8352\u91CE\u6E38\u8361\u8005"]
 };
-const MOB_PRESETS = {
+var MOB_PRESETS = {
   "\u54E5\u5E03\u6797\u65A5\u5019": { hp: 30, atk: 6 },
   "\u5DE8\u72FC": { hp: 60, atk: 10 },
   "\u6BD2\u86C7": { hp: 25, atk: 8 },
@@ -734,7 +692,7 @@ const MOB_PRESETS = {
   "\u9AB7\u9AC5\u5175": { hp: 50, atk: 12 },
   "\u8352\u91CE\u6E38\u8361\u8005": { hp: 40, atk: 6 }
 };
-let _mobSeq = 0;
+var _mobSeq = 0;
 function initRegions(s) {
   s.regions = WORLD_REGIONS.map((r) => ({
     id: r.id,
@@ -839,8 +797,8 @@ function regionTick(s, player) {
     }
   }
 }
-const TOWN_BUILDINGS = [];
-const TOWN_NPCS = [];
+var TOWN_BUILDINGS = [];
+var TOWN_NPCS = [];
 function ensureTown(s) {
   const town = WORLD_REGIONS[0];
   if (!s.town || !s.town.buildings) {
@@ -987,6 +945,18 @@ function step(s, input, poseHint) {
     if (e.cooldown > 0) e.cooldown -= 1;
     if (e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
     if (e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
+    if (e.knockbackVx != null || e.knockbackVy != null) {
+      e.vx += e.knockbackVx || 0;
+      e.vy += e.knockbackVy || 0;
+      e.knockbackVx = (e.knockbackVx || 0) * 0.75;
+      e.knockbackVy = (e.knockbackVy || 0) * 0.75;
+      if (Math.abs(e.knockbackVx) < 1e-3) e.knockbackVx = void 0;
+      if (Math.abs(e.knockbackVy) < 1e-3) e.knockbackVy = void 0;
+    }
+    if (e.deathMs != null && e.deathMs > 0) {
+      e.deathMs = Math.max(0, e.deathMs - 100);
+      if (e.deathMs === 0) e.alive = false;
+    }
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
     if (e.side === "enemy" && e.isLocal) {
@@ -1050,10 +1020,10 @@ function step(s, input, poseHint) {
     pushEvent(s, "\u4F60\u5012\u4E0B\u4E86\u2026\u2026");
   }
 }
-const SYS_DATA_KEY = "sys_state";
-const AI_STORY_ROLES_KEY = "ai_story_roles";
-const SYS_PERSIST_EVERY_TICKS = 20;
-const EFFECT_COLOR = {
+var SYS_DATA_KEY = "sys_state";
+var AI_STORY_ROLES_KEY = "ai_story_roles";
+var SYS_PERSIST_EVERY_TICKS = 20;
+var EFFECT_COLOR = {
   normal: "#eeeeee",
   fire: "#ff4422",
   water: "#33bbff",
@@ -1071,7 +1041,7 @@ function effectColor(effectsType, fallback) {
   const c = EFFECT_COLOR[String(effectsType || "")];
   return c || fallback;
 }
-const EFFECT_ICON = {
+var EFFECT_ICON = {
   normal: "images/spells/enchantment/sure_blade.png",
   fire: "images/spells/fire/fireball.png",
   water: "images/spells/ice/freeze.png",
@@ -1088,10 +1058,10 @@ const EFFECT_ICON = {
 function effectIcon(effectsType) {
   return EFFECT_ICON[String(effectsType || "")] || "";
 }
-const RARITY_PRICE = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
-const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
-const KIND_LIST = ["consumable", "material", "equipment", "skill_book", "quest"];
-const BUILTIN_SHOP_GOODS = [
+var RARITY_PRICE = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
+var RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
+var KIND_LIST = ["consumable", "material", "equipment", "skill_book", "quest"];
+var BUILTIN_SHOP_GOODS = [
   { id: "b_huiqi", name: "\u56DE\u6C14\u6563", price: 30, kind: "consumable", rarity: "common", heal: 30, desc: "\u6062\u590D 30 \u70B9\u751F\u547D", from: "builtin" },
   { id: "b_jijiu", name: "\u6025\u6551\u5305", price: 60, kind: "consumable", rarity: "fine", heal: 60, desc: "\u6062\u590D 60 \u70B9\u751F\u547D", from: "builtin" },
   { id: "b_ganliang", name: "\u5E72\u7CAE", price: 12, kind: "consumable", rarity: "common", heal: 14, desc: "\u6062\u590D 14 \u70B9\u751F\u547D", from: "builtin" },
@@ -1251,8 +1221,8 @@ function sellPrice(it) {
   const k = it.kind === "equipment" ? 1.5 : it.kind === "skill_book" ? 2 : 1;
   return Math.max(1, Math.round(base * k));
 }
-const ITEM_TYPES = ["atk", "heal", "buff", "attribute"];
-const ITEM_ATTR_TYPES = ["Defense", "Attack", "Life", "Blue"];
+var ITEM_TYPES = ["atk", "heal", "buff", "attribute"];
+var ITEM_ATTR_TYPES = ["Defense", "Attack", "Life", "Blue"];
 function inferItemType(name, kind) {
   const n = String(name || "");
   if (kind === "skill_book") return { type: "buff", range: "melee" };
@@ -1286,9 +1256,9 @@ function bagAttributeBonus(s) {
   });
   return bonus;
 }
-const STAT_BASE = { hp: 100, mp: 100, atk: 10, def: 1 };
-const STAT_PER_LEVEL = 10;
-const PLAYER_ATTR_KEYS = ["Life", "Blue", "Attack", "Defense"];
+var STAT_BASE = { hp: 100, mp: 100, atk: 10, def: 1 };
+var STAT_PER_LEVEL = 10;
+var PLAYER_ATTR_KEYS = ["Life", "Blue", "Attack", "Defense"];
 function permAttributeBonus(s) {
   const out = { Life: 0, Blue: 0, Attack: 0, Defense: 0 };
   const card = s.playerCard || {};
@@ -1336,7 +1306,7 @@ function refreshPlayerExpFields(s) {
   me.exp = exp;
   me.expToNext = playerNextExp(lv);
 }
-const LEVEL_DESC_MAP_KEYS = ["level_desc_map", "level_titles", "level_title_map", "level_desc_table", "\u7B49\u7EA7\u79F0\u53F7\u8868"];
+var LEVEL_DESC_MAP_KEYS = ["level_desc_map", "level_titles", "level_title_map", "level_desc_table", "\u7B49\u7EA7\u79F0\u53F7\u8868"];
 function resolveLevelDesc(card, level) {
   for (const key of LEVEL_DESC_MAP_KEYS) {
     const m = card?.[key];
@@ -1631,7 +1601,6 @@ function ensureNpcCards(s, levelName) {
   }
   s.npcCards = cards;
 }
-const ROLE_SPAWN_R_M = 2.5;
 function spawnRoleEntity(s, role) {
   if (!role) return null;
   const exist = s.entities.find((x) => x.id === String(role.id) || x.name === String(role.name));
@@ -1666,7 +1635,7 @@ function spawnRoleEntity(s, role) {
   s.entities.push(e);
   return e;
 }
-const START_MAP_NAME = "Mulberry Town";
+var START_MAP_NAME = "Mulberry Town";
 function roleKeyOf(e) {
   return String(e && (e.id || e.name) || "");
 }
@@ -2189,6 +2158,11 @@ async function handle_action(action, params, state, context) {
     }
     case "tick": {
       if (s.phase !== "playing") return okResp("");
+      if (s.screenShake !== void 0 && s.screenShake > 0) {
+        s.screenShake -= 1;
+        if (s.screenShake === 0) s.screenShakeIntensity = 0;
+      }
+      if (s.hitStopFrames !== void 0 && s.hitStopFrames > 0) s.hitStopFrames -= 1;
       s.writeback = null;
       if (s.teleportTarget) s.teleportTarget = null;
       s.tick += 1;
@@ -2876,6 +2850,3 @@ async function handle_action(action, params, state, context) {
       return okResp("");
   }
 }
-export {
-  handle_action
-};
