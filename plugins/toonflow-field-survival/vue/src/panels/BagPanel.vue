@@ -22,6 +22,16 @@ const ATTR_TYPES = ["Defense", "Attack", "Life", "Blue"] as const;
 const ATTR_LABEL: Record<string, string> = { Defense: "防御", Attack: "攻击", Life: "生命", Blue: "蓝量" };
 const TYPE_LABEL: Record<string, string> = { atk: "攻击", heal: "治疗", buff: "强化", attribute: "属性" };
 
+/** 属性特效枚举（与 md/游戏特效.md P2 对照） */
+const EFFECT_TYPES: Array<{ v: string; label: string }> = [
+  { v: "", label: "默认" },
+  { v: "normal", label: "普通" },
+  { v: "fire", label: "火" }, { v: "water", label: "水" }, { v: "thunder", label: "雷" },
+  { v: "wind", label: "风" }, { v: "earth", label: "土" }, { v: "metal", label: "金" }, { v: "wood", label: "木" },
+  { v: "light", label: "光明" }, { v: "dark", label: "黑暗" },
+  { v: "bleed", label: "出血" }, { v: "poison", label: "毒素" },
+];
+
 function durText(it: any): string {
   const d = Math.round(Number(it?.durability ?? -1));
   if (d < 0) return "永久";
@@ -42,7 +52,7 @@ const sellCount = ref(1);
 const form = reactive({
   name: "", power: 0, cost: 0, cd: 0, type: "heal", range: "melee",
   lv: 1, buff_type: "", durability: -1, attribute_type: "", attribute_value: 0,
-  quantity: 1, description: "",
+  quantity: 1, description: "", effects_type: "",
 });
 
 function startEdit(it: any, i: number) {
@@ -62,6 +72,7 @@ function startEdit(it: any, i: number) {
   form.attribute_value = Math.round(Number(it.attribute_value) || 0);
   form.quantity = Math.max(1, Math.round(Number(it.count ?? it.quantity) || 1));
   form.description = String(it.description || it.desc || "");
+  form.effects_type = String(it.effects_type || "");
 }
 function submitEdit(i: number) {
   emit("edit-item", {
@@ -79,6 +90,7 @@ function submitEdit(i: number) {
     attribute_value: form.attribute_value,
     quantity: Math.max(1, Math.round(Number(form.quantity) || 1)),
     description: form.description.trim(),
+    effects_type: form.effects_type,
   });
   editing.value = -1;
 }
@@ -178,6 +190,11 @@ function onDrop(i: number) {
         </label>
         <label>被动数值 attribute_value<input v-model.number="form.attribute_value" type="number" /></label>
         <label>数量 quantity<input v-model.number="form.quantity" type="number" min="1" /></label>
+        <label>属性特效
+          <select v-model="form.effects_type">
+            <option v-for="et in EFFECT_TYPES" :key="et.v" :value="et.v">{{ et.label }}（{{ et.v }}）</option>
+          </select>
+        </label>
         <label style="grid-column: 1 / -1">描述 description<input v-model="form.description" maxlength="60" placeholder="保留参数卡原注记，可改写" /></label>
         <div class="bpi-edit__ops">
           <button class="bpi-btn" @click="submitEdit(i)">保存</button>

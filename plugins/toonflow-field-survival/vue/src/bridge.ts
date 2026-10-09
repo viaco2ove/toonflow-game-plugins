@@ -60,14 +60,16 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
   const msg = { type: "tf_plugin_tick", action, params };
   try {
+    // ★ 调试提示：tick 是每帧高频消息，console.log 会刷屏；只对非 tick 动作打日志
+    if (action !== "tick") console.log("[bridge] sendTick →", action, "params keys =", params ? Object.keys(params) : []);
     // ★ 同 sendToHost：standalone 只 dispatchEvent 一次，避免宿主/mockHost 双重消费
     if (!isConnMode() && window.parent === window) {
       window.dispatchEvent(new MessageEvent("message", { data: msg }));
       return;
     }
     window.parent.postMessage(msg, "*");
-  } catch {
-    /* ignore */
+  } catch (err) {
+    console.warn("[bridge] sendTick 异常：", err, "msg =", msg);
   }
 }
 

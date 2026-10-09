@@ -196,7 +196,7 @@ interface SysItem {
   quantity?: number; description?: string;
   index?: number;
 }
-interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; }
+interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; effects_type?: string; }
 interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
 interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
 
@@ -383,6 +383,7 @@ const sysSkills = computed<SysSkill[]>(() => {
     range: s.range,
     lv: s.lv,
     buff_type: s.buff_type,
+    effects_type: s.effects_type || "",   // ★ P2 属性特效
     index: i,
   }));
 });
@@ -2420,6 +2421,42 @@ let clickFxList: ClickFx[] = [];
 /** 点击特效持续帧数（_animTick 是 60fps 帧计数 → 36 帧 ≈ 0.6 秒） */
 const CLICK_FX_FRAMES = 36;
 
+/* ============================================================
+   ★ 打击感：震屏 + 顿帧
+   ============================================================ */
+/** 当前震屏剩余帧数（0 = 无震屏）；正值时 render() 对 canvas 做随机偏移 */
+let shakeFrames = 0;
+/** 震屏强度（像素）；每帧由 shakeTick() 衰减至 0 */
+let shakeIntensity = 0;
+/** 顿帧计数器（>0 时跳过 render()）；命中帧设为 HIT_STOP_FRAMES */
+let hitStopFrames = 0;
+const SHAKE_DURATION = 6;   // 帧（0.1s @60fps）
+const HIT_STOP_FRAMES = 3;  // 帧（约 50ms）
+
+/** 触发震屏（普通 / 爆炸加强） */
+function triggerShake(intensity = 4): void {
+  if (intensity > shakeIntensity) {
+    shakeIntensity = intensity;
+    shakeFrames = SHAKE_DURATION;
+  }
+}
+
+/** 触发顿帧 */
+function triggerHitStop(): void {
+  hitStopFrames = HIT_STOP_FRAMES;
+}
+
+/** 每帧调用一次，衰减震屏和顿帧 */
+function tickScreenEffects(): void {
+  if (hitStopFrames > 0) hitStopFrames--;
+  if (shakeFrames > 0) shakeFrames--;
+  if (shakeFrames === 0) shakeIntensity = 0;
+}
+
+/** 把打击感 API 暴露到 window，供同窗口 mockHost.ts 调用 */
+(window as any).__fsTriggerShake = (intensity?: number) => triggerShake(intensity);
+(window as any).__fsTriggerHitStop = () => triggerHitStop();
+
 function clearMoveTo(): void {
   input.value.moveTo = null;
   moveToPath = [];
@@ -2951,6 +2988,10 @@ function localTick(): void {
     if ((e as any).actionBobMs && (e as any).actionBobMs > 0) {
       (e as any).actionBobMs = Math.max(0, (e as any).actionBobMs - 100);
     }
+    // ★ 打击感：死亡淡出衰减（每 tick -100ms，归零后移除实体）
+    if ((e as any).deathMs !== undefined && (e as any).deathMs > 0) {
+      (e as any).deathMs = Math.max(0, (e as any).deathMs - 100);
+    }
   }
   // 3. 定期补 spawn 野兽（每 600 tick = 60 秒一波）— mockHost 跑的时候这步无效（会跳过已有 enemy）
   if (s.tick % 600 === 0) spawnLocalMobsIfNeeded();
@@ -3175,6 +3216,13 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.restore();
   }
 
+  // ★ 打击感：死亡淡出（deathMs > 0 时透明度渐变至消失）
+  if ((e as any).deathMs && (e as any).deathMs > 0) {
+    const alpha = Math.min(1, (e as any).deathMs / 400);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+  }
+
   // ★ 角色头像（req.md：2.5D 小人模型上方显示头像 + 角色名）
   // 布局自上而下：头像(30) → 名字 → sprite
   const avatarSize = Math.max(14, Math.min(100, Math.round(dw * avatarScaleFactor)));  // ★ v4：随角色尺寸（≈0.8 格）
@@ -3256,6 +3304,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.fillStyle = e.side === "enemy" ? "#d63b3b" : "#4ec74e";
   ctx.fillRect(barX, barY, barW * hpRatio, barH);
   ctx.restore();
+
+  // ★ 关闭死亡淡出的 ctx.save()（if 块内打开的）
+  if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
 }
 
 // ----------------------------------------------------------
@@ -3298,6 +3349,13 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   ctx.ellipse(px, py + 4, dw * 0.55, dw * 0.2, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+
+  // ★ 打击感：死亡淡出（deathMs > 0 时整个 sprite 透明渐变）
+  if ((e as any).deathMs && (e as any).deathMs > 0) {
+    const alpha = Math.min(1, (e as any).deathMs / 400);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+  }
 
   if (SHEET_TILESET.ready) {
     drawTile(ctx, tileId, dx, dy, dw, dh);
@@ -3356,6 +3414,9 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   ctx.fillStyle = "#d63b3b";
   ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
   ctx.restore();
+
+  // ★ 关闭死亡淡出的 ctx.save()
+  if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
 }
 
 /* ============================================================
@@ -3382,7 +3443,7 @@ function drawVfxLayer(
     const py = wz2py(baseY);
     const progress = 1 - (p.life / p.total); // 0 → 1
     switch (p.kind) {
-      case "slash_arc":  drawSlashArc(ctx, px, py, progress); break;
+      case "slash_arc":  drawSlashArc(ctx, px, py, progress, p.angle ?? 0, p.color || "#ffffff"); break;
       case "fireball": {
         // 弹体：把 target 世界米转成屏幕像素再插值
         let baseTx = p.targetX, baseTy = p.targetY;
@@ -3499,26 +3560,30 @@ function drawClickFxLayer(
   }
 }
 
-/** 弧形斩波：1/4 圆弧白刃，旋转消失 */
-function drawSlashArc(ctx: CanvasRenderingContext2D, px: number, py: number, p: number): void {
+/** 弧形斩波：1/4 圆弧白刃，旋转消失；angle = 度数（0=右 90=下 180=左 270=上）；color = 主色调（effects_type） */
+function drawSlashArc(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, angleDeg = 0, color = "#ffffff"): void {
   ctx.save();
   const r = 26 + p * 12;     // 弧半径
   const alpha = Math.max(0, 1 - p * 1.1);
   ctx.globalAlpha = alpha;
-  ctx.strokeStyle = "#ffffff";
+  ctx.strokeStyle = color;
   ctx.lineWidth = 6;
   ctx.lineCap = "round";
-  ctx.shadowColor = "rgba(255,255,255,0.6)";
+  ctx.shadowColor = color;
   ctx.shadowBlur = 8;
-  // 弧从 -90° 扫到 0°，绕身体右侧
+  // ★ 打击感：弧从"攻击者指向目标"的反方向扫起，始终朝外（刀刃朝外）
+  //   朝向 angle：0=右，90=下，180=左，270=上
+  //   弧起点 = angle + 135（弧在外侧 1/4），终点 = angle - 135（逆时针扫）
+  const startAngle = ((angleDeg + 135) * Math.PI) / 180;
+  const endAngle   = ((angleDeg - 135) * Math.PI) / 180;
   ctx.beginPath();
-  ctx.arc(px, py - 12, r, -Math.PI / 2, 0, false);
+  ctx.arc(px, py - 12, r, startAngle, endAngle, true);
   ctx.stroke();
-  // 次弧淡出（淡黄色拖尾）
-  ctx.strokeStyle = "rgba(255,220,120,0.5)";
+  // 次弧淡出（同色系拖尾，透明度减半）
+  ctx.globalAlpha = alpha * 0.5;
   ctx.lineWidth = 3;
   ctx.beginPath();
-  ctx.arc(px, py - 12, r - 4, -Math.PI / 2 + 0.3, -0.3, false);
+  ctx.arc(px, py - 12, r - 4, startAngle + 0.15, startAngle - 0.15, true);
   ctx.stroke();
   ctx.restore();
 }
@@ -3535,7 +3600,7 @@ function drawFireballPx(ctx: CanvasRenderingContext2D, px: number, py: number, t
     const t = Math.max(0, e - i * 0.06);
     const tx2 = px + dx * t, ty2 = py + dy * t;
     ctx.globalAlpha = alpha * (1 - i / 4) * 0.5;
-    ctx.fillStyle = "#ffaa55";
+    ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(tx2, ty2 - 8, 8 - i * 2, 0, Math.PI * 2);
     ctx.fill();
@@ -3715,6 +3780,12 @@ function render() {
   const W = Math.round(c.width / k);
   const H = Math.round(c.height / k);
   ctx.setTransform(k, 0, 0, k, 0, 0);
+  // ★ 打击感震屏：活跃时在 canvas 层面叠加随机偏移（不破坏坐标逻辑）
+  if (shakeFrames > 0 && shakeIntensity > 0) {
+    const ox = (Math.random() - 0.5) * shakeIntensity * 2;
+    const oy = (Math.random() - 0.5) * shakeIntensity * 2;
+    ctx.translate(ox, oy);
+  }
 
   /* ============================================================
      相机数学（来自 map_config.json + zoom 系统）
@@ -4888,6 +4959,8 @@ function onSleep() {
 function loop(ts: number) {
   raf = requestAnimationFrame(loop);
   _animTick++;
+  // ★ 打击感：每帧衰减震屏和顿帧（在所有条件判断之前，保证状态始终更新）
+  tickScreenEffects();
   const s = state.value;
   if (!s || s.phase !== "playing") return;
   // ★ 409 连击防护：宿主通知游戏已结束（如聊天框 #退出 指针被清），
@@ -4895,6 +4968,12 @@ function loop(ts: number) {
   if (tickHalted.value) return;
   // ★ fix①（性能）：页面切到后台（锁屏 / 切走）时既不应渲染也不应上报 tick
   if (typeof document !== "undefined" && document.hidden) return;
+  // ★ 打击感顿帧：顿帧计数器 >0 时跳过本次渲染（等效"冻结"画面）
+  if (hitStopFrames > 0) {
+    // 仍执行地图/小地图刷新以保持流畅感，只是主画面暂停
+    if (ts - lastMinimapAt >= 100) { lastMinimapAt = ts; drawMinimap(); }
+    return;
+  }
   // ★ fix①（性能）：手机端把渲染帧率封顶 30fps（渲染内已按 dt 归一，速度不受影响）
   // 注意：lastFrameAt 与 render() 内部的 lastRenderAt（显示位置插值时钟）是两个独立变量
   if (!MIN_FRAME_MS || ts - lastFrameAt >= MIN_FRAME_MS) { lastFrameAt = ts; render(); }

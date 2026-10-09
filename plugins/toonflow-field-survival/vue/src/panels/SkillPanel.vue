@@ -21,12 +21,22 @@ const BUFF_LABEL: Record<string, string> = {
 };
 const TYPE_LABEL: Record<string, string> = { atk: "攻击", heal: "治疗", buff: "强化" };
 
+/** 属性特效枚举（与 md/游戏特效.md P2 对照） */
+const EFFECT_TYPES: Array<{ v: string; label: string }> = [
+  { v: "", label: "默认" },
+  { v: "normal", label: "普通" },
+  { v: "fire", label: "火" }, { v: "water", label: "水" }, { v: "thunder", label: "雷" },
+  { v: "wind", label: "风" }, { v: "earth", label: "土" }, { v: "metal", label: "金" }, { v: "wood", label: "木" },
+  { v: "light", label: "光明" }, { v: "dark", label: "黑暗" },
+  { v: "bleed", label: "出血" }, { v: "poison", label: "毒素" },
+];
+
 function cdText(cd: number) { return (cd / 10).toFixed(1) + "s"; }
 function cdLeftText(cdLeft: number) { return (cdLeft / 10).toFixed(1) + "s"; }
 
 /** 正在编辑的技能下标（-1 = 无） */
 const editing = ref(-1);
-const form = reactive({ name: "", power: 0, cost: 0, cd: 24, type: "atk", range: "melee", lv: 1, buff_type: "" });
+const form = reactive({ name: "", power: 0, cost: 0, cd: 24, type: "atk", range: "melee", lv: 1, buff_type: "", effects_type: "" });
 
 function startEdit(s: any, i: number) {
   editing.value = editing.value === i ? -1 : i;
@@ -39,6 +49,7 @@ function startEdit(s: any, i: number) {
   form.range = s.range === "ranged" ? "ranged" : "melee";
   form.lv = Math.max(1, Math.round(Number(s.lv) || 1));
   form.buff_type = BUFF_TYPES.includes(s.buff_type) ? s.buff_type : "";
+  form.effects_type = String(s.effects_type || "");
 }
 function submitEdit(i: number) {
   emit("edit-skill", {
@@ -51,6 +62,7 @@ function submitEdit(i: number) {
     range: form.range,
     lv: form.lv,
     buff_type: form.buff_type,
+    effects_type: form.effects_type,
   });
   editing.value = -1;
 }
@@ -95,6 +107,11 @@ function submitEdit(i: number) {
           <select v-model="form.buff_type">
             <option value="">无</option>
             <option v-for="b in BUFF_TYPES" :key="b" :value="b">{{ BUFF_LABEL[b] }}（{{ b }}）</option>
+          </select>
+        </label>
+        <label>属性特效
+          <select v-model="form.effects_type">
+            <option v-for="et in EFFECT_TYPES" :key="et.v" :value="et.v">{{ et.label }}（{{ et.v }}）</option>
           </select>
         </label>
         <label>等级 lv<input v-model.number="form.lv" type="number" min="1" /></label>

@@ -515,6 +515,28 @@ function makeEnemyWithArch(m: MonsterArchetype, x: number, y: number, lv: number
    战斗特效（VFX）辅助
    ============================================================ */
 
+/** ★ 属性特效主色调表（与 md/curr_design/toonflow-field-survival/游戏特效.md 对照） */
+const EFFECT_COLOR: Record<string, string> = {
+  normal:  "#eeeeee",
+  fire:    "#ff4422",
+  water:   "#33bbff",
+  thunder: "#f8ff33",
+  wind:    "#a8ffdd",
+  earth:   "#b88646",
+  metal:   "#ffdd66",
+  wood:    "#46cc55",
+  light:   "#fffcd0",
+  dark:    "#662288",
+  poison:  "#88dd22",
+  bleed:   "#bb1122",
+};
+
+/** 解析 effects_type 主色调：缺省 / 未知 → null（沿用默认） */
+function effectColor(et?: string): string | null {
+  if (!et) return null;
+  return EFFECT_COLOR[et] || null;
+}
+
 /** 添加一个 VFX（屏幕像素空间，调用方已转换坐标） */
 function pushVfx(p: import("./types").VfxParticle): void {
   if (!state.vfx) state.vfx = [];
@@ -531,10 +553,37 @@ function bobEntity(e: Entity): void {
 /** 让实体"挨打闪红"（受到伤害时） */
 function flashEntity(e: Entity, ms = 250): void {
   e.hitFlashMs = ms;
+  // ★ 打击感：受伤时触发震屏 + 顿帧（调用 App.vue 暴露的 window API）
+  try { (window as any).__fsTriggerShake?.(3); } catch {}
+  try { (window as any).__fsTriggerHitStop?.(); } catch {}
 }
 
-/** 在两个实体之间生成 VFX（弹体类用 fireball） */
-function pushAttackVfx(from: Entity, to: Entity, ranged: boolean): void {
+/** ★ 打击感：给实体施加击退速度（沿 from→to 方向，0.4 米/tick） */
+function knockbackEntity(target: Entity, fromX: number, fromY: number): void {
+  const dx = target.x - fromX;
+  const dy = target.y - fromY;
+  const d = Math.hypot(dx, dy) || 1;
+  target.knockbackVx = (dx / d) * 0.4;
+  target.knockbackVy = (dy / d) * 0.4;
+}
+
+/** ★ 打击感：每 tick 衰减击退速度（线性减速至 0） */
+function tickKnockback(e: Entity): void {
+  if (e.knockbackVx !== undefined) {
+    e.x += e.knockbackVx;
+    e.knockbackVx *= 0.75;         // 每 tick 速度 × 0.75，~6 tick 归零
+    if (Math.abs(e.knockbackVx) < 0.01) e.knockbackVx = undefined;
+  }
+  if (e.knockbackVy !== undefined) {
+    e.y += e.knockbackVy;
+    e.knockbackVy *= 0.75;
+    if (Math.abs(e.knockbackVy) < 0.01) e.knockbackVy = undefined;
+  }
+}
+
+/** 在两个实体之间生成 VFX（弹体类用 fireball）；effects_type 影响主色调 */
+function pushAttackVfx(from: Entity, to: Entity, ranged: boolean, effects_type?: string): void {
+  const c = effectColor(effects_type) || (ranged ? "#ff8c3a" : "#ffffff");
   if (ranged) {
     pushVfx({
       id: "vfb" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
@@ -542,16 +591,18 @@ function pushAttackVfx(from: Entity, to: Entity, ranged: boolean): void {
       x: from.x, y: from.y,
       targetX: to.x, targetY: to.y,
       life: 12, total: 12,
-      color: "#ff8c3a",
+      color: c,
     });
   } else {
-    // 近战：在目标位置生成弧形斩波
+    // 近战：在目标位置生成弧形斩波，朝向从 from 指向 to
+    const angle = Math.atan2(to.y - from.y, to.x - from.x) * (180 / Math.PI);
     pushVfx({
       id: "vfb" + state.tick + "_" + Math.random().toString(36).slice(2, 6),
       kind: "slash_arc",
       x: to.x, y: to.y,
       life: 10, total: 10,
-      color: "#ffffff",
+      color: c,
+      angle,   // ★ 打击感：弧形斩波朝向
     });
   }
 }
@@ -635,10 +686,10 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
     floaters: [],
     vfx: [],
     skills: [
-      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0, type: "atk" as const, range: "melee" as const },
-      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0, type: "atk" as const, range: "ranged" as const },
-      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0, type: "heal" as const, range: "melee" as const },
-      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const, range: "melee" as const },
+      { name: "冲斩", power: 18, cost: 10, cd: 30, cdLeft: 0, type: "atk" as const, range: "melee" as const, effects_type: "metal" as const },
+      { name: "火球", power: 25, cost: 20, cd: 60, cdLeft: 0, type: "atk" as const, range: "ranged" as const, effects_type: "fire" as const },
+      { name: "治疗", power: -40, cost: 25, cd: 90, cdLeft: 0, type: "heal" as const, range: "melee" as const, effects_type: "wood" as const },
+      { name: "护盾", power: 0, cost: 15, cd: 120, cdLeft: 0, type: "buff" as const, range: "melee" as const, effects_type: "earth" as const },
     ],
     items: itemSlots,
     // ★ 对齐真实宿主：mock 也下发 playerCard（背包面板 sysBagItems 以参数卡 items 为数据源）
@@ -727,6 +778,8 @@ function install(): void {
       }
       if (action === "tick") {
         state.tick++;
+        // ★ 打击感：击退速度衰减（每 tick 乘 0.75，约 6 tick 归零）
+        for (const e of state.entities) tickKnockback(e);
         // ★ 修复（mock 根因②）：把 App 加载出来的地图怪物并入 mock 的 state，
         //   否则下一次 push() 整份覆盖会把它们当场抹掉（森林野怪"闪一下就消失"）。
         syncAppEntities();
@@ -858,9 +911,10 @@ function install(): void {
           if (closest) {
             const dmg = Math.max(1, me.atk - (closest.def || 0));
             closest.hp = Math.max(0, closest.hp - dmg);
-            // ★ VFX：玩家打敌人 → 斩波在敌人位置 + 敌人闪红
+            // ★ VFX：玩家打敌人 → 斩波在敌人位置 + 敌人闪红 + 击退
             pushAttackVfx(me, closest, false);
             flashEntity(closest);
+            knockbackEntity(closest, me.x, me.y);
             bobEntity(me);
             state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
             state.events.push("[mock] 攻击 " + closest.name + " (-" + dmg + "HP)");
@@ -931,14 +985,16 @@ function install(): void {
           if (target) {
             const dmg = Math.max(1, slot.power - (target.def || 0));
             target.hp = Math.max(0, target.hp - dmg);
-            // ★ VFX：按技能的 range 选 fireball（远程）或 slash_arc（近战）
-            pushAttackVfx(me, target, slot.range === "ranged");
+            // ★ VFX：按技能的 range 选 fireball（远程）或 slash_arc（近战）；按 effects_type 替换主色调
+            pushAttackVfx(me, target, slot.range === "ranged", (slot as any).effects_type);
             flashEntity(target);
+            knockbackEntity(target, me.x, me.y);
             bobEntity(me);
             state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: target.x, y: target.y - 10, life: 20, kind: "damage", color: "#ff5a5a" });
             state.events.push("[mock] " + slot.name + " 对 " + target.name + " 造成 " + dmg + " 伤害");
             if (target.hp <= 0) {
               target.alive = false;
+              target.deathMs = 400;  // ★ 打击感：死亡淡出 400ms
               state.kills++;
               state.money += 3;
               me.exp += target.level * 5;
@@ -1004,9 +1060,11 @@ function install(): void {
               const dmg = Math.max(1, 40 - (e.def || 0));
               e.hp = Math.max(0, e.hp - dmg);
               flashEntity(e);
+              knockbackEntity(e, me.x, me.y);
               state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 10, life: 20, kind: "damage", color: "#ff8c3a" });
               if (e.hp <= 0) {
                 e.alive = false;
+                e.deathMs = 400;  // ★ 打击感：死亡淡出 400ms
                 state.kills++;
                 me.exp += e.level * 5;
                 if (me.exp >= me.expToNext) levelUpEntity(me);
@@ -1055,6 +1113,7 @@ function install(): void {
           if (params?.range === "ranged" || params?.range === "melee") sk.range = params.range;
           if (Number.isFinite(Number(params?.lv))) (sk as any).lv = Math.max(1, Math.round(Number(params.lv)));
           (sk as any).buff_type = typeof params?.buff_type === "string" ? params.buff_type : "";
+          (sk as any).effects_type = typeof params?.effects_type === "string" ? params.effects_type : "";
           state.events.push(`[mock] 技能「${sk.name}」参数已修改并保存`);
         }
         push();

@@ -228,7 +228,7 @@ interface Entity {
 interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
-  type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; }
+  type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; effects_type?: string; }
 interface ItemSlot { name: string; count: number; heal: number; kind?: string; }
 
 export interface FieldSurvivalState {
@@ -249,7 +249,7 @@ export interface FieldSurvivalState {
   /** ★ game.md 打击特效：宿主侧生成的战斗粒子（kind 与前端 drawVfxLayer 对齐） */
   vfx?: Array<Record<string, any>>;
   /** game.md 技能修改：用户改过的技能参数（按归一技能名存），持久化到 t_plugin_session_data */
-  skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string }>;
+  skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string; effects_type?: string }>;
   /** ★ game.md 物品修改：用户改过的物品参数（按展示名存），持久化到 t_plugin_session_data */
   itemMeta?: Record<string, ItemMeta>;
   // 用户参数卡派生
@@ -509,6 +509,7 @@ function buildSkills(card: Record<string, unknown> | undefined, n = 8, meta?: Re
       range: m?.range || base.range,
       lv: num(m?.lv, lvs[i] || 1),
       buff_type: m?.buff_type || "",
+      effects_type: m?.effects_type || "",
     });
   }
   return out;
@@ -1554,6 +1555,8 @@ export interface BagItem {
   lv?: number; buff_type?: string;
   durability?: number; durabilityLeft?: number;
   attribute_type?: string; attribute_value?: number;
+  /** ★ P2 技能属性特效 */
+  effects_type?: string;
 }
 /** ★ game.md 物品修改：itemMeta 持久化结构（t_plugin_session_data） */
 export interface ItemMeta {
@@ -1564,6 +1567,8 @@ export interface ItemMeta {
   attribute_type: string; attribute_value: number;
   /** ★ game.md：数量与描述（描述保留参数卡原注记全文） */
   quantity: number; description: string;
+  /** ★ P2 技能属性特效（空串/缺省 = 走默认 VFX） */
+  effects_type?: string;
 }
 export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; }
 export interface NpcCard {
@@ -1590,6 +1595,28 @@ const SYS_DATA_KEY = "sys_state";
 const AI_STORY_ROLES_KEY = "ai_story_roles";
 /** 每 N 帧把系统数据落一次库（避免每 tick 都写） */
 const SYS_PERSIST_EVERY_TICKS = 20;
+
+/** ★ P2 技能属性特效：effects_type → VFX 主色调（md/游戏特效.md P2 对照表） */
+const EFFECT_COLOR: Record<string, string> = {
+  normal:  "#eeeeee",
+  fire:    "#ff4422",
+  water:   "#33bbff",
+  thunder: "#f8ff33",
+  wind:    "#a8ffdd",
+  earth:   "#b88646",
+  metal:   "#ffdd66",
+  wood:    "#46cc55",
+  light:   "#fffcd0",
+  dark:    "#662288",
+  poison:  "#88dd22",
+  bleed:   "#bb1122",
+};
+/** 解析 effects_type 主色调；缺省/未知 → fallback（沿用默认色） */
+function effectColor(effectsType: unknown, fallback: string): string {
+  const c = EFFECT_COLOR[String(effectsType || "")];
+  return c || fallback;
+}
+
 /** 稀有度 → 基础估价（卖出按 40% 折算） */
 const RARITY_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
 const RARITY_LIST = ["common", "fine", "rare", "epic", "legend"];
@@ -1723,6 +1750,7 @@ function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string
       durabilityLeft: num(im?.durabilityLeft, num(im?.durability, -1)),
       attribute_type: im && "attribute_type" in im ? im.attribute_type : inferItemAttrType(it.name),
       attribute_value: num(im?.attribute_value, defaultItemAttrValue(it.name)),
+      effects_type: im?.effects_type || "",
     });
   });
   const list = Array.from(map.values());
@@ -2025,18 +2053,18 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
     const heal = it.heal || defaultHeal(it.name, it.kind);
     const before = me.hp;
     if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
-    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+    pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), size: 1.0 });
     if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
   } else if (t === "buff") {
-    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), size: 1.0 });
     if (it.buff_type) msg += `（${it.buff_type}）`;
   } else {
     // atk / attribute：普攻效果；attribute 是纯属性点，使用不消耗但有小跳 + 普攻特效
     const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(me, e) < SKILL_RANGE_M);
     if ((it.range || "melee") === "ranged" && targets[0]) {
-      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0 });
+      pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), size: 1.0 });
     } else {
-      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+      pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), size: 1.6 });
     }
     if (num(it.power, 0) > 0 && targets.length) {
       damage(s, targets[0], num(it.power, 0), me);
@@ -2808,6 +2836,9 @@ export async function handle_action(
       // ★ 已在实体生成前恢复过一次（要拿角色位置）；这里不再重复，
       //   否则库里的旧 parked 会覆盖刚按 ai_story_roles 归位好的驻留数据。
       if (!(s as any)._sysRestored) await restoreSys(context, s);
+      // ★ 修复：restoreSys 恢复 skillMeta 后必须重跑 buildSkills（否则 syncCardFromContext
+      //   可能因 card 未变而 return，skills 仍是空 effects_type）
+      s.skills = buildSkills(s.playerCard || {}, 8, s.skillMeta);
       syncCardFromContext(s, context); // ★ start 也同步参数卡
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
       // ★ fix：开局 levelName 与前端对齐（前端 DEFAULT_START_LEVEL = "Mulberry Town"）。
@@ -2928,18 +2959,18 @@ export async function handle_action(
       // ★ game.md 技能特效：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const fx = skillFxKind(skill);
       if (fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+        pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor((skill as any).effects_type, "#7CFFB2"), size: 1.0 });
       } else if (fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+        pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor((skill as any).effects_type, "#9CCFFF"), size: 1.0 });
       } else if (fx === "ranged") {
         const t0 = targets[0];
         pushVfx(s, {
           kind: "fireball", entityId: player.id, targetEntityId: t0?.id,
           x: player.x, y: player.y, targetX: t0?.x ?? player.x, targetY: t0?.y ?? player.y,
-          facing: player.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0,
+          facing: player.facing, life: 16, total: 16, color: effectColor((skill as any).effects_type, "#ff6a00"), size: 1.0,
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor((skill as any).effects_type, "#fff"), size: 1.6 });
       }
       targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
       pushEvent(s, `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标`);
@@ -2969,7 +3000,9 @@ export async function handle_action(
       const dmg = Math.max(1, Math.round(player.atk * 0.6));
       (player as any).actionBobMs = 200;
       floater(s, "普攻", player.x, player.y - 34);
-      pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: "#fff", size: 1.2 });
+      // ★ P2：普攻带当前武器/主手物品的 effects_type（从 playerCard 第一件 atk 装备推断，无则默认白）
+      const mainItem = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
+      pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor(mainItem?.effects_type, "#fff"), size: 1.2 });
       damage(s, target, dmg);
       pushEvent(s, `普攻命中 ${target.name}，伤害 ${dmg}`);
       return okResp(`普攻 → ${target.name} -${dmg}`);
@@ -3147,18 +3180,18 @@ export async function handle_action(
       // ★ game.md 技能特效（与「skill」共用一套归类）：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const _fx = skillFxKind(sk);
       if (_fx === "heal") {
-        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: "#7CFFB2", size: 1.0 });
+        pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor((sk as any).effects_type, "#7CFFB2"), size: 1.0 });
       } else if (_fx === "buff") {
-        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: "#9CCFFF", size: 1.0 });
+        pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor((sk as any).effects_type, "#9CCFFF"), size: 1.0 });
       } else if (_fx === "ranged") {
         const _t0 = skTargets[0];
         pushVfx(s, {
           kind: "fireball", entityId: meSk.id, targetEntityId: _t0?.id,
           x: meSk.x, y: meSk.y, targetX: _t0?.x ?? meSk.x, targetY: _t0?.y ?? meSk.y,
-          facing: meSk.facing, life: 16, total: 16, color: "#ff6a00", size: 1.0,
+          facing: meSk.facing, life: 16, total: 16, color: effectColor((sk as any).effects_type, "#ff6a00"), size: 1.0,
         });
       } else {
-        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: "#fff", size: 1.6 });
+        pushVfx(s, { kind: "slash_arc", entityId: meSk.id, x: meSk.x, y: meSk.y, facing: meSk.facing, life: 12, total: 12, color: effectColor((sk as any).effects_type, "#fff"), size: 1.6 });
       }
       if (!skTargets.length) {
         pushEvent(s, `施放 ${sk.name}，未命中目标`);
@@ -3184,7 +3217,8 @@ export async function handle_action(
       sk.range = str(params?.range) === "ranged" ? "ranged" : "melee";
       sk.lv = Math.max(1, Math.round(num(params?.lv, sk.lv || 1)));
       sk.buff_type = BUFF_TYPES.includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
-      s.skillMeta = { ...(s.skillMeta || {}), [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type } };
+      sk.effects_type = (typeof params?.effects_type === "string") ? params.effects_type : (sk.effects_type || "");
+      s.skillMeta = { ...(s.skillMeta || {}), [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type, effects_type: sk.effects_type } };
       // 参数卡「技能」只保存技能名称列表：改名/升级时替换原条目（带 lv 注记）
       const card = (s.playerCard || {}) as Record<string, any>;
       const flat: string[] = [];
@@ -3222,6 +3256,7 @@ export async function handle_action(
       it.durability = clamp(Math.round(num(params?.durability, it.durability == null ? -1 : it.durability)), -1, 99999);
       it.attribute_type = (ITEM_ATTR_TYPES as readonly string[]).includes(str(params?.attribute_type)) ? str(params?.attribute_type) : "";
       it.attribute_value = Math.round(num(params?.attribute_value, it.attribute_value || 0));
+      it.effects_type = (typeof params?.effects_type === "string") ? params.effects_type : (it.effects_type || "");
       // ★ game.md quantity/description：先汇总原条目数量与描述，再决定写回值
       const flat: string[] = [];
       (Array.isArray(card.items) ? card.items : []).forEach((x: any) => {
@@ -3250,6 +3285,7 @@ export async function handle_action(
         durability: it.durability!, durabilityLeft: it.durability!,
         attribute_type: it.attribute_type!, attribute_value: it.attribute_value!,
         quantity: qty, description: descFinal,
+        effects_type: it.effects_type!,
       };
       s.itemMeta = { ...(s.itemMeta || {}) };
       if (oldName !== nm) delete s.itemMeta[oldName];

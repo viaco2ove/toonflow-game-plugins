@@ -47,6 +47,11 @@ export interface Entity {
   full_name?: string;
   /** ★ 图集瓦片 gid（Tiled object.gid）：>0 时 drawEntity 按 gid-1 切图集出图（game.md：外观由 gid 决定，entity_type 只决定行为类）；缺省按 side 角色表 */
   gid?: number;
+  /** ★ 打击感：受击击退速度（米/tick），每 tick 线性衰减归零 */
+  knockbackVx?: number;
+  knockbackVy?: number;
+  /** ★ 打击感：死亡渐隐倒计时（ms），>0 时显示淡出特效，降至 0 后移除实体 */
+  deathMs?: number;
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }
@@ -65,6 +70,8 @@ export interface VfxParticle {
   targetY?: number;
   color?: string;
   scale?: number;
+  /** ★ 弧形斩波朝向（度数，0=右 90=下 180=左 270=上），缺省=右 */
+  angle?: number;
 }
 /** ★ 飘字（伤害 / 治疗 / 补蓝 / 增益），按 kind 决定颜色 */
 export interface Floater {
@@ -76,6 +83,32 @@ export interface Floater {
   kind?: "damage" | "heal_hp" | "heal_mp" | "buff" | "miss";
   color?: string;
 }
+export type EffectType =
+  | ""       // 默认，沿用原有逻辑
+  | "metal"  // 金
+  | "wood"   // 木
+  | "water"  // 水
+  | "fire"   // 火
+  | "earth"  // 土
+  | "wind"   // 风
+  | "thunder" // 雷（电）
+  | "light"  // 光明
+  | "dark"   // 黑暗
+  | "normal" // 普通普攻
+  | "bleed"  // 出血
+  | "poison" // 毒素
+  | "buff_dmg_bonus_fire"
+  | "buff_dmg_bonus_water"
+  | "buff_dmg_bonus_thunder"
+  | "buff_dmg_bonus_wind"
+  | "buff_dmg_bonus_earth"
+  | "buff_dmg_bonus_metal"
+  | "buff_dmg_bonus_wood"
+  | "buff_dmg_bonus_light"
+  | "buff_dmg_bonus_dark"
+  | "buff_dmg"
+  | "buff_defense";
+
 export interface SkillSlot {
   name: string;
   power: number;
@@ -85,6 +118,8 @@ export interface SkillSlot {
   type: "atk" | "heal" | "buff";
   /** ★ 近战 / 远程（影响 VFX：melee=弧形斩波 / ranged=火球轨迹） */
   range: "melee" | "ranged";
+  /** ★ 属性特效类型（为空则走默认 VFX） */
+  effects_type?: EffectType;
 }
 export interface ItemSlot {
   name: string;
@@ -104,6 +139,8 @@ export interface ItemSlot {
   stats?: Record<string, number | string | boolean>;
   /** 一次性使用 */
   singleUse?: boolean;
+  /** ★ 属性特效类型（为空则走默认 VFX） */
+  effects_type?: EffectType;
 }
 
 export interface RoleOption {
