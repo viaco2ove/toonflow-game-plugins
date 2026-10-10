@@ -97,3 +97,4 @@ run.local.ps1
 /script/tavo_mcp_use/__pycache__/
 *.tbg
 null
+/workshops/
