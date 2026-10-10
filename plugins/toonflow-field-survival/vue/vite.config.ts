@@ -1049,6 +1049,26 @@ window.addEventListener("message", async (e) => {
         //   冻结，野怪同步段重建 lastState.entities 后下面的逻辑仍改旧数组，
         //   导致 server push 出去的仍然是旧 11 只野怪（dev-host 永远在用切关前的引用）。
         const ents = lastState.entities;
+        // ★ P1 打击感衰减（dev-host 桩同步 entry.ts / mockHost.ts）：
+        //   震屏/顿帧每 tick -1 帧；击退速度 ×0.75 衰减并积分到位置；死亡淡出 -100ms
+        if (lastState.screenShake > 0) {
+          lastState.screenShake -= 1;
+          if (lastState.screenShake === 0) lastState.screenShakeIntensity = 0;
+        }
+        if (lastState.hitStopFrames > 0) lastState.hitStopFrames -= 1;
+        for (const e of ents) {
+          if (e.knockbackVx != null || e.knockbackVy != null) {
+            // ★ NaN 防护：任一轴缺省按 0 处理（单轴击退时另一轴不能被 undefined 污染成 NaN）
+            e.x += e.knockbackVx || 0; e.y += e.knockbackVy || 0;
+            e.knockbackVx = (e.knockbackVx || 0) * 0.75;
+            e.knockbackVy = (e.knockbackVy || 0) * 0.75;
+            if (Math.abs(e.knockbackVx) < 0.001) delete e.knockbackVx;
+            if (Math.abs(e.knockbackVy) < 0.001) delete e.knockbackVy;
+          }
+          if (e.deathMs != null && e.deathMs > 0) {
+            e.deathMs = Math.max(0, e.deathMs - 100);
+          }
+        }
         // 1. 镜像玩家位姿（前端权威）
         const me = ents.find((e) => e.side === "player");
         if (me) {
@@ -1113,6 +1133,13 @@ window.addEventListener("message", async (e) => {
           target.hitFlashMs = 250;
           lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
           e.cooldown = 40;
+          // ★ P1 打击感（dev-host 桩同步 entry.ts）：怪打玩家 → 震屏 + 顿帧 + 玩家被击退
+          lastState.screenShake = 6; lastState.screenShakeIntensity = 4;
+          lastState.hitStopFrames = 3;
+          const kdx = target.x - e.x, kdy = target.y - e.y;
+          const kd = Math.hypot(kdx, kdy) || 1;
+          target.knockbackVx = (kdx / kd) * 0.4;
+          target.knockbackVy = (kdy / kd) * 0.4;
           if (target.hp <= 0) {
             target.alive = false;
             lastState.events.push("[mock] 玩家被 " + e.name + " 击倒");
@@ -1136,12 +1163,20 @@ window.addEventListener("message", async (e) => {
           closest.hitFlashMs = 250;
           me.actionBobMs = 300;
           lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+          // ★ P1 打击感（dev-host 桩同步 entry.ts）：打中怪 → 震屏 + 顿帧 + 怪被击退
+          lastState.screenShake = 6; lastState.screenShakeIntensity = 4;
+          lastState.hitStopFrames = 3;
+          const kdx = closest.x - me.x, kdy = closest.y - me.y;
+          const kd = Math.hypot(kdx, kdy) || 1;
+          closest.knockbackVx = (kdx / kd) * 0.4;
+          closest.knockbackVy = (kdy / kd) * 0.4;
           // ★ 默认攻击特效：红色火花 + 命中爆炸
           if (!lastState.vfx) lastState.vfx = [];
           lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "spark", entityId: closest.id, x: closest.x, y: closest.y, life: 8, total: 8, color: "#ff5a5a" });
           lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "explosion", entityId: closest.id, x: closest.x, y: closest.y, life: 6, total: 6, color: "#ff8c3a" });
           if (closest.hp <= 0) {
             closest.alive = false;
+            closest.deathMs = 400;   // ★ P1：死亡淡出 400ms（alive=false 但 deathMs>0 仍渲染渐隐）
             lastState.kills++;
             lastState.money = (lastState.money || 0) + 3;
             me.exp = (me.exp || 0) + (closest.level || 1) * 5;
@@ -1161,9 +1196,16 @@ window.addEventListener("message", async (e) => {
             target2.hitFlashMs = 250;
             a.actionBobMs = 300;
             lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target2.x, y: target2.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            // ★ P1 打击感（dev-host 桩同步 entry.ts）：盟友击中 → 震屏 + 击退（不加顿帧，避免盟友打怪频繁冻结玩家操作）
+            lastState.screenShake = 6; lastState.screenShakeIntensity = 3;
+            const kdx = target2.x - a.x, kdy = target2.y - a.y;
+            const kd = Math.hypot(kdx, kdy) || 1;
+            target2.knockbackVx = (kdx / kd) * 0.4;
+            target2.knockbackVy = (kdy / kd) * 0.4;
             a.cooldown = 30;
             if (target2.hp <= 0) {
               target2.alive = false;
+              target2.deathMs = 400;   // ★ P1：死亡淡出
               lastState.kills++;
               lastState.money = (lastState.money || 0) + 3;
               lastState.events.push("[mock] 盟友 " + a.name + " 击杀 " + target2.name);

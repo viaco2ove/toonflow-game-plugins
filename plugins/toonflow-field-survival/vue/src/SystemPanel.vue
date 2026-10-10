@@ -46,7 +46,7 @@ const activeTab = ref<TabId>("bag");
 <template>
   <div class="sp">
     <div class="sp-head" @pointerdown="emit('drag-start', $event)">
-      <span class="sp-title">系统v1 · {{ player?.name || "玩家" }}</span>
+      <span class="sp-title">系统v2 · {{ player?.name || "玩家" }}</span>
       <span class="sp-gold">💰{{ gold }}</span>
       <span class="sp-map">{{ currentMap }}</span>
       <button class="sp-close" @click="emit('close')" title="关闭">×</button>
