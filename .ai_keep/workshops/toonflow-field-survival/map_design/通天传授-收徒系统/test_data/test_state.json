@@ -1,0 +1,888 @@
+{
+  "description": "本地调试用测试数据（npm run dev 或直接打开 game.html 时加载）。roles 缺失时 mockHost.ts 会自动用默认角色。",
+  "world": {
+    "w": 960,
+    "h": 600
+  },
+  "roles": [
+    {
+      "id": "r01",
+      "name": "陈彦",
+      "roleType": "player",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/player/avatar.webp",
+      "description": "赦夜人主角",
+      "initial_level": 5
+    },
+    {
+      "id": "r02",
+      "name": "裴勇",
+      "roleType": "npc",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/裴勇/avatar.webp",
+      "initial_level": 10
+    },
+    {
+      "id": "r03",
+      "name": "夜见",
+      "roleType": "system",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/夜见/avatar.webp",
+      "initial_level": 10
+    },
+    {
+      "id": "r04",
+      "name": "聂小可",
+      "roleType": "npc",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/聂小可/avatar.webp",
+      "initial_level": 10
+    },
+    {
+      "id": "r05",
+      "name": "武飞",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r06",
+      "name": "黑狼",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r07",
+      "name": "朱果",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r08",
+      "name": "骑士",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r09",
+      "name": "郭奉凯",
+      "roleType": "npc",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/avatars/郭奉凯/avatar.webp",
+      "initial_level": 10
+    },
+    {
+      "id": "r10",
+      "name": "霍魁",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r11",
+      "name": "魏靖",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r12",
+      "name": "林佩雅",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r13",
+      "name": "暮光者",
+      "roleType": "npc",
+      "initial_level": 10
+    },
+    {
+      "id": "r14",
+      "name": "某男子",
+      "roleType": "general"
+    },
+    {
+      "id": "r15",
+      "name": "某女子",
+      "roleType": "general",
+      "avatarPath": "./images/player_sprites/4213.png"
+    }
+  ],
+  "monsters": [
+    {
+      "monsterId": "m001",
+      "name": "碎蠕",
+      "rank": "零阶｜碎屑湮体",
+      "monsterType": "畸变湮体",
+      "entity_type": "RAT",
+      "description": "湮雾凝聚细碎残躯，成群出没，单独威胁极低，成群具备杀伤力",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/sui_rong.webp",
+      "recommendLevel": 1,
+      "dropItems": [
+        "mat_dark_nucleus_fragment"
+      ],
+      "weakness": [
+        "强光"
+      ],
+      "feature": "趋光，个体无智慧，只凭本能狩猎"
+    },
+    {
+      "monsterId": "m002",
+      "name": "蚀爪野犬",
+      "rank": "一阶｜低阶湮物",
+      "monsterType": "畸变湮体",
+      "entity_type": "WILD_GOAT",
+      "description": "被湮雾异化的流浪野犬，北丘夜巷最常见猎杀目标，46号新人试训主要对手",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/corrode_dog.webp",
+      "recommendLevel": 2,
+      "dropItems": [
+        "mat_dark_nucleus_low"
+      ],
+      "weakness": [
+        "强光",
+        "破湮冷兵器"
+      ],
+      "feature": "夜间巷区游荡，嗅觉敏锐，会迂回偷袭"
+    },
+    {
+      "monsterId": "m003",
+      "name": "畸口",
+      "rank": "超一型｜精英低‑中阶",
+      "monsterType": "畸变湮体",
+      "entity_type": "ORC",
+      "description": "超一型上位畸变湮体，暗猎场高危目标，出现往往伴随伤亡，需要5级以上组队讨伐",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/deform_mouth.webp",
+      "recommendLevel": 5,
+      "dropItems": [
+        "mat_dark_nucleus_low",
+        "mat_dark_nucleus_mid"
+      ],
+      "weakness": [
+        "大功率驱湮光源",
+        "淬湮武器"
+      ],
+      "feature": "躯体庞大，口部畸变，爆发力极强，会埋伏废墟暗处"
+    },
+    {
+      "monsterId": "m004",
+      "name": "浮泣",
+      "rank": "二阶｜中阶湮物",
+      "monsterType": "雾灵湮体",
+      "entity_type": "GHOST",
+      "description": "雾灵类中阶湮体，擅长制造幻觉，模仿熟人声音拆分小队，本体为浓缩黑雾",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/float_weep.webp",
+      "recommendLevel": 7,
+      "dropItems": [
+        "mat_dark_nucleus_mid"
+      ],
+      "weakness": [
+        "暮光屏障",
+        "高强度驱湮闪光"
+      ],
+      "feature": "擅长幻境迷惑，物理冷兵器普通攻击难以命中本体",
+      "isRanged": true
+    },
+    {
+      "monsterId": "m005",
+      "name": "骸拥",
+      "rank": "二阶｜中阶湮物",
+      "monsterType": "畸变湮体",
+      "entity_type": "MUMMY",
+      "description": "多具人类尸体纠缠异化而成，废墟防空洞、废弃建筑常见，力量巨大",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/bone_hug.webp",
+      "recommendLevel": 7,
+      "dropItems": [
+        "mat_dark_nucleus_mid"
+      ],
+      "weakness": [
+        "淬湮武器"
+      ],
+      "feature": "躯体由多遗骸拼接，击破局部无法击杀本体"
+    },
+    {
+      "monsterId": "m006",
+      "name": "冥廊哨影",
+      "rank": "三阶｜高阶湮物",
+      "monsterType": "雾灵湮体",
+      "entity_type": "BANSHEE",
+      "description": "冥夜走廊专属高阶雾灵，大范围精神干扰，可以篡改短距离感官记忆，打散探险队伍",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/corridor_shadow.webp",
+      "recommendLevel": 12,
+      "dropItems": [
+        "mat_dark_nucleus_high"
+      ],
+      "weakness": [
+        "高阶暮光屏障",
+        "掌灯人湮能压制"
+      ],
+      "feature": "打散之后可以重新聚合，很难彻底灭杀，优先精神攻击",
+      "isRanged": true
+    },
+    {
+      "monsterId": "m007",
+      "name": "沉沦执傀",
+      "rank": "三阶｜高阶湮物",
+      "monsterType": "人类异化感染者",
+      "entity_type": "VAMPIRE",
+      "description": "被湮深度侵蚀的人类，保留部分记忆，擅长伪装，设圈套引诱活人踏入黑暗，掌灯人重点清缴对象",
+      "avatarPath": "./public/test_data/toonflow_agme_cache/monsters/sink_puppet.webp",
+      "recommendLevel": 13,
+      "dropItems": [
+        "mat_dark_nucleus_high"
+      ],
+      "weakness": [
+        "淬湮武器，强光仅能短暂压制"
+      ],
+      "feature": "拥有人类智慧，会谈判、欺骗、布置陷阱",
+      "isRanged": true
+    }
+  ],
+  "materials": [
+    {
+      "matId": "mat_weapon_quench_dagger",
+      "name": "淬湮短刀",
+      "type": "weapon",
+      "subType": "近战武器",
+      "description": "46号/不流工坊锻造特制短刃，北丘最通用的破湮冷兵器，可有效杀伤低‑中阶湮物",
+      "effect": "攻击+15，对湮物伤害有效；普通刀剑无法做到",
+      "effectType": "attack",
+      "stats": {
+        "atk": 15
+      },
+      "priceOfficial": 85,
+      "priceBlack": 65,
+      "usable": true
+    },
+    {
+      "matId": "mat_weapon_machete",
+      "name": "开山刀",
+      "type": "weapon",
+      "subType": "近战武器",
+      "description": "不流公会夜采人廉价武器，耐用便宜，对付成群低阶湮物",
+      "effect": "攻击+8，杀伤上限低，对中阶以上湮物效果差",
+      "effectType": "attack",
+      "stats": {
+        "atk": 8
+      },
+      "priceOfficial": 40,
+      "priceBlack": 30,
+      "usable": true
+    },
+    {
+      "matId": "mat_weapon_twilight_sword",
+      "name": "暮光佩剑",
+      "type": "weapon",
+      "subType": "近战武器",
+      "description": "掌灯人高阶专员制式佩剑，铭刻暮光纹路，身份象征，对湮物杀伤极佳",
+      "effect": "攻击+45，对高阶湮体伤害显著，可配合暮光天赋增幅",
+      "effectType": "attack",
+      "stats": {
+        "atk": 45,
+        "twilightBonus": 20
+      },
+      "priceOfficial": 0,
+      "priceBlack": 0,
+      "usable": true,
+      "note": "掌灯人专属，不对外售卖，不会流入黑市"
+    },
+    {
+      "matId": "mat_weapon_ritual_sword",
+      "name": "仪式长剑",
+      "type": "weapon",
+      "subType": "近战武器",
+      "description": "黑甲骑士配剑，哑光重甲，重量大，针对高阶湮体",
+      "effect": "攻击+50，攻速慢但单次伤害极高，重击可破中阶湮体防御",
+      "effectType": "attack",
+      "stats": {
+        "atk": 50,
+        "speed": -10
+      },
+      "priceOfficial": 0,
+      "priceBlack": 900,
+      "usable": true
+    },
+    {
+      "matId": "mat_weapon_folding_fan",
+      "name": "收拢折扇（武器型）",
+      "type": "weapon",
+      "subType": "近战武器",
+      "description": "暗藏金属刃片的扇刃，可当普通折扇伪装，适合潜行暗杀",
+      "effect": "攻击+12，潜行状态下首击伤害翻倍",
+      "effectType": "attack",
+      "stats": {
+        "atk": 12,
+        "stealthBonus": 100
+      },
+      "priceOfficial": 0,
+      "priceBlack": 260,
+      "usable": true
+    },
+    {
+      "matId": "mat_weapon_shotgun",
+      "name": "破湮霰弹枪",
+      "type": "weapon",
+      "subType": "热武器",
+      "description": "改装枪械，装填特制破湮弹丸，清扫成群低阶湮物；弹药昂贵稀缺",
+      "effect": "攻击+30，可同时命中多个目标，对中阶以上湮物伤害衰减",
+      "effectType": "attack",
+      "stats": {
+        "atk": 30,
+        "multiTarget": true
+      },
+      "priceOfficial": 0,
+      "priceBlack": 540,
+      "usable": true,
+      "note": "公会配发为主，黑市货源稀少，需配套破湮霰弹"
+    },
+    {
+      "matId": "mat_weapon_pistol",
+      "name": "改装自卫手枪",
+      "type": "weapon",
+      "subType": "热武器",
+      "description": "据点自卫用改装手枪，主要对付人类敌人，对湮物效果很差",
+      "effect": "攻击+20，对人形敌人有效，对湮物伤害仅30%",
+      "effectType": "attack",
+      "stats": {
+        "atk": 20,
+        "antiYanEfficiency": 0.3
+      },
+      "priceOfficial": 220,
+      "priceBlack": 165,
+      "usable": true
+    },
+    {
+      "matId": "mat_weapon_flash_bomb",
+      "name": "驱湮闪光弹",
+      "type": "weapon",
+      "subType": "投掷消耗",
+      "description": "爆炸产生强光冲击，逼退低‑中阶湮物，是夜采队保命道具",
+      "effect": "对低‑中阶湮物造成强光压制（眩晕2回合），对高阶湮体仅短暂干扰",
+      "effectType": "attack",
+      "stats": {
+        "stunTurns": 2,
+        "targetRank": "low-mid"
+      },
+      "priceOfficial": 22,
+      "priceBlack": 18,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_armor_field_suit",
+      "name": "46号外勤防湮工装",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "哑光深色工装，药剂浸泡布料，抵御低阶湮雾，轻便适合废墟潜行",
+      "effect": "防御+10，抵御低阶湮雾侵蚀，不抗高阶湮物理重击",
+      "effectType": "defense",
+      "stats": {
+        "def": 10,
+        "antiFog": 0.3
+      },
+      "priceOfficial": 110,
+      "priceBlack": 85,
+      "usable": true
+    },
+    {
+      "matId": "mat_armor_shadow_cloak",
+      "name": "碎影罩衫",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "薄款吸光面料，吸收部分光线，方便黑夜隐蔽",
+      "effect": "防御+3，潜行隐蔽大幅提升，几乎无物理防护",
+      "effectType": "defense",
+      "stats": {
+        "def": 3,
+        "stealth": 40
+      },
+      "priceOfficial": 65,
+      "priceBlack": 50,
+      "usable": true
+    },
+    {
+      "matId": "mat_armor_combat_jacket",
+      "name": "哑光防湮作战夹克",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "不流公会制式，药剂浸泡面料，哑光不反光，降低湮雾侵蚀",
+      "effect": "防御+12，降低湮雾侵蚀20%，避免吸引高阶湮物",
+      "effectType": "defense",
+      "stats": {
+        "def": 12,
+        "antiFog": 0.2
+      },
+      "priceOfficial": 125,
+      "priceBlack": 95,
+      "usable": true
+    },
+    {
+      "matId": "mat_armor_alloy_guard",
+      "name": "轻量化合金护具（一套）",
+      "type": "armor",
+      "subType": "护具",
+      "description": "护肩、护肘、护膝套装，防护物理冲击，重量轻便",
+      "effect": "防御+8，仅防御物理撞击，不能阻挡湮能侵蚀",
+      "effectType": "defense",
+      "stats": {
+        "def": 8
+      },
+      "priceOfficial": 95,
+      "priceBlack": 72,
+      "usable": true
+    },
+    {
+      "matId": "mat_armor_twilight_cloak",
+      "name": "暮光披风",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "特制织物，配合暮光天赋扩大暮光屏障范围，高阶掌灯人专属",
+      "effect": "防御+6，暮光屏障范围+50%，黑夜潜行隐蔽提升",
+      "effectType": "defense",
+      "stats": {
+        "def": 6,
+        "twilightRange": 50
+      },
+      "priceOfficial": 0,
+      "priceBlack": 0,
+      "usable": true,
+      "note": "掌灯人专属，不对外售卖"
+    },
+    {
+      "matId": "mat_armor_high_combat_suit",
+      "name": "高阶防湮作战服",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "掌灯人高级专员礼服式作战服，驱湮涂层等级最高",
+      "effect": "防御+22，抵御中阶湮雾侵蚀，物理防护优秀",
+      "effectType": "defense",
+      "stats": {
+        "def": 22,
+        "antiFog": 0.5
+      },
+      "priceOfficial": 0,
+      "priceBlack": 0,
+      "usable": true,
+      "note": "掌灯人内部装备，不流通黑市"
+    },
+    {
+      "matId": "mat_armor_black_armor",
+      "name": "哑光黑甲全套",
+      "type": "armor",
+      "subType": "护甲",
+      "description": "甲面哑光不反光的重甲套装，配灰黑斗篷，夜客骑士专属",
+      "effect": "防御+35，物理防御极高，对高阶湮体有抗性；移动速度降低",
+      "effectType": "defense",
+      "stats": {
+        "def": 35,
+        "speed": -15,
+        "antiHighYan": 0.3
+      },
+      "priceOfficial": 0,
+      "priceBlack": 0,
+      "usable": true,
+      "note": "夜客骑士专属，稀有"
+    },
+    {
+      "matId": "mat_light_stick_cheap",
+      "name": "平民廉价款便携光棒",
+      "type": "light",
+      "subType": "光源",
+      "description": "底层平民、新人夜采人标配，续航短、光照半径小、容易故障",
+      "effect": "光照半径8米，续航2‑4小时，可威慑低阶湮物",
+      "effectType": "light",
+      "stats": {
+        "lightRadius": 8,
+        "duration": 180
+      },
+      "priceOfficial": 18,
+      "priceBlack": 14,
+      "usable": true
+    },
+    {
+      "matId": "mat_light_stick_pro",
+      "name": "制式高续航光棒",
+      "type": "light",
+      "subType": "光源",
+      "description": "46号/不流外勤标配，续航与光照半径优于平民款",
+      "effect": "光照半径15米，续航8‑12小时，可威慑低阶湮物",
+      "effectType": "light",
+      "stats": {
+        "lightRadius": 15,
+        "duration": 600
+      },
+      "priceOfficial": 45,
+      "priceBlack": 36,
+      "usable": true
+    },
+    {
+      "matId": "mat_light_beacon",
+      "name": "照耀器（大型集体光源）",
+      "type": "light",
+      "subType": "大型光源",
+      "description": "大功率固定光源，划定夜采安全光圈，需要蓄电池供电，体积笨重",
+      "effect": "光照半径50米，可驱散成群低阶湮物；一旦熄灭全队陷入绝境",
+      "effectType": "light",
+      "stats": {
+        "lightRadius": 50,
+        "requiresBattery": true
+      },
+      "priceOfficial": 420,
+      "priceBlack": 330,
+      "usable": true
+    },
+    {
+      "matId": "mat_light_short_rod",
+      "name": "光械短棒",
+      "type": "light",
+      "subType": "特殊光源",
+      "description": "聂小可核心装备，46号工坊特制，可切换强光威慑/弱光潜行，消耗内置能源",
+      "effect": "强光模式：光照25米威慑中低阶湮物；弱光模式：潜行隐蔽+60；能源耗尽无法发动",
+      "effectType": "light",
+      "stats": {
+        "lightRadius": 25,
+        "stealthMode": 60
+      },
+      "priceOfficial": 0,
+      "priceBlack": 620,
+      "usable": true,
+      "note": "46号配发为主，黑市极少货源"
+    },
+    {
+      "matId": "mat_light_drive_device",
+      "name": "便携强光驱散装置",
+      "type": "light",
+      "subType": "特殊光源",
+      "description": "掌灯人高阶装备，释放高强度光束，逼退湮物，消耗使用者暮光能量",
+      "effect": "释放强光光束，威慑中阶湮物，可短暂压制高阶湮体；消耗暮光能量",
+      "effectType": "light",
+      "stats": {
+        "lightRadius": 30,
+        "consumeTwilight": true
+      },
+      "priceOfficial": 280,
+      "priceBlack": 0,
+      "usable": true,
+      "note": "高阶专员装备，几乎不流入黑市"
+    },
+    {
+      "matId": "mat_consumable_bandage",
+      "name": "基础外伤包",
+      "type": "consumable",
+      "subType": "补血",
+      "description": "普通绷带与外伤药物，处理物理伤口，无法治疗湮侵蚀造成的内伤与精神损伤",
+      "effect": "立即恢复生命30点（HP+30），只能治疗物理伤害",
+      "effectType": "heal_hp",
+      "stats": {
+        "heal": 30
+      },
+      "priceOfficial": 18,
+      "priceBlack": 13,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_consumable_medkit",
+      "name": "强效急救包",
+      "type": "consumable",
+      "subType": "补血",
+      "description": "46号/掌灯人医疗配给，含止血凝胶与缝合工具，外勤高强度任务标准配置",
+      "effect": "立即恢复生命80点（HP+80），并清除持续流血状态",
+      "effectType": "heal_hp",
+      "stats": {
+        "heal": 80,
+        "cureBleed": true
+      },
+      "priceOfficial": 60,
+      "priceBlack": 80,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_consumable_suppress_low",
+      "name": "平价抗湮抑制药剂",
+      "type": "consumable",
+      "subType": "补蓝",
+      "description": "46号、不流公会配给药剂，轻微延缓湮精神侵蚀，效果有限",
+      "effect": "恢复精神30点（SP+30），小幅降低湮侵蚀积累",
+      "effectType": "heal_sp",
+      "stats": {
+        "heal": 30,
+        "antiErosion": 0.1
+      },
+      "priceOfficial": 35,
+      "priceBlack": 27,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_consumable_suppress_high",
+      "name": "强效抗湮药剂",
+      "type": "consumable",
+      "subType": "补蓝",
+      "description": "掌灯人制式药剂，强效压制湮侵蚀，黑市溢价严重且假货泛滥",
+      "effect": "恢复精神100点（SP+100），大幅延缓湮同化进程",
+      "effectType": "heal_sp",
+      "stats": {
+        "heal": 100,
+        "antiErosion": 0.4
+      },
+      "priceOfficial": 80,
+      "priceBlack": 125,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_consumable_suppress_special",
+      "name": "赦夜人专用侵蚀抑制剂",
+      "type": "consumable",
+      "subType": "补蓝（赦夜人限定）",
+      "description": "专给共生湮源的赦夜人，延缓湮源同化宿主，产量极低，黑市天价假货极多",
+      "effect": "恢复精神150点（SP+150），清除湮源同化风险累积，赦夜人专用",
+      "effectType": "heal_sp",
+      "stats": {
+        "heal": 150,
+        "clearAssimilation": true
+      },
+      "priceOfficial": 0,
+      "priceBlack": 520,
+      "usable": true,
+      "singleUse": true,
+      "note": "仅对赦夜人有效"
+    },
+    {
+      "matId": "mat_consumable_yan_energy",
+      "name": "湮能回复剂",
+      "type": "consumable",
+      "subType": "补蓝",
+      "description": "萃取暗核湮能制成的能量药剂，供赦夜人/暮光者战斗中快速补充湮能值（技能条）",
+      "effect": "恢复湮能40点（MP+40），仅对拥有湮能体系者生效，普通人使用会轻微精神受损",
+      "effectType": "heal_mp",
+      "stats": {
+        "heal": 40,
+        "restrict": "yan-user"
+      },
+      "priceOfficial": 90,
+      "priceBlack": 130,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_consumable_spirit_charm",
+      "name": "精神护符",
+      "type": "consumable",
+      "subType": "增益",
+      "description": "抵御湮物精神低语，降低幻觉，耐久消耗品",
+      "effect": "精神低语抗性+50%，持续生效，耐久会缓慢损耗",
+      "effectType": "buff",
+      "stats": {
+        "mentalResist": 50
+      },
+      "priceOfficial": 0,
+      "priceBlack": 295,
+      "usable": true
+    },
+    {
+      "matId": "mat_consumable_barrier",
+      "name": "湮雾屏障道具",
+      "type": "consumable",
+      "subType": "增益",
+      "description": "短时间制造隔绝湮雾的防护屏障，一次性消耗品，黑市独有",
+      "effect": "生成湮雾屏障，隔绝湮雾侵蚀3回合，范围内队友共享",
+      "effectType": "buff",
+      "stats": {
+        "barrierTurns": 3,
+        "partyWide": true
+      },
+      "priceOfficial": 0,
+      "priceBlack": 210,
+      "usable": true,
+      "singleUse": true
+    },
+    {
+      "matId": "mat_dark_nucleus_fragment",
+      "name": "暗核碎渣",
+      "type": "resource",
+      "subType": "暗核",
+      "description": "零阶湮体掉落，几乎无交易价值，少量可用于简易药剂制作",
+      "effect": "材料，可合成简易药剂；无直接使用效果",
+      "effectType": "material",
+      "stats": {},
+      "priceOfficial": 0,
+      "priceBlack": 5,
+      "usable": false
+    },
+    {
+      "matId": "mat_dark_nucleus_low",
+      "name": "低阶暗核",
+      "type": "resource",
+      "subType": "暗核",
+      "description": "一阶/超一型湮物产出，黑市硬通货；制作光源、药剂、装备附魔；赦夜人共生体可吞噬升级",
+      "effect": "货币/材料：黑市流通；湮源吞噬可获得成长；直接接触有精神侵蚀风险，需密封存放",
+      "effectType": "currency",
+      "stats": {
+        "darkValue": 1
+      },
+      "priceOfficial": 40,
+      "priceBlack": 62,
+      "usable": true
+    },
+    {
+      "matId": "mat_dark_nucleus_mid",
+      "name": "中阶暗核",
+      "type": "resource",
+      "subType": "暗核",
+      "description": "二阶湮物凝结，价值远高于低阶；暮光者仪式萃取湮能、高级装备改装",
+      "effect": "货币/材料：价值高于低阶暗核4倍；湮源吞噬成长效果更佳；需密封盒存放",
+      "effectType": "currency",
+      "stats": {
+        "darkValue": 4
+      },
+      "priceOfficial": 130,
+      "priceBlack": 180,
+      "usable": true
+    },
+    {
+      "matId": "mat_dark_nucleus_high",
+      "name": "高阶暗核",
+      "type": "resource",
+      "subType": "暗核",
+      "description": "三阶高阶湮体产出，极度稀缺；传言是开启冥夜走廊的钥匙碎片，掌灯人严格回收",
+      "effect": "货币/材料：天价珍稀品，湮源吞噬成长巨大；掌灯人管控，黑市争夺核心",
+      "effectType": "currency",
+      "stats": {
+        "darkValue": 15,
+        "corridorKeyFragment": true
+      },
+      "priceOfficial": 300,
+      "priceBlack": 580,
+      "usable": true
+    },
+    {
+      "matId": "mat_dark_moss",
+      "name": "暗苔",
+      "type": "resource",
+      "subType": "夜采物",
+      "description": "黑夜废墟生长变异苔藓，夜采主要采集物，制药基础原料",
+      "effect": "材料：制作基础药剂的原料",
+      "effectType": "material",
+      "stats": {},
+      "priceOfficial": 22,
+      "priceBlack": 31,
+      "usable": false
+    },
+    {
+      "matId": "mat_ink_condensate",
+      "name": "凝墨",
+      "type": "resource",
+      "subType": "夜采物",
+      "description": "废墟墙体渗出黑色液态变异物质，制作耗材、部分药剂原料",
+      "effect": "材料：制作耗材与特殊药剂的原料",
+      "effectType": "material",
+      "stats": {},
+      "priceOfficial": 30,
+      "priceBlack": 41,
+      "usable": false
+    },
+    {
+      "matId": "mat_ruin_parts",
+      "name": "旧世界废墟零件",
+      "type": "resource",
+      "subType": "夜采物",
+      "description": "旧世界遗留机械、电子残骸，可维修装备、改装武器",
+      "effect": "材料：装备维修/改装消耗，视零件好坏浮动定价",
+      "effectType": "material",
+      "stats": {},
+      "priceOfficial": 25,
+      "priceBlack": 38,
+      "usable": false
+    },
+    {
+      "matId": "mat_seal_bag",
+      "name": "暗核收纳布袋",
+      "type": "tool",
+      "subType": "容器",
+      "description": "简易密封布袋，隔绝暗核直接接触，防护有限，46号/不流队员标配",
+      "effect": "可安全存放1颗低阶暗核，防止精神侵蚀；无法存放高阶暗核",
+      "effectType": "storage",
+      "stats": {
+        "capacity": 1,
+        "maxRank": "mid"
+      },
+      "priceOfficial": 25,
+      "priceBlack": 20,
+      "usable": false
+    },
+    {
+      "matId": "mat_seal_box_high",
+      "name": "硬质暗核密封收纳盒",
+      "type": "tool",
+      "subType": "容器",
+      "description": "掌灯人制式硬质盒，隔绝湮能，安全存放高阶暗核",
+      "effect": "可安全存放任意等级暗核，完全隔绝湮能外泄",
+      "effectType": "storage",
+      "stats": {
+        "capacity": 5,
+        "maxRank": "high"
+      },
+      "priceOfficial": 90,
+      "priceBlack": 250,
+      "usable": false
+    },
+    {
+      "matId": "mat_detector_simple",
+      "name": "简易湮能检测仪",
+      "type": "tool",
+      "subType": "侦测",
+      "description": "检测周遭湮能浓度，预警湮潮、高阶湮体靠近，有误差",
+      "effect": "侦测湮能浓度，预警50米内高阶湮体/湮潮（精度85%）",
+      "effectType": "detection",
+      "stats": {
+        "range": 50,
+        "accuracy": 0.85
+      },
+      "priceOfficial": 170,
+      "priceBlack": 132,
+      "usable": false
+    },
+    {
+      "matId": "mat_detector_high",
+      "name": "高阶湮能分析仪",
+      "type": "tool",
+      "subType": "侦测",
+      "description": "掌灯人制式，精准判断湮体等级、暗核纯度、人类侵蚀程度",
+      "effect": "精准侦测：湮体等级判定、暗核纯度分析、识别被侵蚀人类（精度99%）",
+      "effectType": "detection",
+      "stats": {
+        "accuracy": 0.99,
+        "analyze": true
+      },
+      "priceOfficial": 0,
+      "priceBlack": 0,
+      "usable": false,
+      "note": "掌灯人内部装备，不流通黑市"
+    },
+    {
+      "matId": "mat_comms_short",
+      "name": "46号短距加密通讯器",
+      "type": "tool",
+      "subType": "通讯",
+      "description": "短距离加密通话，湮雾干扰信号，远距离直接失联",
+      "effect": "500米内加密通话，黑夜湮雾干扰下信号衰减",
+      "effectType": "communication",
+      "stats": {
+        "range": 500
+      },
+      "priceOfficial": 140,
+      "priceBlack": 108,
+      "usable": false
+    },
+    {
+      "matId": "mat_battery_large",
+      "name": "高容量蓄电池",
+      "type": "tool",
+      "subType": "能源",
+      "description": "给照耀器、大型光源装备供电，北丘硬通货物资",
+      "effect": "为照耀器/大型光源供电8小时，消耗品",
+      "effectType": "energy",
+      "stats": {
+        "power": 8
+      },
+      "priceOfficial": 130,
+      "priceBlack": 100,
+      "usable": false
+    }
+  ]
+}

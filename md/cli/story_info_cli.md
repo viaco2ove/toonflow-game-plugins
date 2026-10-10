@@ -5,3 +5,4 @@ python -m toon_plugins story_info -s "赦夜人冥夜走廊-第二季" --worldid
 
 ## 完整摘要
 python -m toon_plugins story_info -s "赦夜人冥夜走廊-第二季" --worldid 47 --state
+python -m toon_plugins story_info -s "通天传授-收徒系统" --worldid 45 --state

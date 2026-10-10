@@ -204,6 +204,12 @@ export const NPC_DIALOG_ZH: Record<string, string> = {
   BARKEEP: "酒馆老板",
   // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
   NANI_AND_BILI_RESCUE: "娜妮",
+  // ★ 通天传授-收徒系统：大罗宗人物（map_design/通天传授-收徒系统 地图集）
+  XUANCHEN: "玄尘长老",
+  MO_LAO: "墨老",
+  SU_MO: "苏沫",
+  XIAO_ZHONG: "萧肿",
+  CHEN_NANXUAN: "陈南璇",
 };
 
 /** 阵营规范化：非法值返回 null（调用方回退 entity_type 推断） */
@@ -564,9 +570,15 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
   //   修复：当 Tiled 没写 name 时，回退到调用方传入的 levelName（小写驼峰 → Pascal Case 友好显示）。
   const tiledName = (obj && typeof obj.name === "string" && obj.name.trim()) ? obj.name.trim() : "";
   const finalName = tiledName || (levelName ? levelName : "overworld");
+  // ★ 地图集自定义主题/旁白（map_design 地图集改造：顶层 theme/narration/notes 由编辑器写入）
+  const tiledTheme = (obj && typeof obj.theme === "string" && obj.theme.trim()) ? obj.theme.trim() : "";
+  const tiledNarration = (obj && typeof obj.narration === "string" && obj.narration.trim()) ? obj.narration.trim() : "";
+  const tiledNotes = (obj && typeof obj.notes === "string" && obj.notes.trim()) ? obj.notes.trim() : "";
   return {
     ...f,
     name: finalName,
+    theme: tiledTheme || f.theme,
+    narration: tiledNarration || f.narration,
     // ★ 按地图实际大小（不强制 ±1500 大地图）
     size: [W, H],
     x_range: [-W / 2, W / 2],
@@ -580,9 +592,8 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
     mobs,
     npcs,
     mobLevelRange,
-    // ★ Tiled 实际加载成功时，清掉 fallback 的"未找到 mulberryTown.json"诊断字段，
-    //   否则外部面板/HUD 会显示 "fallback（未找到 mulberryTown.json 时使用）"自相矛盾
-    notes: undefined,
+    // ★ 地图集 notes（改造脚本写入的故事定位说明）；无则清掉 fallback 诊断字段
+    notes: tiledNotes || undefined,
   };
 }
 
