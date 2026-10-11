@@ -1808,6 +1808,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Dungeon 2"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·下行梯(通第4层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_stairs_down",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1842,6 +1852,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Dungeon 4"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·上行梯(回第2层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_stairs_up",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1870,6 +1890,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·叁",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -1900,6 +1925,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·叁",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1928,6 +1958,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·叁",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -1958,6 +1993,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·叁",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1986,6 +2026,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·叁",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2016,6 +2061,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·叁",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2044,6 +2094,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·叁",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2080,6 +2135,6 @@
  "version": 1.2,
  "width": 35,
  "theme": "宗门锁灵塔·第3层",
- "narration": "锁灵塔第3层。灵压渐重，塔壁上历代弟子刻下的突破感悟依稀可辨。连破数层直冲九层——宗门历史由你来写。",
- "notes": "突破剧情：锁灵塔第3层。镇塔傀儡 Lv80-90。"
+ "narration": "锁灵塔第3层。灵压渐重，塔壁上历代弟子刻下的突破感悟依稀可辨。第叁层的镇塔傀儡已非等闲。",
+ "notes": "突破剧情: 锁灵塔第3层, 镇塔傀儡 Lv64-74"
 }

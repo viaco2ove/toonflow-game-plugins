@@ -1484,6 +1484,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Town"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·下行梯(通第2层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_stairs_down",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1518,6 +1528,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Dungeon 2"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·出口(回外门)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_stairs_up",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1546,6 +1566,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·壹",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -1576,6 +1601,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·壹",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1604,6 +1634,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·壹",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -1634,6 +1669,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·壹",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1662,6 +1702,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·壹",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -1698,6 +1743,6 @@
  "version": 1.2,
  "width": 31,
  "theme": "宗门锁灵塔·第1层",
- "narration": "锁灵塔——大罗宗镇宗之宝，塔内灵气凝而不散，是弟子闭关突破的圣地。塔层越深，灵压越强，镇守的傀儡（妖修）也越凶。",
- "notes": "突破剧情：锁灵塔第1层。镇塔傀儡 Lv60-70。"
+ "narration": "锁灵塔——大罗宗镇宗之宝，塔内灵气凝而不散，是弟子闭关突破的圣地。塔层越深，灵压越强，镇塔傀儡也越凶。连破数层直冲九层——宗门历史由你来写。",
+ "notes": "突破剧情: 锁灵塔第1层, 镇塔傀儡 Lv60-70"
 }

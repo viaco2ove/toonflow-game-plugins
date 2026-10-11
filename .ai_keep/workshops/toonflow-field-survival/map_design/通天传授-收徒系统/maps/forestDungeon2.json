@@ -1576,6 +1576,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Forest Dungeon 1"
+      },
+      {
+       "name": "full_name",
+       "value": "秘境·下行梯(通第3层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_stairs_down",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1610,6 +1620,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Forest Dungeon 3"
+      },
+      {
+       "name": "full_name",
+       "value": "秘境·上行梯(回第1层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_stairs_up",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1638,6 +1658,11 @@
       {
        "name": "full_name",
        "value": "山魈野伥·2阶",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
        "type": "string"
       }
      ],
@@ -1668,6 +1693,11 @@
        "name": "full_name",
        "value": "山魈野伥·2阶",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1696,6 +1726,11 @@
       {
        "name": "full_name",
        "value": "山魈野伥·2阶",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
        "type": "string"
       }
      ],
@@ -1726,6 +1761,11 @@
        "name": "full_name",
        "value": "山魈野伥·2阶",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1755,6 +1795,11 @@
        "name": "full_name",
        "value": "山魈野伥·2阶",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -1783,6 +1828,11 @@
       {
        "name": "full_name",
        "value": "山魈野伥·2阶",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "secret_floor",
        "type": "string"
       }
      ],
@@ -1819,6 +1869,6 @@
  "version": 1.2,
  "width": 33,
  "theme": "后山秘境·第2层",
- "narration": "青云竹海地下秘境第2层。上古灵脉在此汇聚，妖兽盘踞其间。",
- "notes": "竹海秘境第2层。Lv20-30。"
+ "narration": "青云竹海地下秘境第2层。上古灵脉在此汇聚，竹根穿透岩层，妖兽盘踞其间。越深处的妖兽，血脉越发不凡。",
+ "notes": "竹海秘境第2层, 妖兽 Lv20-30"
 }

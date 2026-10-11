@@ -2164,6 +2164,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Dungeon 4"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·上行梯(回第4层)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_stairs_up",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2188,6 +2198,16 @@
        "name": "portalID",
        "type": "string",
        "value": "Mulberry Town"
+      },
+      {
+       "name": "full_name",
+       "value": "锁灵塔·出口(回大罗宗外门)",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_exit",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2216,6 +2236,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·伍",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2246,6 +2271,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·伍",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2274,6 +2304,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·伍",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2304,6 +2339,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·伍",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2332,6 +2372,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·伍",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2362,6 +2407,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·伍",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2390,6 +2440,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·伍",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2420,6 +2475,11 @@
        "name": "full_name",
        "value": "锁灵傀儡·伍",
        "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
+       "type": "string"
       }
      ],
      "rotation": 0,
@@ -2448,6 +2508,11 @@
       {
        "name": "full_name",
        "value": "锁灵傀儡·伍",
+       "type": "string"
+      },
+      {
+       "name": "area",
+       "value": "tower_floor",
        "type": "string"
       }
      ],
@@ -2484,6 +2549,6 @@
  "version": 1.2,
  "width": 39,
  "theme": "宗门锁灵塔·第5层",
- "narration": "锁灵塔第5层。灵压渐重，塔壁上历代弟子刻下的突破感悟依稀可辨。连破数层直冲九层——宗门历史由你来写。",
- "notes": "突破剧情：锁灵塔第5层。镇塔傀儡 Lv100-110。"
+ "narration": "锁灵塔第5层。灵压渐重，塔壁上历代弟子刻下的突破感悟依稀可辨。第伍层的镇塔傀儡已非等闲。",
+ "notes": "突破剧情: 锁灵塔第5层, 镇塔傀儡 Lv68-78"
 }
