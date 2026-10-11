@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
-import { levelRangeLabel } from "../mapConfig";
+import { levelRangeLabel, getLevelDisplayName } from "../mapConfig";
 
 const props = defineProps<{
   nodes: any[];
@@ -49,13 +49,13 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
 <template>
   <div class="mapp">
     <div class="mp-bar">
-      <span>当前：{{ currentMap }}</span>
+      <span>当前：{{ getLevelDisplayName(currentMap) }}</span>
       <span class="mp-pos">({{ Math.round(playerX) }}, {{ Math.round(playerY) }})</span>
       <button class="mp-mini" @click="zoomed = !zoomed">{{ zoomed ? "放大" : "缩小" }}</button>
     </div>
 
     <div v-if="!zoomed" class="mp-stage">
-      <div class="mp-title">{{ currentMap }}（细节视图）</div>
+      <div class="mp-title">{{ getLevelDisplayName(currentMap) }}（细节视图）</div>
       <div class="mp-plot">
         <div
           v-for="(c, i) in norm"
@@ -93,7 +93,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
           :style="{ left: n.lx + '%', top: n.ly + '%' }"
           @click="emit('travel', n.name)"
         >
-          {{ n.name }}
+          {{ n.display || n.name }}
           <span v-if="levelRangeLabel(n.name)" class="mp-node__lv">{{ levelRangeLabel(n.name) }}</span>
         </button>
       </div>
@@ -103,7 +103,7 @@ const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts
     <div class="mp-list">
       <div class="mp-list__head">全部地图（{{ mapPts.length }}）</div>
       <div v-for="n in mapPts" :key="'row' + n.name" class="mp-row" :class="{ 'mp-row--cur': n.name === currentMap }">
-        <span class="mp-row__name">{{ n.name }}</span>
+        <span class="mp-row__name">{{ n.display || n.name }}</span>
         <span v-if="levelRangeLabel(n.name)" class="mp-row__lv">{{ levelRangeLabel(n.name) }}</span>
         <span v-if="n.name === currentMap" class="mp-row__tag">当前</span>
         <button class="mp-row__btn" :disabled="n.name === currentMap" @click="emit('travel', n.name)">传送</button>

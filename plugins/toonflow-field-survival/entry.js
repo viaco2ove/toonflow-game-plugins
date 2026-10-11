@@ -2324,8 +2324,14 @@ async function handle_action(action, params, state, context) {
     /* ============ ★ v5：系统面板（背包 / 纳戒 / 商城 / 技能 / 地图 / 角色卡）============ */
     case "sys": {
       const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
+      const displayNames = Array.isArray(params?.displayNames) ? params.displayNames.map(String) : [];
       if (levels.length) {
-        s.mapNodes = levels.map((n, i) => ({ name: n, x: 160 + i % 4 * 260, y: 140 + Math.floor(i / 4) * 200 }));
+        s.mapNodes = levels.map((n, i) => ({
+          name: n,
+          display: displayNames[i] || n,
+          x: 160 + i % 4 * 260,
+          y: 140 + Math.floor(i / 4) * 200
+        }));
       }
       if (str(params?.levelName)) s.levelName = str(params.levelName, s.levelName || "");
       if (!s.ring) s.ring = { items: [], skills: [] };

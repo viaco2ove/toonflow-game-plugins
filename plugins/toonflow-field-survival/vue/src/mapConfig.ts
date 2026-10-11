@@ -786,9 +786,33 @@ const LEVEL_FILES: Record<string, string> = {
   "Forest Dungeon 5": "forestDungeon5",
 };
 
+/** 关卡英文名 → 中文显示名（地图面板展示用）。与 LEVEL_FILES 的 key 一一对应。 */
+const LEVEL_DISPLAY_NAMES: Record<string, string> = {
+  "Mulberry Town": "大罗宗外门",
+  "Mulberry Forest": "青云竹海",
+  "Mulberry Graveyard": "乱葬岗",
+  "Lich Lair": "尸祖洞府",
+  "Loot Goblin Lair": "藏宝洞",
+  "Mulberry Dungeon": "锁灵塔·1层",
+  "Mulberry Dungeon 2": "锁灵塔·2层",
+  "Mulberry Dungeon 3": "锁灵塔·3层",
+  "Mulberry Dungeon 4": "锁灵塔·4层",
+  "Mulberry Dungeon 5": "锁灵塔·5层",
+  "Forest Dungeon": "竹海秘境·1层",
+  "Forest Dungeon 2": "竹海秘境·2层",
+  "Forest Dungeon 3": "竹海秘境·3层",
+  "Forest Dungeon 4": "竹海秘境·4层",
+  "Forest Dungeon 5": "竹海秘境·5层",
+};
+
 /** 全部已登记关卡名（用于上报插件，生成大地图节点）。 */
 export function listLevelNames(): string[] {
   return Object.keys(LEVEL_FILES);
+}
+
+/** 根据关卡英文名获取中文显示名。 */
+export function getLevelDisplayName(levelName: string): string {
+  return LEVEL_DISPLAY_NAMES[levelName] ?? levelName;
 }
 
 /**

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
+import { getLevelDisplayName } from "../mapConfig";
 
 const props = defineProps<{
   player: any;
@@ -21,7 +22,7 @@ function expPct(c: any) {
 function place(c: any) {
   if (c.onMap === false) return "未上场 · 暂无位置信息";
   const on = (c.mapName || "") === props.currentMap;
-  return (c.mapName || "未知地图") + (on ? "（本图）" : "") + " (" + Math.round(Number(c.x) || 0) + ", " + Math.round(Number(c.y) || 0) + ")";
+  return getLevelDisplayName(c.mapName || "未知地图") + (on ? "（本图）" : "") + " (" + Math.round(Number(c.x) || 0) + ", " + Math.round(Number(c.y) || 0) + ")";
 }
 function canParty(c: any) { return !c.enemy && c.side !== "enemy"; }
 

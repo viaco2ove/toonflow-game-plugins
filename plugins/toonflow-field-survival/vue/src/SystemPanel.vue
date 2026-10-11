@@ -6,6 +6,7 @@ import ShopPanel from "./panels/ShopPanel.vue";
 import SkillPanel from "./panels/SkillPanel.vue";
 import MapPanel from "./panels/MapPanel.vue";
 import RolePanel from "./panels/RolePanel.vue";
+import { getLevelDisplayName } from "./mapConfig";
 
 type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role";
 
@@ -48,7 +49,7 @@ const activeTab = ref<TabId>("bag");
     <div class="sp-head" @pointerdown="emit('drag-start', $event)">
       <span class="sp-title">系统v2 · {{ player?.name || "玩家" }}</span>
       <span class="sp-gold">💰{{ gold }}</span>
-      <span class="sp-map">{{ currentMap }}</span>
+      <span class="sp-map">{{ getLevelDisplayName(currentMap) }}</span>
       <button class="sp-close" @click="emit('close')" title="关闭">×</button>
     </div>
 

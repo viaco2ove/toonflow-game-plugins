@@ -45,7 +45,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones } from "./eventEngine";
 import { bakeTiledMap } from "./mapBake";
@@ -491,19 +491,23 @@ const sysPlayerY = computed(() => state.value?.entities.find(e => e.side === "pl
 let sysLevelsReported = "";
 
 function reportLevels(): void {
-  let names: string[] = [];
+  let items: { id: string; display: string }[] = [];
   try {
-    names = listLevelNames();
+    const names = listLevelNames();
+    items = names.map(n => ({ id: n, display: getLevelDisplayName(n) }));
   } catch {
-    names = [];
+    items = [];
   }
-  if (!names.length) {
-    names = Array.from(new Set([currentLevelName.value, ...sysMapNodes.value.map((n: any) => String(n?.name || ""))].filter(Boolean)));
+  if (!items.length) {
+    items = [
+      { id: currentLevelName.value, display: getLevelDisplayName(currentLevelName.value) },
+      ...sysMapNodes.value.map((n: any) => ({ id: String(n?.name || ""), display: String(n?.display || n?.name || "") }))
+    ].filter((i: any) => i.id);
   }
-  const key = names.join("|");
-  if (!names.length || key === sysLevelsReported) return;
+  const key = items.map(i => i.id).join("|");
+  if (!items.length || key === sysLevelsReported) return;
   sysLevelsReported = key;
-  sendTick("sys", { levels: names });
+  sendTick("sys", { levels: items.map(i => i.id), displayNames: items.map(i => i.display) });
 }
 
 const pendingSys = ref("");

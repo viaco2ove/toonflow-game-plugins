@@ -1107,8 +1107,14 @@ function install(): void {
       if (action === "sys") {
         // ★ 对齐 entry.js case "sys"：记录关卡列表 → 大地图节点（地图面板缩小视图）
         const levels = Array.isArray(params?.levels) ? params.levels.map(String).filter(Boolean) : [];
+        const displayNames = Array.isArray(params?.displayNames) ? params.displayNames.map(String) : [];
         if (levels.length) {
-          state.mapNodes = levels.map((n: string, i: number) => ({ name: n, x: 160 + (i % 4) * 260, y: 140 + Math.floor(i / 4) * 200 }));
+          state.mapNodes = levels.map((n: string, i: number) => ({
+            name: n,
+            display: displayNames[i] || n,
+            x: 160 + (i % 4) * 260,
+            y: 140 + Math.floor(i / 4) * 200,
+          }));
         }
         if (params?.levelName) state.levelName = String(params.levelName);
         push();
