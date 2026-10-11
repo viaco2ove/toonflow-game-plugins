@@ -513,14 +513,21 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           } as any);
         } else if (props.entity_type === "LEVEL_TRANSITION" || props.entity_type === "LADDER") {
           // ★ 出口/传送点 → kind=portal（App.vue 画箭头提示"从这里出去"）
+          //   name：切换目标（喂给 switchLevel → levelNameToFile）；
+          //   label：画面显示文字（full_name 优先，如"山门牌坊·往大罗宗外门"）。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
+          const portalName = String(props.portalID || props.entity_type);
+          // 显示文字：full_name 优先 → 关卡中文显示名（"Mulberry Dungeon"→"锁灵塔·1层"）→ portalID
+          const portalLabel = props.full_name != null ? String(props.full_name)
+            : (LEVEL_DISPLAY_NAMES[portalName] ?? portalName);
           decorations.push({
             id: `p_${decIdx++}`,
             kind: "portal" as any,
             x: wx,
             y: wz,
-            name: String(props.portalID || props.entity_type),
+            name: portalName,
+            ...({ label: portalLabel } as any),
           } as any);
         } else if (!NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
           // ★ 未识别类型不得静默丢弃：至少告警，便于新增地图时及时补进白名单
@@ -539,7 +546,9 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
   // ★ 城镇 safe zone：只给「城镇类」关卡生成。
   //   此前对每张 Tiled 图都无条件生成中央城镇 safe 区，导致森林/墓地/地牢里玩家
   //   进图即落在 safe 区（→ 兜底刷怪被抑制、野怪不追人）。野外/地牢地图 zones 为空。
-  const isTownLevel = !levelName || /town|overworld/i.test(levelName);
+  //   ★ 中文关卡名（修真地图集，如"大罗宗外门"）按文件名判断。
+  const levelFile = levelName ? levelNameToFile(levelName) : "";
+  const isTownLevel = !levelName || /town|overworld/i.test(levelName) || /mulberryTown|^overworld$/.test(levelFile);
   const zones: MapZone[] = isTownLevel
     ? [
         {
@@ -775,15 +784,33 @@ const LEVEL_FILES: Record<string, string> = {
   "Lich Lair": "lichLair",
   "Loot Goblin Lair": "lootGoblinLair",
   "Mulberry Dungeon": "mulberryDungeon1",
+  "Mulberry Dungeon 1": "mulberryDungeon1",
   "Mulberry Dungeon 2": "mulberryDungeon2",
   "Mulberry Dungeon 3": "mulberryDungeon3",
   "Mulberry Dungeon 4": "mulberryDungeon4",
   "Mulberry Dungeon 5": "mulberryDungeon5",
   "Forest Dungeon": "forestDungeon1",
+  "Forest Dungeon 1": "forestDungeon1",
   "Forest Dungeon 2": "forestDungeon2",
   "Forest Dungeon 3": "forestDungeon3",
   "Forest Dungeon 4": "forestDungeon4",
   "Forest Dungeon 5": "forestDungeon5",
+  // 中文 portalID（修真地图集的出口直接写中文关卡名，如 mulberryForest 的"大罗宗外门"）
+  "大罗宗外门": "mulberryTown",
+  "青云竹海": "mulberryForest",
+  "乱葬岗": "mulberryGraveyard",
+  "尸祖洞府": "lichLair",
+  "藏宝洞": "lootGoblinLair",
+  "锁灵塔·1层": "mulberryDungeon1",
+  "锁灵塔·2层": "mulberryDungeon2",
+  "锁灵塔·3层": "mulberryDungeon3",
+  "锁灵塔·4层": "mulberryDungeon4",
+  "锁灵塔·5层": "mulberryDungeon5",
+  "竹海秘境·1层": "forestDungeon1",
+  "竹海秘境·2层": "forestDungeon2",
+  "竹海秘境·3层": "forestDungeon3",
+  "竹海秘境·4层": "forestDungeon4",
+  "竹海秘境·5层": "forestDungeon5",
 };
 
 /** 关卡英文名 → 中文显示名（地图面板展示用）。与 LEVEL_FILES 的 key 一一对应。 */

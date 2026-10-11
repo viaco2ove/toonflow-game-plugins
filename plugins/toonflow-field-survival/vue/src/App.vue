@@ -2213,13 +2213,10 @@ async function afterMapSwitchForEvents(mapFile: string): Promise<void> {
     }
   } catch { setEventZones([]); }
 }
-/** 关卡名 → 地图文件名（levelNameToFile 的本地包装，失败返回 ""） */
+/** 关卡名 → 地图文件名（levelNameToFile 的本地包装，失败返回 ""；中文关卡名走 LEVEL_FILES 权威表） */
 function levelNameToFileSafe(levelName: string): string {
   try {
-    const slug = String(levelName || "").trim()
-      .replace(/[^0-9A-Za-z]+(.)/g, (_m, c: string) => c.toUpperCase())
-      .replace(/[^0-9A-Za-z]/g, "");
-    return slug ? slug.charAt(0).toLowerCase() + slug.slice(1) : "";
+    return levelNameToFile(levelName);
   } catch { return ""; }
 }
 
@@ -4468,8 +4465,8 @@ function renderOneDecoration(
       ctx.closePath();
       ctx.fill(); ctx.stroke();
       ctx.globalAlpha = 1;
-      // 4) 目的地文字
-      const dest = (dec as any).name || "出口";
+      // 4) 目的地文字（full_name 优先，如"山门牌坊·往大罗宗外门"；无则回退 portalID）
+      const dest = (dec as any).label || (dec as any).name || "出口";
       ctx.fillStyle = "rgba(0,0,0,.85)";
       ctx.font = "bold " + Math.max(8, Math.round(sx * 0.28)) + "px 'Microsoft YaHei', sans-serif";
       ctx.textAlign = "center";
