@@ -1371,21 +1371,23 @@ function install(): void {
         spectators: Array.isArray(sel.spectators) ? sel.spectators : [],
         enemies: Array.isArray(sel.enemies) ? sel.enemies : [],
       };
-      // 重置实体：只保留友方角色作为玩家/盟友
-      state.entities = state.entities.filter((e) => e.side !== "player" && e.side !== "ally");
-      // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
+      // ★ 重置实体：清掉旧玩家/盟友/敌人，重新生成（保留地图 NPC 等装饰物）
+      state.entities = state.entities.filter((e) => e.side !== "player" && e.side !== "ally" && e.side !== "enemy");
+      // ★ 玩家永远生成（对齐 dev-host / 真实宿主）：默认玩家 = roleType==="player" 或 roles[0]，
+      //   不依赖 participants 是否勾选（participants 是「友方」列表，玩家角色本身不在可选列表里）。
+      //   否则 standalone 预览下 participants 默认空 → 不生成玩家 → 地图上永远看不到「用户」。
+      const playerRole = state.roles.find((r) => r.roleType === "player") || state.roles[0];
+      if (playerRole) {
+        state.entities.push(makeEntity(playerRole, "player", 0, 0));
+      }
+      // ★ 友方（participants）：环绕玩家 12 米
       const partR = state.selections.participants
         .map((id) => state.roles.find((r) => r.id === id) || state.roles.find((r) => r.name === id))
         .filter(Boolean) as RoleOption[];
       partR.forEach((r, i) => {
-        // ★ v3：玩家出生 origin (0,0)，盟友环绕（半径 12 米 = ALLY_FOLLOW_GAP_M）
-        const isPlayer = i === 0;
+        if (playerRole && r.id === playerRole.id) return; // ★ 跳过玩家自身（避免重复生成）
         const angle = (i / Math.max(1, partR.length)) * Math.PI * 2;
-        state.entities.push(makeEntity(
-          r, isPlayer ? "player" : "ally",
-          isPlayer ? 0 : Math.cos(angle) * 12,
-          isPlayer ? 0 : Math.sin(angle) * 12,
-        ));
+        state.entities.push(makeEntity(r, "ally", Math.cos(angle) * 12, Math.sin(angle) * 12));
       });
       // 敌对角色：作为敌人 NPC 上场（而不是野兽）— 玩家附近 ±80 米环形分布
       // participants 可能是 id(r02) 也可能是 name(裴勇)，两种都尝试匹配
