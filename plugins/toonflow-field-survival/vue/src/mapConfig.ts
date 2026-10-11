@@ -408,8 +408,10 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
         const props = Array.isArray(obj.properties)
           ? Object.fromEntries(obj.properties.map((p: any) => [p.name, p.value]))
           : {};
-        if (props.entity_type === "PLAYER") {
-          // 玩家出生点：Tiled 对象 y 是 1-indexed，需要减 1
+        if (props.entity_type === "PLAYER" || props.entity_type === "SPAWN_POINT") {
+          // ★ 玩家出生点：Tiled 对象 y 是 1-indexed，需要减 1。
+          //   PLAYER（旧命名，mulberryTown 等原版地图用）和 SPAWN_POINT（新命名，编辑器专用）
+          //   都作为出生点；多个 SPAWN_POINT 取最后一个，编辑时注意避免重复放置。
           playerSpawn = {
             x: obj.x / 32 - W / 2,
             y: obj.y / 32 - 1 - H / 2,
