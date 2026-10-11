@@ -625,12 +625,81 @@ async function loadEntryModule() {
   }
 }
 
+/** 从 workshops 读 levelName 对应的地图 JSON，解析 SPAWN_POINT/PLAYER 对象，
+ *  把 { x, y, mapName } 写入 entryCtx.tiledSpawn（被 entry.ts 的 case "start" 读）。
+ *  ★ 关卡名 → 文件名不做任何硬编码表：从编辑器后端动态拉地图清单，
+ *    按文件名 / display_name（= Tiled JSON 的 name 字段）匹配；
+ *    编辑器后端不在时回退英文 slug 推导。
+ */
+let __mapListCache = null;   // [{ name, display_name }]
+async function fetchMapList() {
+  if (__mapListCache) return __mapListCache;
+  try {
+    const r = await fetch("http://127.0.0.1:8000/api/collections/" + encodeURIComponent(STORY));
+    if (r.ok) {
+      const j = await r.json();
+      __mapListCache = Array.isArray(j.maps) ? j.maps : null;
+    }
+  } catch { __mapListCache = null; }
+  return __mapListCache;
+}
+async function loadTiledSpawn(levelName) {
+  if (!levelName || !entryCtx) return;
+  const want = String(levelName).trim();
+  // 1) 动态解析：编辑器后端的地图清单（name=文件名，display_name=Tiled name 中文名）
+  let file = "";
+  const list = await fetchMapList();
+  if (list) {
+    const hit = list.find(m => m.name === want) || list.find(m => m.display_name === want);
+    if (hit) file = hit.name;
+  }
+  // 2) 回退：英文命名规则推导（"Mulberry Forest" → mulberryForest）
+  if (!file) {
+    const slug = want.replace(/[^0-9A-Za-z]+(.)/g, (_m, c) => c.toUpperCase()).replace(/[^0-9A-Za-z]/g, "");
+    if (slug) file = slug.charAt(0).toLowerCase() + slug.slice(1);
+  }
+  if (!file) return;
+  try {
+    const r = await fetch("/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/maps/" + file + ".json");
+    if (!r.ok) return;
+    const j = await r.json();
+    const W = j.width || 0, H = j.height || 0;
+    const actor = (j.layers || []).find(l => l.type === "objectgroup");
+    if (!actor) return;
+    // 优先取 SPAWN_POINT（旧地图没有就回退到 PLAYER）
+    let hit = (actor.objects || []).find(o => (o.properties || []).find(p => p.name === "entity_type" && p.value === "SPAWN_POINT"));
+    if (!hit) hit = (actor.objects || []).find(o => (o.properties || []).find(p => p.name === "entity_type" && p.value === "PLAYER"));
+    if (!hit) return;
+    // Tiled 对象坐标 (x,y 单位像素) → 世界坐标（米）：mapConfig.ts 已确认是 obj.x/32 - W/2
+    entryCtx.tiledSpawn = {
+      x: hit.x / 32 - W / 2,
+      y: hit.y / 32 - 1 - H / 2,
+      mapName: levelName,
+    };
+    log("✓ tiledSpawn 解析（" + levelName + "）→ (" + entryCtx.tiledSpawn.x.toFixed(2) + ", " + entryCtx.tiledSpawn.y.toFixed(2) + ")");
+  } catch (e) {
+    log("! tiledSpawn 解析失败（" + levelName + "）：" + (e && e.message ? e.message : String(e)));
+  }
+}
+
 /** 把 action 交给 entry.js 执行；成功返回 true，失败（只报一次）返回 false 交给旧逻辑兜底 */
 async function tryEntryAction(action, params) {
   if (entryBroken) return false;
   try {
     const mod = await loadEntryModule();
     if (!entryCtx) buildEntryCtx();
+    // ★ start / sys_travel 之前：解析目标关卡地图的 SPAWN_POINT/PLAYER 对象 → ctx.tiledSpawn。
+    //   start 的 params 往往不带 levelName（选人阶段还不知道关卡），所以依次取
+    //   params.levelName → entryState.levelName（上局恢复）→ "Mulberry Town" 兜底。
+    //   sys_travel 的 params.mapName 就是目标图（地图面板「传送」按钮）。
+    if (action === "start" || action === "start_init") {
+      const lv = String(((params || {})).levelName || (entryState && entryState.levelName) || "Mulberry Town").trim();
+      if (lv) await loadTiledSpawn(lv);
+    }
+    if (action === "sys_travel") {
+      const lv = String(((params || {})).mapName || "").trim();
+      if (lv) await loadTiledSpawn(lv);
+    }
     if (!entryState && action !== "init" && action !== "start_init" && action !== "start") {
       await mod.handle_action("init", {}, null, entryCtx);
     }

@@ -2055,8 +2055,11 @@ async function handle_action(action, params, state, context) {
       s.levelName = curLv;
       s.entities = [];
       s.localMobsEpoch = 0;
-      const startMapName = "Mulberry Town";
-      const playerEnt = makeEntity(playerRole, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
+      const tiledSpawn = context && context.tiledSpawn || null;
+      const px = tiledSpawn && Number.isFinite(tiledSpawn.x) ? tiledSpawn.x : PLAYER_SPAWN.x;
+      const py = tiledSpawn && Number.isFinite(tiledSpawn.y) ? tiledSpawn.y : PLAYER_SPAWN.y;
+      const startMapName = tiledSpawn && tiledSpawn.mapName || "Mulberry Town";
+      const playerEnt = makeEntity(playerRole, "player", px, py, 0);
       playerEnt.mapName = curLv;
       s.entities.push(playerEnt);
       initPlayerFromCard(s, playerRole);
@@ -2760,7 +2763,15 @@ async function handle_action(action, params, state, context) {
       handleLevelChange(s, false);
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-      s.teleportTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      const ts2 = context && context.tiledSpawn || null;
+      const useSpawn = ts2 && ts2.mapName === target && Number.isFinite(ts2.x) && Number.isFinite(ts2.y);
+      s.teleportTarget = {
+        mapName: target,
+        x: useSpawn ? ts2.x : 0,
+        y: useSpawn ? ts2.y : 0,
+        name: target,
+        rev: s.sysRevision
+      };
       pushEvent(s, `\u4F20\u9001\u81F3\u300C${target}\u300D`);
       await persistSys(context, s);
       return okResp(`\u5DF2\u4F20\u9001\u81F3\u300C${target}\u300D`);

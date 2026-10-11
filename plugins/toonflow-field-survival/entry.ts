@@ -2755,9 +2755,15 @@ export async function handle_action(
       //   epoch 一并恢复，若不清，前端继续发同一 epoch 会被 applyLocalEnemies 当作
       //   "已接管"忽略 → 敌怪表死锁为空（配合 fix⑦ 的丢失重建兜底，双保险）。
       s.localMobsEpoch = 0;
-      // ★ fix: 玩家/ally/spectator 统一归属 start_map（固定 "Mulberry Town"），不依赖 map?.theme
-      const startMapName = "Mulberry Town";
-      const playerEnt = makeEntity(playerRole as any, "player", PLAYER_SPAWN.x, PLAYER_SPAWN.y, 0);
+      // ★ fix: 玩家/ally/spectator 统一归属 start_map（不依赖 map?.theme）
+      // ★ 玩家出生点：优先读 ctx.tiledSpawn（dev-host 端从 Tiled JSON 的 entity_type=PLAYER|SPAWN_POINT
+      //   对象解析出来的 { x, y }，编辑地图时挪动 SPAWN_POINT 即可改玩家出现位置），
+      //   没有则用 PLAYER_SPAWN 默认值
+      const tiledSpawn = (context && (context as any).tiledSpawn) || null;
+      const px = tiledSpawn && Number.isFinite(tiledSpawn.x) ? tiledSpawn.x : PLAYER_SPAWN.x;
+      const py = tiledSpawn && Number.isFinite(tiledSpawn.y) ? tiledSpawn.y : PLAYER_SPAWN.y;
+      const startMapName = (tiledSpawn && tiledSpawn.mapName) || "Mulberry Town";
+      const playerEnt = makeEntity(playerRole as any, "player", px, py, 0);
       (playerEnt as any).mapName = curLv;
       s.entities.push(playerEnt);
       // ★ game.md 等级系统：等级/经验取参数卡，四维按公式重算（HP/MP 取卡面值并夹进满值上限）
@@ -3537,8 +3543,17 @@ export async function handle_action(
       handleLevelChange(s, false);
       ensureNpcCards(s, target);
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
+      // ★ 落点：优先用目标地图 Tiled SPAWN_POINT/PLAYER（编辑器可配），否则 (0,0)
+      const ts2 = (context && (context as any).tiledSpawn) || null;
+      const useSpawn = ts2 && ts2.mapName === target && Number.isFinite(ts2.x) && Number.isFinite(ts2.y);
       // ★ 大地图传送统一走 teleportTarget 通道（前端只 watch 它；travelTarget 从无人消费，是死代码）
-      (s as any).teleportTarget = { mapName: target, x: 0, y: 0, name: target, rev: s.sysRevision };
+      (s as any).teleportTarget = {
+        mapName: target,
+        x: useSpawn ? ts2.x : 0,
+        y: useSpawn ? ts2.y : 0,
+        name: target,
+        rev: s.sysRevision,
+      };
       pushEvent(s, `传送至「${target}」`);
       await persistSys(context, s);
       return okResp(`已传送至「${target}」`);

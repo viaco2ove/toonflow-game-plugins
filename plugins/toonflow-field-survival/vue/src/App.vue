@@ -2810,6 +2810,8 @@ const TICK_DT = 0.1;              // 与 loop() 的 TICK_MS=100 对应
  *   loop() 据此停发 tick；收到任何宿主回包（tf_plugin_state）即解除。
  *   必须在 script setup 顶层（与 loop 同级）声明，否则 loop() 闭包访问不到 onMounted 内部的 const。 */
 const tickHalted = ref(false);
+/** ★ 出生点安全化只跑一次（首次进入 playing），后续切图走 switchLevel 自己的 settleSpawn */
+let spawnSafetyDone = false;
 // ★ 按地图实际大小自适应 WORLD_LIMIT（不再硬编码 ±1500）
 let worldLimitCache = { w: 0, h: 0, limit: 0 };
 function worldLimitM(): number {
@@ -5810,7 +5812,26 @@ onBeforeUnmount(() => {
 });
 
 watch(() => state.value?.phase, (p) => {
-  if (p === "playing") requestAnimationFrame(() => { fitCanvas(); applyCanvasSmoothing(); render(); drawMinimap(); });
+  if (p === "playing") {
+    requestAnimationFrame(() => { fitCanvas(); applyCanvasSmoothing(); render(); drawMinimap(); });
+    // ★ 玩家出生点安全化（首次进入 playing）：宿主（entry.start）按 Tiled SPAWN_POINT/PLAYER
+    //   摆好玩家后，这里按本图碰撞网格把落点吸附到格中心/主连通域（与 onMounted 初始
+    //   settleSpawn 同一套规则）。之所以要补这一次：onMounted 的初始 settleSpawn 跑在
+    //   宿主 start 回包之前，那时玩家可能还是 (0,0) 兜底位，吸附结果会被宿主回包覆盖。
+    if (!spawnSafetyDone && walkGrid && walkIndex) {
+      spawnSafetyDone = true;
+      const me0 = state.value?.entities.find((e) => e.side === "player");
+      if (me0) {
+        const sp = settleSpawn(me0.x, me0.y);
+        if (sp.x !== me0.x || sp.z !== me0.y) {
+          console.info(`[field-survival] playing 落点安全化 (${me0.x.toFixed(1)}, ${me0.y.toFixed(1)}) → (${sp.x.toFixed(1)}, ${sp.z.toFixed(1)})`);
+          me0.x = sp.x;
+          me0.y = sp.z;
+          lastLocalPose = { x: me0.x, y: me0.y, facing: me0.facing };
+        }
+      }
+    }
+  }
   // ★ 进入 over 立刻同步一次（玩家最终态要落库）
   if (p === "over") savePlayerCardNow();
 });
