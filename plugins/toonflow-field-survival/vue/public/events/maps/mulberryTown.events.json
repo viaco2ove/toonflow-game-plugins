@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "map": "mulberryTown",
+  "events": [
+    {
+      "id": "E01_bind_system",
+      "comment": "phase_1 开局：进图自动触发系统绑定过场",
+      "trigger": { "type": "enter_map" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_done", "op": "missing" },
+        { "type": "flag_check", "key": "phase_1_active", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "run_script", "script": "E01_bind_system" }
+      ]
+    },
+    {
+      "id": "E02_broom_pickup",
+      "comment": "phase_1 节拍1「扫帚与石阶」：进入祖师堂区域即拾起扫帚（扫帚是装饰物无实体，故用区域触发）",
+      "trigger": { "type": "area_enter", "zone": "祖师堂" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_active", "value": true },
+        { "type": "flag_check", "key": "broom_picked", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "run_script", "script": "E02_broom_pickup" }
+      ]
+    },
+    {
+      "id": "E03_xuanchen_bainian",
+      "comment": "phase_1 节拍2「系统绑定完成→讨个说法」：与玄尘长老对话完成拜师",
+      "trigger": { "type": "interact", "uid": "225" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_active", "value": true },
+        { "type": "flag_check", "key": "broom_picked", "value": true }
+      ],
+      "actions": [
+        { "type": "run_script", "script": "E03_xuanchen_bainian" }
+      ]
+    },
+    {
+      "id": "E05_open_forest",
+      "comment": "phase_1 收尾：拜师后山门牌坊解锁 → 传青云竹海",
+      "trigger": { "type": "interact", "uid": "219" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_done", "value": true }
+      ],
+      "actions": [
+        { "type": "toast", "text": "【收徒系统】山门已开，可前往青云竹海历练。", "color": "gold" },
+        { "type": "teleport", "map": "Mulberry Forest", "x": 1, "y": 25 }
+      ]
+    }
+  ]
+}

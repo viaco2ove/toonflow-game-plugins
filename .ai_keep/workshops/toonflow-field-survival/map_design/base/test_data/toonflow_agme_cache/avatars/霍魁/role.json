@@ -1,0 +1,57 @@
+{
+  "id": "npc_9",
+  "roleType": "npc",
+  "name": "霍魁",
+  "description": "不流前任队长，人称\"魁哥\"。阴鸷、野心、外宽内忌——在不流当了八年队长，谁都信他，短寸黑须、笑面虎相，笑起来比不笑更危险。被指与夜客暗通（真伪不明），是\"谁是叛徒\"悬案的头号嫌疑人——但真正背叛不流的人，依旧藏在暗处。\n\n性别: 男\n年龄: 38\n性格: 阴鸷、野心、外宽内忌\n外貌: 短寸黑须，笑面虎相，常年一件旧夹克，手腕缠不流的旧队绳\n音色特点: 38岁中音男声，笑里藏刀，音调上扬时最危险\n技能: 火器、近身格斗、政商人脉\n物品: 不流令牌\n装备: 老式左轮、不流令牌\n等级: 9\n血量: 900\n蓝量: 400\n金钱: 1000\n其他: 不流前任队长；被指暗通夜客（真伪不明）；\"谁是叛徒\"头号嫌疑人；八年队长生涯谁都信他",
+  "avatarImagePrompt": "38岁男性，短寸黑须，笑面虎相——嘴角上扬但眼神阴鸷，常年一件旧夹克，手腕缠一条褪色的旧队绳。AI 3D 写实电影风格，半身像，赛博朋克冷调，人物在笑，灯光只照亮半边脸，另半边沉在阴影里。",
+  "attributes": {},
+  "voiceMode": "clone",
+  "voicePromptText": "",
+  "parameterCardJson": {
+    "name": "霍魁",
+    "raw_setting": "不流前任队长，人称\"魁哥\"。阴鸷、野心、外宽内忌——在不流当了八年队长，谁都信他，短寸黑须、笑面虎相，笑起来比不笑更危险。被指与夜客暗通（真伪不明），是\"谁是叛徒\"悬案的头号嫌疑人——但真正背叛不流的人，依旧藏在暗处。",
+    "gender": "男",
+    "age": 38,
+    "level": 9,
+    "level_desc": "不流前任队长，资历深厚，纵横黑白两道",
+    "personality": "阴鸷、野心、外宽内忌",
+    "appearance": "短寸黑须，笑面虎相，常年一件旧夹克，手腕缠不流的旧队绳",
+    "voice": "38岁中音男声，笑里藏刀，音调上扬时最危险",
+    "skills": [
+      "火器",
+      "近身格斗",
+      "政商人脉"
+    ],
+    "items": [
+      "不流令牌"
+    ],
+    "equipment": [
+      "老式左轮",
+      "不流令牌"
+    ],
+    "hp": 900,
+    "mp": 400,
+    "money": 1000,
+    "other": [
+      "不流前任队长",
+      "被指暗通夜客（真伪不明）",
+      "\"谁是叛徒\"头号嫌疑人",
+      "八年队长生涯谁都信他"
+    ],
+    "roleType": "npc",
+    "information": "不流前任队长，\"魁哥\"，被指暗通夜客（真伪不明），\"谁是叛徒\"悬案头号嫌疑人",
+    "role_key_information": "不流前任队长，\"魁哥\"，被指暗通夜客（真伪不明），\"谁是叛徒\"悬案头号嫌疑人",
+    "exp": 0,
+    "next_level_exp": 900
+  },
+  "voice": "克隆：霍魁_voice.wav",
+  "voiceReferenceAudioPath": "/1/voice/c6a82ff2-e0c8-42c3-8822-74e1b7d71382.wav",
+  "voiceReferenceAudioName": "霍魁_voice.wav",
+  "voicePresetId": "",
+  "avatarPath": "/1/game/scene/b598188a-56d2-4760-96d6-22ffdc73f743.webp",
+  "avatarBgPath": "/1/game/scene/4cbf1fc6-5c55-463f-b1de-e87aae89b605.png",
+  "avatarVideoPath": "/1/game/scene/a500c46f-8a02-43c1-81a0-54a102918681.mp4",
+  "avatarFirstFramePath": "/1/game/scene/06cdf7cf-360c-4856-b4da-9d17baef0671.png",
+  "avatarDurationMs": 0,
+  "voiceMixVoices": []
+}
