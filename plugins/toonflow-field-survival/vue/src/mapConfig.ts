@@ -627,7 +627,25 @@ export function makeScaleFromMap(map: MapConfig): TerrainScaleConfig {
    异步加载 mulberryTown.json（与 map_config.json 完全一致 + 运行时数据）
    ============================================================ */
 
+/**
+ * ★ 地图 JSON fetch 前缀链（优先级从高到低）：
+ *   1. /story-data/<repoPath>/ —— dev（vite）模式直读 workshops 地图集源文件
+ *      （storyDataPlugin 中间件，vite.config.ts）。改造地图集时无需手动同步 public/。
+ *   2. assetUrl("maps/") —— 生产：插件资产通道（getAsset+token）
+ *   3. /maps/ 、 ./maps/ —— dev-host / 本地静态副本兜底
+ * 失败依次回退，与 loadLevelByName 的"多前缀尝试"语义一致。
+ */
+function storyMapBase(): string {
+  try {
+    const sp = new URLSearchParams(location.search);
+    const s = sp.get("story") || (window as any).__STORY__ || "";
+    if (s) return `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(s)}/maps/`;
+  } catch { /* ignore */ }
+  return "/story-data/toonflow-field-survival/map_design/通天传授-收徒系统/maps/";
+}
+
 export const OVERWORLD_URLS = [
+  storyMapBase() + "mulberryTown.json",
   assetUrl("maps/mulberryTown.json"),
   "/maps/mulberryTown.json",
   "./maps/mulberryTown.json",
@@ -643,6 +661,7 @@ export const OVERWORLD_URLS = [
    宿主下发的氛围字段 map.theme 不再参与任何关卡决策（详见 App.vue）。
    ============================================================ */
 export const FIRST_MAP_URLS = [
+  storyMapBase() + "first.map.json",
   assetUrl("maps/first.map.json"),
   "/maps/first.map.json",
   "./maps/first.map.json",
@@ -721,7 +740,7 @@ export async function loadStartLevelName(): Promise<string> {
  */
 export async function loadMapConfig(levelName: string = DEFAULT_START_LEVEL): Promise<MapConfig> {
   const file = levelNameToFile(levelName) || "mulberryTown";
-  for (const prefix of [assetUrl("maps/"), "/maps/", "./maps/"]) {
+  for (const prefix of [storyMapBase(), assetUrl("maps/"), "/maps/", "./maps/"]) {
     try {
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;
@@ -826,7 +845,7 @@ export function levelNameToFile(levelName: string): string {
 export async function loadLevelByName(levelName: string): Promise<MapConfig | null> {
   const file = levelNameToFile(levelName);
   if (!file) return null;
-  for (const prefix of [assetUrl("maps/"), "/maps/", "./maps/"]) {
+  for (const prefix of [storyMapBase(), assetUrl("maps/"), "/maps/", "./maps/"]) {
     try {
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;

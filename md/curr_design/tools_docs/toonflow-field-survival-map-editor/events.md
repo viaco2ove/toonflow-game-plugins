@@ -80,3 +80,10 @@ plaintext
 由 AI 写 JSON/TS 文件；
 flag 状态不在资源文件，在玩家存档。
 本质就是：把魔兽触发器从编辑器 GUI 拖拽，变成磁盘上的文件，交给 AI 编辑。
+
+# 混合模式
+
+1. JSON 不是"白名单触发器"——引擎只保证 核心高频动作（传送、刷怪、对话、存读 flag、播放音效/特效、激活 portal）有 JSON 枚举；其它由一个 fallback action 走 onCustomAction(name, args) 钩子，让 TS 脚本注册自定义动作，JSON 引用动作名即可。这样既不破坏"安全优先"，又不给引擎枚举表加 100 个 case。
+2. TS 脚本必须经一道 schema 校验——AI 写完 .ts 后跑 node .cache/validate_events.mjs 检查：是否使用未注册的 ctx API（API 表由引擎导出）、是否引用不存在的 entity uid、是否调用了 dangerous API（eval / Function / require）。这样"动态代码难校验"的痛点其实能解掉大半。
+3. 触发器位置不放 events/，放 maps/<name>.events.json——和地图文件配对，删地图时事件一起走；避免目录散。events/ 留给 shared/（跨图共享的复杂 TS 脚本）。
+4. 编辑器零改造——事件不在编辑器管。编辑器只显示「事件挂载点」（portal 旁边/对象属性面板加个"事件 ID"字段，引用 maps/xxx.events.json 里的事件名）。AI 写代码，编辑器只做引用展示，不做调试。

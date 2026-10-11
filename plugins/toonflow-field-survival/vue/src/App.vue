@@ -46,6 +46,8 @@ import {
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames } from "./mapConfig";
+// ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
+import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones } from "./eventEngine";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
@@ -2176,10 +2178,45 @@ async function switchLevel(levelName: string): Promise<void> {
     zoneLeftTick = 0;
     zoneRespawnReady = true;
     console.info("[field-survival] 已切换到关卡：", levelName);
+    // ★ 事件系统：切图后加载新图事件 + 触发 enter_map + 注入 eventZones
+    const evMapFile = levelNameToFileSafe(levelName);
+    if (evMapFile) void afterMapSwitchForEvents(evMapFile);
   } finally {
     levelSwitching.value = false;
     switchingLevel.value = false;
   }
+}
+
+/** 切图后调用：加载新图事件 + 触发 enter_map + 注入本图 eventZones */
+async function afterMapSwitchForEvents(mapFile: string): Promise<void> {
+  await onMapEntered(mapFile);
+  // 读本图 eventZones（地图 JSON 顶层自定义字段）→ 注入区域检测
+  try {
+    const raw = getTiledRaw() as any;
+    if (raw && Array.isArray(raw.eventZones)) {
+      // 世界米坐标：Tiled 像素 → 中心原点米
+      const W = Number(raw.width) || 1, H = Number(raw.height) || 1;
+      setEventZones(raw.eventZones.map((z: any) => ({
+        name: String(z.name || ""),
+        x: Number(z.x) - W / 2,
+        y: Number(z.y) - H / 2,
+        r: z.r != null ? Number(z.r) : undefined,
+        rx: z.rx != null ? Number(z.rx) : undefined,
+        ry: z.ry != null ? Number(z.ry) : undefined,
+      })));
+    } else {
+      setEventZones([]);
+    }
+  } catch { setEventZones([]); }
+}
+/** 关卡名 → 地图文件名（levelNameToFile 的本地包装，失败返回 ""） */
+function levelNameToFileSafe(levelName: string): string {
+  try {
+    const slug = String(levelName || "").trim()
+      .replace(/[^0-9A-Za-z]+(.)/g, (_m, c: string) => c.toUpperCase())
+      .replace(/[^0-9A-Za-z]/g, "");
+    return slug ? slug.charAt(0).toLowerCase() + slug.slice(1) : "";
+  } catch { return ""; }
 }
 
 /** Chunk 系统（按玩家位置动态加载/卸载装饰物） */
@@ -2931,6 +2968,8 @@ function localTick(): void {
   //   否则若落点恰好≤2.5 米（净空约束无解的极小图 / 宿主强行摆位），会每 tick 切一次图。
   if (!levelSwitching.value) {
     const meNow = s.entities.find((e) => e.side === "player");
+    // ★ 事件系统：区域进出检测（eventZones，走同一玩家坐标）
+    if (meNow) void tickZones(meNow.x, meNow.y);
     const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");
     const distTo = (p: any) => Math.hypot(p.x - (meNow?.x ?? 0), p.y - (meNow?.y ?? 0));
     if (portalLatchPending) {
@@ -4798,6 +4837,16 @@ const chatError = ref("");               // agent 调用失败的错误消息（
 async function onChatStart() {
   const npc = nearChat.value;
   if (!npc) return;
+  // ★ 事件系统优先：nearChat.id 形如 "mapnpc_<tiledId>_<ts>"，取第 2 段当 Tiled object id
+  //   命中事件 → 事件系统接管本次交互（不再弹聊天面板）
+  const tiledId = String(npc.id).split("_")[1] || "";
+  if (tiledId) {
+    await fireInteractEvent(tiledId);
+    // 事件触发过（flag 变化）就不再弹普通聊天 —— 简化判定：事件引擎内部防重入，
+    // 若本次命中了事件，引擎的 console 会打日志；这里无法直接得知，用启发式：
+    // 只要 tiledId 对应本图事件文件的 interact uid，就不弹聊天。
+    if (eventUidsHas(tiledId)) return;
+  }
   chatNpcId.value = npc.id;
   chatNpcName.value = npc.name;
   chatMessages.value = [];
@@ -5350,6 +5399,42 @@ let stopHost: (() => void) | null = null;
 onMounted(async () => {
   // ★ 调试句柄：standalone/dev-host 下可从控制台切图（window.__switchLevel("Mulberry Forest")）
   (window as any).__switchLevel = switchLevel;
+  // ★ 事件系统初始化（map_design 事件引擎）：注入游戏钩子
+  initEventEngine({
+    currentMapFile: () => levelNameToFileSafe(currentLevelName.value),
+    player: () => {
+      const me = state.value?.entities.find(e => e.side === "player");
+      return me ? { id: me.id, x: me.x, y: me.y } : null;
+    },
+    entityByTiledId: (tiledId: string) => {
+      const e = state.value?.entities.find(en => String(en.id).startsWith(`mapnpc_${tiledId}_`));
+      return e ? { id: e.id, x: e.x, y: e.y, name: e.name } : null;
+    },
+    toast: (text: string, color?: string) => showToast(text),
+    subtitle: (text: string, durationMs?: number) => {
+      // 字幕用 toast + eventLog 组合（v0.2 接独立字幕层）
+      showToast(text);
+      if (state.value) state.value.events.push(`[字幕] ${text}`);
+    },
+    eventLog: (text: string) => {
+      if (state.value) state.value.events.push(`[事件] ${text}`);
+      console.info("[event]", text);
+    },
+    teleport: (mapName: string, x: number, y: number) => {
+      if (!state.value) return;
+      const s = state.value;
+      s.sysRevision = Math.round(Number(s.sysRevision) || 0) + 1;
+      (s as any).teleportTarget = { mapName, x, y, name: mapName, rev: s.sysRevision };
+    },
+    pluginData: {
+      get: async (key: string) => {
+        try { return await toonflowJsApi.pluginData.get(key); } catch { return null; }
+      },
+      set: async (key: string, value: unknown) => {
+        try { await toonflowJsApi.pluginData.set(key, value); } catch { /* ignore */ }
+      },
+    },
+  });
   // ★ 只读调试钩子：bsk/E2E 自动化巡检用（evaluate 里摸不到 Vue 内部实例，
   //   生产构建下 __vue_app__._instance 在隔离世界不可读）。只读 getter，无副作用。
   (window as any).__FS_DEBUG__ = {
@@ -5387,7 +5472,10 @@ onMounted(async () => {
   // ★ --conn 模式（dev-host / 真实宿主）：Vue app 就绪后主动通知宿主推送 select state
   //   dev-host 的 PAGE 模板里注册了 window.__devHostPluginLoaded 监听，
   //   收到后触发 storyData 加载 → init → select state 推送
-  if ((window as any).__CONN__ === "1" || (window as any).__STORY__) {
+  //   ★ 独立预览（?__standalone=1）：即便 dev-host 注入了 __CONN__="1"/__STORY__，也跳过本分支，
+  //     不走"等真实宿主"逻辑，直接由下面 standalone 初始化吃 window.__initialState。
+  const isStandalonePreview = /[?&]__standalone(=1)?(&|$)/.test(location.search);
+  if (!isStandalonePreview && ((window as any).__CONN__ === "1" || (window as any).__STORY__)) {
     console.info("[field-survival] --conn 模式：等待真实宿主推送 state");
     window.__devHostPluginLoaded = window.__devHostPluginLoaded || [];
     window.__devHostPluginLoaded.push(() => {
@@ -5405,7 +5493,14 @@ onMounted(async () => {
   // ★ 起始地图（回归修复）：起始关卡名来自 maps/first.map.json 的 start_map.value，
   //   用它初始化 currentLevelName，并加载"开局首张地图"。
   //   文件缺失 / 解析失败 / 字段为空 → 回退 DEFAULT_START_LEVEL（"Mulberry Town"），绝不抛错。
-  const startLevel = await loadStartLevelName();
+  let startLevel = await loadStartLevelName();
+  // ★ 独立预览模式（地图编辑器 window.open ?__standalone=1&map=<文件名>）：
+  //   URL 的 map 参数强制进指定地图（覆盖 first.map.json 的 start_map），直接预览正在编辑的那张图。
+  try {
+    const up = new URLSearchParams(location.search);
+    const urlMap = up.get("map");
+    if (urlMap) startLevel = decodeURIComponent(urlMap).trim();
+  } catch { /* ignore */ }
   currentLevelName.value = startLevel;
   console.info("[field-survival] 起始关卡（maps/first.map.json start_map.value）：", startLevel);
   // ★ v3：先加载地图配置（开局地图 = startLevel），得到 scale / zoom / 装饰物 / chunk 数据
@@ -5452,6 +5547,9 @@ onMounted(async () => {
     for (let i = 0; i < 30; i++) chunkSystem.tick();  // 一次消费完 pending 队列
     // 装饰物：按 chunk 索引
     initDecorations();
+    // ★ 事件系统：首次进图也触发 enter_map（switchLevel 只覆盖后续切图）
+    const evInitMapFile = levelNameToFileSafe(startLevel);
+    if (evInitMapFile) void afterMapSwitchForEvents(evInitMapFile);
   } catch (err) {
     console.warn("[field-survival] loadMapConfig 失败，使用兜底数据：", err);
     initDecorations();

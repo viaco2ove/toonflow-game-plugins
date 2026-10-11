@@ -22,6 +22,12 @@ let hostReady = false;
 
 /** 当前是否处于 --conn 拟真模式（true = 真实宿主模式，不走 dispatchEvent 兜底） */
 function isConnMode(): boolean {
+  // ★ 独立预览（地图编辑器 window.open ?__standalone=1）：强制 standalone，
+  //   即便 dev-host 启动注入了 __CONN__="1" / VITE_CONN=1 也忽略——
+  //   否则 sendTick 会走 window.parent.postMessage 抛 DataCloneError（每帧刷屏）。
+  try {
+    if (typeof location !== "undefined" && /[?&]__standalone(=1)?(&|$)/.test(location.search)) return false;
+  } catch { /* ignore */ }
   try {
     const v = (import.meta as any).env?.VITE_CONN;
     if (v && v !== "0" && v !== "false" && v !== "") return true;

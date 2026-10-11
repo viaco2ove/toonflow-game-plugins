@@ -1387,7 +1387,9 @@ window.addEventListener("message", async (e) => {
       server.middlewares.use("/", (req, res, next) => {
         const u = req.url || "/";
         // ?__inner=1 是 dev-host 内嵌 iframe 的标记，加载真正的游戏本体（不再重定向）
-        if (u.includes("__inner=1")) return next();
+        // ?__standalone=1 是地图编辑器「独立预览」标记：同样直接加载游戏本体，
+        //   但强制 standalone（mock 宿主）模式，从 URL 的 story/map 参数读本地地图，无需 storyInfo/鉴权。
+        if (u.includes("__inner=1") || u.includes("__standalone")) return next();
         // /@fs/*、/src/* 等模块路径和静态资源透传（让 vite 自己处理）
         if (u.includes("/@fs") || u.includes("/src/") || u.includes("/node_modules/")) return next();
         // 静态资源 / 资源路径透传
@@ -1411,7 +1413,11 @@ window.addEventListener("message", async (e) => {
  */
 export default defineConfig(({ mode }) => {
   // 加载 .env.<mode> 文件（debug 模式下走 .env.debug）
+  // loadEnv 只读 .env.<mode> 文件，不会读到 subprocess 传入的 process.env
+  // 所以同时 fallback 到 process.env（编辑器启动 dev-host 时由后端通过 env 传入）
   const env = loadEnv(mode, process.cwd(), "");
+  const STORY = env.STORY ?? process.env.STORY ?? "";
+  const CONN = env.CONN ?? process.env.CONN ?? "";
   // workshops 目录在 vue/ 的 ../../workshops/
   const workshopsRoot = resolve(__dirname, "..", "..", "..", "workshops");
   return {
@@ -1419,7 +1425,7 @@ export default defineConfig(({ mode }) => {
       vue(),
       viteSingleFile(),
       // 仅在非生产模式注册中间件
-      ...(mode === "production" ? [] : [storyDataPlugin(workshopsRoot), devHostPlugin(env.CONN ?? "", env.STORY ?? "")]),
+      ...(mode === "production" ? [] : [storyDataPlugin(workshopsRoot), devHostPlugin(CONN, STORY)]),
     ],
     server: {
       port: 3000,
@@ -1436,8 +1442,8 @@ export default defineConfig(({ mode }) => {
     },
     define: {
       // Vite 默认不注入非 VITE_ 前缀的变量到客户端，这里显式暴露
-      __STORY__: JSON.stringify(env.STORY ?? ""),
-      __CONN__: JSON.stringify(env.CONN ?? ""),
+      __STORY__: JSON.stringify(STORY),
+      __CONN__: JSON.stringify(CONN),
     },
     base: "./",
     build: {
