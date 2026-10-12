@@ -452,8 +452,12 @@ let lastDrawTiles = []
 let shiftHeld = false
 let ctrlHeld = false
 let altHeld = false
+let tHeld = false
 let movingObj = null        // 拖动中的对象 { obj, origX, origY }
 let movingStartTile = null  // 拖动起始 tile { tx, ty }
+
+// ★ T 键：toggle「坐标显示」模式——开启时左键单击显示 tile/world 坐标（飘字）
+const showCoordInspector = ref(false)
 
 /** Shift 按住 → 笔刷绘制模式；Ctrl 按住 → 平移模式；Alt 按住 → 移动实体 */
 function updateCursor() {
@@ -820,6 +824,8 @@ function onPointerUp(e) {
   if (!mouseMoved && mouseDownAt) {
     const { tx, ty } = screenToTile(e.clientX, e.clientY)
     handleClick(tx, ty)
+    // ★ T 键坐标显示模式：左键单击也显示坐标（与选择行为兼容）
+    maybeShowCoord(e.clientX, e.clientY)
   } else if (isDragging) {
     if (tool.value === 'draw' || tool.value === 'erase') pushHistory()
     isDragging = false
@@ -919,6 +925,7 @@ function onKeyDown(e) {
   if (e.key === 'Shift') { shiftHeld = true; updateCursor() }
   if (e.key === 'Control') { ctrlHeld = true; updateCursor() }
   if (e.key === 'Alt') { altHeld = true; updateCursor() }
+  if (e.key === 't' || e.key === 'T') { tHeld = true }
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return
   switch (e.key.toLowerCase()) {
     case 'v': setTool('select'); break
@@ -928,6 +935,15 @@ function onKeyDown(e) {
     case 'd': setTool('erase-obj'); break
     case 'g': showGrid.value = !showGrid.value; render(); break
     case 'c': showCollision.value = !showCollision.value; render(); break
+    case 't':
+      // ★ T 键（独立按，非组合）→ toggle 坐标显示模式
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        showCoordInspector.value = !showCoordInspector.value
+        updateCursor()
+        e.preventDefault()
+        coordToast(`坐标显示 ${showCoordInspector.value ? '开' : '关'}（左键查看）`)
+      }
+      break
     case 'z': if (e.ctrlKey || e.metaKey) { e.preventDefault(); undo() } break
     case 'y': if (e.ctrlKey || e.metaKey) { e.preventDefault(); redo() } break
     case 's': if (e.ctrlKey || e.metaKey) { e.preventDefault(); saveCurrentMap() } break
@@ -940,6 +956,26 @@ function onKeyUp(e) {
   if (e.key === 'Shift') { shiftHeld = false; updateCursor() }
   if (e.key === 'Control') { ctrlHeld = false; updateCursor() }
   if (e.key === 'Alt') { altHeld = false; updateCursor() }
+  if (e.key === 't' || e.key === 'T') { tHeld = false }
+}
+
+// ★ 坐标显示模式提示（复用现有 toast 系统）
+const coordToastMsg = ref('')
+let coordToastTimer = 0
+function coordToast(msg) {
+  coordToastMsg.value = msg
+  if (coordToastTimer) clearTimeout(coordToastTimer)
+  coordToastTimer = setTimeout(() => { coordToastMsg.value = '' }, 5000)
+}
+
+/** 左键单击时若 showCoordInspector 开：显示 (tile x, tile y) + 世界坐标 */
+function maybeShowCoord(sx, sy) {
+  if (!showCoordInspector.value) return
+  if (!currentMap.value) return
+  const { tx, ty } = screenToTile(sx, sy)
+  const wx = tx - Math.floor(currentMap.value.width / 2)
+  const wy = ty - Math.floor(currentMap.value.height / 2)
+  coordToast(`tile【json】 (${tx}, ${ty})  世界 (${wx}, ${wy})`)
 }
 
 // ─── Canvas resize ───
@@ -1292,6 +1328,8 @@ function onPropApply() {
     <span>缩放: {{ zoom.toFixed(2) }}×</span>
     <span>相机: {{ camX.toFixed(1) }}, {{ camY.toFixed(1) }}</span>
     <span>选中: {{ selectedObjInfo ? (selectedObjInfo.props.full_name || selectedObjInfo.props.name || selectedObjInfo.entityType) : '无' }}</span>
+    <span v-if="showCoordInspector" style="color:var(--accent)" title="按 T 切换；开启时左键查看坐标">📍 坐标模式</span>
+    <span v-if="coordToastMsg" style="color:var(--accent)">{{ coordToastMsg }}</span>
     <span v-if="error" style="color:var(--red)">⚠ {{ error }}</span>
   </div>
 
