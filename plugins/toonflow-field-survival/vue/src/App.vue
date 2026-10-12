@@ -2287,7 +2287,9 @@ async function afterMapSwitchForEvents(mapFile: string): Promise<void> {
   try {
     const raw = getTiledRaw() as any;
     if (raw && Array.isArray(raw.eventZones)) {
-      // 世界米坐标：Tiled 像素 → 中心原点米
+      // 换算：eventZones 里的 x/y/rx/ry 都是 Tiled 瓦片坐标
+      //   玩家世界坐标 = (玩家瓦片 - 地图半宽/半高)，即「中心原点瓦片」单位
+      //   所以 zone 也用瓦片为单位（不除 32），直接减半宽/半高
       const W = Number(raw.width) || 1, H = Number(raw.height) || 1;
       setEventZones(raw.eventZones.map((z: any) => ({
         name: String(z.name || ""),

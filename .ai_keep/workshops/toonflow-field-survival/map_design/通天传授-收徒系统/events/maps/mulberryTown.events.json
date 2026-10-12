@@ -61,8 +61,8 @@
     },
     {
       "id": "E11_herb_at",
-      "comment": "走进采药区：弹窗确认采药，按概率得药材或空手",
-      "trigger": { "type": "area_enter", "zone": "采药区" },
+      "comment": "走进农田：弹窗确认采药，按概率得药材或空手",
+      "trigger": { "type": "area_enter", "zone": "农田" },
       "repeat": true,
       "actions": [
         { "type": "run_script", "script": "E11_herb_at" }
