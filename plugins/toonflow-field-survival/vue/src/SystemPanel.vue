@@ -6,9 +6,10 @@ import ShopPanel from "./panels/ShopPanel.vue";
 import SkillPanel from "./panels/SkillPanel.vue";
 import MapPanel from "./panels/MapPanel.vue";
 import RolePanel from "./panels/RolePanel.vue";
+import EventPanel from "./panels/EventPanel.vue";
 import { getLevelDisplayName } from "./mapConfig";
 
-type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role";
+type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event";
 
 const props = defineProps<{
   player: any;
@@ -28,6 +29,11 @@ const props = defineProps<{
   mapNodes: any[];
   navPath: string[];
   notice: string;
+  /** 事件系统：当前地图事件定义 + flag 状态 + 区域定义 + repeat fire 次数 */
+  eventDefs?: any[];
+  eventFlags?: Record<string, unknown>;
+  eventZones?: { name: string; x: number; y: number; rx?: number; ry?: number; r?: number }[];
+  eventRepeatHits?: Record<string, number>;
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
@@ -39,6 +45,7 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: "skill", label: "技能", icon: "✨" },
   { id: "map", label: "地图", icon: "🗺" },
   { id: "role", label: "角色", icon: "👥" },
+  { id: "event", label: "事件", icon: "⚡" },
 ];
 
 const activeTab = ref<TabId>("bag");
@@ -113,13 +120,27 @@ const activeTab = ref<TabId>("bag");
         @travel="(name: string) => emit('travel', name)"
       />
       <RolePanel
-        v-else
+        v-else-if="activeTab === 'role'"
         :player="player"
         :cards="npcs"
         :current-map="currentMap"
         @teleport="(c: any) => emit('teleport', c)"
         @follow="(id: string, on: boolean) => emit('follow', id, on)"
         @summon="(c: any) => emit('summon', c)"
+      />
+      <EventPanel
+        v-else-if="activeTab === 'event'"
+        :map-name="currentMap"
+        :events="eventDefs || []"
+        :flags="eventFlags || {}"
+        :event-zones="eventZones"
+        :repeat-hits="eventRepeatHits"
+        :player-x="playerX"
+        :player-y="playerY"
+        @set-flag="(k: string, v: unknown) => emit('set-flag', k, v)"
+        @del-flag="(k: string) => emit('del-flag', k)"
+        @fire-event="(id: string) => emit('fire-event', id)"
+        @reload-events="() => emit('reload-events')"
       />
     </div>
 

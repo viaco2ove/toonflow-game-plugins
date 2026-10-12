@@ -4,7 +4,7 @@
  * 进图后 1.2s 触发：显示【收徒系统】绑定提示 → 飘字 → 指引找扫帚
  * 对应故事节拍：「扫帚与石阶 → 系统绑定完成」
  */
-import type { Ctx } from "./_ctx";
+import type { Ctx } from "../shared/_ctx";
 
 export default async function main(ctx: Ctx): Promise<void> {
   await ctx.save.setFlag("phase_1_active", true);

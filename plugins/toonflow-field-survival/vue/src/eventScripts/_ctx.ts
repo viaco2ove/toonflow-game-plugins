@@ -58,6 +58,14 @@ export interface Ctx {
     subtitle(text: string, durationMs?: number): void;
     /** 往 state.events 推一条事件日志（HUD 事件流） */
     event(text: string): void;
+    /** 确认对话框（采集/交互确认）：resolve(true)=玩家点了确定 */
+    confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
+  };
+
+  /** 背包操作（走宿主 sys_shop_buy 同款入包链，mock/真实宿主都落账） */
+  bag: {
+    /** 发放物品到背包 */
+    give(name: string, count?: number): void;
   };
 
   /** 关卡操作 */
@@ -118,6 +126,8 @@ export interface EventDef {
   >;
   /** 备注（编辑器只读显示） */
   comment?: string;
+  /** 可重复触发（采集类 area_enter）：跳过「本次会话一次机会」防重入 */
+  repeat?: boolean;
 }
 
 /** 事件文件（maps/<name>.events.json 顶层结构） */

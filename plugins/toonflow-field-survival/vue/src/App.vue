@@ -45,9 +45,9 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
-import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones } from "./eventEngine";
+import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents } from "./eventEngine";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
@@ -214,6 +214,38 @@ function showToast(msg: string, ms = 4200): void {
   hudToast.value = msg;
   window.clearTimeout(toastTimer);
   toastTimer = window.setTimeout(() => { hudToast.value = ""; }, ms);
+}
+
+/** 事件系统确认对话框（采集/交互确认）：evConfirm.open({...}) → Promise<boolean> */
+const evConfirm = ref<{ title: string; detail: string; confirmText: string; cancelText: string; resolve: (v: boolean) => void } | null>(null);
+function evConfirmOpen(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean> {
+  // 已有弹窗未关闭时，新请求直接拒绝（防连点叠加）
+  if (evConfirm.value) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    evConfirm.value = {
+      title: String(opts.title || ""),
+      detail: String(opts.detail || ""),
+      confirmText: String(opts.confirmText || "确定"),
+      cancelText: String(opts.cancelText || "取消"),
+      resolve,
+    };
+  });
+}
+function evConfirmClose(ok: boolean): void {
+  const c = evConfirm.value;
+  if (!c) return;
+  evConfirm.value = null;
+  c.resolve(ok);
+}
+
+/** 事件系统发放物品：走 sendTick("sys_item_add") 让 mockHost 接管（避免本地 state 被 mock 全量覆盖） */
+function evGiveItem(name: string, count = 1): void {
+  const n = Math.max(1, Math.round(count));
+  if (!name) return;
+  // ★ 关键：必须走 sendTick → mockHost 改它的 state.items + playerCard.items → 推回 tf_plugin_state
+  //   直接改本地 state.value 会被 mock 的 push state 整份覆盖，物品会消失
+  sendTick("sys_item_add", { name, count: n });
+  showToast(`获得 ${name}${n > 1 ? `×${n}` : ""}`);
 }
 
 /** 插件下发的用户参数卡（宿主每 tick 注入 ctx.playerCard → state.playerCard） */
@@ -481,6 +513,30 @@ const sysNpcCards = computed<SysRole[]>(() => {
 
 const sysMapNodes = computed<any[]>(() => (((state.value as any)?.mapNodes || []) as any[]));
 
+/** ★ 事件系统面板数据：当前地图已加载事件定义 / flag 状态 / eventZones / repeat fire 计数 */
+const sysEventDefs = computed<any[]>(() => getLoadedEvents());
+const sysEventZones = computed<any[]>(() => getEventZones());
+const sysEventRepeatHits = ref<Record<string, number>>({});
+const sysEventFlags = ref<Record<string, unknown>>({});
+
+/** 定时轮询 player_flags + 同步 repeat 计数（事件系统面板显示用） */
+let sysEventSyncTimer = 0;
+function startSysEventSync(): void {
+  if (sysEventSyncTimer) return;
+  const tick = async () => {
+    try {
+      const api = (window as any).__TFAPI__ || toonflowJsApi;
+      if (api?.pluginData?.get) {
+        const f = await api.pluginData.get("player_flags");
+        sysEventFlags.value = (f && typeof f === "object") ? f as Record<string, unknown> : {};
+      }
+    } catch {}
+    sysEventRepeatHits.value = getRepeatHits() || {};
+    sysEventSyncTimer = window.setTimeout(tick, 1500);
+  };
+  tick();
+}
+
 const sysCurrentMp = computed(() => state.value?.entities.find(e => e.side === "player")?.mp ?? 0);
 const sysCurrentMaxMp = computed(() => state.value?.entities.find(e => e.side === "player")?.maxMp ?? 0);
 const sysPlayerX = computed(() => state.value?.entities.find(e => e.side === "player")?.x ?? 0);
@@ -665,6 +721,39 @@ function onSysSummon(card: any) {
   sysNotice.value = `正在召唤 ${card.name} 到身边…`;
   runSysCmd("sys_party", { roleId: card.id, follow: false, summon: true });
   scheduleAllyPositionsSave();
+}
+
+/* ★ 事件系统面板 handlers：直接走 toonflowJsApi.pluginData 读写 player_flags */
+async function onSysSetFlag(key: string, value: unknown): Promise<void> {
+  try {
+    await toonflowJsApi.pluginData.set("player_flags", { ...(sysEventFlags.value || {}), [key]: value });
+    sysEventFlags.value = { ...(sysEventFlags.value || {}), [key]: value };
+    sysNotice.value = `flag ${key} = ${JSON.stringify(value)}`;
+  } catch (e: any) {
+    sysNotice.value = `flag 写失败：${e?.message || e}`;
+  }
+}
+async function onSysDelFlag(key: string): Promise<void> {
+  try {
+    const next = { ...(sysEventFlags.value || {}) };
+    delete next[key];
+    await toonflowJsApi.pluginData.set("player_flags", next);
+    sysEventFlags.value = next;
+    sysNotice.value = `已删 flag ${key}`;
+  } catch (e: any) {
+    sysNotice.value = `flag 删失败：${e?.message || e}`;
+  }
+}
+async function onSysFireEvent(evId: string): Promise<void> {
+  const ok = await fireEventManually(evId);
+  sysNotice.value = ok ? `已手动 fire ${evId}` : `事件 ${evId} 未找到`;
+}
+async function onSysReloadEvents(): Promise<void> {
+  const f = levelNameToFileSafe(currentLevelName.value);
+  if (f) await loadMapEvents(f);
+  // 强制刷新面板响应
+  sysEventDefs.value = getLoadedEvents();
+  sysNotice.value = `已重载 ${f || currentLevelName.value} 的事件`;
 }
 
 /** 保存所有已上场 ally 的位置信息到 t_plugin_session_data */
@@ -5429,6 +5518,8 @@ onMounted(async () => {
       s.sysRevision = Math.round(Number(s.sysRevision) || 0) + 1;
       (s as any).teleportTarget = { mapName, x, y, name: mapName, rev: s.sysRevision };
     },
+    confirm: (opts) => evConfirmOpen(opts),
+    giveItem: (name, count) => evGiveItem(name, count),
     pluginData: {
       get: async (key: string) => {
         try { return await toonflowJsApi.pluginData.get(key); } catch { return null; }
@@ -5471,6 +5562,9 @@ onMounted(async () => {
     },
     get nearChat() { return nearChat.value; },
   };
+
+  // ★ 启动事件系统面板数据同步（轮询 player_flags + repeat 计数）
+  startSysEventSync();
 
   // ★ --conn 模式（dev-host / 真实宿主）：Vue app 就绪后主动通知宿主推送 select state
   //   dev-host 的 PAGE 模板里注册了 window.__devHostPluginLoaded 监听，
@@ -5998,6 +6092,18 @@ watch(() => state.value?.phase, (p) => {
       <!-- ★ 睡眠恢复等 HUD 级提示（系统面板未打开时也能看到） -->
       <div v-if="hudToast" class="hud-toast" @click="hudToast = ''">{{ hudToast }}</div>
 
+      <!-- ★ 事件系统确认对话框（采集/交互确认） -->
+      <div v-if="evConfirm" class="ev-confirm-overlay" @click.self="evConfirmClose(false)">
+        <div class="ev-confirm">
+          <div class="ev-confirm__title">{{ evConfirm.title }}</div>
+          <div v-if="evConfirm.detail" class="ev-confirm__detail">{{ evConfirm.detail }}</div>
+          <div class="ev-confirm__btns">
+            <button class="ev-confirm__cancel" @click="evConfirmClose(false)">{{ evConfirm.cancelText }}</button>
+            <button class="ev-confirm__ok" @click="evConfirmClose(true)">{{ evConfirm.confirmText }}</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ★ game.md 对话功能：聊天面板 -->
       <div v-if="chatActive" class="chat-panel">
         <div class="chat-panel__header">
@@ -6196,6 +6302,10 @@ watch(() => state.value?.phase, (p) => {
         :map-nodes="sysMapNodes"
         :nav-path="[]"
         :notice="sysNotice"
+        :event-defs="sysEventDefs"
+        :event-flags="sysEventFlags"
+        :event-zones="sysEventZones"
+        :event-repeat-hits="sysEventRepeatHits"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"
@@ -6213,6 +6323,10 @@ watch(() => state.value?.phase, (p) => {
         @travel="onSysTravel"
         @follow="onSysFollow"
         @summon="onSysSummon"
+        @set-flag="onSysSetFlag"
+        @del-flag="onSysDelFlag"
+        @fire-event="onSysFireEvent"
+        @reload-events="onSysReloadEvents"
         @close="showSystemPanel = false"
       />
     </div>
@@ -6842,6 +6956,66 @@ body {
   from { opacity: 0; transform: translate(-50%, -10px); }
   to { opacity: 1; transform: translate(-50%, 0); }
 }
+
+/* ★ 事件系统确认对话框（采集/交互确认） */
+.ev-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+.ev-confirm {
+  min-width: 240px;
+  max-width: 80%;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #2a2018, #1a1410);
+  border: 2px solid #d4a13e;
+  border-radius: 4px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.7);
+  color: #f4e8c0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ev-confirm__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffe79e;
+  margin-bottom: 6px;
+}
+.ev-confirm__detail {
+  font-size: 12px;
+  color: #c8b888;
+  margin-bottom: 10px;
+}
+.ev-confirm__btns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.ev-confirm__ok,
+.ev-confirm__cancel {
+  padding: 4px 14px;
+  border: 1px solid #6a5a3a;
+  border-radius: 3px;
+  background: #1a1610;
+  color: #c8b888;
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ev-confirm__ok {
+  background: #d4a13e;
+  color: #1a1410;
+  border-color: #d4a13e;
+  font-weight: 600;
+}
+.ev-confirm__ok:hover { background: #e8b95e; }
+.ev-confirm__cancel:hover { color: #ffe79e; border-color: #d4a13e; }
 
 /* ★ game.md 床碰撞：睡眠按钮（靠近床铺出现，像素风与退出按钮同族、暖色区分） */
 .btn--sleep {

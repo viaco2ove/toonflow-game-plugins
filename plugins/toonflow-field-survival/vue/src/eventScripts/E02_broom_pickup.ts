@@ -4,7 +4,7 @@
  * 玩家在祖师堂 interact 扫帚物件（uid=271）：
  *   拾起《扫地神功》玉简 → 系统提示 → 解锁 E03 玄尘长老对话
  */
-import type { Ctx } from "./_ctx";
+import type { Ctx } from "../shared/_ctx";
 
 export default async function main(ctx: Ctx): Promise<void> {
   await ctx.save.setFlag("broom_picked", true);

@@ -49,6 +49,33 @@
         { "type": "toast", "text": "【收徒系统】山门已开，可前往青云竹海历练。", "color": "gold" },
         { "type": "teleport", "map": "Mulberry Forest", "x": 1, "y": 25 }
       ]
+    },
+    {
+      "id": "E10_fishing_at",
+      "comment": "走进喷水池：弹窗确认垂钓，按概率得鱼或空钩",
+      "trigger": { "type": "area_enter", "zone": "喷水池" },
+      "repeat": true,
+      "actions": [
+        { "type": "run_script", "script": "E10_fishing_at" }
+      ]
+    },
+    {
+      "id": "E11_herb_at",
+      "comment": "走进采药区：弹窗确认采药，按概率得药材或空手",
+      "trigger": { "type": "area_enter", "zone": "采药区" },
+      "repeat": true,
+      "actions": [
+        { "type": "run_script", "script": "E11_herb_at" }
+      ]
+    },
+    {
+      "id": "E12_wood_at",
+      "comment": "走到木材堆：弹窗确认取木，按概率得松木/沉香/朽木",
+      "trigger": { "type": "area_enter", "zone": "木材堆" },
+      "repeat": true,
+      "actions": [
+        { "type": "run_script", "script": "E12_wood_at" }
+      ]
     }
   ]
 }

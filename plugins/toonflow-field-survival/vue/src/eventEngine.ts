@@ -36,6 +36,10 @@ export interface EventHooks {
   eventLog(text: string): void;
   /** 传送（走已有 teleportTarget 通道） */
   teleport(mapName: string, x: number, y: number): void;
+  /** 确认对话框（采集/交互确认）：resolve(true)=确定 */
+  confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
+  /** 发放物品到背包（走 sys_shop_buy 同款 ItemSlot+参数卡合并，mock/真实宿主都能落账） */
+  giveItem(name: string, count?: number): void;
   /** pluginData 读写（t_plugin_session_data） */
   pluginData: {
     get(key: string): Promise<unknown>;
@@ -140,6 +144,11 @@ function makeCtx(): Ctx {
       toast: (text: string, color?: string) => hooks?.toast(text, color),
       subtitle: (text: string, durationMs?: number) => hooks?.subtitle(text, durationMs),
       event: (text: string) => hooks?.eventLog(text),
+      confirm: (opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }) =>
+        hooks?.confirm(opts) ?? Promise.resolve(false),
+    },
+    bag: {
+      give: (name: string, count?: number) => hooks?.giveItem(name, count),
     },
     level: {
       switchTo: (mapFile: string, x: number, y: number) => hooks?.teleport(mapFile, x, y),
@@ -220,9 +229,17 @@ async function runActions(ev: EventDef): Promise<void> {
 }
 
 // ─── 事件触发入口 ───
+// repeat 事件（采集类 area_enter）：不进 firedIds 防重入，但加冷却（ms）防连点
+const repeatCooldown = new Map<string, number>();
 async function fireEvent(ev: EventDef): Promise<void> {
-  if (firedIds.value.has(ev.id)) return; // 防重入
-  firedIds.value.add(ev.id);
+  if (ev.repeat) {
+    const cd = repeatCooldown.get(ev.id) || 0;
+    if (Date.now() < cd) return;
+    repeatCooldown.set(ev.id, Date.now() + 3000);
+  } else {
+    if (firedIds.value.has(ev.id)) return; // 防重入
+    firedIds.value.add(ev.id);
+  }
   try {
     if (await checkConditions(ev)) {
       console.info("[eventEngine] 触发事件:", ev.id);
@@ -231,9 +248,40 @@ async function fireEvent(ev: EventDef): Promise<void> {
   } catch (e) {
     console.error("[eventEngine] 事件执行异常:", ev.id, e);
   } finally {
-    // 条件不满足时允许下次再判（如 flag 在别处被改）——这里选择"一次机会"策略，
-    // 与"判定通过"型事件语义一致；连续触发型事件（area_enter 反复进）v0.2 再加
+    // repeat 事件不占 firedIds；普通事件保持"一次机会"策略（条件不满足时允许下次再判）
   }
+}
+
+/** ★ 调试/UI 用：读取当前已加载的事件定义（供 EventPanel 显示） */
+export function getLoadedEvents(): EventDef[] {
+  return loadedEvents.value?.events || [];
+}
+
+/** ★ 调试/UI 用：读取当前已设置的 eventZones（供 EventPanel 显示区域） */
+export function getEventZones(): EventZone[] {
+  return evZones || [];
+}
+
+/** ★ 调试/UI 用：读取已 fire 的 repeat 事件次数 */
+export function getRepeatHits(): Record<string, number> {
+  const out: Record<string, number> = {};
+  // 简化：当前用 Map 计数 1（fire 一次计一次）。用「冷却剩余是否>0」判断 fire 过
+  // 真实计数需要 Map<id, count>，下面我们改个最小入侵版本
+  for (const id of repeatCooldown.keys()) out[id] = (out[id] || 0) + 1;
+  return out;
+}
+
+/** ★ 调试/UI 用：手动 fire 某事件（绕过触发器直接调 runActions） */
+export async function fireEventManually(evId: string): Promise<boolean> {
+  const ev = (loadedEvents.value?.events || []).find(e => e.id === evId);
+  if (!ev) return false;
+  // 临时清掉 firedIds / 冷却，让 runActions 跑一次
+  const wasInFired = firedIds.value.has(ev.id);
+  if (!ev.repeat) firedIds.value.delete(ev.id);
+  repeatCooldown.delete(ev.id);
+  // 直接复用 fireEvent 内部逻辑
+  try { await fireEvent(ev); } catch (e) { console.warn("[eventEngine] manual fire error", e); }
+  return true;
 }
 
 // ─── 公开钩子（App.vue 调用） ───

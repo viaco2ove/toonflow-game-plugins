@@ -4,7 +4,7 @@
  * 玩家持《扫地神功》与玄尘长老（uid=225）对话：
  *   玄尘善后 → 正式接任宗主 → phase_1 收尾
  */
-import type { Ctx } from "./_ctx";
+import type { Ctx } from "../shared/_ctx";
 
 export default async function main(ctx: Ctx): Promise<void> {
   await ctx.save.setFlag("sect_join", true);

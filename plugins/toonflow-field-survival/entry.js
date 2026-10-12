@@ -2647,6 +2647,24 @@ async function handle_action(action, params, state, context) {
       await persistSys(context, s);
       return okResp(`\u8D2D\u4E70 ${good.name}\xD7${ask}`);
     }
+    case "sys_item_add": {
+      // \u2605 \u4E8B\u4EF6\u7CFB\u7EDF\u91C7\u96C6\u5956\u52B1\uFF1A\u4E0E sys_shop_buy \u540C\u6B3E\u5165\u5305\u94FE\uFF08\u6263\u8D39=0\uFF09
+      const nm = str(params?.name).slice(0, 20);
+      const ask = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!nm) return okResp("\u7F3A\u5C11\u7269\u54C1\u540D");
+      const card = s.playerCard || {};
+      const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+      const exist = bag.find((x) => x.name === nm);
+      if (exist) exist.count += ask;
+      else bag.push({ name: nm, count: ask, kind: "material", rarity: "common" });
+      s.bagMeta = { ...s.bagMeta || {}, [nm]: { name: nm, count: 0, kind: "material", rarity: "common" } };
+      patchCard(s, { items: serializeBag(bag, card.items) });
+      pushEvent(s, `\u83B7\u5F97 ${nm}\xD7${ask}`);
+      const me = playerEntity(s);
+      if (me) floater(s, `+${nm}`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`\u83B7\u5F97 ${nm}\xD7${ask}`);
+    }
     case "sys_party": {
       const rid = str(params?.roleId);
       if (!rid) return okResp("\u7F3A\u5C11\u89D2\u8272");

@@ -1255,7 +1255,7 @@ function install(): void {
         return;
       }
       if (action === "sys_shop_buy") {
-        // ★ 对齐 entry.js case "sys_shop_buy"：扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
+        // ★ 对齐 entry.js case "sys_shop_buy":扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
         const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id);
         if (!good) {
           state.events.push("[mock] 商品不存在");
@@ -1286,6 +1286,29 @@ function install(): void {
         }
         arr.push(base > 1 ? `${good.name}×${base}` : good.name);
         state.events.push(`[mock] 购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
+        push();
+        return;
+      }
+      if (action === "sys_item_add") {
+        // ★ 事件系统采集奖励：与 sys_shop_buy 同款入包链，扣费=0
+        const nm = String(params?.name || "").trim().slice(0, 20);
+        const ask = Math.max(1, Math.round(Number(params?.count) || 1));
+        if (!nm) { state.events.push("[mock] sys_item_add 缺 name"); push(); return; }
+        const slot = (state.items || []).find((x: any) => x.name === nm);
+        if (slot) slot.count += ask;
+        else (state.items || []).push({ name: nm, count: ask, heal: 0, mp: 0, type: "hp" });
+        const pc: any = (state as any).playerCard || ((state as any).playerCard = {});
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const old = arr.findIndex((x) => clean(x) === clean(nm));
+        let base = ask;
+        if (old >= 0) {
+          const m = arr[old].match(/[×xX*]\s*(\d+)/);
+          base = (m ? Number(m[1]) : 1) + ask;
+          arr.splice(old, 1);
+        }
+        arr.push(base > 1 ? `${nm}×${base}` : nm);
+        state.events.push(`[mock] 获得 ${nm}×${ask}`);
         push();
         return;
       }
