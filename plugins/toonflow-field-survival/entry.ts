@@ -1427,6 +1427,19 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     }
   });
 
+  // ★ #ai 指令通用应用器：任意非玩家/非 ally 实体（NPC / neutral / 未入队角色）带 _aiMoveTo 即移动。
+  //   AI 托管勾选只决定 ally 循环是否接管；#ai 命令要对「任意对话角色」生效，故这里通用处理。
+  s.entities.forEach((a) => {
+    if (a.side === "player" || a.side === "ally") return;
+    const mv = (a as any)._aiMoveTo;
+    if (!mv) return;
+    moveTowards(a, mv.x, mv.y, speed * 0.8);
+    if (dist(a, mv) < 0.5) {
+      delete (a as any)._aiMoveTo;
+      delete (a as any)._aiMoveToTick;
+    }
+  });
+
   // ★ v4 敌人 AI：探测半径 10 米（MOB_DETECT_M）→ 追击 → 2 米攻击
   //          → 超出 12 米（MOB_DISENGAGE_M）脱战 → 归位巢点并在 8 米内游荡
   enemies.forEach((e) => {

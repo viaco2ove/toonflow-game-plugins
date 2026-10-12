@@ -48,6 +48,8 @@ import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents } from "./eventEngine";
+// ★ AI 托管系统（ally 类型角色的 AI 控制）
+import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
 import { bakeTiledMap } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
@@ -199,7 +201,7 @@ interface SysItem {
   index?: number;
 }
 interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; effects_type?: string; }
-interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
+interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; aiManaged?: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
 interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
 
 const RARITY_DEFAULT_PRICE: Record<string, number> = { common: 8, fine: 22, rare: 60, epic: 180, legend: 520 };
@@ -470,6 +472,7 @@ function cardToRole(c: any, i: number): SysRole {
     x: Number(c?.x || 0),
     y: Number(c?.y || 0),
     inParty: !!c?.inParty,
+    aiManaged: !!c?.aiManaged,
     avatarPath: c?.avatarPath,
     parameterCardJson: c?.parameterCardJson || null,
     onMap: c?.onMap !== false,
@@ -714,6 +717,49 @@ function onSysFollow(id: string, on: boolean) {
   sysNotice.value = on ? "已加入队伍" : "已离开队伍";
   runSysCmd("sys_party", { roleId: id, follow: !!on });
   scheduleAllyPositionsSave();
+}
+
+/* ★ AI 托管 toggle：启用/关闭角色的 AI 控制 */
+function onSysAIToggle(id: string, on: boolean) {
+  console.info(`[ai] onSysAIToggle 触发: id=${id}, on=${on}`);
+  if (!id) return;
+  // 找到对应的实体（先在 entities，再在 npcCards）
+  let ent: any = state.value?.entities?.find((e: any) => e.id === id);
+  if (!ent) {
+    const npcCards = ((state.value as any)?.npcCards || []) as any[];
+    const card = npcCards.find((c: any) => String(c?.id) === id);
+    if (card) {
+      ent = {
+        id: card.id,
+        name: card.name,
+        side: "ally",
+        x: 0, y: 0,
+        hp: card.hp || 50, maxHp: card.maxHp || 50,
+        mp: card.mp || 30, maxMp: card.maxMp || 30,
+        level: card.level || 1,
+        atk: 10, def: 5,
+        alive: true,
+        mapName: card.mapName || currentLevelName.value,
+      };
+    }
+  }
+  if (on) {
+    if (ent) {
+      enableAI(ent as any, "勇敢冲锋型");
+      // ★ 通知 entry.js 设 _aiManaged 标记（让 ally 循环驱动这个 entity）
+      runSysCmd("ai_command", { roleId: id, action: "_mark_managed" });
+      sysNotice.value = `${ent.name || id} 已启用 AI 托管`;
+      console.info(`[ai] 🎯 触发首次决策 for ${ent.name}`, ent);
+    } else {
+      sysNotice.value = `未找到角色 ${id}`;
+    }
+  } else {
+    disableAI(id);
+    // 关闭 AI 托管：发 stop 清除 _aiMoveTo / _aiAttackTarget / _aiManaged
+    // 不动组队状态 —— 组队跟随是独立功能
+    runSysCmd("ai_command", { roleId: id, action: "stop" });
+    sysNotice.value = `${id} 已关闭 AI 托管`;
+  }
 }
 
 /** 召唤：把角色召唤到用户旁边（不加入队伍、不跟随，仅传送到身边设为友方） */
@@ -3064,6 +3110,8 @@ function localTick(): void {
     const meNow = s.entities.find((e) => e.side === "player");
     // ★ 事件系统：区域进出检测（eventZones，走同一玩家坐标）
     if (meNow) void tickZones(meNow.x, meNow.y);
+    // ★ AI 托管系统：每 tick 检查 AI 角色（异步、不阻塞游戏循环）
+    void tickAllAIs(s, s.tick || 0);
     const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");
     const distTo = (p: any) => Math.hypot(p.x - (meNow?.x ?? 0), p.y - (meNow?.y ?? 0));
     if (portalLatchPending) {
@@ -5055,6 +5103,55 @@ async function triggerChatSpeak(mode: "options" | "response" = "response", userT
   }
 }
 
+/* ============== AI 大脑 LLM 通道（v0.2 B 阶段） ==============
+ * 复用 chatResultWaiters 机制，但用单独的 brainLLMReqId 前缀避免和对话冲突。
+ * 走 sendTick("sys_brain", ...) → 宿主 agent（task-ai-brain-agent）→ state.chatResult 回推。
+ * 真实大模型返回 {"action":{...}, "goal":...} 格式的 JSON。
+ */
+const brainResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; timer: number }> = [];
+function waitBrainResult(reqId: string, timeoutMs = 15000): Promise<any> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      const i = brainResultWaiters.findIndex((w) => w.reqId === reqId);
+      if (i >= 0) brainResultWaiters.splice(i, 1);
+      resolve({ ok: false, error: "brain LLM 超时" });
+    }, timeoutMs);
+    brainResultWaiters.push({ reqId, resolve, timer });
+  });
+}
+function notifyBrainResult(res: any): void {
+  const rid = String(res?.reqId || "");
+  if (!rid || !rid.startsWith("brain_")) return;
+  const i = brainResultWaiters.findIndex((w) => w.reqId === rid);
+  if (i < 0) return;
+  const w = brainResultWaiters[i];
+  brainResultWaiters.splice(i, 1);
+  window.clearTimeout(w.timer);
+  w.resolve(res);
+}
+
+/** ★ AI 大脑 LLM 调用（v0.2）：通过宿主 agent 通道 */
+async function callBrainLLM(
+  entityName: string,
+  systemPrompt: string,
+  userPrompt: string,
+): Promise<string> {
+  const reqId = `brain_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  try {
+    sendTick("sys_brain", { reqId, entityName, systemPrompt, userPrompt });
+    const res = await waitBrainResult(reqId);
+    if (!res?.ok) {
+      console.warn("[ai] brain LLM 失败：", res?.error);
+      return "";
+    }
+    // 期望 res.text 是 JSON 字符串
+    return String(res.text || "");
+  } catch (e: any) {
+    console.warn("[ai] brain LLM 异常：", e);
+    return "";
+  }
+}
+
 /**
  * ★ game.md 对话功能：发言按钮
  * phase=options 时 → 点发言让 AI 生成3个选项
@@ -5084,6 +5181,24 @@ async function onChatSend() {
   chatPhase.value = "idle";
   chatMessages.value.push({ speaker: "我", text: txt, mine: true });
   chatAgentResp.value = txt;
+
+  // ★ #ai 指令：触发 AI 托管器对「当前对话角色」做一次决策并执行（无论是否勾选 AI 托管）
+  if (/^#\s*ai\b/i.test(txt)) {
+    const partner = (state.value?.entities || []).find((e: any) => e.id === chatNpcId.value) as any;
+    const speakerName = chatNpcName.value || partner?.name || "角色";
+    if (!partner) {
+      chatMessages.value.push({ speaker: speakerName, text: "（找不到可执行的角色）", mine: false });
+      return;
+    }
+    try {
+      const out = await issueAIChatCommand(partner, txt, state.value as any);
+      chatMessages.value.push({ speaker: speakerName, text: out.say, mine: false });
+    } catch (e: any) {
+      chatMessages.value.push({ speaker: speakerName, text: "（指令执行出错：" + String(e?.message || e) + "）", mine: false });
+    }
+    return;
+  }
+
   await triggerChatSpeak("response", txt);
 }
 
@@ -5531,6 +5646,8 @@ onMounted(async () => {
       },
     },
   });
+  // ★ AI 托管系统 LLM 调用器（v0.2：走宿主 agent 通道）
+  registerAILLM(callBrainLLM);
   // ★ 只读调试钩子：bsk/E2E 自动化巡检用（evaluate 里摸不到 Vue 内部实例，
   //   生产构建下 __vue_app__._instance 在隔离世界不可读）。只读 getter，无副作用。
   (window as any).__FS_DEBUG__ = {
@@ -5684,7 +5801,10 @@ onMounted(async () => {
     const prevPhase = state.value?.phase;
     // ★ sys_chat 结果回推：后端把大模型结果写在 state.chatResult{reqId}，这里按 reqId 唤醒等待者
     const incomingChat = (d.state as any)?.chatResult;
-    if (incomingChat && typeof incomingChat === "object") notifyChatResult(incomingChat);
+    if (incomingChat && typeof incomingChat === "object") {
+      notifyChatResult(incomingChat);
+      notifyBrainResult(incomingChat);
+    }
     // ★ 宿主/ mock 推送前的本地实体快照：用于把 App 侧生成的地图怪物（mapmob_*）归并保留
     const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;
@@ -6325,6 +6445,7 @@ watch(() => state.value?.phase, (p) => {
         @travel="onSysTravel"
         @follow="onSysFollow"
         @summon="onSysSummon"
+        @ai-toggle="onSysAIToggle"
         @set-flag="onSysSetFlag"
         @del-flag="onSysDelFlag"
         @fire-event="onSysFireEvent"

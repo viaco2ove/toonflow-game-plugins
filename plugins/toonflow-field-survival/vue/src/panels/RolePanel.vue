@@ -163,6 +163,10 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
           <input type="checkbox" :checked="!!c.inParty" :disabled="!canParty(c)" @change="emit('follow', c.id, ($event.target as HTMLInputElement).checked)" />
           组队跟随
         </label>
+        <label class="rlc-chk rlc-chk--ai" :class="{ 'rlc-chk--off': !canParty(c) }" title="勾选后，AI 大模型将控制该角色行为">
+          <input type="checkbox" :checked="!!c.aiManaged" :disabled="!canParty(c)" @change="emit('ai-toggle', c.id, ($event.target as HTMLInputElement).checked)" />
+          AI托管
+        </label>
       </div>
       <!-- ★ 动态参数卡（友方/中立/敌对全部可看） -->
       <div v-if="isOpen(c.id)" class="rlc-param">
@@ -214,7 +218,8 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
 .rlc-btn--summon { border-color: #7acc7a; background: #2a7a2a; }
 .rlc-btn--ghost { border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.06); color: #cfd8e3; }
 .rlc-btn--mini { padding: 1px 6px; font-size: 10px; }
-.rlc-chk { font-size: 10px; color: #cfd8e3; display: flex; align-items: center; gap: 3px; }
+.rlc-chk--ai { color: #d4a13e; }
+.rlc-chk--ai input { accent-color: #d4a13e; }
 .rlc-chk--off { opacity: 0.5; }
 .rlc-empty, .rlc-hint { color: #93a2b3; font-size: 11px; }
 

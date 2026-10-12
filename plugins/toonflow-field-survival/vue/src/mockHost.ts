@@ -772,6 +772,41 @@ function install(): void {
         push();
         return;
       }
+      if (action === "ai_command") {
+        // ★ #ai 指令通道：复用 entry.js 的 ai_command 语义，但 mock 宿主直接改 state
+        //   支持任意非玩家实体（NPC/neutral/ally），不依赖 AI 托管勾选
+        const rid = String(params?.roleId || params?.entityId || "");
+        const ent = state.entities.find((x) => x.id === rid);
+        if (!ent) { push(); return; }
+        const cmd = String(params?.action || "");
+        if (cmd === "move") {
+          const tx = Number(params?.x);
+          const ty = Number(params?.y);
+          if (Number.isFinite(tx) && Number.isFinite(ty)) {
+            (ent as any)._aiMoveTo = { x: tx, y: ty };
+            (ent as any)._aiMoveToTick = state.tick;
+          }
+        } else if (cmd === "attack") {
+          (ent as any)._aiAttackTarget = String(params?.targetId || "");
+        } else if (cmd === "stop") {
+          delete (ent as any)._aiMoveTo;
+          delete (ent as any)._aiMoveToTick;
+          delete (ent as any)._aiAttackTarget;
+        }
+        push();
+        return;
+      }
+      if (action === "sys_brain") {
+        // ★ 预览（standalone）无 AI 托管大脑 LLM 通道：立即回失败，避免调用方 45s 超时
+        const reqId = String(params?.reqId || "");
+        (state as any).chatResult = {
+          reqId,
+          ok: false,
+          error: "preview 无 AI 托管大脑通道（请走 --conn / 安装后宿主以使用自由文本 #ai）",
+        };
+        push();
+        return;
+      }
       if (action === "start") {
         // 已经在 playing，忽略
         return;
@@ -937,6 +972,24 @@ function install(): void {
           if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
           if (e.actionBobMs && e.actionBobMs > 0) e.actionBobMs = Math.max(0, e.actionBobMs - 100);
         });
+        // ★ #ai 指令通用移动应用器：任意非玩家实体（NPC/neutral/ally）带 _aiMoveTo 即朝目标移动
+        //   （预览生效；AI 托管勾选只影响真实宿主的 ally 循环，#ai 要对任意角色生效故这里通用处理）
+        for (const e of state.entities) {
+          if (e.side === "player") continue;
+          const mv = (e as any)._aiMoveTo;
+          if (!mv) continue;
+          const dx = mv.x - e.x;
+          const dy = mv.y - e.y;
+          const d = Math.hypot(dx, dy);
+          if (d < 0.5) {
+            delete (e as any)._aiMoveTo;
+            delete (e as any)._aiMoveToTick;
+            continue;
+          }
+          const sp = 0.18; // 米/帧，步行速度
+          moveEnemyBy(e, (dx / (d || 1)) * sp, (dy / (d || 1)) * sp);
+          e.facing = dx > 0 ? 0 : 180;
+        }
         // 波次生成
         waveTimer++;
         if (waveTimer >= WAVE_INTERVAL) {

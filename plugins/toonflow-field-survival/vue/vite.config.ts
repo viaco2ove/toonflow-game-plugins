@@ -356,7 +356,7 @@ const log = (m) => {
 };
 const post = (state, response) => {
   if (state && typeof state === "object") state.response = response || "";
-  document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive","sys","sys_sell","sys_use_item","sys_sort","sys_ring_move","sys_use_skill","sys_shop_refresh","sys_shop_buy","sys_party","sys_teleport","sys_travel"], response: response || "" }, "*");
+  document.getElementById("game").contentWindow.postMessage({ type: "tf_plugin_state", state, actions: ["init","start","tick","skill","item","page","exit","revive","sys","sys_sell","sys_use_item","sys_sort","sys_ring_move","sys_use_skill","sys_shop_refresh","sys_shop_buy","sys_party","sys_teleport","sys_travel","ai_command","sys_brain"], response: response || "" }, "*");
 };
 // ★ 插件侧 agent 调用通道（App.vue 直接调，不走 entry.js）
 // ★ 写入 window.top（跨 iframe boundary）：Vue 在 iframe 内，dev-host PAGE 在 top，
@@ -703,6 +703,7 @@ async function tryEntryAction(action, params) {
     if (!entryState && action !== "init" && action !== "start_init" && action !== "start") {
       await mod.handle_action("init", {}, null, entryCtx);
     }
+    log("[dev-host] handle_action: " + action + " " + JSON.stringify(Object.keys(params || {})).slice(0, 80));
     const res = await mod.handle_action(action, params || {}, entryState, entryCtx);
     if (!res || !res.state) return false;
     entryState = res.state;
@@ -1005,6 +1006,9 @@ window.addEventListener("message", async (e) => {
   const d = e?.data;
   if (!d || typeof d !== "object") return;
   log("iframe→ " + JSON.stringify(d).slice(0, 240));
+  if (d.type === "tf_plugin_tick") {
+    log("[tick] action=" + d.action + " from=" + (e.source === window ? "self" : "iframe"));
+  }
   if (d.type === "tf_plugin_loaded") {
     log("HOST: tf_plugin_loaded received, loading story...");
     const ok = await loadStoryData();
@@ -1037,6 +1041,7 @@ window.addEventListener("message", async (e) => {
   }
   // ★ 薄宿主：--conn 桩下所有动作优先交给真实插件 entry.js 执行（与「安装后」路径一致）
   if (d.type === "tf_plugin_tick" && typeof d.action === "string") {
+    log("[dev-host] → entry " + d.action);
     if (await queueEntryAction(d.action, d.params || {})) return;
   }
   if (d.type === "tf_plugin_tick" && d.action === "start") {

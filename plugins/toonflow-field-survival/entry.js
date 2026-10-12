@@ -911,18 +911,72 @@ function step(s, input, poseHint) {
   }
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
   const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
-  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && partyIds.indexOf(e.id) >= 0);
+  // ★ AI 托管：把 _aiManaged 标记的角色也加入驱动列表（即使不在 partyIds）
+  //   行为：AI 角色可自由活动（不被 anchor 拉到玩家身边），但仍受敌人感知和 AI 目标驱动
+  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && (partyIds.indexOf(e.id) >= 0 || e._aiManaged));
   allies.forEach((a, i) => {
-    const target = enemies.filter((e) => dist(player, e) < ALLY_ENGAGE_M).reduce((best, e) => !best || dist(player, e) < dist(player, best) ? e : best, null);
-    const anchor = {
-      x: player.x + Math.cos(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
-      y: player.y + Math.sin(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M
-    };
+    // ★ AI 托管：检查是否设了 AI 目标（_aiMoveTo / _aiAttackTarget）
+    //   如果设了 → AI 目标优先；否则用默认 anchor + 玩家 4 米内敌人
+    const aiTarget = a._aiAttackTarget ? s.entities.find((e) => e.id === a._aiAttackTarget && e.alive) : null;
+    const aiMove = a._aiMoveTo;
+    const isAIManaged = !!a._aiManaged;
+
+    // 攻击目标优先级：AI 指定 > 玩家 4 米内 > null
+    let target = aiTarget;
+    if (!target) {
+      // AI 托管的角色：攻击 13 米内最近的敌人（独立感知范围）
+      // 队伍中的角色：跟玩家一样只打玩家 4 米内的
+      const engageM = isAIManaged ? 13 : ALLY_ENGAGE_M;
+      target = enemies.filter((e) => dist(a, e) < engageM).reduce((best, e) => !best || dist(a, e) < dist(best, e) ? e : best, null);
+    }
+
+    // 移动目标：AI 指定 > 队伍 anchor（跟玩家）> AI 角色原地待命
+    let moveX, moveY, doMove = true;
+    if (aiMove && (s.tick - (a._aiMoveToTick || 0)) < 600) {  // 60秒内有效
+      moveX = aiMove.x;
+      moveY = aiMove.y;
+      // 到达后清除
+      if (dist(a, aiMove) < 0.5) {
+        delete a._aiMoveTo;
+        delete a._aiMoveToTick;
+      }
+    } else if (partyIds.indexOf(a.id) >= 0) {
+      // 在队伍里：默认 anchor（跟玩家）
+      const anchor = {
+        x: player.x + Math.cos(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+        y: player.y + Math.sin(i / Math.max(1, allies.length) * Math.PI * 2) * ALLY_FOLLOW_GAP_M
+      };
+      moveX = anchor.x;
+      moveY = anchor.y;
+    } else {
+      // AI 托管但不在队伍：原地待命（不主动移动，等大脑 ai_command）
+      doMove = false;
+      moveX = a.x;
+      moveY = a.y;
+    }
+
     if (target) moveTowards(a, target.x, target.y, speed * 0.92);
-    else moveTowards(a, anchor.x, anchor.y, speed * 0.8);
+    else if (doMove) moveTowards(a, moveX, moveY, speed * 0.8);
     if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
       damage(s, target, a.atk, a);
       a.cooldown = 30;
+    }
+
+    // ★ AI 移动到目标附近：清掉 _aiMoveTo（让下一 tick 重新决策）
+    if (aiMove && dist(a, aiMove) >= 0.5) {
+      // 还在路上，不清
+    }
+  });
+  // ★ #ai 指令通用应用器：任意非玩家/非 ally 实体（NPC / neutral / 未入队角色）带 _aiMoveTo 即移动。
+  //   AI 托管勾选只决定 ally 循环是否接管；#ai 命令要对「任意对话角色」生效，故这里通用处理。
+  s.entities.forEach((a) => {
+    if (a.side === "player" || a.side === "ally") return;
+    const mv = a._aiMoveTo;
+    if (!mv) return;
+    moveTowards(a, mv.x, mv.y, speed * 0.8);
+    if (dist(a, mv) < 0.5) {
+      delete a._aiMoveTo;
+      delete a._aiMoveToTick;
     }
   });
   enemies.forEach((e) => {
@@ -2721,6 +2775,7 @@ async function handle_action(action, params, state, context) {
       if (follow) set.add(rid);
       else set.delete(rid);
       s.partyIds = Array.from(set);
+      // ★ AI 托管标记：前端通过 sys_party(aiManaged:true) 标记
       if (e) {
         if (follow) {
           if (!e._baseSide) e._baseSide = e.side;
@@ -2729,7 +2784,16 @@ async function handle_action(action, params, state, context) {
             e.alive = true;
             e.hp = e.maxHp;
           }
+          if (params?.aiManaged) e._aiManaged = true;
         } else {
+          // 取消队伍时清除 AI 标记
+          if (e) {
+            delete e._aiManaged;
+            delete e._aiMoveTo;
+            delete e._aiMoveToTick;
+            delete e._aiAttackTarget;
+            delete e._aiAttackTick;
+          }
           const mapName = e.mapName || s.levelName || "";
           if (!s.parked) s.parked = {};
           if (!s.parked[mapName]) s.parked[mapName] = [];
@@ -2742,9 +2806,64 @@ async function handle_action(action, params, state, context) {
         }
       }
       ensureNpcCards(s, s.levelName || "");
-      pushEvent(s, `${e?.name || rid} ${follow ? "\u52A0\u5165\u961F\u4F0D\uFF0C\u5F00\u59CB\u8DDF\u968F\u4F60\u6218\u6597" : "\u5DF2\u8131\u79BB\u961F\u4F0D"}`);
+      if (!params?.silent) pushEvent(s, `${e?.name || rid} ${follow ? "\u52A0\u5165\u961F\u4F0D\uFF0C\u5F00\u59CB\u8DDF\u968F\u4F60\u6218\u6597" : "\u5DF2\u8131\u79BB\u961F\u4F0D"}`);
       await persistSys(context, s);
       return okResp(follow ? "\u5DF2\u7EC4\u961F\u8DDF\u968F" : "\u5DF2\u53D6\u6D88\u8DDF\u968F");
+    }
+    case "ai_command": {
+      console.info("[entry.js] ai_command hit:", JSON.stringify(params || {}).slice(0, 100));
+      // \u2605 AI \u6258\u7BA1\u901A\u9053\uFF1A\u524D\u7AEF AI \u51B3\u7B56\u7CFB\u7EDF \u2192 sendTick \u2192 entry.js \u6539 state
+      //   \u4E0D\u9700\u8981\u6301\u4E45\u5316\uFF08\u6BCF tick \u7531 AI \u91CD\u65B0\u51B3\u7B56\u8986\u76D6\uFF09
+      const rid = str(params?.roleId || params?.entityId);
+      if (!rid) return okResp("ai_command: \u7F3A\u5C11 roleId");
+      const ent = s.entities.find((x) => x.id === rid);
+      if (!ent) return okResp(`ai_command: \u5B9E\u4F53 ${rid} \u4E0D\u5728\u573A\u4E0A`);
+      const cmd = String(params?.action || params?.type || "");
+      switch (cmd) {
+        case "move": {
+          // moveTo: \u8BBE\u7F6E AI \u89D2\u8272\u7684\u79FB\u52A8\u76EE\u6807\uFF08\u8986\u76D6 entry.js \u7684 anchor \u8DDF\u968F\uFF09
+          const tx = Number(params?.x);
+          const ty = Number(params?.y);
+          if (!Number.isFinite(tx) || !Number.isFinite(ty)) return okResp("ai_command.move: \u5750\u6807\u65E0\u6548");
+          ent._aiMoveTo = { x: tx, y: ty };
+          ent._aiMoveToTick = s.tick;
+          return okResp(`AI \u79FB\u52A8: ${ent.name} \u2192 (${tx.toFixed(1)}, ${ty.toFixed(1)})`);
+        }
+        case "attack": {
+          // attack: \u8BBE\u7F6E AI \u89D2\u8272\u7684\u653B\u51FB\u76EE\u6807
+          const targetId = str(params?.targetId);
+          if (!targetId) return okResp("ai_command.attack: \u7F3A\u5C11 targetId");
+          ent._aiAttackTarget = targetId;
+          ent._aiAttackTick = s.tick;
+          return okResp(`AI \u653B\u51FB: ${ent.name} \u2192 ${targetId}`);
+        }
+        case "stop": {
+          // \u6E05\u9664 AI \u76EE\u6807\uFF0C\u6062\u590D\u9ED8\u8BA4\u884C\u4E3A
+          delete ent._aiMoveTo;
+          delete ent._aiMoveToTick;
+          delete ent._aiAttackTarget;
+          delete ent._aiAttackTick;
+          // \u540C\u65F6\u6E05\u9664 _aiManaged \u6807\u8BB0\uFF08\u8BA9 entry.js \u4E0D\u518D\u5355\u72EC\u9A71\u52A8\u5B83\uFF0C\u9664\u975E\u5B83\u5728 partyIds\uFF09
+          delete ent._aiManaged;
+          return okResp(`AI \u505C\u6B62: ${ent.name}`);
+        }
+        case "_mark_managed": {
+          // \u4EC5\u6807\u8BB0\u4E3A AI \u6258\u7BA1\uFF08\u4E0D\u52A8 partyIds \u2014\u2014 AI \u6258\u7BA1\u548C\u7EC4\u961F\u8DDF\u968F\u662F\u76F8\u4E92\u72EC\u7ACB\u7684\uFF09
+          ent._aiManaged = true;
+          return okResp(`AI \u6258\u7BA1\u6807\u8BB0: ${ent.name}`);
+        }
+        case "useItem": {
+          // AI \u7528\u836F\uFF1A\u76F4\u63A5\u7ED9\u5B9E\u4F53\u56DE\u8840
+          const heal = Number(params?.heal || 0);
+          if (heal > 0) {
+            ent.hp = Math.min(ent.maxHp || ent.hp + heal, (ent.hp || 0) + heal);
+            pushEvent(s, `AI: ${ent.name} \u4F7F\u7528\u7269\u54C1 +${heal}HP`);
+          }
+          return okResp(`AI \u6CBB\u7597: ${ent.name}`);
+        }
+        default:
+          return okResp(`ai_command: \u672A\u77E5 action '${cmd}'`);
+      }
     }
     case "sys_teleport": {
       const rid = str(params?.roleId);

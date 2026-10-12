@@ -127,6 +127,7 @@ const activeTab = ref<TabId>("bag");
         @teleport="(c: any) => emit('teleport', c)"
         @follow="(id: string, on: boolean) => emit('follow', id, on)"
         @summon="(c: any) => emit('summon', c)"
+        @ai-toggle="(id: string, on: boolean) => emit('ai-toggle', id, on)"
       />
       <EventPanel
         v-else-if="activeTab === 'event'"
