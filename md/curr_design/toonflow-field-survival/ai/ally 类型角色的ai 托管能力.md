@@ -597,10 +597,435 @@ interface AllyPosition {
 - [ ] 边界情况处理
 - [ ] 端到端测试
 
-## 设计重点1：ai 大模型什么时候触发去调用接口？
+## 设计重点1：AI 大模型什么时候触发去调用接口？
 
-## 设计重点2：ai托管器agent 的系统提示词和用户提示词如何设计？
+### 触发策略设计
 
+AI 决策触发分为 **主动触发**（按固定间隔）和 **被动触发**（事件驱动）。
+
+#### 1. 主动触发（心跳机制）
+
+```typescript
+interface BrainConfig {
+  minInterval: number;    // 最小间隔（防止频繁调用），默认 5000ms
+  maxInterval: number;    // 最大间隔（确保AI不会太迟钝），默认 15000ms
+  adaptiveEnabled: boolean; // 自适应间隔：战斗时缩短，空闲时延长
+}
+
+// 间隔调整策略
+function calculateBrainInterval(config: BrainConfig, situation: "combat" | "idle" | "exploring"): number {
+  if (!config.adaptiveEnabled) return config.minInterval;
+  
+  switch (situation) {
+    case "combat":
+      return Math.max(config.minInterval, 3000);  // 战斗时 3 秒决策
+    case "exploring":
+      return (config.minInterval + config.maxInterval) / 2;  // 探索时 10 秒
+    case "idle":
+      return config.maxInterval;  // 空闲时最长间隔
+  }
+}
+```
+
+| 场景 | 建议间隔 | 原因 |
+|------|----------|------|
+| 战斗 | 3-5秒 | 需要快速响应战况变化 |
+| 采集/移动 | 5-10秒 | 任务导向，节奏适中 |
+| 空闲/待机 | 15-30秒 | 减少不必要的 LLM 调用 |
+
+#### 2. 被动触发（事件驱动）
+
+以下事件立即触发一次 AI 决策（优先于心跳）：
+
+| 触发事件 | 优先级 | 示例 |
+|----------|--------|------|
+| 血量突变 >30% | P0（最高） | 被集火突袭 |
+| 蓝量耗尽 | P0 | 无法释放技能 |
+| 目标死亡 | P1 | 需切换目标或重选任务 |
+| 背包状态剧变 | P1 | 获得稀有物品/背包满了 |
+| 进入新地图 | P1 | 需重新评估环境 |
+| 遭遇新敌人类型 | P2 | 需判断威胁等级 |
+| 玩家指令 | P1 | 用户通过聊天指派任务 |
+| 附近友方求助 | P2 | 支援请求 |
+
+```typescript
+// 事件触发器
+class BrainTrigger {
+  private lastTriggerTime = 0;
+  private minGap = 1000; // 两次触发最小间隔（防抖）
+
+  onEvent(event: AIGameEvent): boolean {
+    const now = Date.now();
+    if (now - this.lastTriggerTime < this.minGap) {
+      return false; // 防抖
+    }
+    
+    // 优先级判断
+    if (event.priority === "P0") {
+      this.lastTriggerTime = now;
+      return true; // 立即触发
+    }
+    
+    if (event.priority === "P1" && this.canInterrupt()) {
+      this.lastTriggerTime = now;
+      return true;
+    }
+    
+    return false; // 排队等下次心跳
+  }
+  
+  // 当前动作能否被打断
+  private canInterrupt(): boolean {
+    const currentAction = this.getCurrentAction();
+    // 移动和等待可打断，攻击和采集不打断
+    return ["move", "wait"].includes(currentAction?.type);
+  }
+}
+```
+
+#### 3. 冷却机制
+
+```typescript
+interface BrainCooldown {
+  lastDecision: number;           // 上次决策时间
+  lastCombatDecision: number;    // 上次战斗决策
+  lastGatherDecision: number;    // 上次采集决策
+  
+  // 检查是否在冷却中
+  isOnCooldown(type: "any" | "combat" | "gather"): boolean {
+    const now = Date.now();
+    switch (type) {
+      case "combat":
+        return now - this.lastCombatDecision < 3000;
+      case "gather":
+        return now - this.lastGatherDecision < 10000;
+      default:
+        return now - this.lastDecision < 2000;
+    }
+  }
+}
+```
+
+#### 4. 触发决策流程图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        游戏 Tick                             │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   事件检测                                   │
+│  [血量↓30%] [蓝量耗尽] [目标死亡] [进入新地图] [心跳] ...  │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│               BrainTrigger.onEvent()                        │
+│  • 优先级 P0 → 立即触发                                      │
+│  • 优先级 P1 → 检查动作可打断 → 触发                         │
+│  • 优先级 P2 → 放入事件队列                                  │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      ▼
+         ┌────────────────────────┐
+         │   在冷却中？           │
+         └──────────┬─────────────┘
+              是     │      否
+              ▼      │      ▼
+         [跳过]      │ ┌─────────────────────────────────┐
+                    │ │  收集 AIPerception               │
+                    │ │  • 自身状态                      │
+                    │ │  • 周围实体（敌人/友方/NPC）     │
+                    │ │  • 资源点（eventZones）          │
+                    │ │  • 世界信息（地图/时间）          │
+                    │ └──────────────┬──────────────────┘
+                    │                │
+                    │                ▼
+                    │ ┌─────────────────────────────────┐
+                    │ │  构建 LLM Prompt                 │
+                    │ │  • System Prompt（角色设定）     │
+                    │ │  • User Prompt（当前状态）       │
+                    │ └──────────────┬──────────────────┘
+                    │                │
+                    │                ▼
+                    │ ┌─────────────────────────────────┐
+                    │ │  调用 LLM 接口                   │
+                    │ │  await llm.speak("ai_brain",...) │
+                    │ └──────────────┬──────────────────┘
+                    │                │
+                    │                ▼
+                    │ ┌─────────────────────────────────┐
+                    │ │  解析决策结果                    │
+                    │ │  • 验证 action 格式              │
+                    │ │  • 设置 AIState                  │
+                    │ │  • 更新 cooldown                 │
+                    │ └─────────────────────────────────┘
+                    └──────────────────────────────────────┘
+```
+
+---
+
+## 设计重点2：AI托管器 Agent 的系统提示词和用户提示词设计
+
+### 角色设定原则
+
+1. **一致性**：Agent 的行为必须与角色设定一致
+2. **简洁性**：Prompt 不宜过长，影响 LLM 响应速度
+3. **可执行**：输出必须是明确可执行的动作
+4. **安全边界**：禁止执行伤害玩家或其他角色的动作
+
+### System Prompt（角色大脑设定）
+
+```
+# 角色设定
+
+你是角色【{{角色名}}】的AI控制大脑。
+
+## 基础信息
+- 名字：{{角色名}}
+- 等级：Lv.{{等级}}
+- 职业/定位：{{职业}}
+- 性格特点：{{性格描述}}
+- 当前所在地图：{{当前地图}}
+
+## 核心能力
+- HP: {{当前HP}}/{{最大HP}} ({{HP百分比}}%)
+- MP: {{当前MP}}/{{最大MP}} ({{MP百分比}}%)
+- 攻击力: {{攻击力}}
+- 防御力: {{防御力}}
+
+## 背包物品
+{{#each 背包物品}}
+- {{name}} ×{{quantity}} ({{description}})
+{{/each}}
+
+## 技能列表
+{{#each 技能列表}}
+- {{name}} (消耗{{cost}}MP, 冷却{{cd}}秒)
+{{/each}}
+
+## 当前位置
+- X: {{x坐标}}, Y: {{y坐标}}
+- 附近可采集资源：
+  {{#each 可达资源}}
+  - {{zoneName}} ({{distance}}米)
+  {{/each}}
+  {{#unless 可达资源}}
+  - 暂无
+  {{/unless}}
+```
+
+### User Prompt（当前状态 + 决策请求）
+
+```
+## 当前情况
+
+### 环境感知
+- 周围敌人：{{enemyCount}}只 ({{enemyList}})
+- 周围友方：{{allyCount}}个 ({{allyList}})
+- 周围NPC：{{npcCount}}个 ({{npcList}})
+
+### 战斗状态
+{{#if 在战斗中}}
+- 当前正在战斗
+- 攻击目标：{{targetName}} (HP: {{targetHp}})
+- 目标距离：{{targetDistance}}米
+{{else}}
+- 当前未在战斗
+{{/if}}
+
+### 资源状态
+- 背包使用率：{{inventoryUsage}}%
+{{#if 背包接近满}}
+- ⚠️ 背包即将满，建议处理物品
+{{/if}}
+
+### 角色记忆（最近3件事）
+{{#each 最近记忆}}
+{{#if @first}}
+- **最新**: {{description}} ({{timestamp}})
+{{else}}
+- {{description}} ({{timestamp}})
+{{/if}}
+{{/each}}
+
+### 当前目标
+{{currentGoal}}
+
+## 可用动作
+
+请选择以下动作之一：
+
+| 动作 | 参数 | 说明 |
+|------|------|------|
+| move | x, y | 移动到坐标 |
+| attack | targetId | 攻击指定目标 |
+| gather | zoneName | 进入采集区域 |
+| interact | npcId | 与NPC对话 |
+| useSkill | skillName | 使用技能 |
+| useItem | itemName | 使用物品 |
+| flee | - | 撤退到安全位置 |
+| wait | duration | 原地等待 |
+| follow | targetId | 跟随目标 |
+
+## 决策要求
+
+请根据当前情况做出决策：
+
+1. **生存优先**：HP < 30% 必须治疗或撤退
+2. **效率优先**：有明确目标时保持专注
+3. **团队协作**：适当支援附近友方
+4. **资源管理**：背包 > 80% 时优先处理
+
+## 输出格式
+
+请以JSON格式输出决策：
+
+```json
+{
+  "reasoning": "简要说明决策理由（20字内）",
+  "goal": "描述当前目标（可与原目标相同）",
+  "action": {
+    "type": "动作类型",
+    "target": {"id": "目标ID", "x": 0, "y": 0, "name": "目标名"},
+    "context": "执行此动作的原因"
+  }
+}
+```
+```
+
+### 完整 Prompt 示例
+
+```
+# 角色设定
+
+你是角色【萧肿】的AI控制大脑。
+
+## 基础信息
+- 名字：萧肿
+- 等级：Lv.5
+- 职业/定位：近战战士
+- 性格特点：勇敢冲锋型，喜欢正面战斗
+- 当前所在地图：mulberryTown（桑顿小镇）
+
+## 核心能力
+- HP: 75/80 (94%)
+- MP: 30/40 (75%)
+- 攻击力: 35
+- 防御力: 12
+
+## 背包物品
+- 生命药水 ×2
+- 铁剑 ×1 (装备中)
+
+## 技能列表
+- 冲斩 (消耗10MP, 冷却5秒)
+- 怒吼 (消耗20MP, 冷却15秒)
+
+## 当前位置
+- X: 13, Y: 25
+- 附近可采集资源：
+  - 农田 (距离 15米)
+  - 木材堆 (距离 8米)
+  - 喷水池 (距离 20米)
+
+---
+
+## 当前情况
+
+### 环境感知
+- 周围敌人：1只 (哥布林, HP: 30/30)
+- 周围友方：2个 (玩家陆川, 萧肿自己)
+- 周围NPC：0个
+
+### 战斗状态
+- 当前正在战斗
+- 攻击目标：哥布林 (HP: 30/30)
+- 目标距离：3.5米
+
+### 资源状态
+- 背包使用率：45%
+
+### 角色记忆（最近3件事）
+- 最新: 遭遇哥布林，展开战斗 (刚刚)
+- 在 mulberryTown 城镇中巡逻 (5分钟前)
+- 跟随玩家陆川进入地图 (10分钟前)
+
+### 当前目标
+跟随玩家陆川战斗
+
+## 决策要求
+
+1. 优先保证存活（血量<30%时必须撤退或治疗）
+2. 背包80%时优先处理物品
+3. 如果有明确目标，保持目标一致性
+4. 与玩家保持适当距离（不要太远以便支援）
+
+## 输出格式
+
+请以JSON格式输出决策：
+
+```json
+{
+  "reasoning": "继续追击哥布林完成击杀",
+  "goal": "击败哥布林获得经验",
+  "action": {
+    "type": "attack",
+    "target": {"id": "goblin_1", "x": 15, "y": 24, "name": "哥布林"},
+    "context": "目标HP充足，继续追击"
+  }
+}
+```
+
+### LLM 期望输出
+
+```json
+{
+  "reasoning": "哥布林HP剩余，追击完成击杀可获得经验",
+  "goal": "击败哥布林",
+  "action": {
+    "type": "attack",
+    "target": {"id": "goblin_1", "x": 15, "y": 24, "name": "哥布林"},
+    "context": "目标HP: 30/30，可继续战斗"
+  }
+}
+```
+
+### 错误处理
+
+当 LLM 输出格式错误时的兜底策略：
+
+```typescript
+async function parseLLMResponse(raw: string): Promise<LLMDecision | null> {
+  try {
+    const json = JSON.parse(raw);
+    if (json.action && json.action.type) {
+      return json as LLMDecision;
+    }
+  } catch {
+    // JSON 解析失败
+  }
+  
+  // 兜底：返回"保持现状"决策
+  return {
+    reasoning: "LLM响应异常，保持现状",
+    goal: currentGoal,
+    action: { type: "wait", context: "等待下次决策" }
+  };
+}
+```
+
+### Prompt 优化技巧
+
+1. **控制长度**：System Prompt < 500 tokens，User Prompt < 1000 tokens
+2. **结构化输出**：使用明确的 JSON 格式
+3. **提供示例**：在 Prompt 中给出期望输出的示例
+4. **设置边界**：明确禁止的动作（如攻击友方）
+5. **上下文窗口**：只传递最近3-5条记忆，避免历史过长
+
+### 触发性事件设计
+例如在workshops/toonflow-field-survival/map_design/通天传授-收徒系统/events 编写触发性事件，我在与角色交谈时 输入 #ai xxxx 就主动触发 ai托管器agent 无论有没有 打勾ai 托管都会进行一次 ai 决策。 例如#ai 帮我去收集木材。 #ai 帮我去收集药草。  #ai 在周围瞎逛
 ## 注意事项
 
 1. **性能考虑**：LLM 调用有延迟，决策间隔不宜过短（建议5-10秒）
