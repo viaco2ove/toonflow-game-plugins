@@ -13,6 +13,7 @@
  * 本模块与 UI 解耦：App.vue 传入 hooks 对象，事件引擎通过 hooks 与游戏交互。
  */
 import { ref } from "vue";
+import { assetUrl } from "./assets";
 import type { Ctx, EventsFile, EventDef } from "../../../../../workshops/toonflow-field-survival/map_design/通天传授-收徒系统/events/shared/_ctx";
 
 // ─── 运行时状态 ───
@@ -72,28 +73,31 @@ async function saveFlags(): Promise<void> {
 // ─── 事件加载 ───
 // ★ 事件文件与地图同源加载：fetch events/maps/<mapFile>.events.json
 //   - dev（vite dev server）：走 /story-data/ 中间件（vite.config.ts:storyDataPlugin）读 workshops 真实文件
-//   - dev-host / 生产：地图集打包时 events/ 与 maps/ 同目录部署（同一条 assetUrl 链）
+//   - dev-host / 生产：走 assetUrl("events/maps/")（自动适配 getAsset + token 路径）
 //   - fetch 全部失败 → 本图无事件，静默返回
-const EVENTS_BASES = [
-  "/story-data/toonflow-field-survival/map_design/通天传授-收徒系统/events/maps/",
-  "events/maps/",
-  "./events/maps/",
-];
-
 export async function loadMapEvents(mapFile: string): Promise<void> {
   loadedEvents.value = null;
   firedIds.value = new Set();
-  for (const base of EVENTS_BASES) {
+  // 每次调用时动态获取 assetUrl（确保 location.href 已设置）
+  const evBases = [
+    "/story-data/toonflow-field-survival/map_design/通天传授-收徒系统/events/maps/",
+    assetUrl("events/maps/"),
+    "events/maps/",
+    "./events/maps/",
+  ];
+  for (const base of evBases) {
     try {
-      const r = await fetch(base + `${mapFile}.events.json`);
+      const url = base + `${mapFile}.events.json`;
+      const r = await fetch(url);
       if (!r.ok) continue;
       const data = await r.json() as EventsFile;
       if (data.version !== 1 || !Array.isArray(data.events)) continue;
       loadedEvents.value = data;
-      console.info("[eventEngine] 已加载事件:", mapFile, data.events.length, "条 (from", base.slice(0, 30) + ")");
+      console.info("[eventEngine] 已加载事件:", mapFile, data.events.length, "条 (from", base.slice(0, 40) + ")");
       return;
-    } catch { /* try next base */ }
+    } catch (e) { console.warn("[eventEngine] fetch 失败:", base, e); /* try next base */ }
   }
+  console.warn("[eventEngine] 未找到事件文件:", mapFile);
 }
 
 // ─── 脚本执行 ───
