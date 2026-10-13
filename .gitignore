@@ -98,3 +98,4 @@ run.local.ps1
 *.tbg
 null
 /workshops/
+/plugins/toonflow-field-survival/ui/

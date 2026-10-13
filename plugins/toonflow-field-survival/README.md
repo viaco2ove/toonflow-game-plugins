@@ -1,5 +1,6 @@
 # 野外生存 (Field Survival)
-ui 文件直接删除了。看看会不会自动生成。
+ui 文件直接删除了。看看会不会自动生成。 
+ui 文件夹已被忽略，不上传git.
 > 野外生存 ARPG 小游戏插件 · Toonflow Plugin v1.0.0
 
 ## 快速开始
