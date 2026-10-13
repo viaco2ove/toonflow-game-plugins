@@ -41,7 +41,7 @@ function cloneForPost<T>(v: T): T {
   }
 }
 
-function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 10000): Promise<any> {
+function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 10000, sessionId?: string): Promise<any> {
   const reqId = `jsapi_${Date.now()}_${++reqSeq}`;
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -50,7 +50,7 @@ function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 1000
     }, timeoutMs);
     pending.set(reqId, { resolve, reject, timer });
     try {
-      window.parent.postMessage({ type: "tf_plugin_data", reqId, op, dataKey, value: cloneForPost(value) }, "*");
+      window.parent.postMessage({ type: "tf_plugin_data", reqId, op, dataKey, value: cloneForPost(value), sessionId }, "*");
     } catch (err) {
       pending.delete(reqId);
       window.clearTimeout(timer);
@@ -64,6 +64,13 @@ export const toonflowJsApi = {
   pluginData: {
     get(dataKey: string): Promise<any> {
       return request("get", dataKey).then((r) => r.value);
+    },
+    /**
+     * ★ 读模板（sessionId="all" 跨会话共享）
+     * CLI -u 写到 "map_visual:故事名" (sessionId="all")，前端用此方法拉
+     */
+    getTemplate(dataKey: string): Promise<any> {
+      return request("get", dataKey, undefined, 10000, "all").then((r) => r.value);
     },
     set(dataKey: string, value: unknown): Promise<void> {
       return request("set", dataKey, value).then(() => undefined);

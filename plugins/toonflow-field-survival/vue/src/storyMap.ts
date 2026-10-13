@@ -64,15 +64,25 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
  *   形态② { format:"tbg", data:<base64> }（entry 从故事模板搬运的未解包结构）→ 解包。
  */
 async function normalizeBundle(v: any): Promise<StoryMapBundle | null> {
-  if (!v || typeof v !== "object") return null;
+  if (!v || typeof v !== "object") {
+    console.warn(`[field-survival] map_visual 读取结果: 非对象 (${typeof v})`);
+    return null;
+  }
   if (v.files && typeof v.files === "object") {
+    console.info(`[field-survival] map_visual 形态①（已解包）: files keys = ${Object.keys(v.files).join(", ")}`);
     return { files: v.files as Record<string, any>, first: v.first };
   }
   if (v.format === "tbg" && typeof v.data === "string") {
+    console.info(`[field-survival] map_visual 形态②（未解包 tbg）: data length = ${v.data.length} bytes (base64)`);
     const unpacked = await tbgToVisFiles(v.data);
-    if (!unpacked) return null;
+    if (!unpacked) {
+      console.warn(`[field-survival] map_visual tbg 解包失败`);
+      return null;
+    }
+    console.info(`[field-survival] map_visual tbg 解包成功: files keys = ${Object.keys(unpacked.files).join(", ")}`);
     return { files: unpacked.files, first: unpacked.first };
   }
+  console.warn(`[field-survival] map_visual 形态未知: keys = ${Object.keys(v).join(", ")}`);
   return null;
 }
 
@@ -85,20 +95,71 @@ async function normalizeBundle(v: any): Promise<StoryMapBundle | null> {
  */
 export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle | null> {
   if (loaded && !force) return bundle;
+
+// ── 调试输出：故事 / 地图集来源（用户要求打印的字段） ──
+  // 故事名来源链：ctx.worldName → ?story= → window.__STORY__ → 默认故事
+  const _ctx = (toonflowJsApi as any)?.ctx || {};
+  // 故事名来源链：ctx.worldName → ?story= → window.__STORY__ → 默认故事
+  let _urlStory = "";
+  try {
+    _urlStory = new URLSearchParams(location.search).get("story") || "";
+  } catch { /* ignore */ }
+  const _storyName = String(
+    _ctx.worldName || _urlStory || (window as any).__STORY__ || "通天传授-收徒系统"
+  );
+  const _storyId = String(_ctx.storyId || _ctx.worldId || "未知");
+  console.info(`[field-survival] 故事名: ${_storyName}`);
+  console.info(`[field-survival] 故事id: ${_storyId}`);
+  // ★ 统一：CLI 写到 "map_visual:<故事名>" (sessionId="all")，前端用 getTemplate 拉
+  const _dataKey = `map_visual:${_storyName}`;
+  console.info(`[field-survival] 故事集获取方式: toonflowJsApi.pluginData.getTemplate("${_dataKey}")`);
+  console.info(`[field-survival] 故事集 datakey: ${_dataKey} (sessionId=all)`);
+  let _getOk = false;
+  let _fileNames: string[] = [];
+  let _fallbackReason = "";
   loaded = true;
   bundle = null;
   if (!inIframe()) return null;
   try {
-    const v = await withTimeout((toonflowJsApi as any)?.pluginData?.get("map_visual"), 2000);
-    const nb = await normalizeBundle(v);
+    // ★ 统一通道：getTemplate（sessionId="all" 模板）
+    const v = await withTimeout(
+      (toonflowJsApi as any)?.pluginData?.getTemplate?.(_dataKey),
+      2000
+    );
+    console.info(`[field-survival] map_visual 模板读取结果: ${v ? (v.format === "tbg" ? "tbg 包" : v.files ? "files 结构" : "未知形态") + ` (keys: ${v ? Object.keys(v).join(",") : "null"})` : "null"}`);
+    let nb = await normalizeBundle(v);
+    // ── 退路①：模板读不到（iframe 内拿不到 worldName）→ 读 entry 注入的本会话 map_visual ──
+    if (!nb || Object.keys(nb.files).length === 0) {
+      console.info(`[field-survival] 模板未命中，退路读本会话 map_visual（entry.ensureStoryVisualMap 注入）`);
+      const sv = await withTimeout(
+        (toonflowJsApi as any)?.pluginData?.get?.("map_visual"),
+        2000
+      );
+      console.info(`[field-survival] 会话 map_visual 读取结果: ${sv ? (sv.format === "tbg" ? "tbg 包" : sv.files ? "files 结构" : "未知形态") : "null"}`);
+      const nb2 = await normalizeBundle(sv);
+      if (nb2 && Object.keys(nb2.files).length > 0) nb = nb2;
+    }
     if (nb && Object.keys(nb.files).length > 0) {
       bundle = nb;
+      const fileNames = Object.keys(bundle.files);
+      _getOk = true;
+      _fileNames = fileNames;
       console.info(
-        `[field-survival] 已加载会话视觉地图包 map_visual（${Object.keys(bundle.files).length} 张图）`,
+        `[field-survival] 已加载故事视觉地图包 ${_dataKey}（${fileNames.length} 张图）: ${fileNames.join(", ")}${bundle.first ? ` + first` : ""}`,
       );
+    } else {
+      _fallbackReason = nb ? "files 为空" : "normalize 返回 null（模板不存在 / 形态未知 / tbg 解包失败）";
     }
-  } catch {
+  } catch (e: any) {
+    _fallbackReason = `读取异常: ${e?.message || e}`;
     bundle = null;
+  }
+  // ── 调试总结：成功/失败 + 退路回默认 ──
+  console.info(`[field-survival] 故事集是否从数据库获取成功: ${_getOk ? `✅ 是（${_fileNames.length} 张图）` : `❌ 否`}`);
+  if (!_getOk) {
+    console.info(`[field-survival] 故事集获取失败。退路回默认地图数据: ui/maps 目录 (first.map.json + 回退 storyMapBase())`);
+  } else {
+    console.info(`[field-survival] 故事集 json 文件名: ${_fileNames.join(", ")}${bundle?.first ? " + first.map.json" : ""}`);
   }
   return bundle;
 }

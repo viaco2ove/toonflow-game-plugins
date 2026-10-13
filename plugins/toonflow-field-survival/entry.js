@@ -101,37 +101,33 @@ async function ensureMapData(ctx) {
  *   插件原来把视觉 Tiled 世界（mulberryTown.json 等）安装时烘焙进 ui/maps/，
  *   所有故事/用户共用同一份。本函数把「按当前故事」纠正过来：
  *     1. 取 context.worldName（tick.ts / MiniGameController v6 注入的当前世界名）；
- *     2. 读模板 getTemplate("map_visual:<worldName>")（CLI -u 写在 sessionId="all"），
+ *     2. 读模板 api.get("map_visual:<worldName>", { sessionId: "all" })
  *        回退旧 key "map_data:<worldName>"（用户历史上传的模板）；
- *     3. 原样写进本会话 map_visual → 前端 storyMap.loadStoryMapBundle 消费，
- *        loadLevelByName/loadMapConfig/loadStartLevelName 优先渲染这套世界；
- *     4. 本会话已有 map_visual（手动上传过 / 上次已注入）→ 跳过，绝不覆盖用户上传。
- *   无 worldName / 无模板 / 后端无 getTemplate → 静默跳过（回退 ui/maps，零回归）。
+ *     3. ★ v0.4 改为：不再搬到当前 session 的 map_visual
+ *        → 前端 storyMap.loadStoryMapBundle 用 getTemplate 直接读 "map_visual:<story>" 模板
+ *        → 节省空间（每用户/每 session 不再各自复制一份 .tbg）
+ *        → 手动 UI 上传仍走当前 session 的 map_visual（覆盖模板）
+ *   无 worldName / 无模板 → 静默跳过（回退 ui/maps，零回归）。
  */
 async function ensureStoryVisualMap(context, s) {
   try {
     const worldName = str(context && context.worldName, "");
     if (!worldName) return null;
     const api = context && context.tsApi && context.tsApi.pluginData;
-    if (!api || typeof api.get !== "function" || typeof api.set !== "function") return null;
-    if (typeof api.getTemplate !== "function") return null;
-    let existing = null;
-    try {
-      existing = await api.get("map_visual");
-    } catch {
-    }
-    if (existing && (existing.files || existing.format === "tbg")) return existing;
+    if (!api || typeof api.get !== "function") return null;
+    // ★ v0.4 简化：跳过搬运，让前端直接读模板
+    //   兼容老 key：map_data:<worldName>
     const keys = ["map_visual:" + worldName, "map_data:" + worldName];
     for (const k of keys) {
       let tpl = null;
       try {
-        tpl = await api.getTemplate(k);
+        // sessionId="all" 跨会话模板通道（前端 toonflowJsApi.getTemplate 实现）
+        tpl = api.getTemplate ? await api.getTemplate(k) : null;
       } catch {
       }
       if (tpl && (tpl.format === "tbg" || tpl.files)) {
-        await api.set("map_visual", tpl);
         if (s) s.mapVisualFrom = k;
-        console.log("[field-survival] 故事视觉地图模板已注入会话 map_visual：" + k);
+        console.log("[field-survival] 故事视觉地图模板已确认（前端直接读，不搬 session）：" + k);
         return tpl;
       }
     }

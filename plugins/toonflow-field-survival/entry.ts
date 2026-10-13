@@ -220,6 +220,7 @@ async function ensureStoryVisualMap(context?: PluginGameContext, s?: FieldSurviv
   };
   try {
     const worldName = str((context as any)?.worldName, "");
+     console.log("[map-diag] enter ensureStoryVisualMap");
     D("enter ensureStoryVisualMap", who);
     if (!worldName) { D("SKIP: worldName 为空 → 走 ui/maps 通用回退", who); return null; }
     const api = (context as any)?.tsApi?.pluginData;
@@ -227,6 +228,7 @@ async function ensureStoryVisualMap(context?: PluginGameContext, s?: FieldSurviv
       D("SKIP: tsApi.pluginData 不可用", who); return null;
     }
     if (typeof api.getTemplate !== "function") {
+      console.log("[map-diag] SKIP: getTemplate 不存在（旧后端）");
       D("SKIP: getTemplate 不存在（旧后端）", who); return null;
     }
     let existing: any = null;
@@ -2820,6 +2822,7 @@ export async function handle_action(
       // 无论之前是 playing/over，第二次进入都必须回到 select 阶段
       const fresh = emptyState(context);
       // ★ v6：故事绑定视觉地图模板尽早注入（init 早于选人面板，前端 onMounted 即可读到）
+      console.log("[map-diag] start_init");
       await ensureStoryVisualMap(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "请选择友方 / 观战 / 敌对角色后开始" };
