@@ -55,6 +55,13 @@ export function setStoryContext(name: string, id?: string | number): void {
   if (id != null && id !== "" && !_stateStoryId) _stateStoryId = String(id);
 }
 
+/** ★ App.vue 收到宿主 tf_plugin_state 时，可把当前会话ID 喂进来（便于日志/排查） */
+export function setSessionContext(sessionId: string): void {
+  if (sessionId) _stateSessionId = String(sessionId);
+}
+
+let _stateSessionId = "";
+
 function inIframe(): boolean {
   try {
     return typeof window !== "undefined" && window.parent !== window;
@@ -117,13 +124,23 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   //   ④ window.__STORY__（vite dev-host 注入）
   const _ctx = (toonflowJsApi as any)?.ctx || {};
   let _urlStory = "";
+  let _urlWorldId = "";
+  let _urlSessionId = "";
   try {
-    _urlStory = new URLSearchParams(location.search).get("story") || "";
+    const sp = new URLSearchParams(location.search);
+    _urlStory = sp.get("story") || "";
+    _urlWorldId = sp.get("worldId") || "";
+    _urlSessionId = sp.get("sessionId") || "";
   } catch { /* ignore */ }
   const _storyName = String(
     _stateStoryName || _ctx.worldName || _urlStory || (window as any).__STORY__ || ""
   );
-  const _storyId = String(_stateStoryId || _ctx.storyId || _ctx.worldId || "未知");
+  // 故事id 优先级：setStoryContext 写入 → ctx.storyId/worldId → URL ?worldId= → 兜底"未知"
+  const _storyId = String(
+    _stateStoryId || _ctx.storyId || _ctx.worldId || _urlWorldId || "未知"
+  );
+  // 调试日志加会话id（便于排插桩/查数据落库归属）
+  const _sessionId = String(_stateSessionId || _ctx.sessionId || _urlSessionId || "未知");
   console.info(`[field-survival] 故事名: ${_storyName}`);
   console.info(`[field-survival] 故事id: ${_storyId}`);
    console.info(`[field-survival] sessionid: ${_sessionId}`);
