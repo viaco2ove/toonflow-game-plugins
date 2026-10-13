@@ -667,10 +667,16 @@ function makeEntity(
 
 function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
   const card = (ctx?.playerCard || {}) as Record<string, unknown>;
+  const _wn = str((ctx as any)?.worldName, "");
+  const _wid = (ctx as any)?.worldId;
   return {
     phase: "select",
     version: 3,                  // v3：3000m 世界 + 米单位 + scale 元数据
     tick: 0,
+    // ★ v6+：把宿主注入的当前世界身份写进 state 顶层，前端可同步从 state.value 拿到。
+    //   init/start_init 会再覆盖一次（兜底）。Map 数据绑定 / 角色面板 / 事件源都靠它。
+    ...(_wn ? { worldName: _wn } : {}),
+    ...(_wid != null && _wid !== "" ? { worldId: _wid } : {}),
     world: { w: WORLD_X_RANGE[1] - WORLD_X_RANGE[0], h: WORLD_Z_RANGE[1] - WORLD_Z_RANGE[0] },
     /** v3 增强：玩家出生点 (0,0) */
     spawn: { ...PLAYER_SPAWN },
@@ -2824,6 +2830,12 @@ export async function handle_action(
       // ★ v6：故事绑定视觉地图模板尽早注入（init 早于选人面板，前端 onMounted 即可读到）
       console.log("[map-diag] start_init");
       await ensureStoryVisualMap(context);
+      // ★ 把宿主注入的当前世界身份写进 state 顶层（前端 storyMap / 角色面板 / 事件等
+      //   都能从 state.value?.worldName 直接拿到，避开 ?story= URL 方案与 tsApi.ctx 的可用性问题）。
+      const _wn = str((context as any)?.worldName, "");
+      const _wid = (context as any)?.worldId;
+      if (_wn) (fresh as any).worldName = _wn;
+      if (_wid != null && _wid !== "") (fresh as any).worldId = _wid;
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "请选择友方 / 观战 / 敌对角色后开始" };
     }

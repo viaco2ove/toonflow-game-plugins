@@ -20,7 +20,7 @@ declare global {
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
-import { loadStoryMapBundle, getStoryFirstMap } from "./storyMap";
+import { loadStoryMapBundle, getStoryFirstMap, setStoryContext } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
@@ -5938,6 +5938,13 @@ onMounted(async () => {
   if (incoming && Array.isArray(incoming.entities)) applyEnemyCollision(incoming.entities as Entity[]);
   // ★  vfx/floaters 衰减由 dev-host tick 负责（vite.config.ts 每 tick life--）。
   //    客户端不要保留 prevEntities 的 vfx，否则 prevEntities 里的 vfx 不衰减、永远显示。
+  // ★ 把宿主/entry 注入的世界身份同步给 storyMap 缓存（与 roles 同源，最稳）。
+  //   state.worldName/worldId 在 init 时由 entry.ts 写入顶层（见 emptyState）。
+  if (incoming && typeof incoming === "object") {
+    const wn = (incoming as any).worldName;
+    const wid = (incoming as any).worldId;
+    if (wn || wid != null) setStoryContext(String(wn || ""), wid);
+  }
   state.value = incoming;
     ready.value = true;
 
