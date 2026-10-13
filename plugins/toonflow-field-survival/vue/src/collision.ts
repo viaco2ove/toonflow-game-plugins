@@ -30,6 +30,7 @@
  */
 
 import { assetUrl } from "./assets";
+import { getStoryTileset } from "./storyMap";
 
 /** 单个 tile id 的碰撞标记 */
 export interface TileFlags {
@@ -90,6 +91,27 @@ let flagsPromise: Promise<TileFlagTable> | null = null;
 export function loadTileFlags(): Promise<TileFlagTable> {
   if (flagsPromise) return flagsPromise;
   flagsPromise = (async (): Promise<TileFlagTable> => {
+    // ★ 故事绑定：先看 storyMap 包内有无 tileset（compiled_dawnlike.json），
+    //   没有再走公共 URL（assetUrl / 公共 compiled_dawnlike.json）。
+    const storyTileset = getStoryTileset();
+    if (storyTileset && Array.isArray(storyTileset.tiles)) {
+      const out: TileFlagTable = {};
+      for (const t of storyTileset.tiles) {
+        if (t?.id == null) continue;
+        let blocked = false;
+        let vision = false;
+        let bed = false;
+        for (const p of t.properties ?? []) {
+          const v = toBool(p?.value);
+          if (p?.name === "blocked") blocked = v;
+          else if (p?.name === "blocks_vision") vision = v;
+          else if (p?.name === "description" && String(p?.value ?? "").trim().toLowerCase() === "bed") bed = true;
+        }
+        out[Number(t.id)] = { blocked, vision, bed };
+      }
+      console.info(`[field-survival] tileset（来自 storyMap 包内）已加载: ${Object.keys(out).length} tiles`);
+      return out;
+    }
     for (const url of FLAG_URLS) {
       try {
         const r = await fetch(url);

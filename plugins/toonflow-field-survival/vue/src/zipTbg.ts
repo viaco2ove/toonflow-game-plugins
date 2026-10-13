@@ -50,7 +50,7 @@ export function b64ToUint8Array(b64: string): Uint8Array {
   return out;
 }
 
-/** 是否 Tiled 导出格式（layers + width + tilewidth）——排除 first.map.json/story.json 等 metadata */
+/** 是否 Tiled 导出格式（layers + width + tilewidth）——保留备用，目前 zip 解包不再用 */
 function isTiledJson(raw: Uint8Array): boolean {
   try {
     const o = JSON.parse(new TextDecoder().decode(raw));
@@ -61,36 +61,79 @@ function isTiledJson(raw: Uint8Array): boolean {
 }
 
 export interface TbgVisFiles {
-  /** 文件名(不含 .json，如 mulberryTown) → 原始 Tiled JSON */
+  /**
+   * zip 内**全量** entries（按原 zip 路径作为 key，含 maps/、tileset、images/、story.json 等）。
+   *   - maps/*.json → 已 JSON.parse 的对象
+   *   - 其它 .json → 已 JSON.parse 的对象（story.json / entity_types.json / compiled_dawnlike.json 等）
+   *   - 其它二进制（.png/.gif/.xlsx/...）→ Uint8Array
+   * 历史版本只取 maps/*.json，会丢掉 tileset/images，导致切故事时 tileset 不变。
+   * 现在保留全量：故事 A 用 A 的 tileset/story.json，故事 B 用 B 的，互不污染。
+   */
   files: Record<string, any>;
+  /**
+   * 便利字段：maps/<name>.json 的解析结果（key 不含 maps/ 前缀、不含 .json），
+   * 关卡名 → Tiled JSON 映射，与 loadMapConfig(levelName) 内部的 levelNameToFile 对齐。
+   * 历史形态① 消费者（loadMapConfig / loadLevelByName）继续走这个。
+   */
+  mapFiles: Record<string, any>;
   /** first.map.json 解析结果（开局起始图声明），可选 */
   first: any;
+  /** story.json 解析结果（故事元数据），可选 */
+  story: any;
+  /** entity_types.json 解析结果（地图 entity 类型表），可选 */
+  entityTypes: any;
+  /** compiled_dawnlike.json 解析结果（tileset 属性表，碰撞/视线判定），可选 */
+  tileset: any;
 }
 
 /**
- * 把 .tbg 的 base64 数据解成「视觉 Tiled 文件集」。
- * 规则与 App.vue onUploadMap 一致：取 maps/ 下（排除 maps/bak/）全部 Tiled json 作 files，
- * first.map.json 作 first。找不到任何 Tiled 图返回 null。
+ * 把 .tbg 的 base64 数据解成「完整视觉地图集」——
+ * 取 zip 内**全量** entries（排除 bak/ 备份目录、test_data/ 测试数据），按 zip 路径作为 key。
+ * 附加便利字段：mapFiles（maps/*.json 索引）、first/story/entityTypes/tileset 直接可读。
  */
 export async function tbgToVisFiles(b64: string): Promise<TbgVisFiles | null> {
   try {
     const buf = b64ToUint8Array(b64);
     const entries = await readZipEntries(buf);
     const files: Record<string, any> = {};
+    const mapFiles: Record<string, any> = {};
     let first: any = null;
+    let story: any = null;
+    let entityTypes: any = null;
+    let tileset: any = null;
     for (const e of entries) {
-      if (/maps\/bak\//i.test(e.name)) continue;
-      const fm = /(?:^|\/)maps\/([^/]+)\.json$/i.exec(e.name);
-      if (fm && isTiledJson(e.bytes)) {
-        try { files[fm[1]] = JSON.parse(new TextDecoder().decode(e.bytes)); } catch { /* skip */ }
+      // 跳过 bak 备份 / test_data 测试数据（不应进入运行时视觉）
+      if (/(^|\/)bak\//i.test(e.name)) continue;
+      if (/(^|\/)test_data\//i.test(e.name)) continue;
+      const name = e.name;
+      const lower = name.toLowerCase();
+      const isJson = lower.endsWith(".json");
+      const isTiledMap = /^maps\/[^/]+\.json$/i.test(name);
+      let value: any = e.bytes; // 默认存原始 bytes
+      if (isJson) {
+        try { value = JSON.parse(new TextDecoder().decode(e.bytes)); } catch { /* 解析失败就当 bytes 存 */ }
       }
-      const ff = /(?:^|\/)first\.map\.json$/i.exec(e.name);
-      if (ff && !first) {
-        try { first = JSON.parse(new TextDecoder().decode(e.bytes)); } catch { /* skip */ }
+      files[name] = value;
+      // 便利索引
+      if (isTiledMap && value && typeof value === "object" && Array.isArray(value.layers)) {
+        const key = name.replace(/^maps\//i, "").replace(/\.json$/i, "");
+        mapFiles[key] = value;
+      }
+      if (/(^|\/)first\.map\.json$/i.test(name) && value && typeof value === "object" && !first) {
+        first = value;
+      }
+      if (/(^|\/)story\.json$/i.test(name) && value && typeof value === "object" && !story) {
+        story = value;
+      }
+      if (/(^|\/)entity_types\.json$/i.test(name) && value && typeof value === "object" && !entityTypes) {
+        entityTypes = value;
+      }
+      if (/(^|\/)compiled_dawnlike\.json$/i.test(name) && value && typeof value === "object" && !tileset) {
+        tileset = value;
       }
     }
     if (Object.keys(files).length === 0) return null;
-    return { files, first };
+    return { files, mapFiles, first, story, entityTypes, tileset };
   } catch {
     return null;
   }

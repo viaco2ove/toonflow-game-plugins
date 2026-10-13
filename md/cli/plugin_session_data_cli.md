@@ -1,5 +1,10 @@
 命令全集
-上传故事的命令
+# 上传故事的命令
+## 1) 删掉错误数据
+python -m toon_plugins plugin_session_data -i plugins\toonflow-field-survival --remove -k "map_visual:赦夜人冥夜走廊-第二季" -story "赦夜人冥夜走廊-第二季"
+
+## 2) 重新上传（指向源 workshops 里的故事地图目录）
+python -m toon_plugins plugin_session_data -i plugins\toonflow-field-survival -u workshops\toonflow-field-survival\map_design\赦夜人冥夜走廊-第二季 -story "赦夜人冥夜走廊-第二季"
 python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -u "D:/Users/viaco/tools/Toonflow-game/toonflow-game-plugins/workshops/toonflow-field-survival/map_design/赦夜人冥夜走廊-第二季"
 
 # 1. list
