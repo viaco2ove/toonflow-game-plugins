@@ -126,6 +126,7 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   const _storyId = String(_stateStoryId || _ctx.storyId || _ctx.worldId || "未知");
   console.info(`[field-survival] 故事名: ${_storyName}`);
   console.info(`[field-survival] 故事id: ${_storyId}`);
+   console.info(`[field-survival] sessionid: ${_sessionId}`);
   // ★ 统一：CLI 写到 "map_visual:<故事名>" (sessionId="all")，前端用 getTemplate 拉
   const _dataKey = `map_visual:${_storyName}`;
   console.info(`[field-survival] 故事集获取方式: toonflowJsApi.pluginData.getTemplate("${_dataKey}")`);
