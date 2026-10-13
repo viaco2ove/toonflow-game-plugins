@@ -2,15 +2,15 @@
 /**
  * 解析 npm 命令行参数（--story xxx / --conn），设置 env 后启动 vite。
  * 用法：
- *   npm run debug -- --story 赦夜人冥夜走廊-第二季 --conn
- *   npm run debug --story=赦夜人冥夜走廊-第二季 --conn=
+ *   npm run debug -- --story xxx --conn
+ *   npm run debug --story=xxx --conn=
  *   npm run debug                          (等同 debug:story)
  */
 const { spawn } = require("child_process");
 const path = require("path");
 
 const args = process.argv.slice(2);
-let story = process.env.STORY || "赦夜人冥夜走廊-第二季";
+let story = process.env.STORY || "xxx";
 let conn = process.env.CONN || "";
 
 // 解析 --story <value> 或 --story=<value>
