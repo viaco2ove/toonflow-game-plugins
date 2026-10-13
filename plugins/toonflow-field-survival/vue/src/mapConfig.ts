@@ -812,55 +812,15 @@ export async function loadMapConfig(levelName: string = DEFAULT_START_LEVEL): Pr
 /**
  * ★ 关卡表：portalID（地图 JSON 里出口对象的 portalID 属性）→ 文件名
  *
- * 维护须知：地图里每个出口的 portalID 都必须能在这里（或命名规则）解析出文件名，
- * 否则走到该出口时 loadLevelByName 返回 null，switchLevel 只打一条 console.warn，
- * 外部表现就是"走到出口不切图"。新增地图时请在此登记，或保证名字符合
- * "Foo Bar 2" → "fooBar2" 的命名规则。
- *
- * Rotten-Soup 对照：src/assets/js/game/Game.js changeLevels() 用 levels[mapID] 取图；
- * 地牢（LADDER + createDungeon=true）原版是 createDungeonFloors() 运行时随机生成 5 层，
- * 本项目用预生成的静态 JSON 等价替代（mulberryDungeon1..5 / forestDungeon1..5）：
- *   城镇/森林的下行梯 portalID = "Mulberry Dungeon" / "Forest Dungeon"（进第 1 层）
- *   第 2..4 层的下行梯 portalID = "Mulberry Dungeon 2" .. "4"
- *   第 5 层的 LEVEL_TRANSITION 回到起点地图（"Mulberry Town" / "Mulberry Forest"）
+ *  不再使用硬编码！！！
+ *  而是 自动识别 "Mulberry Town": "mulberryTown",
  */
 const LEVEL_FILES: Record<string, string> = {
-  "Mulberry Town": "mulberryTown",
-  "Mulberry Forest": "mulberryForest",
-  "Mulberry Graveyard": "mulberryGraveyard",
-  "Lich Lair": "lichLair",
-  "Loot Goblin Lair": "lootGoblinLair",
-  "Mulberry Dungeon": "mulberryDungeon1",
-  "Mulberry Dungeon 1": "mulberryDungeon1",
-  "Mulberry Dungeon 2": "mulberryDungeon2",
-  "Mulberry Dungeon 3": "mulberryDungeon3",
-  "Mulberry Dungeon 4": "mulberryDungeon4",
-  "Mulberry Dungeon 5": "mulberryDungeon5",
-  "Forest Dungeon": "forestDungeon1",
-  "Forest Dungeon 1": "forestDungeon1",
-  "Forest Dungeon 2": "forestDungeon2",
-  "Forest Dungeon 3": "forestDungeon3",
-  "Forest Dungeon 4": "forestDungeon4",
-  "Forest Dungeon 5": "forestDungeon5",
-  // 中文 portalID（修真地图集的出口直接写中文关卡名，如 mulberryForest 的"大罗宗外门"）
-  "大罗宗外门": "mulberryTown",
-  "青云竹海": "mulberryForest",
-  "乱葬岗": "mulberryGraveyard",
-  "尸祖洞府": "lichLair",
-  "藏宝洞": "lootGoblinLair",
-  "锁灵塔·1层": "mulberryDungeon1",
-  "锁灵塔·2层": "mulberryDungeon2",
-  "锁灵塔·3层": "mulberryDungeon3",
-  "锁灵塔·4层": "mulberryDungeon4",
-  "锁灵塔·5层": "mulberryDungeon5",
-  "竹海秘境·1层": "forestDungeon1",
-  "竹海秘境·2层": "forestDungeon2",
-  "竹海秘境·3层": "forestDungeon3",
-  "竹海秘境·4层": "forestDungeon4",
-  "竹海秘境·5层": "forestDungeon5",
 };
 
-/** 关卡英文名 → 中文显示名（地图面板展示用）。与 LEVEL_FILES 的 key 一一对应。 */
+/** 关卡英文名 → 中文显示名（地图面板展示用）。与 LEVEL_FILES 的 key 一一对应。
+ * 以地图的json 数据为准。这里只是默认值。
+ * */
 const LEVEL_DISPLAY_NAMES: Record<string, string> = {
   "Mulberry Town": "城镇",
   "Mulberry Forest": "森林",
