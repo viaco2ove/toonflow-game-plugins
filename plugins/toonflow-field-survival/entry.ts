@@ -209,31 +209,63 @@ async function ensureMapData(ctx?: PluginGameContext): Promise<MapData> {
  *   无 worldName / 无模板 / 后端无 getTemplate → 静默跳过（回退 ui/maps，零回归）。
  */
 async function ensureStoryVisualMap(context?: PluginGameContext, s?: FieldSurvivalState): Promise<any | null> {
+  const D = (msg: string, extra?: any) =>
+    console.log("[map-diag] " + msg, JSON.stringify(extra ?? {}));
+  const who = {
+    pluginId: (context as any)?.pluginId,
+    userId: (context as any)?.userId,
+    sessionId: (context as any)?.sessionId,
+    worldId: (context as any)?.worldId,
+    worldName: (context as any)?.worldName,
+  };
   try {
     const worldName = str((context as any)?.worldName, "");
-    if (!worldName) return null;
+    D("enter ensureStoryVisualMap", who);
+    if (!worldName) { D("SKIP: worldName 为空 → 走 ui/maps 通用回退", who); return null; }
     const api = (context as any)?.tsApi?.pluginData;
-    if (!api || typeof api.get !== "function" || typeof api.set !== "function") return null;
-    if (typeof api.getTemplate !== "function") return null;
+    if (!api || typeof api.get !== "function" || typeof api.set !== "function") {
+      D("SKIP: tsApi.pluginData 不可用", who); return null;
+    }
+    if (typeof api.getTemplate !== "function") {
+      D("SKIP: getTemplate 不存在（旧后端）", who); return null;
+    }
     let existing: any = null;
+    let getErr = "";
     try {
       existing = await api.get("map_visual");
-    } catch { /* 读取失败 → 继续尝试模板 */ }
+    } catch (e: any) { getErr = String(e?.message || e); }
+    D("会话 map_visual 读取结果", {
+      ...who,
+      hit: !!(existing && (existing.files || existing.format === "tbg")),
+      shape: existing ? (existing.format === "tbg" ? "tbg" : (existing.files ? "files" : "unknown")) : "null",
+      fileNames: existing?.files ? Object.keys(existing.files).slice(0, 12) : undefined,
+      err: getErr || undefined,
+    });
     if (existing && (existing.files || existing.format === "tbg")) return existing;
     const keys = ["map_visual:" + worldName, "map_data:" + worldName];
     for (const k of keys) {
       let tpl: any = null;
+      let err = "";
       try {
         tpl = await api.getTemplate(k);
-      } catch { /* 模板读取失败 → 试下一个 key */ }
+      } catch (e: any) { err = String(e?.message || e); }
+      D("故事模板查询 " + k, {
+        ...who,
+        hit: !!(tpl && (tpl.format === "tbg" || tpl.files)),
+        format: tpl?.format,
+        fileNames: tpl?.files ? Object.keys(tpl.files).slice(0, 12) : undefined,
+        err: err || undefined,
+      });
       if (tpl && (tpl.format === "tbg" || tpl.files)) {
         await api.set("map_visual", tpl);
         if (s) (s as any).mapVisualFrom = k;
         console.log("[field-survival] 故事视觉地图模板已注入会话 map_visual：" + k);
+        D("INJECTED: 模板已写入本会话 map_visual", { ...who, from: k });
         return tpl;
       }
     }
-  } catch { /* 模板注入失败不阻断开局（回退 ui/maps） */ }
+    D("MISS: 所有候选模板均未命中 → 走 ui/maps 通用回退", who);
+  } catch (e: any) { D("ERROR: " + String(e?.message || e), who); }
   return null;
 }
 
