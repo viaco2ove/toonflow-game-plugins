@@ -105,34 +105,71 @@ async function normalizeBundle(v: any): Promise<StoryMapBundle | null> {
     console.warn(`[field-survival] map_visual 读取结果: 非对象 (${typeof v})`);
     return null;
   }
-  if (v.files && typeof v.files === "object") {
+if (v.files && (typeof v.files === "object")) {
+    // ★ CLI 写入的 v.files 可能是数组（zip entry 名列表）而非对象（zip contents）。
+    //   数组形态下 Object.keys 会变成 "0","1","2"...（数字 keys），误导消费者。
+    //   真正的视觉数据在 v.data（base64 压缩流），一律走 tbgToVisFiles 重解。
+    if (Array.isArray(v.files) && typeof v.data === "string") {
+      console.info(`[field-survival] map_visual 形态①-数组（v.files 是 entry 名数组, ${v.files.length} 项），改走 v.data 重解 .tbg`);
+      const unpacked = await tbgToVisFiles(v.data);
+      if (!unpacked) {
+        console.warn(`[field-survival] map_visual 数组形态 → tbg 解包失败（data length=${v.data.length}）`);
+        return null;
+      }
+      const fileKeys = Object.keys(unpacked.files);
+      const mapKeys = Object.keys(unpacked.mapFiles || {});
+      console.info(`[field-survival] map_visual tbg 解包成功: 全量=${fileKeys.length} entries（maps 关卡=${mapKeys.length}（${mapKeys.slice(0, 5).join(", ")}${mapKeys.length > 5 ? "..." : ""}）, tileset=${unpacked.tileset ? "✓" : "✗"}, story=${unpacked.story ? "✓" : "✗"}, images=${fileKeys.filter((k) => /^images\//i.test(k)).length}）`);
+      return {
+        files: unpacked.files,
+        mapFiles: unpacked.mapFiles,
+        first: unpacked.first,
+        story: unpacked.story,
+        entityTypes: unpacked.entityTypes,
+        tileset: unpacked.tileset,
+      };
+    }
     const files = v.files as Record<string, any>;
     const fileKeys = Object.keys(files);
     // 区分：旧形态（key 是裸文件名 mulberryTown 这种）vs 新形态（key 是 maps/mulberryTown.json 路径）。
-    // 旧形态只有关卡 JSON，需补成"路径化"以适配新 consumers（tileset/images 缺省 → 走公共资源）。
     const looksLikePath = fileKeys.some((k) => k.includes("/") || k.endsWith(".json") || k.endsWith(".png") || k.endsWith(".gif") || k.endsWith(".xlsx"));
     if (looksLikePath) {
+      // ★ 防护：形态①-new 必须有"过 Tiled 校验"（含 layers 数组）的关卡才算合法。
+      //   历史曾被人/CLI 误传，把 sprite 帧 atlas 写成 { maps/0.json: ..., maps/1.json: ... }，
+      //   这些 entries 不是 Tiled JSON（无 layers），必须拒绝当 0 关卡，避免脏数据当关卡列表消费。
       const mapFiles: Record<string, any> = {};
       for (const k of fileKeys) {
-        if (/^maps\/[^/]+\.json$/i.test(k) && files[k] && typeof files[k] === "object" && Array.isArray((files[k] as any).layers)) {
-          mapFiles[k.replace(/^maps\//i, "").replace(/\.json$/i, "")] = files[k];
-        }
+        const v2 = files[k];
+        if (!/^maps\/[^/]+\.json$/i.test(k)) continue;
+        if (!v2 || typeof v2 !== "object" || !Array.isArray(v2.layers)) continue;
+        mapFiles[k.replace(/^maps\//i, "").replace(/\.json$/i, "")] = v2;
       }
       const tileset = files["compiled_dawnlike.json"] || v.tileset || null;
       const story = files["story.json"] || v.story || null;
       const entityTypes = files["entity_types.json"] || v.entityTypes || null;
+      if (Object.keys(mapFiles).length === 0) {
+        console.warn(`[field-survival] map_visual 形态①-new 拒绝：${fileKeys.length} entries 无一含 Tiled layers 数组（疑似 sprite atlas 误传）`);
+        return null;
+      }
       console.info(`[field-survival] map_visual 形态①-new（已解包全量）: files=${fileKeys.length}（maps 关卡=${Object.keys(mapFiles).length}, has tileset=${!!tileset}, has story=${!!story}）`);
-    // 只列关卡名（maps/*.json 的 basename），避免刷屏
-    const sampleMapKeys = Object.keys(mapFiles).slice(0, 5);
-    if (sampleMapKeys.length) console.info(`[field-survival]   样例关卡: ${sampleMapKeys.join(", ")}${Object.keys(mapFiles).length > 5 ? "..." : ""}`);
+      const sampleMapKeys = Object.keys(mapFiles).slice(0, 5);
+      if (sampleMapKeys.length) console.info(`[field-survival]   样例关卡: ${sampleMapKeys.join(", ")}${Object.keys(mapFiles).length > 5 ? "..." : ""}`);
       return { files, mapFiles, first: v.first, story, entityTypes, tileset };
     }
-    // 旧形态：files key 就是关卡名（mulberryTown / mulberryForest），直接当 mapFiles 用
+    // 旧形态：files key 就是关卡名（mulberryTown / mulberryForest），同样防护
+    const mapFiles: Record<string, any> = {};
+    for (const k of fileKeys) {
+      const v2 = files[k];
+      if (v2 && typeof v2 === "object" && Array.isArray(v2.layers)) mapFiles[k] = v2;
+    }
+    if (Object.keys(mapFiles).length === 0) {
+      console.warn(`[field-survival] map_visual 形态①-legacy 拒绝：${fileKeys.length} entries 无一含 Tiled layers 数组`);
+      return null;
+    }
     const tileset = v.tileset || null;
     const story = v.story || null;
     const entityTypes = v.entityTypes || null;
-    console.info(`[field-survival] map_visual 形态①-legacy（仅关卡）: 关卡=${fileKeys.length} 张（${fileKeys.slice(0, 5).join(", ")}${fileKeys.length > 5 ? "..." : ""}）; tileset=${tileset ? "✓" : "✗"}, story=${story ? "✓" : "✗"}`);
-    return { files, mapFiles: files, first: v.first, story, entityTypes, tileset };
+    console.info(`[field-survival] map_visual 形态①-legacy（仅关卡）: 关卡=${Object.keys(mapFiles).length} 张（${Object.keys(mapFiles).slice(0, 5).join(", ")}${Object.keys(mapFiles).length > 5 ? "..." : ""}）; tileset=${tileset ? "✓" : "✗"}, story=${story ? "✓" : "✗"}`);
+    return { files, mapFiles, first: v.first, story, entityTypes, tileset };
   }
   if (v.format === "tbg" && typeof v.data === "string") {
     console.info(`[field-survival] map_visual 形态②（未解包 tbg）: data length = ${v.data.length} bytes (base64)`);
@@ -238,9 +275,19 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
         `[field-survival] 已加载故事视觉地图包 ${_dataKey}：关卡 ${mapKeys.length} 张（${mapKeys.join(", ")}）+ 全量 entries ${totalEntries}（images=${imageCount}, tileset=${hasTileset ? "✓" : "✗"}, story.json=${hasStory ? "✓" : "✗"}）${bundle.first ? " + first.map.json" : ""}`,
       );
 
-      console.info(
-        `[field-survival] 地图json（maps/xxx.json） 文件名列表{ ${mapKeys.map((k) => `maps/${k}.json`).join(", ")} }`,
-      );
+      // 关卡名列表单独打一行（关卡数 <= 30 时全列；>30 截断样例；>200 进一步压缩）
+      const _mapPaths = mapKeys.map((k) => `maps/${k}.json`);
+      if (_mapPaths.length === 0) {
+        console.info(`[field-survival] 地图json（maps/xxx.json） 文件名列表{ （无） }`);
+      } else if (_mapPaths.length <= 30) {
+        console.info(`[field-survival] 地图json（maps/xxx.json） 文件名列表{ ${_mapPaths.join(", ")} }`);
+      } else if (_mapPaths.length <= 200) {
+        const head = _mapPaths.slice(0, 10).join(", ");
+        const tail = _mapPaths.slice(-5).join(", ");
+        console.info(`[field-survival] 地图json（maps/xxx.json） 文件名列表{ ${head}, ...（${_mapPaths.length - 15} 个略）..., ${tail} }`);
+      } else {
+        console.info(`[field-survival] 地图json（maps/xxx.json） 文件名列表{ ${_mapPaths.length} 条疑似脏数据（首 5: ${_mapPaths.slice(0, 5).join(", ")}） }`);
+      }
     } else {
       _fallbackReason = nb ? "files 为空" : "normalize 返回 null（模板不存在 / 形态未知 / tbg 解包失败）";
     }

@@ -30,9 +30,10 @@ export async function readZipEntries(buf: Uint8Array): Promise<{ name: string; b
     if (method === 0) {
       bytes = data;
     } else if (method === 8) {
-      // deflate raw
-      const stream = new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
-      bytes = new Uint8Array(await stream);
+      // deflate raw（zip method 8 是 raw deflate，无 zlib header/wrapper）
+      // ★ 必须 await：否则 bytes 变成空 Uint8Array，JSON.parse / 解码全是空串
+      const ab = await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
+      bytes = new Uint8Array(ab);
     } else {
       throw new Error(`不支持的 zip method=${method}（仅 store/deflate）`);
     }
