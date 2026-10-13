@@ -42,6 +42,19 @@ export interface StoryMapBundle {
 let bundle: StoryMapBundle | null = null;
 let loaded = false;
 
+/** 缓存从 tf_plugin_state.state 里取到的故事名/id（init 后由 App.vue 写入） */
+let _stateStoryName = "";
+let _stateStoryId = "";
+
+/**
+ * 插件 App.vue 收到首条 tf_plugin_state 时调用，把世界名/ID 写进来。
+ * 同源的 state.roles/entities 来自同一份后端状态，所以这是最稳的来源。
+ */
+export function setStoryContext(name: string, id?: string | number): void {
+  if (name && !_stateStoryName) _stateStoryName = String(name);
+  if (id != null && id !== "" && !_stateStoryId) _stateStoryId = String(id);
+}
+
 function inIframe(): boolean {
   try {
     return typeof window !== "undefined" && window.parent !== window;
@@ -97,17 +110,20 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   if (loaded && !force) return bundle;
 
 // ── 调试输出：故事 / 地图集来源（用户要求打印的字段） ──
-  // 故事名来源链：ctx.worldName → ?story= → window.__STORY__ → 默认故事
+  // 故事名来源链（按可靠性从高到低）：
+  //   ① plugin_state 里透出的 worldName（与角色列表同源，最稳）
+  //   ② ctx.worldName（旧 tsApi）
+  //   ③ ?story= URL 参数（宿主 ScenePlay 拼 iframe URL 时追加）
+  //   ④ window.__STORY__（vite dev-host 注入）
   const _ctx = (toonflowJsApi as any)?.ctx || {};
-  // 故事名来源链：ctx.worldName → ?story= → window.__STORY__ → 默认故事
   let _urlStory = "";
   try {
     _urlStory = new URLSearchParams(location.search).get("story") || "";
   } catch { /* ignore */ }
   const _storyName = String(
-    _ctx.worldName || _urlStory || (window as any).__STORY__ || "通天传授-收徒系统"
+    _stateStoryName || _ctx.worldName || _urlStory || (window as any).__STORY__ || ""
   );
-  const _storyId = String(_ctx.storyId || _ctx.worldId || "未知");
+  const _storyId = String(_stateStoryId || _ctx.storyId || _ctx.worldId || "未知");
   console.info(`[field-survival] 故事名: ${_storyName}`);
   console.info(`[field-survival] 故事id: ${_storyId}`);
   // ★ 统一：CLI 写到 "map_visual:<故事名>" (sessionId="all")，前端用 getTemplate 拉

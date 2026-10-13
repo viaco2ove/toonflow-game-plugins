@@ -14,7 +14,7 @@
  */
 import { ref } from "vue";
 import { assetUrl } from "./assets";
-import type { Ctx, EventsFile, EventDef } from "../../../../../workshops/toonflow-field-survival/map_design/通天传授-收徒系统/events/shared/_ctx";
+import type { Ctx, EventsFile, EventDef } from "../../../../../workshops/toonflow-field-survival/map_design//events/shared/_ctx";
 
 // ─── 运行时状态 ───
 const loadedEvents = ref<EventsFile | null>(null);
@@ -84,7 +84,7 @@ export async function loadMapEvents(mapFile: string): Promise<void> {
   // ★ 修复 401 噪声：getAsset 环境（生产/真机 iframe）下 /story-data 中间件不存在且需鉴权→401，
   //   跳过该 dev 路径，直接用 assetUrl（getAsset+token）通道。
   // ★ 修复故事串号：dev 前缀必须与 mapConfig 的 STORY_MAP_BASE_DEV 用同一个故事名（?story=），
-  //   否则进入「赦夜人第二季」时仍会读到「通天传授-收徒系统」下的 events 文件。
+  //   否则进入「赦夜人第二季」时仍会读到「」下的 events 文件。
   const isGetAsset = (() => { try { return location.href.includes("getAsset"); } catch { return false; } })();
   const evBases = isGetAsset
     ? [assetUrl("events/maps/"), "events/maps/", "./events/maps/"]

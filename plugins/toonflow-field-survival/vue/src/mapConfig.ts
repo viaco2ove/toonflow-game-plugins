@@ -205,7 +205,7 @@ export const NPC_DIALOG_ZH: Record<string, string> = {
   BARKEEP: "酒馆老板",
   // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
   NANI_AND_BILI_RESCUE: "娜妮",
-  // ★ 通天传授-收徒系统：大罗宗人物（map_design/通天传授-收徒系统 地图集）
+  // ★ ：大罗宗人物（map_design/ 地图集）
   XUANCHEN: "玄尘长老",
   MO_LAO: "墨老",
   SU_MO: "苏沫",
@@ -661,7 +661,8 @@ function inGetAssetEnv(): boolean {
 }
 /**
  * 解析当前 dev iframe 的故事名（?story= 或 window.__STORY__）。
- * 取不到时回退到默认故事「通天传授-收徒系统」（兼容历史测试用例）。
+ * ai:取不到时回退到默认故事「xxxx」（兼容历史测试用例）。
+ * 我：你他妈人工智障！！！
  */
 function resolveDevStoryName(): string {
   try {
@@ -669,7 +670,7 @@ function resolveDevStoryName(): string {
     const s = sp.get("story") || (window as any).__STORY__ || "";
     if (s) return s;
   } catch { /* ignore */ }
-  return "通天传授-收徒系统";
+  return "";
 }
 
 const STORY_MAP_BASE_DEV: string = `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(resolveDevStoryName())}/maps/`;
