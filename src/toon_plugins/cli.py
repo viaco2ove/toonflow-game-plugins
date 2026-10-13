@@ -128,6 +128,34 @@ def resolve_client(env_path=None):
     return client
 
 
+def _resolve_plugin_id(raw: str) -> str:
+    """把「插件文件夹名」解析为运行时真正使用的 pluginId（manifest.id）。
+
+    -i 常传 toonflow-field-survival（文件夹），但运行时按 manifest.id
+    （如 com.toonflow.minigame-field-survival）读写 t_plugin_session_data。
+    若 raw 指向含 manifest.json 的目录，取其真实 id；否则原样返回。
+    """
+    if not raw:
+        return raw
+    # 已是完整 id（含点号，形如 com.toonflow...）通常无需解析
+    if "." in raw and not os.path.isdir(raw):
+        return raw
+    candidates = [raw, os.path.join("plugins", raw), os.path.join(os.path.dirname(CLI_ROOT), "plugins", raw)]
+    for cand in candidates:
+        if os.path.isdir(cand):
+            mpath = os.path.join(cand, "manifest.json")
+            if os.path.isfile(mpath):
+                try:
+                    with open(mpath, encoding="utf-8") as f:
+                        m = _json.load(f)
+                    mid = m.get("id")
+                    if mid:
+                        return str(mid)
+                except Exception:
+                    pass
+    return raw
+
+
 @click.group()
 @click.option("--env", "-e", type=click.Path(exists=True), help=".env path")
 @click.pass_context
@@ -430,7 +458,8 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
 # ─────────────────────────────────────────────────────────────────────────
 # 把地图目录打包成 .tbg 文件（zip 压缩、跳过 test_data/）
 #   - -build：只产出 .tbg 文件
-#   - -u：产出 .tbg 后再 base64 写 t_plugin_session_data.map_data
+#   - -u：产出 .tbg 后再 base64 写 t_plugin_session_data.map_visual（v6 起主 key，
+#         兼容同步写 map_data；运行时 entry 按当前故事读并注入会话）
 # ─────────────────────────────────────────────────────────────────────────
 def build_tbg_file(source_path: str) -> dict:
     """把目录（或单个 .tbg/.json 文件）打包成 .tbg 写到 source_path 同级。
@@ -562,7 +591,7 @@ def story_info(ctx, story, world_id, roles, state):
 
 
 @main.command(name="plugin_session_data")
-@click.option("-i", "plugin_id", required=True, help="插件 id（如 toonflow-field-survival）")
+@click.option("-i", "plugin_id", required=True, help="插件 id 或插件文件夹名（如 toonflow-field-survival；含 manifest.json 的目录会自动解析为 manifest.id）")
 @click.option("-story", "story", default="", help="故事标识（可读字段，写入 t_plugin_session_data.pluginName 不持久，仅日志用）")
 @click.option("--session", "session_id", default="all", show_default=True, help="会话 id（默认 all 跨会话共享）")
 @click.option("-k", "--key", "data_key", default=None, help="dataKey（get/set/remove 必填）")
@@ -573,7 +602,7 @@ def story_info(ctx, story, world_id, roles, state):
 @click.option("--value", "value_inline", default=None, help="--set 时直接给值（JSON 字符串）")
 @click.option("--value-file", "value_file", default=None, type=click.Path(exists=True), help="--set 时从文件读值（自动 JSON.parse）")
 @click.option("-u", "--upload-tbg", "upload_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
-              help="上传地图：传 .tbg/.json 文件（直接写 map_data）或地图目录（自动 zip 打包成 .tbg 写 map_data）。等价 --set -k map_data --value-file <file>")
+              help="上传地图：传 .tbg/.json 文件（直接写 map_visual）或地图目录（自动 zip 打包成 .tbg 写 map_visual）。等价 --set -k map_visual --value-file <file>")
 @click.option("-build", "build_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
               help="只构建 .tbg 文件到目录同级（不写 t_plugin_session_data），等价把 -u 的打包步骤单独跑。")
 @click.option("-role", "op_role", is_flag=True, help="读取并展示 AI 故事角色位置（dataKey=ai_story_roles）")
@@ -590,6 +619,16 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
     """
     client = resolve_client(ctx.obj["env_path"])
 
+    # ★ 命名空间对齐：用户常传插件「文件夹名」（如 toonflow-field-survival），但运行时
+    #   entry.ensureStoryVisualMap 按 manifest.id（如 com.toonflow.minigame-field-survival）
+    #   读 t_plugin_session_data。若 -i 指向含 manifest.json 的目录，则解析为真实 id，
+    #   保证模板读写命名空间一致（否则写库在 toonflow-field-survival、运行时读 com.toonflow...
+    #   永远读不到 → 故事视觉地图失效）。
+    resolved = _resolve_plugin_id(plugin_id)
+    if resolved != plugin_id:
+        click.echo(f"[plugin_data] -i {plugin_id!r} → manifest.id {resolved!r}")
+    plugin_id = resolved
+
     # ★ -u/--upload-tbg 走「上传地图」快捷路径：dataKey=map_data，op=set，从文件读
     #   先于 ops 推断：用户传 -u 时不必再传 --set / -k / --value-file
     if upload_tbg:
@@ -600,9 +639,10 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         # ★ -build 只打包不写 server；-u 打包并上传
         if build_tbg:
             click.secho("[ERR] --upload-tbg 与 -build 互斥", fg="red"); return
-        # ★ 按 story 命名空间隔离：map_data:赦夜人冥夜走廊-第二季
-        #   避免故事 A 的地图覆盖故事 B 的（同一 userId/sessionId="all" 下）
-        data_key = "map_data:" + (story or "default")
+        # ★ v6 故事绑定：主 key 改 map_visual:<story>（运行时 entry.ensureStoryVisualMap 优先读），
+        #   旧 key map_data:<story> 仍会同步写一份（entry 回退读，兼容历史模板）。
+        #   两者均按 story 命名空间隔离，避免故事 A 的地图覆盖故事 B 的（sessionId="all" 下）。
+        data_key = "map_visual:" + (story or "default")
         value_file = upload_tbg
         op = "set"
         # ★ -u 走 set 快捷路径，直接跳到 SET 分支（不要让后面 ops 推断把它覆盖成 get）
@@ -737,6 +777,15 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         # 兼容 r 是 {ok: true, dataKey, value:null} 或 {data:{...}} 两种形态
         summary = (r or {}).get("data") if isinstance(r, dict) and isinstance(r.get("data"), dict) else r
         click.secho("[OK] " + _json.dumps(summary or {}, ensure_ascii=False), fg="green")
+        # ★ v6：-u 上传视觉地图模板时，同步写一份旧 key map_data:<story>
+        #   （entry.ensureStoryVisualMap 的回退模板 key，兼容 2026-10-13 前上传的模板）
+        legacy_key = "map_data:" + (story or "default")
+        if legacy_key != data_key:
+            try:
+                client.set_plugin_data(plugin_id, legacy_key, value, session_id=session_id, story=story)
+                click.echo(f"[plugin_data] 兼容模板已同步写入 {legacy_key}")
+            except Exception as e:
+                click.secho(f"[WARN] 兼容模板 {legacy_key} 写入失败（不影响主 key）：{e}", fg="yellow")
     elif op == "list":
         r = client.list_plugin_data(plugin_id, session_id=session_id, story=story)
         # ToonClient._parse_response 已经把外层 data 字段剥掉了；r 本身就是

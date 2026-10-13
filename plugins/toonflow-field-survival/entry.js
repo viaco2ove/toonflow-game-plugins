@@ -96,6 +96,49 @@ async function ensureMapData(ctx) {
     return map;
   }
 }
+/**
+ * ★ v6 故事绑定视觉地图模板注入（2026-10-13）：
+ *   插件原来把视觉 Tiled 世界（mulberryTown.json 等）安装时烘焙进 ui/maps/，
+ *   所有故事/用户共用同一份。本函数把「按当前故事」纠正过来：
+ *     1. 取 context.worldName（tick.ts / MiniGameController v6 注入的当前世界名）；
+ *     2. 读模板 getTemplate("map_visual:<worldName>")（CLI -u 写在 sessionId="all"），
+ *        回退旧 key "map_data:<worldName>"（用户历史上传的模板）；
+ *     3. 原样写进本会话 map_visual → 前端 storyMap.loadStoryMapBundle 消费，
+ *        loadLevelByName/loadMapConfig/loadStartLevelName 优先渲染这套世界；
+ *     4. 本会话已有 map_visual（手动上传过 / 上次已注入）→ 跳过，绝不覆盖用户上传。
+ *   无 worldName / 无模板 / 后端无 getTemplate → 静默跳过（回退 ui/maps，零回归）。
+ */
+async function ensureStoryVisualMap(context, s) {
+  try {
+    const worldName = str(context && context.worldName, "");
+    if (!worldName) return null;
+    const api = context && context.tsApi && context.tsApi.pluginData;
+    if (!api || typeof api.get !== "function" || typeof api.set !== "function") return null;
+    if (typeof api.getTemplate !== "function") return null;
+    let existing = null;
+    try {
+      existing = await api.get("map_visual");
+    } catch {
+    }
+    if (existing && (existing.files || existing.format === "tbg")) return existing;
+    const keys = ["map_visual:" + worldName, "map_data:" + worldName];
+    for (const k of keys) {
+      let tpl = null;
+      try {
+        tpl = await api.getTemplate(k);
+      } catch {
+      }
+      if (tpl && (tpl.format === "tbg" || tpl.files)) {
+        await api.set("map_visual", tpl);
+        if (s) s.mapVisualFrom = k;
+        console.log("[field-survival] 故事视觉地图模板已注入会话 map_visual：" + k);
+        return tpl;
+      }
+    }
+  } catch {
+  }
+  return null;
+}
 const WORLD_X_RANGE = [-1500, 1500];
 const WORLD_Z_RANGE = [-1500, 1500];
 const PLAYER_SPAWN = { x: 13, y: 4 };
@@ -2090,6 +2133,8 @@ async function handle_action(action, params, state, context) {
     case "init":
     case "start_init": {
       const fresh = emptyState(context);
+      // ★ v6：故事绑定视觉地图模板尽早注入（init 早于选人面板，前端 onMounted 即可读到）
+      await ensureStoryVisualMap(context, null);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "\u8BF7\u9009\u62E9\u53CB\u65B9 / \u89C2\u6218 / \u654C\u5BF9\u89D2\u8272\u540E\u5F00\u59CB" };
     }
@@ -2176,6 +2221,8 @@ async function handle_action(action, params, state, context) {
           s.entities.push(se);
         }
       });
+      // ★ v6：先注入当前故事的视觉地图模板（本会话已有 map_visual 则跳过），再取玩法元数据
+      await ensureStoryVisualMap(context, s);
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
       if (s.map) {

@@ -20,6 +20,8 @@ declare global {
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
+import { loadStoryMapBundle, getStoryFirstMap } from "./storyMap";
+import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
@@ -1047,42 +1049,10 @@ const mapFileInput = ref<HTMLInputElement | null>(null);
 const mapUploading = ref(false);
 
 /**
- * 最小 zip 解析器（0/store + 8/deflate）。返回 [{name, bytes}]。
- * 不依赖第三方库，用浏览器原生 DecompressionStream（deflate-raw）。
- * 仅用于解析我们打包出来的 .tbg（zip deflate），够用。
+ * 最小 zip 解析器已抽到 ./zipTbg（readZipEntries，0/store + 8/deflate，
+ * 浏览器原生 DecompressionStream，零第三方依赖）。此处经 import 复用，
+ * storyMap.ts 解包 map_visual 的 {format:"tbg"} 模板形态时走同一份实现。
  */
-async function readZipEntries(buf: Uint8Array): Promise<{ name: string; bytes: Uint8Array }[]> {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  if (dv.getUint32(0, true) !== 0x04034b50) throw new Error("不是 zip 文件（magic mismatch）");
-  const entries: { name: string; bytes: Uint8Array }[] = [];
-  let off = 0;
-  while (off + 4 <= buf.length) {
-    const sig = dv.getUint32(off, true);
-    if (sig !== 0x04034b50) break;
-    const method = dv.getUint16(off + 8, true);
-    const compSize = dv.getUint32(off + 18, true);
-    const uncompSize = dv.getUint32(off + 22, true);
-    const nameLen = dv.getUint16(off + 26, true);
-    const extraLen = dv.getUint16(off + 28, true);
-    const nameBytes = buf.slice(off + 30, off + 30 + nameLen);
-    const name = new TextDecoder().decode(nameBytes);
-    const dataStart = off + 30 + nameLen + extraLen;
-    const data = buf.slice(dataStart, dataStart + compSize);
-    let bytes: Uint8Array;
-    if (method === 0) {
-      bytes = data;
-    } else if (method === 8) {
-      // deflate raw
-      const stream = new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).arrayBuffer();
-      bytes = new Uint8Array(await stream);
-    } else {
-      throw new Error(`不支持的 zip method=${method}（仅 store/deflate）`);
-    }
-    if (uncompSize !== 0 && name && !name.endsWith("/")) entries.push({ name, bytes });
-    off = dataStart + compSize;
-  }
-  return entries;
-}
 /** 上传成功短闪一下"已绑定"提示（3 秒后回到默认态） */
 const mapUploadDone = ref(false);
 let mapUploadDoneTimer = 0;
@@ -5436,6 +5406,10 @@ async function onUploadMap(ev: Event) {
     // 嗅探 zip 魔数（PK\003\004）
     const isZip = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
     let mapData: MapData | null = null;
+    // ★ 故事绑定：完整视觉 Tiled 文件集（文件名→原始JSON），上传后写 map_visual，
+    //   让 loadLevelByName 等优先渲染这套世界（而非共用 ui/maps）。
+    let visFiles: Record<string, any> = {};
+    let visFirst: any = null;
 
     if (isZip) {
       // ★ .tbg：解 zip → 找 maps/*.json 第一张作为主地图
@@ -5471,6 +5445,16 @@ async function onUploadMap(ev: Event) {
         chests: [],
         potions: [],
       };
+      // ★ 收集包内全部 Tiled 地图 + first.map.json，构建视觉地图包（按文件名去 .json 作 key）
+      for (const e of entries) {
+        if (/maps\/bak\//i.test(e.name)) continue;
+        const fm = /(?:^|\/)maps\/([^/]+)\.json$/i.exec(e.name);
+        if (fm && isTiledJson(e.bytes)) {
+          try { visFiles[fm[1]] = JSON.parse(new TextDecoder().decode(e.bytes)); } catch { /* skip */ }
+        }
+        const ff = /(?:^|\/)first\.map\.json$/i.exec(e.name);
+        if (ff && !visFirst) { try { visFirst = safeReadJson(e, "first.map.json"); } catch { /* skip */ } }
+      }
     } else {
       // 纯文本：先试 JSON 解析
       const text = new TextDecoder().decode(buf);
@@ -5482,6 +5466,9 @@ async function onUploadMap(ev: Event) {
       // ★ Tiled 导出格式（layers/width/height）→ 走 normalizeTiledMap
       if (Array.isArray(json?.layers) && (json?.tilewidth || json?.tileheight)) {
         const tiledCfg = normalizeTiledMap(json, file.name.replace(/\.json$/i, ""));
+        // 单张 Tiled 图也纳入视觉包（key=文件名去 .json）
+        const soloKey = file.name.replace(/\.json$/i, "");
+        if (soloKey) visFiles[soloKey] = json;
         mapData = {
           theme: tiledCfg?.theme || "野外",
           zones: tiledCfg?.zones || [],
@@ -5509,6 +5496,16 @@ async function onUploadMap(ev: Event) {
     }
     mapTheme.value = mapData.theme;
     console.info("[field-survival] 地图已上传并绑定：", file.name, "size=", file.size);
+    // ★ 故事绑定：把完整视觉文件集写进 map_visual 并刷新缓存，随后 switchLevel 会优先渲染这套世界
+    if (Object.keys(visFiles).length > 0) {
+      try {
+        await toonflowJsApi.pluginData.set("map_visual", { files: visFiles, first: visFirst });
+        await loadStoryMapBundle(true);
+        console.info("[field-survival] 视觉地图包已写入 map_visual：", Object.keys(visFiles));
+      } catch (e) {
+        console.warn("[field-survival] 写 map_visual 失败（不影响元数据）：", e);
+      }
+    }
     if (state.value?.phase === "playing") {
       void switchLevel(currentLevelName.value);
     }
@@ -5709,6 +5706,14 @@ onMounted(async () => {
   // ★ 起始地图（回归修复）：起始关卡名来自 maps/first.map.json 的 start_map.value，
   //   用它初始化 currentLevelName，并加载"开局首张地图"。
   //   文件缺失 / 解析失败 / 字段为空 → 回退 DEFAULT_START_LEVEL（"Mulberry Town"），绝不抛错。
+  // ★ 故事绑定：先把当前会话的视觉地图包(map_visual)读进缓存，
+  //   供下面的 loadStartLevelName / loadMapConfig 优先取用（取不到回退 ui/maps）。
+  //   生产 iframe 下 await（包是主数据源）；dev/standalone 不阻塞（直读 workshops storyMapBase）。
+  if (import.meta.env.DEV) {
+    void loadStoryMapBundle();
+  } else {
+    await loadStoryMapBundle();
+  }
   let startLevel = await loadStartLevelName();
   // ★ 独立预览模式（地图编辑器 window.open ?__standalone=1&map=<文件名>）：
   //   URL 的 map 参数强制进指定地图（覆盖 first.map.json 的 start_map），直接预览正在编辑的那张图。
@@ -5984,6 +5989,39 @@ onMounted(async () => {
       starting.value = false;
       clearStartTimers();
       startHint.value = "";
+      // ★ v6 故事绑定：后端 init/start 已把「当前故事」的视觉地图模板注入会话 map_visual，
+      //   但 onMounted 的 loadStoryMapBundle 跑在选人阶段（那时模板还没注入，缓存为 null），
+      //   开局地图用的是回退 ui/maps（全故事共用）。这里进入 playing 时强制重读包：
+      //   有包 → 按包的 first.map.json 定起始图（不同则 switchLevel 全量切图；
+      //         相同则重载 mapCfg + 碰撞网格，让地图内容来自该故事而非共用回退图）。
+      void (async () => {
+        try {
+          const b = await loadStoryMapBundle(true);
+          if (!b || Object.keys(b.files).length === 0) return;
+          let lv = currentLevelName.value;
+          const fm = getStoryFirstMap();
+          if (fm) {
+            const sm = String((fm as any)?.start_map?.value ?? (fm as any)?.start_map ?? "").trim();
+            if (sm) lv = sm;
+          }
+          if (lv && lv !== currentLevelName.value) {
+            await switchLevel(lv);
+          } else {
+            const cfg = await loadMapConfig(currentLevelName.value);
+            mapCfg.value = cfg;
+            await rebuildWalkGrid(currentLevelName.value);
+          }
+          console.info(
+            "[field-survival] playing：已按会话视觉地图包渲染（",
+            Object.keys(b.files).length,
+            "张，关卡=",
+            currentLevelName.value,
+            "）",
+          );
+        } catch (e) {
+          console.warn("[field-survival] playing 视觉包刷新失败（继续用回退地图）：", e);
+        }
+      })();
     }
     // ★ 开局后：优先 state.map；缺失时用 toonflowJsApi 从插件数据表拉 map_data 兜底
     const m = (state.value as any)?.map as MapData | null | undefined;

@@ -34,6 +34,7 @@
 
 import { TerrainScaleConfig, DEFAULT_SCALE } from "./terrainScale";
 import { assetUrl } from "./assets";
+import { getStoryMapRaw, getStoryFirstMap } from "./storyMap";
 
 /* ============================================================
    数据类型
@@ -645,18 +646,48 @@ export function makeScaleFromMap(map: MapConfig): TerrainScaleConfig {
  *   2. assetUrl("maps/") —— 生产：插件资产通道（getAsset+token）
  *   3. /maps/ 、 ./maps/ —— dev-host / 本地静态副本兜底
  * 失败依次回退，与 loadLevelByName 的"多前缀尝试"语义一致。
+ *
+ * ★ 修复 401 噪声：/story-data 中间件只在 vite dev 存在；真宿主（getAsset 环境）下该路径
+ *   不存在且需鉴权 → fetch 返回 401（控制台刷红）。故 getAsset 环境下 STORY_MAP_BASE 置空，
+ *   前缀链跳过 dev 路径、直接用 assetUrl（带 token 的 getAsset 通道，200）。
  */
-function storyMapBase(): string {
+/** 是否在宿主 getAsset 环境（生产/真机 iframe）。该环境下 /story-data 不可用且需鉴权→401。 */
+function inGetAssetEnv(): boolean {
+  try {
+    return location.href.includes("getAsset");
+  } catch {
+    return false;
+  }
+}
+/**
+ * 解析当前 dev iframe 的故事名（?story= 或 window.__STORY__）。
+ * 取不到时回退到默认故事「通天传授-收徒系统」（兼容历史测试用例）。
+ */
+function resolveDevStoryName(): string {
   try {
     const sp = new URLSearchParams(location.search);
     const s = sp.get("story") || (window as any).__STORY__ || "";
-    if (s) return `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(s)}/maps/`;
+    if (s) return s;
   } catch { /* ignore */ }
-  return "/story-data/toonflow-field-survival/map_design/通天传授-收徒系统/maps/";
+  return "通天传授-收徒系统";
+}
+
+const STORY_MAP_BASE_DEV: string = `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(resolveDevStoryName())}/maps/`;
+/** dev 模式下 events 子目录前缀（与 STORY_MAP_BASE_DEV 故事名保持一致；eventEngine 复用） */
+export const STORY_EVENT_BASE_DEV: string = `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(resolveDevStoryName())}/events/maps/`;
+/** getAsset 环境返回空（前缀链跳过 /story-data，避免 401）；dev 返回 story-data 中间件路径 */
+const STORY_MAP_BASE = inGetAssetEnv() ? "" : STORY_MAP_BASE_DEV;
+
+/** 统一构建地图 fetch 前缀链（过滤空串，避免 getAsset 环境下拼出相对脏 URL） */
+function mapPrefixes(): string[] {
+  const list: string[] = [];
+  if (STORY_MAP_BASE) list.push(STORY_MAP_BASE);
+  list.push(assetUrl("maps/"), "/maps/", "./maps/");
+  return list;
 }
 
 export const OVERWORLD_URLS = [
-  storyMapBase() + "mulberryTown.json",
+  ...(STORY_MAP_BASE ? [STORY_MAP_BASE + "mulberryTown.json"] : []),
   assetUrl("maps/mulberryTown.json"),
   "/maps/mulberryTown.json",
   "./maps/mulberryTown.json",
@@ -672,7 +703,7 @@ export const OVERWORLD_URLS = [
    宿主下发的氛围字段 map.theme 不再参与任何关卡决策（详见 App.vue）。
    ============================================================ */
 export const FIRST_MAP_URLS = [
-  storyMapBase() + "first.map.json",
+  ...(STORY_MAP_BASE ? [STORY_MAP_BASE + "first.map.json"] : []),
   assetUrl("maps/first.map.json"),
   "/maps/first.map.json",
   "./maps/first.map.json",
@@ -727,6 +758,14 @@ export function getThemeForMapName(levelName: string | null | undefined): "RUINS
 
 /** 读取 maps/first.map.json 的 start_map.value（永不抛错，最差返回 DEFAULT_START_LEVEL） */
 export async function loadStartLevelName(): Promise<string> {
+  // ★ 故事绑定：当前会话有视觉地图包时，起始图声明优先取包内 first.map.json
+  const first = getStoryFirstMap();
+  if (first) {
+    const raw0 = (first as any)?.start_map;
+    const v0 = typeof raw0 === "string" ? raw0 : raw0?.value;
+    const name0 = String(v0 ?? "").trim();
+    if (name0) return name0;
+  }
   for (const url of FIRST_MAP_URLS) {
     try {
       const r = await fetch(url);
@@ -751,7 +790,13 @@ export async function loadStartLevelName(): Promise<string> {
  */
 export async function loadMapConfig(levelName: string = DEFAULT_START_LEVEL): Promise<MapConfig> {
   const file = levelNameToFile(levelName) || "mulberryTown";
-  for (const prefix of [storyMapBase(), assetUrl("maps/"), "/maps/", "./maps/"]) {
+  // ★ 故事绑定：优先用会话视觉地图包里的原始 JSON，缺失才回退 fetch 前缀链
+  const sraw = getStoryMapRaw(file);
+  if (sraw) {
+    const n = normalizeMapConfig(sraw, levelName);
+    if (n) return n;
+  }
+  for (const prefix of mapPrefixes()) {
     try {
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;
@@ -817,8 +862,8 @@ const LEVEL_FILES: Record<string, string> = {
 
 /** 关卡英文名 → 中文显示名（地图面板展示用）。与 LEVEL_FILES 的 key 一一对应。 */
 const LEVEL_DISPLAY_NAMES: Record<string, string> = {
-  "Mulberry Town": "大罗宗外门",
-  "Mulberry Forest": "青云竹海",
+  "Mulberry Town": "城镇",
+  "Mulberry Forest": "森林",
   "Mulberry Graveyard": "乱葬岗",
   "Lich Lair": "尸祖洞府",
   "Loot Goblin Lair": "藏宝洞",
@@ -898,7 +943,13 @@ export function levelNameToFile(levelName: string): string {
 export async function loadLevelByName(levelName: string): Promise<MapConfig | null> {
   const file = levelNameToFile(levelName);
   if (!file) return null;
-  for (const prefix of [storyMapBase(), assetUrl("maps/"), "/maps/", "./maps/"]) {
+  // ★ 故事绑定：优先用会话视觉地图包（切换关卡走 portal 时同样生效），缺失才回退 fetch
+  const sraw = getStoryMapRaw(file);
+  if (sraw) {
+    const n = normalizeMapConfig(sraw, levelName);
+    if (n) return n;
+  }
+  for (const prefix of mapPrefixes()) {
     try {
       const r = await fetch(prefix + file + ".json");
       if (!r.ok) continue;

@@ -13,6 +13,9 @@ description: 用 bsk（BrowserSkill CLI）实测 Toonflow AI 剧场 Web 宿主�
 1. 手工点这条路径很繁琐且不可复现；
 2. 游戏运行在 iframe/shadow 内部，手工 DevTools 很难读到 state。
 
+## 启动参考
+[Reference/run_app.md]
+
 ## Input
 
 必须提供（或按默认）：

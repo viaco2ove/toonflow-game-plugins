@@ -75,16 +75,25 @@ async function saveFlags(): Promise<void> {
 //   - dev（vite dev server）：走 /story-data/ 中间件（vite.config.ts:storyDataPlugin）读 workshops 真实文件
 //   - dev-host / 生产：走 assetUrl("events/maps/")（自动适配 getAsset + token 路径）
 //   - fetch 全部失败 → 本图无事件，静默返回
+import { STORY_EVENT_BASE_DEV } from "./mapConfig";
+
 export async function loadMapEvents(mapFile: string): Promise<void> {
   loadedEvents.value = null;
   firedIds.value = new Set();
   // 每次调用时动态获取 assetUrl（确保 location.href 已设置）
-  const evBases = [
-    "/story-data/toonflow-field-survival/map_design/通天传授-收徒系统/events/maps/",
-    assetUrl("events/maps/"),
-    "events/maps/",
-    "./events/maps/",
-  ];
+  // ★ 修复 401 噪声：getAsset 环境（生产/真机 iframe）下 /story-data 中间件不存在且需鉴权→401，
+  //   跳过该 dev 路径，直接用 assetUrl（getAsset+token）通道。
+  // ★ 修复故事串号：dev 前缀必须与 mapConfig 的 STORY_MAP_BASE_DEV 用同一个故事名（?story=），
+  //   否则进入「赦夜人第二季」时仍会读到「通天传授-收徒系统」下的 events 文件。
+  const isGetAsset = (() => { try { return location.href.includes("getAsset"); } catch { return false; } })();
+  const evBases = isGetAsset
+    ? [assetUrl("events/maps/"), "events/maps/", "./events/maps/"]
+    : [
+        STORY_EVENT_BASE_DEV,
+        assetUrl("events/maps/"),
+        "events/maps/",
+        "./events/maps/",
+      ];
   for (const base of evBases) {
     try {
       const url = base + `${mapFile}.events.json`;

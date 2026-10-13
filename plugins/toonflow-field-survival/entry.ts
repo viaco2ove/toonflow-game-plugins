@@ -28,10 +28,15 @@ interface PluginGameContext {
   sessionId?: string;
   roles?: Array<Record<string, unknown>>;
   playerCard?: Record<string, unknown>;
+  /** ★ v6：当前世界身份（故事绑定视觉地图模板；tick.ts / MiniGameController 注入） */
+  worldId?: number;
+  worldName?: string;
   /** 后端插件 API（toonflowTsApi）：pluginData（t_plugin_session_data）+ agent */
   tsApi?: {
     pluginData: {
       get(dataKey: string): Promise<any>;
+      /** ★ v6：读 sessionId="all" 的故事模板（CLI -u 按 story 播种）；旧后端无此方法时不可用 */
+      getTemplate?(dataKey: string): Promise<any>;
       set(dataKey: string, value: unknown): Promise<void>;
       list(): Promise<string[]>;
       remove(dataKey: string): Promise<void>;
@@ -189,6 +194,47 @@ async function ensureMapData(ctx?: PluginGameContext): Promise<MapData> {
     try { await tsApi.pluginData.set("map_data", map); } catch { /* ignore */ }
     return map;
   }
+}
+
+/**
+ * ★ v6 故事绑定视觉地图模板注入（2026-10-13）：
+ *   插件原来把视觉 Tiled 世界（mulberryTown.json 等）安装时烘焙进 ui/maps/，
+ *   所有故事/用户共用同一份。本函数把「按当前故事」纠正过来：
+ *     1. 取 context.worldName（tick.ts / MiniGameController v6 注入的当前世界名）；
+ *     2. 读模板 getTemplate("map_visual:<worldName>")（CLI -u 写在 sessionId="all"），
+ *        回退旧 key "map_data:<worldName>"（用户历史上传的模板）；
+ *     3. 原样写进本会话 map_visual → 前端 storyMap.loadStoryMapBundle 消费，
+ *        loadLevelByName/loadMapConfig/loadStartLevelName 优先渲染这套世界；
+ *     4. 本会话已有 map_visual（手动上传过 / 上次已注入）→ 跳过，绝不覆盖用户上传。
+ *   无 worldName / 无模板 / 后端无 getTemplate → 静默跳过（回退 ui/maps，零回归）。
+ */
+async function ensureStoryVisualMap(context?: PluginGameContext, s?: FieldSurvivalState): Promise<any | null> {
+  try {
+    const worldName = str((context as any)?.worldName, "");
+    if (!worldName) return null;
+    const api = (context as any)?.tsApi?.pluginData;
+    if (!api || typeof api.get !== "function" || typeof api.set !== "function") return null;
+    if (typeof api.getTemplate !== "function") return null;
+    let existing: any = null;
+    try {
+      existing = await api.get("map_visual");
+    } catch { /* 读取失败 → 继续尝试模板 */ }
+    if (existing && (existing.files || existing.format === "tbg")) return existing;
+    const keys = ["map_visual:" + worldName, "map_data:" + worldName];
+    for (const k of keys) {
+      let tpl: any = null;
+      try {
+        tpl = await api.getTemplate(k);
+      } catch { /* 模板读取失败 → 试下一个 key */ }
+      if (tpl && (tpl.format === "tbg" || tpl.files)) {
+        await api.set("map_visual", tpl);
+        if (s) (s as any).mapVisualFrom = k;
+        console.log("[field-survival] 故事视觉地图模板已注入会话 map_visual：" + k);
+        return tpl;
+      }
+    }
+  } catch { /* 模板注入失败不阻断开局（回退 ui/maps） */ }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2741,6 +2787,8 @@ export async function handle_action(
       // ★ 强制重置为初始选人状态，不依赖旧 state
       // 无论之前是 playing/over，第二次进入都必须回到 select 阶段
       const fresh = emptyState(context);
+      // ★ v6：故事绑定视觉地图模板尽早注入（init 早于选人面板，前端 onMounted 即可读到）
+      await ensureStoryVisualMap(context);
       fresh.roles = Array.isArray(context?.roles) ? context.roles : [];
       return { code: 0, message: "ok", state: fresh, response: "请选择友方 / 观战 / 敌对角色后开始" };
     }
@@ -2850,6 +2898,8 @@ export async function handle_action(
       //   玩家自己 / participants / spectators / enemies 已在上方生成；
       //   角色卡面板仍会展示所有 AI 故事角色（仅位置为空 → 不会出实体）。
       // ★ map-gener agent：用故事动态数据生成地图（存 t_plugin_session_data.map_data）
+      // ★ v6：先注入当前故事的视觉地图模板（本会话已有 map_visual 则跳过），再取玩法元数据
+      await ensureStoryVisualMap(context, s);
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
 
