@@ -25,6 +25,15 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 - plugins/.tmp/raw-*.zip + plugins/.tmp/<ts>-<uuid8>/ = 后端安装插件的中间工作目录
 - 作用：先收流式 zip → 解压 → 编译 → 移到 plugins/<id>/<pluginId>/ → 清掉 .tmp
 
+# sessionStorage 和 IndexedDB
+1. **sessionStorage**
+   - 特点：同 tab 生命周期，关闭标签页直接清空；iframe 同源下可以共享；存储上限很小（~5MB）
+   - AI 心里的优势：简单，API 轻量，不用复杂异步逻辑；刚好匹配你的场景 —— 只需要当前 tab 会话复用，关掉 tab 不需要保留
+   - 短板：容量上限紧张，你的 tbg base64 接近 5MB，很容易溢出；**不能跨标签页共享**
+2. **IndexedDB**
+   - 特点：浏览器持久化数据库，容量大（几十 MB 起步），关闭 tab、重启浏览器数据都保留
+   - AI 心里的优势：容量充足，可跨会话缓存，适合大二进制文件
+   - 短板：API 繁琐、异步回调复杂；还有你这个 iframe 嵌套场景，跨域 / 父子窗口访问会踩坑
 # 地图tbg 解压文件数据处理的后端解法？（评估中）
 每次加载插件（iframe）都解压到{UPLOAD_DIR}的
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
