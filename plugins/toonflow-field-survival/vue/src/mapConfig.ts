@@ -34,7 +34,7 @@
 
 import { TerrainScaleConfig, DEFAULT_SCALE } from "./terrainScale";
 import { assetUrl } from "./assets";
-import { getStoryMapRaw, getStoryFirstMap } from "./storyMap";
+import { getStoryMapRaw, getStoryFirstMap, getStoryLevelNames } from "./storyMap";
 
 /* ============================================================
    数据类型
@@ -840,8 +840,18 @@ const LEVEL_DISPLAY_NAMES: Record<string, string> = {
   "Forest Dungeon 5": "竹海秘境·5层",
 };
 
-/** 全部已登记关卡名（用于上报插件，生成大地图节点）。 */
+/** 全部已登记关卡名（用于上报插件，生成大地图节点）。
+ *
+ * 优先级：
+ *   ① 当前故事的 map_visual 包（storyMap.mapFiles）—— 23 关，来自 .tbg 解包
+ *   ② LEVEL_FILES 硬编码（兜底，仅 mulberryTown / 模板默认关卡）
+ *   ③ 空数组（都拿不到就退到 ui/maps 兜底，关卡列表只有当前关）
+ */
 export function listLevelNames(): string[] {
+  // ① 优先：当前故事 .tbg 解出来的 mapFiles（mulberryTown, mulberryForest, ..., overworld 共 23 关）
+  const fromStory = getStoryLevelNames();
+  if (fromStory.length) return fromStory;
+  // ② 兜底：硬编码 LEVEL_FILES
   return Object.keys(LEVEL_FILES);
 }
 

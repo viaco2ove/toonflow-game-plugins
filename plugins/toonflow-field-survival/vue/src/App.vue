@@ -6025,6 +6025,10 @@ onMounted(async () => {
             currentLevelName.value,
             "）",
           );
+          // ★ 故事视觉包刚加载完，关卡列表从 0→23。强制重置"已上报"键 + 重新上报，
+          //   让 entry.ts 的 s.mapNodes 用上 23 关（之前报告时 bundle 还没就绪只报 1 关）。
+          sysLevelsReported = "";
+          reportLevels();
         } catch (e) {
           console.warn("[field-survival] playing 视觉包刷新失败（继续用回退地图）：", e);
         }

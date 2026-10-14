@@ -354,3 +354,14 @@ export function getStoryMeta(): any | null {
 export function getStoryEntityTypes(): any | null {
   return bundle?.entityTypes ?? getStoryMapEntry("entity_types.json");
 }
+
+/**
+ * 取当前故事视觉包内的全部关卡名（mapFiles 的 key，裸名如 "mulberryTown"，不含 maps/ 和 .json）。
+ * 用于地图面板 / 大地图节点：替代 mapConfig.ts 硬编码的 LEVEL_FILES。
+ * 无 bundle（未加载 / 非 iframe / 故事无 map_visual）→ 返回 []。
+ */
+export function getStoryLevelNames(): string[] {
+  console.info(`[field-survival] getStoryLevelNames: {bundle.mapFiles}`);
+  if (!bundle || !bundle.mapFiles) return [];
+  return Object.keys(bundle.mapFiles);
+}

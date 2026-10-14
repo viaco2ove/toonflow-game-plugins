@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { levelRangeLabel, getLevelDisplayName } from "../mapConfig";
 
 const props = defineProps<{
@@ -44,6 +44,20 @@ const norm = computed(() => project(here.value));
 const mapPts = computed(() => project(props.nodes || []));
 /** 入口相邻连线（成对预计算，避免 v-for i=0 时取 mapPts[-1] 崩渲染） */
 const mapLinks = computed(() => mapPts.value.slice(1).map((n, i) => ({ a: mapPts.value[i], b: n })));
+
+/** 调试日志：打开地图面板时输出 mapPts 数据来源（state.mapNodes → sysMapNodes → nodes → mapPts） */
+watch(
+  () => props.nodes,
+  (nodes) => {
+    const names = (nodes || []).map((n: any) => n?.name || "(无名)").join(", ");
+    console.info(
+      `[field-survival] 地图面板 mapPts 来源: state.mapNodes.length=${(nodes || []).length}, ` +
+      `names=[${names}]; ` +
+      `currentMap=${props.currentMap}`,
+    );
+  },
+  { immediate: true, deep: false },
+);
 </script>
 
 <template>
