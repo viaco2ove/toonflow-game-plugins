@@ -25,6 +25,26 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 - plugins/.tmp/raw-*.zip + plugins/.tmp/<ts>-<uuid8>/ = 后端安装插件的中间工作目录
 - 作用：先收流式 zip → 解压 → 编译 → 移到 plugins/<id>/<pluginId>/ → 清掉 .tmp
 
-# 新的地图tbg 解压文件数据处理
+# 地图tbg 解压文件数据处理的后端解法？
 每次加载插件（iframe）都解压到{UPLOAD_DIR}的
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
+
+原来方案：解压到内存 `StoryMapBundle` JS 对象，没有任何文件落地。
+
+- 优点：最快，无文件 IO，没有垃圾文件问题；
+- 缺点：不能用文件路径方式访问资源，调试时不能直接浏览解压后的文件清单。
+
+你这个新方案：解压落地成文件树
+
+- 优点：可以按文件路径读取，调试时能直接看解压出来的文件，方便核对 maps 目录、json、图片清单；
+- 缺点：增加文件 IO 开销，要处理并发、锁、垃圾回收。
+
+## 一个关键小改进建议（目录原子性，防止半解压损坏）
+
+不要直接解压写入目标目录：
+
+1. 先解压到临时同名目录：`/plugins/data/.tmp/{userId}/{pluginid}/.{storyname}.inprogress`
+2. 全部文件解压、校验 hash 完成
+3. 原子 rename 重命名为 `/plugins/data/.tmp/{userId}/{pluginid}/{storyname}`
+4. 旧目录如果存在，先删除，再 rename
+这样，外部永远只能看到**完整解压成功的包**，不会读到解压一半残缺的文件。
