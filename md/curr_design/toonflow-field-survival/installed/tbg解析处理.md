@@ -25,7 +25,7 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 - plugins/.tmp/raw-*.zip + plugins/.tmp/<ts>-<uuid8>/ = 后端安装插件的中间工作目录
 - 作用：先收流式 zip → 解压 → 编译 → 移到 plugins/<id>/<pluginId>/ → 清掉 .tmp
 
-# 地图tbg 解压文件数据处理的后端解法？
+# 地图tbg 解压文件数据处理的后端解法？（评估中）
 每次加载插件（iframe）都解压到{UPLOAD_DIR}的
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
 
