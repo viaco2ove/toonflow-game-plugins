@@ -58,6 +58,14 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 4. 旧目录如果存在，先删除，再 rename
 这样，外部永远只能看到**完整解压成功的包**，不会读到解压一半残缺的文件。
 
+## ai 评估
+不建议现在做。理由：
+
+1. 当前消费者（mapConfig / collision）已能从内存拿数据，没需求。
+2. 调试便利有更便宜的替代（已加的 console 日志 + DevTools Network）。
+3. 文件 IO / 并发锁 / GC / 跨设备 / iframe 沙箱 五件成本全要背。
+4. 内存压力（OOM 风险）还没出现，过早优化。
+
 # 地图tbg 解压文件数据处理的磁盘解法2？（评估中）
 跟磁盘解法1的差别是 地图集tbg 文件上传时就进行解压处理到
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
