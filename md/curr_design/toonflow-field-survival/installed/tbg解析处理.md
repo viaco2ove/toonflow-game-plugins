@@ -61,3 +61,5 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 # 地图tbg 解压文件数据处理的磁盘解法2？（评估中）
 跟磁盘解法1的差别是 地图集tbg 文件上传时就进行解压处理到
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
+
+ai 评估是暂时不做：等真有 OOM 或多 tab 性能问题再做，且做之前先想清楚"指针怎么存、文件树怎么 GC、iframe 怎么读"
