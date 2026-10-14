@@ -25,7 +25,7 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 - plugins/.tmp/raw-*.zip + plugins/.tmp/<ts>-<uuid8>/ = 后端安装插件的中间工作目录
 - 作用：先收流式 zip → 解压 → 编译 → 移到 plugins/<id>/<pluginId>/ → 清掉 .tmp
 
-# sessionStorage 和 IndexedDB
+# sessionStorage 和 IndexedDB？（评估中）
 1. **sessionStorage**
    - 特点：同 tab 生命周期，关闭标签页直接清空；iframe 同源下可以共享；存储上限很小（~5MB）
    - AI 心里的优势：简单，API 轻量，不用复杂异步逻辑；刚好匹配你的场景 —— 只需要当前 tab 会话复用，关掉 tab 不需要保留
