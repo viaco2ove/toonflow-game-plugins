@@ -34,7 +34,7 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
    - 特点：浏览器持久化数据库，容量大（几十 MB 起步），关闭 tab、重启浏览器数据都保留
    - AI 心里的优势：容量充足，可跨会话缓存，适合大二进制文件
    - 短板：API 繁琐、异步回调复杂；还有你这个 iframe 嵌套场景，跨域 / 父子窗口访问会踩坑
-# 地图tbg 解压文件数据处理的磁盘解法？（评估中）
+# 地图tbg 解压文件数据处理的磁盘解法1？（评估中）
 每次加载插件（iframe）都解压到{UPLOAD_DIR}的
 {UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
 
@@ -57,3 +57,7 @@ plugins/.tmp 是后端 toonflow-game-app 在安装插件时的中间暂存区：
 3. 原子 rename 重命名为 `/plugins/data/.tmp/{userId}/{pluginid}/{storyname}`
 4. 旧目录如果存在，先删除，再 rename
 这样，外部永远只能看到**完整解压成功的包**，不会读到解压一半残缺的文件。
+
+# 地图tbg 解压文件数据处理的磁盘解法2？（评估中）
+跟磁盘解法1的差别是 地图集tbg 文件上传时就进行解压处理到
+{UPLOAD_DIR}/../plugins/data/.tmp/{userId}/{pluginid}/{storyname}
