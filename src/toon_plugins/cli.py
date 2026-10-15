@@ -94,11 +94,12 @@ def ensure_entry_js(plugin_dir, label=""):
     js = os.path.join(plugin_dir, "entry.js")
     ts = os.path.join(plugin_dir, "entry.ts")
 
-    if os.path.isfile(js) and (not os.path.isfile(ts)
-                              or os.path.getmtime(js) >= os.path.getmtime(ts)):
-        return True
-
+    # ★ 强制保证 entry.js 是 entry.ts 的最新编译产物（entry.ts 才是真源）。
+    #   每次打包都重编，避免「手编的 entry.js 比 ts 新」导致 tbg 内是过期编译。
     if not os.path.isfile(ts):
+        # 没有 entry.ts：若已有 entry.js 则直接放行（纯 JS 插件），否则报错
+        if os.path.isfile(js):
+            return True
         click.secho("  [ERR] " + tag + "既无 entry.js 也无 entry.ts，无法打包", fg="red")
         return False
 
@@ -117,7 +118,7 @@ def ensure_entry_js(plugin_dir, label=""):
             cmd = ["npx", "--no-install", "esbuild",
                    "entry.ts", "--outfile=entry.js"]
 
-    click.echo("  [BUILD] " + tag + "entry.js 缺失/过期，编译 entry.ts ...")
+    click.echo("  [BUILD] " + tag + "重编 entry.js (entry.ts → entry.js) ...")
     try:
         r = subprocess.run(cmd, cwd=plugin_dir, capture_output=True, text=True,
                            timeout=300)
@@ -131,7 +132,7 @@ def ensure_entry_js(plugin_dir, label=""):
         click.secho("  [ERR] " + tag + "entry 编译失败: " + tail, fg="red")
         return False
 
-    click.echo("  [BUILD] " + tag + "entry.js 已生成")
+    click.echo("  [BUILD] " + tag + "entry.js 已是最新编译")
     return True
 
 
