@@ -456,6 +456,12 @@ const CHEST_PICKUP_M  = 2;
 const POTION_PICKUP_M = 2;
 /** ★ game.md：远程野怪/远程武器/远程技能 距离 4 米（此前 30 米） */
 const SKILL_RANGE_M   = 4;
+// ── AI 托管专用常量（移植自 cache/entry.js，确保 entry.ts 重编不丢 AI 能力）──
+const AI_MANAGED_ENGAGE_M = 13;        // AI托管角色独立索敌半径（米）
+const AI_GATHER_TICKS = 30;            // 采集中耗时（tick）
+const AI_GATHER_COOLDOWN_TICKS = 200;  // 采集点冷却（tick）
+const AI_GATHER_ARRIVE_M = 1.2;        // 采集到达判定（米）
+const AI_INTERACT_M = 2;               // 交互到达判定（米）
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -837,6 +843,78 @@ function skillFxKind(skill: { name: string; type?: string; range?: string }): "m
   if (/盾|护|祝福|增益|强化|加攻|加防|buff/i.test(n)) return "buff";
   if (/球|箭|弹|术|咒|射|火|冰|雷|电|风|毒|远程/.test(n)) return "ranged";
   return "melee";
+}
+
+// ════════════════════════════════════════════════════════════════
+// ★ AI 托管子系统（移植自 cache/entry.js，确保 entry.ts 为真源、重编不被覆盖）
+//   设计：AI 大脑经前端 sendAICommand → ai_command action 改 state 标记；
+//   本文件 tick 循环按标记驱动 ally；采集产出交由前端事件引擎（地图集脚本）。
+// ════════════════════════════════════════════════════════════════
+
+/** ★ AI 采集到点：只打到达标记，产出交给前端事件引擎（地图集脚本） */
+function resolveAIGather(s: any, ent: any, g: any) {
+  ent._aiGatherArrived = { zoneName: String(g.zoneName || ""), tick: s.tick, reqId: String(g.reqId || "") };
+  pushEvent(s, ent.name + " 到达" + (g.zoneName || "野外") + "，开始采集");
+  floater(s, "采集中...", ent.x, ent.y - 30);
+  pushVfx(s, { kind: "spark", entityId: ent.id, x: ent.x, y: ent.y, life: 10, total: 10, color: "#9CFF6B" });
+  if (!s.aiGatherCd || typeof s.aiGatherCd !== "object") s.aiGatherCd = {};
+  s.aiGatherCd[ent.id + "|" + (g.zoneName || "_")] = s.tick + AI_GATHER_COOLDOWN_TICKS;
+  g.paid = true;
+  return true;
+}
+
+/** ★ AI 交互：到点后给目标挂对话气泡 */
+function resolveAIInteract(s: any, ent: any, it: any) {
+  const tgt = s.entities.find((e: any) => e.id === it.targetId && e.alive);
+  if (!tgt) return false;
+  pushEvent(s, `${ent.name} 与 ${tgt.name} 交谈`);
+  floater(s, "…", tgt.x, tgt.y - 30);
+  if (!Array.isArray(s.aiTalks)) s.aiTalks = [];
+  s.aiTalks.push({
+    id: `t_${s.tick}_${Math.random().toString(36).slice(2, 6)}`,
+    from: ent.name, to: tgt.name, targetId: tgt.id, x: tgt.x, y: tgt.y, life: 30,
+  });
+  if (s.aiTalks.length > 20) s.aiTalks = s.aiTalks.slice(-20);
+  it.done = true;
+  return true;
+}
+
+/** ★ AI 托管每 tick 执行器：采集到点结算 / 交互到点触发 / 超时清理 */
+function tickAIOrders(s: any) {
+  const ents = Array.isArray(s.entities) ? s.entities : [];
+  ents.forEach((ent: any) => {
+    const g = ent._aiGather;
+    if (g && !g.paid) {
+      const arrived = dist(ent, { x: g.x, y: g.y }) <= AI_GATHER_ARRIVE_M;
+      const elapsed = s.tick - (g.startedTick || s.tick);
+      if (arrived && elapsed >= AI_GATHER_TICKS) {
+        const cdKey = `${ent.id}|${g.zoneName || "_"}`;
+        const cdUntil = num((s.aiGatherCd || {})[cdKey], 0);
+        if (s.tick >= cdUntil) {
+          ent.actionBobMs = 300;
+          resolveAIGather(s, ent, g);
+        } else {
+          g.paid = true;
+        }
+      } else if (elapsed > AI_GATHER_TICKS * 6) {
+        g.paid = true;
+      }
+      if (g.paid) delete ent._aiGather;
+    }
+    const it = ent._aiInteract;
+    if (it && !it.done) {
+      const tgt = s.entities.find((e: any) => e.id === it.targetId && e.alive);
+      if (!tgt) {
+        it.done = true;
+      } else if (dist(ent, tgt) <= AI_INTERACT_M) {
+        ent.actionBobMs = 300;
+        resolveAIInteract(s, ent, it);
+      } else if (s.tick - (it.startedTick || s.tick) > 600) {
+        it.done = true;
+      }
+      if (it.done) delete ent._aiInteract;
+    }
+  });
 }
 
 function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity) {
@@ -1491,27 +1569,65 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive);
   // ★ v5：只有「组队跟随」勾选中的角色才跟随用户参战；未组队的原地待命
   const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
-  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && partyIds.indexOf(e.id) >= 0);
+  // ★ AI 托管：把 _aiManaged 标记的角色也加入驱动列表（即使不在 partyIds）
+  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && (partyIds.indexOf(e.id) >= 0 || (e as any)._aiManaged));
 
-  // 友方角色：跟随用户；只有「已威胁玩家（进入玩家身边 ALLY_ENGAGE_M=4m）」的敌人
-  //           才出手，且目标选择锚点是玩家 —— 否则友军阵位散开后会挑离自己近的远怪围殴
-  //           （表现：面前的怪不打，跑去打很远的）。
   allies.forEach((a, i) => {
-    const target = enemies
-      .filter((e) => dist(player, e) < ALLY_ENGAGE_M)
-      .reduce<Entity | null>((best, e) =>
-        !best || dist(player, e) < dist(player, best) ? e : best, null);
-    const anchor = {
-      x: player.x + Math.cos((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
-      y: player.y + Math.sin((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
-    };
+    // ★ AI 托管：检查是否设了 AI 目标（_aiMoveTo / _aiAttackTarget）；否则用默认行为
+    const aiTarget = (a as any)._aiAttackTarget ? s.entities.find((e: any) => e.id === (a as any)._aiAttackTarget && e.alive) : null;
+    const aiMove = (a as any)._aiMoveTo;
+    const isAIManaged = !!(a as any)._aiManaged;
+
+    // 攻击目标：AI 指定 > （入队角色锚玩家 4m / AI托管角色独立感知 13m）
+    let target: Entity | null = aiTarget;
+    if (!target) {
+      if (partyIds.indexOf(a.id) >= 0) {
+        // 入队角色：保持 entry.ts 既有修正——锚定玩家身边 4m 的敌人，避免「打远的」
+        target = enemies
+          .filter((e: any) => dist(player, e) < ALLY_ENGAGE_M)
+          .reduce<Entity | null>((best, e) =>
+            !best || dist(player, e) < dist(player, best) ? e : best, null);
+      } else if (isAIManaged) {
+        // AI 托管（未入队）：独立感知 13m 内最近敌人
+        target = enemies
+          .filter((e: any) => dist(a, e) < AI_MANAGED_ENGAGE_M)
+          .reduce<Entity | null>((best, e) =>
+            !best || dist(a, e) < dist(best, e) ? e : best, null);
+      }
+    }
+
+    // 移动目标：AI 指定 > 队伍 anchor（跟玩家）> AI 角色原地待命
+    let moveX: number, moveY: number, doMove = true;
+    if (aiMove && (s.tick - ((a as any)._aiMoveToTick || 0)) < 600) {  // 60秒内有效
+      moveX = aiMove.x;
+      moveY = aiMove.y;
+      if (dist(a, aiMove) < 0.5) {
+        delete (a as any)._aiMoveTo;
+        delete (a as any)._aiMoveToTick;
+      }
+    } else if (partyIds.indexOf(a.id) >= 0) {
+      const anchor = {
+        x: player.x + Math.cos((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+        y: player.y + Math.sin((i / Math.max(1, allies.length)) * Math.PI * 2) * ALLY_FOLLOW_GAP_M,
+      };
+      moveX = anchor.x;
+      moveY = anchor.y;
+    } else {
+      // AI 托管但不在队伍：原地待命（不主动移动，等大脑 ai_command）
+      doMove = false;
+      moveX = a.x;
+      moveY = a.y;
+    }
+
     if (target) moveTowards(a, target.x, target.y, speed * 0.92);
-    else moveTowards(a, anchor.x, anchor.y, speed * 0.8);
+    else if (doMove) moveTowards(a, moveX, moveY, speed * 0.8);
     if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
       damage(s, target, a.atk, a);
       a.cooldown = 30;
     }
   });
+  // ★ AI 托管订单执行：采集到点结算 / 交互到点触发（必须在移动循环之后）
+  tickAIOrders(s);
 
   // ★ #ai 指令通用应用器：任意非玩家/非 ally 实体（NPC / neutral / 未入队角色）带 _aiMoveTo 即移动。
   //   AI 托管勾选只决定 ally 循环是否接管；#ai 命令要对「任意对话角色」生效，故这里通用处理。
@@ -3522,6 +3638,135 @@ export async function handle_action(
       return okResp(`购买 ${good.name}×${ask}`);
     }
 
+    case "ai_command": {
+      // ★ AI 托管通道：前端 AI 决策系统 → sendTick → 改 state（每 tick 由 AI 重新决策覆盖，不需持久化）
+      const rid = str(params?.roleId || params?.entityId);
+      if (!rid) return okResp("ai_command: 缺少 roleId");
+      const ent = s.entities.find((x: any) => x.id === rid);
+      if (!ent) return okResp(`ai_command: 实体 ${rid} 不在场上`);
+      const cmd = String(params?.action || params?.type || "");
+      switch (cmd) {
+        case "move": {
+          const tx = Number(params?.x);
+          const ty = Number(params?.y);
+          if (!Number.isFinite(tx) || !Number.isFinite(ty)) return okResp("ai_command.move: 坐标无效");
+          (ent as any)._aiMoveTo = { x: tx, y: ty };
+          (ent as any)._aiMoveToTick = s.tick;
+          return okResp(`AI 移动: ${ent.name} → (${tx.toFixed(1)}, ${ty.toFixed(1)})`);
+        }
+        case "attack": {
+          const targetId = str(params?.targetId);
+          if (!targetId) return okResp("ai_command.attack: 缺少 targetId");
+          (ent as any)._aiAttackTarget = targetId;
+          (ent as any)._aiAttackTick = s.tick;
+          return okResp(`AI 攻击: ${ent.name} → ${targetId}`);
+        }
+        case "stop": {
+          delete (ent as any)._aiMoveTo;
+          delete (ent as any)._aiMoveToTick;
+          delete (ent as any)._aiAttackTarget;
+          delete (ent as any)._aiAttackTick;
+          delete (ent as any)._aiManaged;
+          return okResp(`AI 停止: ${ent.name}`);
+        }
+        case "_mark_managed": {
+          (ent as any)._aiManaged = true;
+          return okResp(`AI 托管标记: ${ent.name}`);
+        }
+        case "stopMove": {
+          delete (ent as any)._aiMoveTo;
+          delete (ent as any)._aiMoveToTick;
+          return okResp(`AI 停止移动: ${ent.name}`);
+        }
+        case "gather": {
+          const gx = Number(params?.x);
+          const gy = Number(params?.y);
+          const zoneName = str(params?.zoneName);
+          if (!Number.isFinite(gx) || !Number.isFinite(gy)) return okResp("ai_command.gather: 坐标无效");
+          (ent as any)._aiMoveTo = { x: gx, y: gy };
+          (ent as any)._aiMoveToTick = s.tick;
+          (ent as any)._aiGather = { zoneName, x: gx, y: gy, startedTick: s.tick, paid: false, reqId: str(params?.reqId) };
+          return okResp(`AI 采集: ${ent.name} → ${zoneName || "(未知区域)"}`);
+        }
+        case "interact": {
+          const itId = str(params?.targetId);
+          if (!itId) return okResp("ai_command.interact: 缺少 targetId");
+          const tgt = s.entities.find((x: any) => x.id === itId && x.alive);
+          if (!tgt) return okResp(`ai_command.interact: 目标 ${itId} 不在场`);
+          (ent as any)._aiInteract = { targetId: itId, startedTick: s.tick, done: false };
+          (ent as any)._aiMoveTo = { x: tgt.x, y: tgt.y };
+          (ent as any)._aiMoveToTick = s.tick;
+          return okResp(`AI 交互: ${ent.name} → ${tgt.name}`);
+        }
+        case "useSkill": {
+          const skName = str(params?.skillName);
+          if (!skName) return okResp("ai_command.useSkill: 缺少 skillName");
+          const sk = (Array.isArray(s.skills) ? s.skills : []).find((k: any) => k && k.name === skName);
+          if (!sk) return okResp(`ai_command.useSkill: 技能「${skName}」不可用`);
+          if (num(sk.cdLeft, 0) > 0) return okResp(`ai_command.useSkill: ${skName} 冷却中`);
+          const skCost = Math.max(0, Math.round(num(sk.cost, 0)));
+          if (num((ent as any).mp, 0) < skCost) return okResp(`ai_command.useSkill: ${ent.name} 蓝量不足`);
+          sk.cdLeft = Math.max(1, Math.round(num(sk.cd, 5)));
+          (ent as any).mp = Math.max(0, num((ent as any).mp, 0) - skCost);
+          (ent as any).actionBobMs = 300;
+          floater(s, sk.name, ent.x, ent.y - 34);
+          const skPower = Math.max(1, Math.round(num(sk.power, 0)) + Math.round(num((ent as any).atk, 10) * 0.5));
+          const skTargets = s.entities.filter((e: any) => e.side === "enemy" && e.alive && dist(ent, e) <= SKILL_RANGE_M);
+          const explicitId = str(params?.targetId);
+          const ordered = explicitId
+            ? [...skTargets].sort((a: any, b: any) => (a.id === explicitId ? -1 : b.id === explicitId ? 1 : 0))
+            : skTargets;
+          const skFx = sk.type === "heal" ? "heal" : sk.type === "buff" ? "buff" : sk.range === "ranged" ? "ranged" : "melee";
+          if (skFx === "heal") {
+            const healAmt = Math.max(Math.round(num(sk.power, 20)), skCost * 2);
+            (ent as any).hp = Math.min(num((ent as any).maxHp, num((ent as any).hp, 0) + healAmt), num((ent as any).hp, 0) + healAmt);
+            pushVfx(s, { kind: "heal_ring", entityId: ent.id, x: ent.x, y: ent.y, life: 18, total: 18, color: effectColor(sk.effects_type, "#7CFFB2"), icon: effectIcon(sk.effects_type), size: 1 });
+            pushEvent(s, `${ent.name} 释放 ${sk.name}，恢复 ${healAmt}HP`);
+            return okResp(`${sk.name}（治疗）`);
+          }
+          if (skFx === "buff") {
+            (ent as any).buffs = Array.isArray((ent as any).buffs) ? (ent as any).buffs : [];
+            if (!(ent as any).buffs.includes(sk.name)) (ent as any).buffs.push(sk.name);
+            pushVfx(s, { kind: "buff_ring", entityId: ent.id, x: ent.x, y: ent.y, life: 30, total: 30, color: effectColor(sk.effects_type, "#9CCFFF"), icon: effectIcon(sk.effects_type), size: 1 });
+            pushEvent(s, `${ent.name} 释放 ${sk.name}${sk.buff_type ? `（${sk.buff_type}）` : ""}`);
+            return okResp(`${sk.name}（强化）`);
+          }
+          const skT0 = ordered[0];
+          pushVfx(s, skFx === "ranged"
+            ? { kind: "fireball", entityId: ent.id, targetEntityId: skT0 ? skT0.id : undefined, x: ent.x, y: ent.y, targetX: skT0 ? skT0.x : ent.x, targetY: skT0 ? skT0.y : ent.y, facing: num((ent as any).facing, 0), life: 16, total: 16, color: effectColor(sk.effects_type, "#ff6a00"), icon: effectIcon(sk.effects_type), size: 1 }
+            : { kind: "slash_arc", entityId: ent.id, x: ent.x, y: ent.y, facing: num((ent as any).facing, 0), life: 12, total: 12, color: effectColor(sk.effects_type, "#fff"), icon: effectIcon(sk.effects_type), size: 1.6 });
+          if (!ordered.length) {
+            pushEvent(s, `${ent.name} 释放 ${sk.name}（空放）`);
+            return okResp(`${sk.name}（空放）`);
+          }
+          const hitCount = Math.min(3, ordered.length);
+          ordered.slice(0, 3).forEach((t: any) => damage(s, t, skPower, ent));
+          pushEvent(s, `${ent.name} 释放 ${sk.name}，命中 ${hitCount} 个目标`);
+          return okResp(`${sk.name}（命中 ${hitCount}）`);
+        }
+        case "useItem": {
+          const itHeal = Math.max(0, Math.round(num(params?.heal, 0)));
+          const itMp = Math.max(0, Math.round(num(params?.mp, 0)));
+          const itName = str(params?.itemName, "物品");
+          if (itHeal <= 0 && itMp <= 0) return okResp(`ai_command.useItem: ${itName} 无恢复效果`);
+          const beforeHp = num((ent as any).hp, 0);
+          const beforeMp = num((ent as any).mp, 0);
+          if (itHeal > 0) (ent as any).hp = Math.min(num((ent as any).maxHp, beforeHp + itHeal), beforeHp + itHeal);
+          if (itMp > 0) (ent as any).mp = Math.min(num((ent as any).maxMp, beforeMp + itMp), beforeMp + itMp);
+          const gotHp = Math.round(num((ent as any).hp, 0) - beforeHp);
+          const gotMp = Math.round(num((ent as any).mp, 0) - beforeMp);
+          const gained = [];
+          if (gotHp > 0) gained.push(`+${gotHp}HP`);
+          if (gotMp > 0) gained.push(`+${gotMp}MP`);
+          pushEvent(s, `${ent.name} 使用 ${itName}${gained.length ? " " + gained.join(" ") : ""}`);
+          if (gotHp > 0) pushVfx(s, { kind: "heal_ring", entityId: ent.id, x: ent.x, y: ent.y, life: 18, total: 18, color: "#7CFFB2", size: 1 });
+          return okResp(`${itName}${gained.length ? " " + gained.join(" ") : ""}`);
+        }
+        default:
+          return okResp(`ai_command: 未知 action '${cmd}'`);
+      }
+    }
+
     case "sys_party": {
       // 组队跟随开关（敌对角色与用户自身不可组队）
       const rid = str(params?.roleId);
@@ -3589,6 +3834,8 @@ export async function handle_action(
           if (!(e as any)._baseSide) (e as any)._baseSide = e.side;
           e.side = "ally";
           if (!e.alive) { e.alive = true; e.hp = e.maxHp; }
+          // ★ AI 托管标记：前端通过 sys_party(aiManaged:true) 标记（AI 托管与组队跟随相互独立）
+          if (params?.aiManaged) (e as any)._aiManaged = true;
         } else {
           // ★ 取消组队：保存角色当前位置到 parked，下次召唤/入队时可以恢复位置
           const mapName = (e as any).mapName || s.levelName || "";
@@ -3598,6 +3845,12 @@ export async function handle_action(
           (s.parked[mapName] as any[]) = (s.parked[mapName] as any[]).filter((x) => String(x.id) !== String(e.id));
           (s.parked[mapName] as any[]).push({ id: e.id, name: e.name, x: e.x, y: e.y, mapName });
           e.side = (e as any)._baseSide || "spectator";
+          // ★ 取消组队：同步清理 AI 托管标记，避免 entry.ts 重编译后残留 _aiManaged 仍被主循环接管
+          delete (e as any)._aiManaged;
+          delete (e as any)._aiMoveTo;
+          delete (e as any)._aiMoveToTick;
+          delete (e as any)._aiAttackTarget;
+          delete (e as any)._aiAttackTick;
           // ★ 清零速度：取消组队后 tick 还会按残留 vx/vy 继续位移，必须归零才能就地停留
           e.vx = 0; e.vy = 0;
           (e as any).wanderTimer = 0;
