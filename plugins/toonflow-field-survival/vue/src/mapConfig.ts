@@ -855,8 +855,19 @@ export function listLevelNames(): string[] {
   return Object.keys(LEVEL_FILES);
 }
 
-/** 根据关卡英文名获取中文显示名。 */
+/** 根据关卡英文名获取中文显示名。
+ *
+ * 优先级：
+ *   ① Tiled JSON 顶层 name 字段（如 "大罗宗外门"，来自 map_design/maps/xxx.json 的 name）
+ *   ② LEVEL_DISPLAY_NAMES 硬编码（如 "Mulberry Town" → "城镇"）
+ *   ③ 原文（裸文件名如 "mulberryTown"）
+ */
 export function getLevelDisplayName(levelName: string): string {
+  // ① 从故事包（Tiled JSON）的顶层 name 取中文显示名
+  const tiled = getStoryMapRaw(levelName);
+  const tiledName = tiled && typeof tiled === "object" ? String(tiled.name || "").trim() : "";
+  if (tiledName) return tiledName;
+  // ② 硬编码
   return LEVEL_DISPLAY_NAMES[levelName] ?? levelName;
 }
 

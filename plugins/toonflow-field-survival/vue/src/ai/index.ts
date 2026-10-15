@@ -14,11 +14,10 @@
  * - spine.ts: 脊椎层
  */
 
-import type { AIGameEvent, AIState, AIAction, AIPerception } from "./types";
+import type { AIGameEvent, AIState, AIAction } from "./types";
 import type { Entity, GameState } from "../types";
-import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller } from "./brain";
+import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
 import { executeAction, isActionComplete } from "./spine";
-import { updatePerception, checkEmergency } from "./sensor";
 
 /** 启动 AI 托管（对外 API） */
 export function enableAI(entity: Entity, personality: string = "勇敢冲锋型"): boolean {
@@ -51,23 +50,7 @@ export function cleanupAI(entityId: string): void {
 
 /** 推入 AI 事件（外部通知） */
 export function emitAIEvent(entityId: string, event: AIGameEvent): void {
-  if (isAIEnabled(entityId)) {
-    const list = (require("./brain") as any).pendingEvents as Map<string, AIGameEvent[]>;
-    if (list) {
-      const l = list.get(entityId) || [];
-      l.push(event);
-      list.set(entityId, l);
-    }
-  }
-}
-
-/** 简化的 emitAIEvent（避免运行时 require） */
-export function emitAIEventSimple(entityId: string, event: Omit<AIGameEvent, "timestamp">): void {
-  if (!isAIEnabled(entityId)) return;
-  // 直接调用 brain 内部的事件队列
-  import("./brain").then((mod) => {
-    mod.pushAIEvent(entityId, { ...event, timestamp: Date.now() });
-  });
+  pushAIEvent(entityId, event);
 }
 
 /** 外部通知战斗/系统事件 */
@@ -89,6 +72,9 @@ export function registerAILLM(
 /** ★ 主循环入口：每 tick 由 App.vue 调用（同步版本，fire-and-forget LLM 调用） */
 export function tickAllAIs(state: GameState, currentTick: number): void {
   if (!state) return;
+
+  // ★ 消费宿主的采集到达标记 → 触发地图集事件脚本（产出权威在 events/scripts/*.ts）
+  void consumeGatherArrivals(state);
 
   // 收集所有候选实体（在场的 ally + npcCards 中已托管的）
   const candidates: import("../types").Entity[] = [];
@@ -169,76 +155,36 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
   }
 }
 
-/** 同步大脑决策：直接走兜底策略（无 LLM 调用） */
-function syncBrain(entity: Entity, state: GameState): import("./types").LLMDecision | null {
-  const aiState = getOrCreateAIState(entity);
-  if (!aiState.enabled) return null;
 
-  // 1. 紧急检查（覆盖）
-  const perception: AIPerception = updatePerception(entity, state);
-  const emergency = checkEmergency(entity, perception);
-  aiState.emergency = emergency.flags;
-  if (emergency.shouldOverride && emergency.action) {
-    aiState.goal = "紧急响应";
-    return { reasoning: "紧急响应", goal: aiState.goal, action: emergency.action };
-  }
+/**
+ * ★ 消费宿主打在实体上的采集到达标记（entry.js resolveAIGather 写入）。
+ * 标记不自删（实体字段由宿主权威持有），故按 reqId 去重：
+ * 同一 reqId 的标记被重复推送时不会二次触发采集。
+ * 产出走 mapKnowledge.triggerZoneGather → 事件引擎 fireEventManually → 地图集脚本。
+ */
+const consumedGatherReqIds = new Set<string>();
 
-  // 2. 检查心跳间隔
-  const now = Date.now();
-  const interval = Math.max(3000, aiState.brainInterval);
-  if (now - aiState.lastBrainTick < interval) return null;
-  if (now < aiState.cooldownUntil) return null;
-
-  // 3. 同步决策（兜底）
-  aiState.lastBrainTick = now;
-  const decision = fallbackDecisionSync(perception);
-  aiState.goal = decision.goal;
-  return decision;
-}
-
-function fallbackDecisionSync(perception: import("./types").AIPerception): import("./types").LLMDecision {
-  if (perception.nearby.enemies.length > 0) {
-    const e = perception.nearby.enemies[0];
-    return {
-      reasoning: "兜底：攻击最近敌人",
-      goal: "战斗",
-      action: {
-        type: "attack",
-        target: { id: e.id, x: e.position.x, y: e.position.y, name: e.name },
-        priority: 60,
-        context: `攻击 ${e.name}`,
-      },
-    };
-  }
-  if (perception.resources.length > 0) {
-    const r = perception.resources[0];
-    return {
-      reasoning: "兜底：前往最近资源",
-      goal: "采集",
-      action: {
-        type: "gather",
-        target: { x: r.position.x, y: r.position.y, name: r.zoneName },
-        zoneName: r.zoneName,
-        priority: 50,
-        context: `前往 ${r.zoneName}`,
-      },
-    };
-  }
-  return {
-    reasoning: "兜底：待命",
-    goal: "待命",
-    action: { type: "wait", duration: 3000, priority: 30, context: "待命" },
-  };
-}
-
-/** 同步版本（无 LLM 调用，仅程序化行为） */
-export function tickSyncAIs(state: GameState, _currentTick: number): void {
-  if (!state || !state.entities) return;
-
-  for (const entity of state.entities) {
-    if (entity.side !== "ally" || !entity.alive) continue;
-    if (!isAIEnabled(entity.id)) continue;
-    // 同步部分：仅更新状态标记，不做 LLM 调用
+async function consumeGatherArrivals(state: GameState): Promise<void> {
+  const { triggerZoneGather } = await import("./mapKnowledge");
+  for (const e of state.entities || []) {
+    const arr = (e as any)._aiGatherArrived as { zoneName?: string; reqId?: string } | undefined;
+    if (!arr) continue;
+    const reqId = String(arr.reqId || "");
+    if (reqId && consumedGatherReqIds.has(reqId)) continue; // 已消费过（宿主重复推送）
+    if (reqId) {
+      consumedGatherReqIds.add(reqId);
+      // 防止集合无限增长：只保留最近 200 个
+      if (consumedGatherReqIds.size > 200) {
+        const it = consumedGatherReqIds.values();
+        for (let i = 0; i < 100; i++) {
+          const v = it.next().value;
+          if (v !== undefined) consumedGatherReqIds.delete(v);
+        }
+      }
+    }
+    const zone = String(arr.zoneName || "");
+    const ok = await triggerZoneGather(zone);
+    console.info(`[ai] ${e.name} 采集到达 ${zone || "(未知区域)"} → ${ok ? "已触发地图集脚本" : "该 zone 无采集事件"}`);
   }
 }
 

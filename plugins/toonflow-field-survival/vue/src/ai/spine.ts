@@ -113,47 +113,129 @@ export function executeAttack(entity: Entity, action: AIAction, state: GameState
   };
 }
 
-/** 执行采集（走到 zone） */
+/** 采集区半径内视为「到达并可开采」（zone 的 rx/ry 单位是格≈米） */
+const GATHER_ARRIVE_M = 1.2;
+/** 跟随玩家时保持的距离（米） */
+const FOLLOW_GAP_M = 2.5;
+/** 与 NPC 交互的到达距离（米） */
+const INTERACT_M = 2;
+
+/** 执行采集：走到 zone，到达后由前端触发地图集事件脚本产出 */
 export function executeGather(entity: Entity, action: AIAction, state: GameState): ActionResult {
   if (!action.zoneName && !action.target) {
     return { success: false, message: "采集区域无效" };
   }
   const tx = action.target?.x ?? 0;
   const ty = action.target?.y ?? 0;
-  // 通过 move 通道走到 zone
+  // ★ reqId 去重：宿主到达后写 _aiGatherArrived 标记且不自删（实体字段被宿主权威持有），
+  //   前端按 reqId 消费，重复推送同一标记不会重复触发采集。
+  const reqId = `g_${entity.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  // 一次命令同时表达「走到哪」+「采什么」：宿主负责移动 + 到达打标记，
+  // 产出（掉什么/给多少）由前端 mapKnowledge.triggerZoneGather → 地图集脚本决定。
   sendAICommand(entity.id, {
-    action: "move",
+    action: "gather",
     x: tx,
     y: ty,
+    zoneName: action.zoneName || action.target?.name || "",
+    reqId,
   });
   patchEntityForDevPreview(entity, state, action);
   return {
     success: true,
-    message: `→ ${action.zoneName} (${tx.toFixed(1)}, ${ty.toFixed(1)})`,
+    message: `采集中 → ${action.zoneName} (${tx.toFixed(1)}, ${ty.toFixed(1)})`,
   };
 }
 
-/** 执行技能 */
+/** 执行技能：走 useSkill 通道，由宿主查技能表扣蓝/放 CD/结算伤害 */
 export function executeSkill(entity: Entity, action: AIAction, state: GameState): ActionResult {
   if (!action.skillName) {
     return { success: false, message: "技能名无效" };
   }
-  // TODO: 真实技能通道（v0.4）
-  return { success: true, message: `技能 ${action.skillName} (v0.4 待实现)` };
+  sendAICommand(entity.id, {
+    action: "useSkill",
+    skillName: action.skillName,
+    targetId: action.target?.id,
+  });
+  return { success: true, message: `施放 ${action.skillName}` };
 }
 
-/** 执行物品 */
+/** 执行交互（与 NPC 对话）：走 interact 通道，宿主到点后触发对话事件 */
+export function executeInteract(entity: Entity, action: AIAction, state: GameState): ActionResult {
+  const tid = action.target?.id;
+  if (!tid) return { success: false, message: "交互目标无效" };
+  sendAICommand(entity.id, {
+    action: "interact",
+    targetId: tid,
+  });
+  return { success: true, message: `与 ${action.target?.name || tid} 交互` };
+}
+
+/** 找玩家实体（跟随目标） */
+function findPlayer(state: GameState): Entity | null {
+  return (state.entities || []).find((e) => e.side === "player") || null;
+}
+
+/** 执行跟随：持续把移动目标刷新到玩家身后（宿主每次决策都会重新下发） */
+export function executeFollow(entity: Entity, action: AIAction, state: GameState): ActionResult {
+  const player = findPlayer(state);
+  if (!player) {
+    // 玩家不在场（切图/死亡）→ 停下等待
+    sendAICommand(entity.id, { action: "stopMove" });
+    return { success: false, message: "玩家不在场，跟随暂停" };
+  }
+  const d = Math.hypot(player.x - entity.x, player.y - entity.y);
+  if (d <= FOLLOW_GAP_M) {
+    // 已到位，清掉移动目标避免抖动
+    sendAICommand(entity.id, { action: "stopMove" });
+    return { success: true, message: `已跟随（距玩家 ${d.toFixed(1)}米）` };
+  }
+  sendAICommand(entity.id, {
+    action: "move",
+    x: player.x,
+    y: player.y,
+  });
+  patchEntityForDevPreview(entity, state, {
+    ...action,
+    type: "move",
+    target: { x: player.x, y: player.y, name: player.name },
+  });
+  return { success: true, message: `跟随 ${player.name}（${d.toFixed(1)}米）` };
+}
+
+/** 读取物品真实回复值（优先按名称精确/模糊匹配背包） */
+function lookupItemHeal(itemName: string, state: GameState): { heal: number; mp: number; found: boolean } {
+  const items = (state.items || []) as any[];
+  const key = itemName.trim();
+  const hit =
+    items.find((it) => it?.name === key) ||
+    items.find((it) => typeof it?.name === "string" && (it.name.includes(key) || key.includes(it.name)));
+  if (!hit) return { heal: 0, mp: 0, found: false };
+  return {
+    heal: Number(hit.heal) || 0,
+    mp: Number(hit.mp) || 0,
+    found: true,
+  };
+}
+
+/** 执行物品：读真实 heal/mp 值下发，不再硬编码 30 */
 export function executeItem(entity: Entity, action: AIAction, state: GameState): ActionResult {
   if (!action.itemName) {
     return { success: false, message: "物品名无效" };
   }
-  // 通过 useItem 通道
+  const { heal, mp, found } = lookupItemHeal(action.itemName, state);
+  if (!found) {
+    return { success: false, message: `背包里没有 ${action.itemName}` };
+  }
   sendAICommand(entity.id, {
     action: "useItem",
-    heal: 30,  // TODO: 读真实物品 heal 值
     itemName: action.itemName,
+    heal,
+    mp,
   });
-  return { success: true, message: `使用 ${action.itemName}` };
+  const parts: string[] = [];
+  if (heal > 0) parts.push(`+${heal}HP`);
+  if (mp > 0) parts.push(`+${mp}MP`);
+  return { success: true, message: `使用 ${action.itemName}${parts.length ? "（" + parts.join(" ") + "）" : ""}` };
 }
 
 /** 执行撤退 */
@@ -204,7 +286,7 @@ export function executeAction(
     case "gather":
       return executeGather(entity, action, state);
     case "interact":
-      return { success: true, message: "与NPC对话（v0.4 待实现）" };
+      return executeInteract(entity, action, state);
     case "useSkill":
       return executeSkill(entity, action, state);
     case "useItem":
@@ -214,7 +296,7 @@ export function executeAction(
     case "wait":
       return executeWait(action);
     case "follow":
-      return { success: true, message: "跟随玩家" };
+      return executeFollow(entity, action, state);
     default:
       return { success: false, message: `未知动作: ${action.type}` };
   }
@@ -230,9 +312,30 @@ export function isActionComplete(entity: Entity, state: GameState, action: AIAct
   }
 
   if (action.type === "gather") {
-    const state2 = getOrCreateAIState(entity);
-    if (!state2.gatherStartedAt) return false;
-    return Date.now() - state2.gatherStartedAt >= 3000;
+    // 采集完成 = 走到 zone 内（到达即由宿主结算产出）
+    if (action.target?.x === undefined || action.target?.y === undefined) return true;
+    const dist = Math.hypot(action.target.x - entity.x, action.target.y - entity.y);
+    return dist <= GATHER_ARRIVE_M;
+  }
+
+  if (action.type === "follow") {
+    // 跟随是持续行为：到位也算「完成」，让大脑下一拍重新决定去留
+    const player = (state.entities || []).find((e) => e.side === "player");
+    if (!player) return true;
+    return Math.hypot(player.x - entity.x, player.y - entity.y) <= FOLLOW_GAP_M;
+  }
+
+  if (action.type === "interact") {
+    if (!action.target?.id) return true;
+    const t = (state.entities || []).find((e) => e.id === action.target?.id);
+    if (!t || t.alive === false) return true;
+    // 走到 NPC 身边即可完成交互（宿主在同一 tick 结算对话）
+    return Math.hypot(t.x - entity.x, t.y - entity.y) <= INTERACT_M;
+  }
+
+  if (action.type === "useSkill" || action.type === "useItem") {
+    // 瞬发动作：发一次即完成
+    return true;
   }
 
   if (action.type === "move" || action.type === "flee") {

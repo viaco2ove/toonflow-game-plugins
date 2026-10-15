@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import { DEFAULT_BRAIN_CONFIG } from "./types";
 import { checkEmergency, updatePerception } from "./sensor";
+import { readMapKnowledge } from "./mapKnowledge";
 import type { Entity, GameState } from "../types";
 
 /** AI 大脑状态 */
@@ -133,6 +134,8 @@ function addMemory(state: AIState, type: AIMemory["type"], description: string, 
 
 /** 构建 System Prompt（角色大脑设定） */
 function buildSystemPrompt(state: AIState, perception: AIPerception): string {
+  // ★ 地图集知识（{{mapSpecificHint}} 落地）：从 eventEngine 派生当前图的可采集地点/可交互对象
+  const mapHint = readMapKnowledge().summary;
   return `# 角色设定
 
 你是角色【${state.characterName}】的AI控制大脑。
@@ -143,13 +146,16 @@ function buildSystemPrompt(state: AIState, perception: AIPerception): string {
 - 性格特点：${state.personality}
 - 当前所在地图：${perception.world.currentMap || "未知"}
 
+## 本图知识（地图集提供）
+${mapHint || "- 本地图暂无特殊地点知识"}
+
 ## 核心能力
 - HP: ${perception.self.hp}/${perception.self.maxHp} (${perception.self.hpPercent}%)
 - MP: ${perception.self.mp}/${perception.self.maxMp} (${perception.self.mpPercent}%)
 - 攻击力: ${perception.self.atk}
 - 防御力: ${perception.self.def}
 
-## 背包物品
+## 背包物品（队伍背包 + 私藏）
 ${perception.self.inventory.length ? perception.self.inventory.map((i) => `- ${i.name} ×${i.count}`).join("\n") : "- 空"}
 
 ## 技能列表
@@ -182,8 +188,7 @@ ${perception.nearby.enemies.length ? `- 周围有 ${perception.nearby.enemies.le
 - 最近敌人: ${perception.nearby.enemies[0]?.name} (HP: ${perception.nearby.enemies[0]?.hp}, 距离: ${perception.nearby.enemies[0]?.distance}米)` : "- 当前未在战斗"}
 
 ### 资源状态
-- 背包物品数: ${perception.self.inventory.length}
-${perception.self.inventory.length >= 8 ? "- ⚠️ 背包即将满，建议处理物品" : ""}
+- 背包物品数（队伍+私藏）: ${perception.self.inventory.length}
 - 可达资源: ${perception.resources.length}个${perception.resources[0] ? ` (最近: ${perception.resources[0].zoneName}, ${perception.resources[0].distance}米)` : ""}
 
 ### 角色记忆（最近3件事）

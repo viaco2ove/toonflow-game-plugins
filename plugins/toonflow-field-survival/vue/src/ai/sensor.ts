@@ -16,7 +16,7 @@ import type {
   ItemSlot,
   SkillSlot,
 } from "../types";
-import { getEventZones } from "../eventEngine";
+import { readMapKnowledge } from "./mapKnowledge";
 
 /** 感知半径（米），与玩家视野一致 */
 const PERCEPTION_RADIUS = 13;
@@ -25,10 +25,21 @@ const RESOURCE_RADIUS = 26;
 
 /** 从 entity 抽取自身感知 */
 function senseSelf(entity: Entity, state: GameState): AIPerception["self"] {
-  const items: { name: string; count: number }[] = (state.items || []).map((it: ItemSlot) => ({
-    name: it.name,
-    count: it.count,
-  }));
+  // ★ AI 背包 = 队伍背包（state.items，采集产出经 giveItem 进这里）+ AI 私藏（entity._aiBag）
+  //   合并展示：大脑要知道「采到的东西进了队伍包」，否则采完仍以为空手。
+  const merged = new Map<string, number>();
+  for (const it of state.items || []) {
+    const nm = String(it?.name || "");
+    if (nm) merged.set(nm, (merged.get(nm) || 0) + (Number(it?.count) || 0));
+  }
+  const aiBag = (entity as any)._aiBag as { name: string; count: number }[] | undefined;
+  if (Array.isArray(aiBag)) {
+    for (const b of aiBag) {
+      const nm = String(b?.name || "");
+      if (nm && (Number(b?.count) || 0) > 0) merged.set(nm, (merged.get(nm) || 0) + (Number(b.count) || 0));
+    }
+  }
+  const items: { name: string; count: number }[] = [...merged.entries()].map(([name, count]) => ({ name, count }));
   const skills: { name: string; cost: number; cdLeft: number }[] = (state.skills || []).map(
     (s: SkillSlot) => ({ name: s.name, cost: s.cost, cdLeft: s.cdLeft }),
   );
@@ -101,23 +112,17 @@ function senseNearby(entity: Entity, state: GameState): AIPerception["nearby"] {
   return { enemies, allies, npcs, loot };
 }
 
-/** 感知资源点（来自 eventEngine 的 eventZones） */
+/** 感知资源点（来自 mapKnowledge —— 即 eventEngine 的 eventZones + area_enter 事件派生） */
 function senseResources(entity: Entity): AIResourcePerception[] {
   const resources: AIResourcePerception[] = [];
-  const zones = getEventZones();
+  const { gatherZones } = readMapKnowledge();
 
-  for (const zone of zones) {
+  for (const zone of gatherZones) {
     const dist = Math.hypot(zone.x - entity.x, zone.y - entity.y);
     if (dist > RESOURCE_RADIUS) continue;
 
-    // 根据 zone 名称推断资源类型
-    let type: AIResourcePerception["type"] = "other";
-    if (zone.name.includes("农田") || zone.name.includes("药")) type = "herb";
-    else if (zone.name.includes("水池") || zone.name.includes("泉") || zone.name.includes("溪")) type = "fish";
-    else if (zone.name.includes("木材") || zone.name.includes("树")) type = "wood";
-
     resources.push({
-      type,
+      type: zone.kind,
       zoneName: zone.name,
       position: { x: zone.x, y: zone.y, name: zone.name },
       distance: Math.round(dist * 10) / 10,
@@ -158,7 +163,9 @@ export function checkEmergency(entity: Entity, perception: AIPerception): {
     lowHp: perception.self.hpPercent < 30,
     criticalHp: perception.self.hpPercent < 15,
     lowMp: perception.self.mpPercent < 20,
-    inventoryFull: perception.self.inventory.length >= 8,
+    // ★ 只数 AI 私藏（_aiBag）：perception.self.inventory 是合并视图（含玩家背包），
+    //   拿它判断会让大脑误以为「自己背包满了」而停止采集。
+    inventoryFull: (((entity as any)._aiBag as unknown[])?.length || 0) >= 8,
     targetDied: false,
     surrounded: perception.nearby.enemies.length >= 3,
     newEnemy: false,
