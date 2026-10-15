@@ -149,14 +149,17 @@ function buildSummary(zones: ZoneKnowledge[], uids: string[]): string {
  * AI 采集到达后调用：复用玩家同款区域事件脚本（events/scripts/*.ts）。
  * 产出（掉什么/给多少/弹不弹确认）完全由地图集脚本决定，插件不重复实现。
  *
+ * @param zoneName 采集区域名（对应地图 eventZones 里的 name）
+ * @param actor 采集者（AI 角色 id + 名字）。传入后脚本内的 confirm 自动通过、
+ *              bag.give 落进该角色的 _aiBag，不再弹窗打断玩家、也不污染玩家背包。
  * @returns 是否找到了对应事件并触发（false = 该 zone 没有采集事件，调用方应放弃）
  */
-export async function triggerZoneGather(zoneName: string): Promise<boolean> {
+export async function triggerZoneGather(zoneName: string, actor?: { roleId: string; name: string }): Promise<boolean> {
   const ev = (getLoadedEvents() || []).find(
     (e) => e.trigger?.type === "area_enter" && String(e.trigger.zone || "") === String(zoneName || ""),
   );
   if (!ev) return false;
   // fireEventManually 会清掉 firedIds / 冷却强制跑一次（repeat 采集事件本就该可重复触发）
-  await fireEventManually(ev.id);
+  await fireEventManually(ev.id, actor && actor.roleId ? actor : { roleId: "", name: "player" });
   return true;
 }

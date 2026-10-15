@@ -39,8 +39,12 @@ export interface EventHooks {
   teleport(mapName: string, x: number, y: number): void;
   /** 确认对话框（采集/交互确认）：resolve(true)=确定 */
   confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
-  /** 发放物品到背包（走 sys_shop_buy 同款 ItemSlot+参数卡合并，mock/真实宿主都能落账） */
+  /** 发放物品到玩家背包（走 sys_item_add 通道，mock/真实宿主都能落账） */
   giveItem(name: string, count?: number): void;
+  /** 发放物品到指定 AI 角色的私藏（entity._aiBag，走 ai_bag_add 通道）
+   *  玩家自己的背包是参数卡派生的（entry.ts buildItems），AI 产出不能污染它：
+   *  否则所有 AI 的采集都掉进玩家腰包，而 sensor 的 inventoryFull 判的是 _aiBag。 */
+  giveItemToAi(roleId: string, name: string, count?: number): void;
   /** pluginData 读写（t_plugin_session_data） */
   pluginData: {
     get(key: string): Promise<unknown>;
@@ -114,22 +118,30 @@ export async function loadMapEvents(mapFile: string): Promise<void> {
 //   校验脚本 validate_events.mjs 检查两边一致）。import.meta.glob 限定在 src/ 内，Vite 正常编译。
 const scriptModules = import.meta.glob("./eventScripts/*.ts", { eager: false });
 
-async function runScript(name: string): Promise<void> {
+/** 执行者：roleId="" 表示玩家自己操作（默认）；非空表示 AI 托管角色触发。
+ *  走 fireEvent → runActions → runScript 整条链透传，脚本据此决定
+ *  confirm 是否弹窗、bag.give 进谁的背包。 */
+export interface EventActor { roleId: string; name: string; }
+const PLAYER_ACTOR: EventActor = { roleId: "", name: "player" };
+
+async function runScript(name: string, actor: EventActor = PLAYER_ACTOR): Promise<void> {
   const key = Object.keys(scriptModules).find(k => k.endsWith(`/${name}.ts`));
   if (!key) {
     console.warn("[eventEngine] run_script 找不到脚本:", name);
     return;
   }
   const mod = await scriptModules[key]() as { default: (ctx: Ctx) => Promise<void> };
-  const ctx = makeCtx();
+  const ctx = makeCtx(actor);
   await mod.default(ctx);
 }
 
 // ─── ctx 构造（_ctx.ts 接口的运行时实现） ───
-function makeCtx(): Ctx {
+function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
+  const isAi = !!actor.roleId;
   return {
     player: (hooks?.player() || { id: "player", name: "陆川", side: "player" as const, x: 0, y: 0, hp: 1, maxHp: 1 }) as Ctx["player"],
     mapName: hooks?.currentMapFile() || "",
+    actor: { roleId: actor.roleId, ai: isAi, name: actor.name || "player" },
     save: {
       getFlag: async <T,>(key: string): Promise<T | null> => {
         const f = await loadFlags();
@@ -157,11 +169,24 @@ function makeCtx(): Ctx {
       toast: (text: string, color?: string) => hooks?.toast(text, color),
       subtitle: (text: string, durationMs?: number) => hooks?.subtitle(text, durationMs),
       event: (text: string) => hooks?.eventLog(text),
-      confirm: (opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }) =>
-        hooks?.confirm(opts) ?? Promise.resolve(false),
+      confirm: (opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }) => {
+        // ★ AI 托管采集：脚本问「是否就地采药？」是对玩家说的，不是对 AI 说的。
+        //   真弹窗会让 AI 的采集 Promise 永远悬着（玩家不理就不 resolve），
+        //   且已有弹窗时 evConfirmOpen 直接 return false → 本次采集空手而归。
+        //   故 AI 执行者一律自动同意，只留一条事件日志。
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} ${opts.title || "交互"}：自动确认`);
+          return Promise.resolve(true);
+        }
+        return hooks?.confirm(opts) ?? Promise.resolve(false);
+      },
     },
     bag: {
-      give: (name: string, count?: number) => hooks?.giveItem(name, count),
+      // ★ 分流：AI 的产出进 _aiBag（不污染玩家参数卡派生的背包），玩家自己的照旧
+      give: (name: string, count?: number) => {
+        if (isAi) hooks?.giveItemToAi(actor.roleId, name, count);
+        else hooks?.giveItem(name, count);
+      },
     },
     level: {
       switchTo: (mapFile: string, x: number, y: number) => hooks?.teleport(mapFile, x, y),
@@ -204,14 +229,14 @@ async function checkConditions(ev: EventDef): Promise<boolean> {
 }
 
 // ─── 动作执行 ───
-async function runActions(ev: EventDef): Promise<void> {
+async function runActions(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promise<void> {
   for (const a of ev.actions || []) {
     switch (a.type) {
       case "set_flag":
-        await makeCtx().save.setFlag(a.key, a.value);
+        await makeCtx(actor).save.setFlag(a.key, a.value);
         break;
       case "del_flag":
-        await makeCtx().save.delFlag(a.key);
+        await makeCtx(actor).save.delFlag(a.key);
         break;
       case "toast":
         hooks?.toast(a.text, a.color);
@@ -226,7 +251,7 @@ async function runActions(ev: EventDef): Promise<void> {
         hooks?.teleport(a.map, a.x, a.y);
         break;
       case "run_script":
-        await runScript(a.script);
+        await runScript(a.script, actor);
         break;
       case "call_action":
         console.warn("[eventEngine] call_action v0.2 未实现:", a.name);
@@ -244,7 +269,7 @@ async function runActions(ev: EventDef): Promise<void> {
 // ─── 事件触发入口 ───
 // repeat 事件（采集类 area_enter）：不进 firedIds 防重入，但加冷却（ms）防连点
 const repeatCooldown = new Map<string, number>();
-async function fireEvent(ev: EventDef): Promise<void> {
+async function fireEvent(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promise<void> {
   if (ev.repeat) {
     const cd = repeatCooldown.get(ev.id) || 0;
     if (Date.now() < cd) return;
@@ -256,7 +281,7 @@ async function fireEvent(ev: EventDef): Promise<void> {
   try {
     if (await checkConditions(ev)) {
       console.info("[eventEngine] 触发事件:", ev.id);
-      await runActions(ev);
+      await runActions(ev, actor);
     }
   } catch (e) {
     console.error("[eventEngine] 事件执行异常:", ev.id, e);
@@ -285,7 +310,7 @@ export function getRepeatHits(): Record<string, number> {
 }
 
 /** ★ 调试/UI 用：手动 fire 某事件（绕过触发器直接调 runActions） */
-export async function fireEventManually(evId: string): Promise<boolean> {
+export async function fireEventManually(evId: string, actor: EventActor = PLAYER_ACTOR): Promise<boolean> {
   const ev = (loadedEvents.value?.events || []).find(e => e.id === evId);
   if (!ev) return false;
   // 临时清掉 firedIds / 冷却，让 runActions 跑一次
@@ -293,7 +318,7 @@ export async function fireEventManually(evId: string): Promise<boolean> {
   if (!ev.repeat) firedIds.value.delete(ev.id);
   repeatCooldown.delete(ev.id);
   // 直接复用 fireEvent 内部逻辑
-  try { await fireEvent(ev); } catch (e) { console.warn("[eventEngine] manual fire error", e); }
+  try { await fireEvent(ev, actor); } catch (e) { console.warn("[eventEngine] manual fire error", e); }
   return true;
 }
 

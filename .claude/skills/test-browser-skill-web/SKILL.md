@@ -13,6 +13,10 @@ description: 用 bsk（BrowserSkill CLI）实测 Toonflow AI 剧场 Web 宿主�
 1. 手工点这条路径很繁琐且不可复现；
 2. 游戏运行在 iframe/shadow 内部，手工 DevTools 很难读到 state。
 
+## 切记
+ai 不能自己觉得5175 不行 ，自己 转到 3000 这个dev-host 进行测试。这是掩耳盗铃的行为！！！
+
+
 ## 启动参考
 [Reference/run_app.md]
 

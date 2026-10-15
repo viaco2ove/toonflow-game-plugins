@@ -30,6 +30,17 @@ export interface Ctx {
   /** 当前地图文件名（不含 .json） */
   mapName: string;
 
+  /** 本次事件脚本的执行者。roleId="" = 玩家自己走进区域（保留全部交互行为）；
+   *  非空 = AI 托管角色（如 mapKnowledge.triggerZoneGather 传入的采集者）。
+   *  脚本据此分流：AI 走 ctx.actor.ai → confirm 自动通过、不打断玩家、产出进 _aiBag。 */
+  actor: {
+    roleId: string;
+    /** true = 由 AI 托管角色触发（非玩家操作） */
+    ai: boolean;
+    /** 非 AI 时为 "player"；AI 时为该角色名（飘字/日志用） */
+    name: string;
+  };
+
   /** 玩家卡 flag 读写（唯一来源 t_plugin_session_data） */
   save: {
     getFlag<T = unknown>(key: string): Promise<T | null>;
@@ -58,13 +69,14 @@ export interface Ctx {
     subtitle(text: string, durationMs?: number): void;
     /** 往 state.events 推一条事件日志（HUD 事件流） */
     event(text: string): void;
-    /** 确认对话框（采集/交互确认）：resolve(true)=玩家点了确定 */
+    /** 确认对话框（采集/交互确认）：resolve(true)=玩家点了确定。
+     *  ★ ctx.actor.ai 时引擎自动 resolve(true)，不弹窗打断玩家。 */
     confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
   };
 
-  /** 背包操作（走宿主 sys_shop_buy 同款入包链，mock/真实宿主都落账） */
+  /** 背包操作（走宿主 sys_item_add 同款入包链，mock/真实宿主都落账） */
   bag: {
-    /** 发放物品到背包 */
+    /** 发放物品。ctx.actor.ai 时进该 AI 的 _aiBag，否则进玩家背包。 */
     give(name: string, count?: number): void;
   };
 
@@ -98,7 +110,9 @@ export interface EventDef {
   trigger:
     | { type: "enter_map" }
     | { type: "interact"; uid: string }
-    | { type: "area_enter"; zone: string }
+    // ★ ai.gather：向 AI 托管声明「这个 zone 能采什么」（mapKnowledge 读取，可选字段）
+    //   缺省时按 事件id → zone名 顺序推断。取值：herb / fish / wood / ore / other
+    | { type: "area_enter"; zone: string; ai?: { gather?: "herb" | "fish" | "wood" | "ore" | "other" } }
     | { type: "step_on"; x: number; y: number }
     | { type: "flag_set"; key: string }
     | { type: "kill_count"; gte: number }

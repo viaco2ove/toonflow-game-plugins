@@ -52,6 +52,12 @@ export interface Entity {
   knockbackVy?: number;
   /** ★ 打击感：死亡渐隐倒计时（ms），>0 时显示淡出特效，降至 0 后移除实体 */
   deathMs?: number;
+  /** ★ AI 托管：角色私藏背包（采集产出落这里，与玩家参数卡派生的 s.items 隔离）
+   *  写：entry.ts case "ai_bag_add" / case "ai_bag_drop"
+   *  读：sensor.ts senseSelf 合并展示 / sensor.ts checkEmergency inventoryFull */
+  _aiBag?: { name: string; count: number }[];
+  /** ★ AI 托管：技能加持记录（buff 技能写到角色身上，每 tick 由 sensor 读取） */
+  buffs?: string[];
 }
 
 export interface Chest { id: string; x: number; y: number; opened: boolean; }

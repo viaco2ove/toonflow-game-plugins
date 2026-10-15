@@ -22,6 +22,8 @@ import { readMapKnowledge } from "./mapKnowledge";
 const PERCEPTION_RADIUS = 13;
 /** 资源感知半径（米） */
 const RESOURCE_RADIUS = 26;
+/** AI 私藏格数上限（与 entry.ts AI_BAG_MAX_SLOTS、checkEmergency inventoryFull 判据同源） */
+const AI_BAG_MAX_SLOTS = 8;
 
 /** 从 entity 抽取自身感知 */
 function senseSelf(entity: Entity, state: GameState): AIPerception["self"] {
@@ -32,7 +34,7 @@ function senseSelf(entity: Entity, state: GameState): AIPerception["self"] {
     const nm = String(it?.name || "");
     if (nm) merged.set(nm, (merged.get(nm) || 0) + (Number(it?.count) || 0));
   }
-  const aiBag = (entity as any)._aiBag as { name: string; count: number }[] | undefined;
+  const aiBag = entity._aiBag;
   if (Array.isArray(aiBag)) {
     for (const b of aiBag) {
       const nm = String(b?.name || "");
@@ -165,7 +167,7 @@ export function checkEmergency(entity: Entity, perception: AIPerception): {
     lowMp: perception.self.mpPercent < 20,
     // ★ 只数 AI 私藏（_aiBag）：perception.self.inventory 是合并视图（含玩家背包），
     //   拿它判断会让大脑误以为「自己背包满了」而停止采集。
-    inventoryFull: (((entity as any)._aiBag as unknown[])?.length || 0) >= 8,
+    inventoryFull: (entity._aiBag?.length || 0) >= AI_BAG_MAX_SLOTS,
     targetDied: false,
     surrounded: perception.nearby.enemies.length >= 3,
     newEnemy: false,

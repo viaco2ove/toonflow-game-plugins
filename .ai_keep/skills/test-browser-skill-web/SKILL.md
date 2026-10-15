@@ -13,6 +13,13 @@ description: 用 bsk（BrowserSkill CLI）实测 Toonflow AI 剧场 Web 宿主�
 1. 手工点这条路径很繁琐且不可复现；
 2. 游戏运行在 iframe/shadow 内部，手工 DevTools 很难读到 state。
 
+## 切记
+ai 不能自己觉得5175 不行 ，自己 转到 3000 这个dev-host 进行测试。这是掩耳盗铃的行为！！！
+
+
+## 启动参考
+[Reference/run_app.md]
+
 ## Input
 
 必须提供（或按默认）：
@@ -28,12 +35,16 @@ description: 用 bsk（BrowserSkill CLI）实测 Toonflow AI 剧场 Web 宿主�
 
 ### 例子
 /test-browser-skill-web  测试插件安装后的 进入野怪感知范围是否会被攻击，用户是否可以进行普攻和用技能攻击野怪。
+/test-browser-skill-web  修复并测试插件安装后的 进入野怪感知范围是否会被攻击，用户是否可以进行普攻和用技能攻击野怪。
 
 ## 系统环境配置 
 务必查看！！！
 [system.yml](system/system.yml)
 特别是 web_project_windows，这是前端代码地址
 
+## Reference：参考资料和技能经验知识
+[如何测试 5175 Web 宿主（实战手册）](Reference/how-to-test-web-host.md)
+> ⚠️ 2026-10-06 实测发现 5175 宿主有一个 bug：`pluginMinigameView` 在 gameType 为裸 type（如 `"field_survival"`）时返回 null，导致 iframe 不挂载、战斗功能全不可测。已在 `Toonflow-game-web/src/components/ScenePlay.vue` 修复（两处改动）。修复后需重新 `npm run dev` 启动 5175 生效。
 ## Process
 
 ### Step 0 — 前置检查（10 秒）

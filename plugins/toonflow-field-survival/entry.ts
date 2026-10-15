@@ -462,6 +462,7 @@ const AI_GATHER_TICKS = 30;            // 采集中耗时（tick）
 const AI_GATHER_COOLDOWN_TICKS = 200;  // 采集点冷却（tick）
 const AI_GATHER_ARRIVE_M = 1.2;        // 采集到达判定（米）
 const AI_INTERACT_M = 2;               // 交互到达判定（米）
+const AI_BAG_MAX_SLOTS = 8;            // AI 私藏格数上限（与 sensor.ts inventoryFull 判据一致）
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -3636,6 +3637,52 @@ export async function handle_action(
       if (me) floater(s, `-${cost} 金`, me.x, me.y - 30);
       await persistSys(context, s);
       return okResp(`购买 ${good.name}×${ask}`);
+    }
+
+    case "sys_item_add": {
+      // ★ 事件系统（地图集 area_enter 脚本）的产出入包链。
+      //   前端 eventEngine ctx.bag.give → App.vue evGiveItem → 本 case。
+      //   与 sys_shop_buy 同款（扣费=0）：合并参数卡物品 → 写回 playerCard → persistSys。
+      //   缺这个 case 时命令会掉进 default 静默返回，玩家采集产物直接蒸发。
+      const addName = str(params?.name).trim().slice(0, 20);
+      const addCount = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!addName) return okResp("sys_item_add: 缺少 name");
+      const addCard = (s.playerCard || {}) as Record<string, any>;
+      const addBag = mergeBag(itemsFromCard(addCard), s.bagMeta, s.bagOrder, s.itemMeta);
+      const addExist = addBag.find((x) => sameName(x.name, addName));
+      if (addExist) addExist.count += addCount;
+      else addBag.push({ name: addName, count: addCount, kind: guessKind(addName), heal: 0, mp: 0 } as BagItem);
+      patchCard(s, { items: serializeBag(addBag, addCard.items) });
+      applyBagAttributes(s);
+      pushEvent(s, `获得 ${addName}×${addCount}`);
+      const meAdd = playerEntity(s);
+      if (meAdd) floater(s, `+${addName}`, meAdd.x, meAdd.y - 30);
+      await persistSys(context, s);
+      return okResp(`获得 ${addName}×${addCount}`);
+    }
+
+    case "ai_bag_add": {
+      // ★ AI 托管角色的采集产出：写 entity._aiBag（角色私藏）。
+      //   与 sys_item_add 分开的原因：s.items 是玩家参数卡派生的共享背包，
+      //   AI 产出若走那条链会全部混进玩家腰包；而 sensor.ts 的 inventoryFull 判 _aiBag。
+      const aiRoleId = str(params?.roleId || params?.entityId);
+      const aiName = str(params?.name).trim().slice(0, 20);
+      const aiCount = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!aiRoleId) return okResp("ai_bag_add: 缺少 roleId");
+      if (!aiName) return okResp("ai_bag_add: 缺少 name");
+      const aiEnt = s.entities.find((x: any) => x.id === aiRoleId);
+      if (!aiEnt) return okResp(`ai_bag_add: 角色「${aiRoleId}」不在场`);
+      const bagArr: Array<{ name: string; count: number }> = Array.isArray((aiEnt as any)._aiBag)
+        ? (aiEnt as any)._aiBag
+        : ((aiEnt as any)._aiBag = []);
+      const slot = bagArr.find((x) => sameName(x.name, aiName));
+      if (slot) slot.count += aiCount;
+      else if (bagArr.length < AI_BAG_MAX_SLOTS) bagArr.push({ name: aiName, count: aiCount });
+      else return okResp(`${aiEnt.name} 私藏已满（${AI_BAG_MAX_SLOTS} 格），${aiName} 未能收入`);
+      pushEvent(s, `${aiEnt.name} 采集获得 ${aiName}×${aiCount}`);
+      floater(s, `+${aiName}`, aiEnt.x, aiEnt.y - 30);
+      // ★ 私藏随 entities 回推即持久，不走 persistSys（那是玩家角色卡专用）
+      return okResp(`${aiEnt.name} 获得 ${aiName}×${aiCount}`);
     }
 
     case "ai_command": {

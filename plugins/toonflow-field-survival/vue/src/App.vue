@@ -252,6 +252,16 @@ function evGiveItem(name: string, count = 1): void {
   showToast(`获得 ${name}${n > 1 ? `×${n}` : ""}`);
 }
 
+/** AI 托管角色的采集产出：落进该角色的 entity._aiBag（entry.js/ts 是唯一权威写入方）。
+ *  不走 sys_item_add —— 那条链写的是玩家参数卡派生的共享背包，会让所有 AI 的产出
+ *  混进玩家腰包，而 sensor.ts 的 inventoryFull 判的是 _aiBag，两者对不上。 */
+function evGiveItemToAi(roleId: string, name: string, count = 1): void {
+  const n = Math.max(1, Math.round(count));
+  if (!name || !roleId) return;
+  sendTick("ai_bag_add", { roleId, name, count: n });
+  showToast(`${roleId} 获得 ${name}${n > 1 ? `×${n}` : ""}`);
+}
+
 /** 插件下发的用户参数卡（宿主每 tick 注入 ctx.playerCard → state.playerCard） */
 const sysCard = computed<Record<string, any>>(() => ((state.value as any)?.playerCard || {}) as Record<string, any>);
 const sysGold = computed(() => Math.round(Number(sysCard.value?.money ?? 0)));
@@ -5634,6 +5644,7 @@ onMounted(async () => {
     },
     confirm: (opts) => evConfirmOpen(opts),
     giveItem: (name, count) => evGiveItem(name, count),
+    giveItemToAi: (roleId, name, count) => evGiveItemToAi(roleId, name, count),
     pluginData: {
       get: async (key: string) => {
         try { return await toonflowJsApi.pluginData.get(key); } catch { return null; }

@@ -183,7 +183,8 @@ async function consumeGatherArrivals(state: GameState): Promise<void> {
       }
     }
     const zone = String(arr.zoneName || "");
-    const ok = await triggerZoneGather(zone);
+    // ★ 传 actor：脚本内 confirm 自动通过、bag.give 落进该角色的 _aiBag
+    const ok = await triggerZoneGather(zone, { roleId: e.id, name: e.name });
     console.info(`[ai] ${e.name} 采集到达 ${zone || "(未知区域)"} → ${ok ? "已触发地图集脚本" : "该 zone 无采集事件"}`);
   }
 }
