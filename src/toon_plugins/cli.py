@@ -73,6 +73,68 @@ def resolve_skip_dirs(with_test_data=False):
     return set(SKIP_DIRS)
 
 
+def ensure_entry_js(plugin_dir, label=""):
+    """打包前确保插件目录里有可上传的入口文件 entry.js。
+
+    后端 /plugin/install 解包时会校验「包内必须存在 entry.js」，缺失直接
+    返回 HTTP 400「插件入口文件不存在: entry.js」。而 entry.ts → entry.js
+    的编译原先只发生在「安装成功之后」由后端现编（见 rebuild_entry），
+    于是 entry.js 一旦缺失（被删、被清理、首次只提交了 entry.ts），
+    打包阶段就先挂掉，编译永远等不到执行。
+
+    这里在 zip 之前做一次前置兜底编译：entry.js 缺失（或比 entry.ts 更旧）
+    且 entry.ts 存在时，用项目内已装的 esbuild 把 entry.ts 编成 entry.js。
+    已有 entry.js 且不比 entry.ts 旧时不做任何事，不覆盖手写内容。
+
+    返回 True 表示 entry.js 可用于打包；False 表示无法补齐（应跳过安装）。
+    """
+    import subprocess
+
+    tag = (label + ": ") if label else ""
+    js = os.path.join(plugin_dir, "entry.js")
+    ts = os.path.join(plugin_dir, "entry.ts")
+
+    if os.path.isfile(js) and (not os.path.isfile(ts)
+                              or os.path.getmtime(js) >= os.path.getmtime(ts)):
+        return True
+
+    if not os.path.isfile(ts):
+        click.secho("  [ERR] " + tag + "既无 entry.js 也无 entry.ts，无法打包", fg="red")
+        return False
+
+    # 优先用插件本地 node_modules 的 esbuild，回退到 npx / PATH 上的 esbuild
+    esbuild_bin = os.path.join(plugin_dir, "node_modules", ".bin",
+                               "esbuild.cmd" if sys.platform == "win32" else "esbuild")
+    if os.path.isfile(esbuild_bin):
+        cmd = [esbuild_bin, "entry.ts", "--outfile=entry.js"]
+    else:
+        # Windows 上 npx / esbuild 是 .cmd 包装器，CreateProcess 不走 PATHEXT，
+        # 必须显式补 .cmd 后缀，否则报 [WinError 2] 系统找不到指定的文件
+        if sys.platform == "win32":
+            cmd = ["npx.cmd", "--no-install", "esbuild",
+                   "entry.ts", "--outfile=entry.js"]
+        else:
+            cmd = ["npx", "--no-install", "esbuild",
+                   "entry.ts", "--outfile=entry.js"]
+
+    click.echo("  [BUILD] " + tag + "entry.js 缺失/过期，编译 entry.ts ...")
+    try:
+        r = subprocess.run(cmd, cwd=plugin_dir, capture_output=True, text=True,
+                           timeout=300)
+    except Exception as ex:
+        click.secho("  [WARN] " + tag + "entry 编译调用失败: " + str(ex), fg="yellow")
+        return os.path.isfile(js)
+
+    if r.returncode != 0 or not os.path.isfile(js):
+        err = (r.stderr or r.stdout or "").strip().splitlines()
+        tail = err[-1][:200] if err else ("returncode=" + str(r.returncode))
+        click.secho("  [ERR] " + tag + "entry 编译失败: " + tail, fg="red")
+        return False
+
+    click.echo("  [BUILD] " + tag + "entry.js 已生成")
+    return True
+
+
 def upload_plugin_zip(client, plugin_id, zip_bytes, upload_mode="auto", zip_path=None):
     """按体积自动（或显式）选择插件上传通道。
 
@@ -274,6 +336,11 @@ def plugins(ctx, install_all, install, plugins_dir, no_tpg, upload_mode, include
                         click.secho("  [WARN] " + tname + ": build error: " + str(ex),
                                     fg="yellow")
 
+            # ★ 打包前置：entry.js 缺失时先由 entry.ts 编译补齐（后端 install 校验硬要求）
+            if not ensure_entry_js(pdir, tname):
+                fail_count += 1
+                continue
+
             # Build zip in memory（默认瘦身：SKIP_DIRS 剔除 test_data 等冗余目录）
             buf = io.BytesIO()
             skip = resolve_skip_dirs(want_include_test_data(include_test_data))
@@ -414,6 +481,11 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
                                 result.stderr[:200], fg="yellow")
             except Exception as ex:
                 click.secho("[WARN] build error: " + str(ex), fg="yellow")
+
+    # ★ 打包前置：entry.js 缺失时先由 entry.ts 编译补齐（后端 install 校验硬要求）
+    if not ensure_entry_js(plugin_dir, plugin_id):
+        click.secho("[ERR] Install aborted: entry.js 无法生成", fg="red")
+        return
 
     # 打包（默认瘦身：SKIP_DIRS 剔除 test_data 等冗余目录）
     buf = io.BytesIO()
