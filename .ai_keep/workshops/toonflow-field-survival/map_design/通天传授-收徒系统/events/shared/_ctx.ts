@@ -90,7 +90,9 @@ export interface EventDef {
   trigger:
     | { type: "enter_map" }
     | { type: "interact"; uid: string }
-    | { type: "area_enter"; zone: string }
+    // ★ ai.gather：向 AI 托管声明「这个 zone 能采什么」（mapKnowledge 读取，可选字段）
+    //   缺省时按 事件id → zone名 顺序推断。取值：herb / fish / wood / ore / other
+    | { type: "area_enter"; zone: string; ai?: { gather?: "herb" | "fish" | "wood" | "ore" | "other" } }
     | { type: "step_on"; x: number; y: number }
     | { type: "flag_set"; key: string }
     | { type: "kill_count"; gte: number }

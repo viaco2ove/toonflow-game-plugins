@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "map": "mulberryTown",
+  "events": [
+    {
+      "id": "E01_night_open",
+      "comment": "phase_1 开局：进镇播旁白，激活 phase_1",
+      "trigger": { "type": "enter_map" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_done", "op": "missing" },
+        { "type": "flag_check", "key": "phase_1_active", "op": "missing" }
+      ],
+      "actions": [{ "type": "run_script", "script": "SY_E01_night_open" }]
+    },
+    {
+      "id": "E02_night_herb",
+      "comment": "phase_1 节拍1「夜采」★ ai.gather=herb —— AI 托管大脑据此派生采集点",
+      "trigger": { "type": "area_enter", "zone": "夜采药圃", "ai": { "gather": "herb" } },
+      "repeat": true,
+      "actions": [{ "type": "run_script", "script": "SY_E02_night_herb" }]
+    },
+    {
+      "id": "E03_pharmacy",
+      "comment": "药铺：uid=165（酒馆老板位，本剧作药铺老板）",
+      "trigger": { "type": "interact", "uid": "165" },
+      "actions": [
+        { "type": "toast", "text": "药铺老板：夜里还来？药材我照收，价钱……也照旧。", "color": "white" },
+        { "type": "event_log", "text": "药铺老板：可交药材" },
+        { "type": "set_flag", "key": "pharmacy_met", "value": true }
+      ]
+    },
+    {
+      "id": "E04_townsfolk",
+      "comment": "镇民传闻：uid=225（镇长位）→ 引出暮光教会（rumor_twilight 是 E05 的前置）",
+      "trigger": { "type": "interact", "uid": "225" },
+      "conditions": [{ "type": "flag_check", "key": "rumor_twilight", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "镇长压低声音：这几夜，镇西空屋有人点灯——穿白袍，自称「暮光」。", "color": "gold" },
+        { "type": "event_log", "text": "传闻：镇西空屋的暮光教会" },
+        { "type": "set_flag", "key": "rumor_twilight", "value": true }
+      ]
+    },
+    {
+      "id": "E05_luwenzhao_meet",
+      "comment": "phase_1 节拍3「暮光者」：uid=300 陆文昭（本剧新增 Tiled 对象）",
+      "trigger": { "type": "interact", "uid": "300" },
+      "conditions": [
+        { "type": "flag_check", "key": "rumor_twilight", "value": true },
+        { "type": "flag_check", "key": "met_luwenzhao", "op": "missing" }
+      ],
+      "actions": [{ "type": "run_script", "script": "SY_E05_luwenzhao_meet" }]
+    },
+    {
+      "id": "E06_cruel_altar",
+      "comment": "phase_1 节拍4「残忍」：暮光布道点的血迹 → phase_1_done",
+      "trigger": { "type": "area_enter", "zone": "暮光布道点" },
+      "conditions": [{ "type": "flag_check", "key": "met_luwenzhao", "value": true }],
+      "actions": [
+        { "type": "subtitle", "text": "布道点的石板上，血还没干。", "duration": 4000 },
+        { "type": "toast", "text": "【黑夜】残忍——你记住了这个词。", "color": "red" },
+        { "type": "event_log", "text": "phase 1「黑夜」完成：夜采 → 暮光者 → 残忍" },
+        { "type": "set_flag", "key": "phase_1_done", "value": true }
+      ]
+    },
+    {
+      "id": "E07_to_forest",
+      "comment": "phase_1 收尾：镇口（uid=219）→ 桑林",
+      "trigger": { "type": "interact", "uid": "219" },
+      "conditions": [{ "type": "flag_check", "key": "phase_1_done", "value": true }],
+      "actions": [
+        { "type": "toast", "text": "夜色更深了，桑林方向传来湿泥的味道。", "color": "gold" },
+        { "type": "teleport", "map": "Mulberry Forest", "x": 1, "y": 25 }
+      ]
+    },
+    {
+      "id": "E08_wood_at",
+      "comment": "★ ai.gather=wood：木材堆取木",
+      "trigger": { "type": "area_enter", "zone": "木材堆", "ai": { "gather": "wood" } },
+      "repeat": true,
+      "actions": [{ "type": "run_script", "script": "SY_E08_wood_at" }]
+    }
+  ]
+}

@@ -53,7 +53,7 @@
     {
       "id": "E10_fishing_at",
       "comment": "走进喷水池：弹窗确认垂钓，按概率得鱼或空钩",
-      "trigger": { "type": "area_enter", "zone": "喷水池" },
+      "trigger": { "type": "area_enter", "zone": "喷水池", "ai": { "gather": "fish" } },
       "repeat": true,
       "actions": [
         { "type": "run_script", "script": "E10_fishing_at" }
@@ -62,7 +62,7 @@
     {
       "id": "E11_herb_at",
       "comment": "走进农田：弹窗确认采药，按概率得药材或空手",
-      "trigger": { "type": "area_enter", "zone": "农田" },
+      "trigger": { "type": "area_enter", "zone": "农田", "ai": { "gather": "herb" } },
       "repeat": true,
       "actions": [
         { "type": "run_script", "script": "E11_herb_at" }
@@ -71,7 +71,7 @@
     {
       "id": "E12_wood_at",
       "comment": "走到木材堆：弹窗确认取木，按概率得松木/沉香/朽木",
-      "trigger": { "type": "area_enter", "zone": "木材堆" },
+      "trigger": { "type": "area_enter", "zone": "木材堆", "ai": { "gather": "wood" } },
       "repeat": true,
       "actions": [
         { "type": "run_script", "script": "E12_wood_at" }

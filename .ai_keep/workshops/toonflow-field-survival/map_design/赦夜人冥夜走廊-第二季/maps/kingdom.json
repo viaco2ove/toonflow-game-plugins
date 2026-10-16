@@ -66,7 +66,9 @@
          "x":0,
          "y":0
         }],
+
  "nextobjectid":1,
+  "name": "黎明天国",
  "orientation":"orthogonal",
  "renderorder":"right-down",
  "tiledversion":"1.1.3",

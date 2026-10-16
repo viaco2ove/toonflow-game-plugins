@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "map": "mulberryForest",
+  "events": [
+    {
+      "id": "E10_blood_trial_1",
+      "comment": "phase_2 节拍「魔血试炼」一阶段：首次踏入魔血洼地",
+      "trigger": { "type": "area_enter", "zone": "魔血洼地" },
+      "conditions": [
+        { "type": "flag_check", "key": "phase_1_done", "value": true },
+        { "type": "flag_check", "key": "blood_trial_1", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "subtitle", "text": "泥泞 · 魔血试炼", "duration": 3000 },
+        { "type": "toast", "text": "洼地里的泥是温的。踩下去时，有什么顺着脚踝往上爬。", "color": "red" },
+        { "type": "event_log", "text": "魔血试炼 · 一阶段" },
+        { "type": "set_flag", "key": "blood_trial_1", "value": true }
+      ]
+    },
+    {
+      "id": "E11_blood_trial_2",
+      "comment": "phase_2 收尾：再入魔血洼地 → phase_2_done",
+      "trigger": { "type": "area_enter", "zone": "魔血洼地" },
+      "repeat": true,
+      "conditions": [
+        { "type": "flag_check", "key": "blood_trial_1", "value": true },
+        { "type": "flag_check", "key": "blood_trial_2", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "toast", "text": "血爬到膝弯就停了。它认得你了——这不是好事。", "color": "red" },
+        { "type": "event_log", "text": "phase 2「泥泞」完成：魔血试炼" },
+        { "type": "set_flag", "key": "blood_trial_2", "value": true },
+        { "type": "set_flag", "key": "phase_2_done", "value": true }
+      ]
+    },
+    {
+      "id": "E12_escort",
+      "comment": "护送任务：uid=15（林家商队位）",
+      "trigger": { "type": "interact", "uid": "15" },
+      "conditions": [{ "type": "flag_check", "key": "escort_accepted", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "林家商队：夜路难行，壮士可愿同行一程？", "color": "white" },
+        { "type": "event_log", "text": "任务：护送林家商队" },
+        { "type": "set_flag", "key": "escort_accepted", "value": true }
+      ]
+    },
+    {
+      "id": "E13_guard_join",
+      "comment": "林家护卫入队：uid=12",
+      "trigger": { "type": "interact", "uid": "12" },
+      "conditions": [
+        { "type": "flag_check", "key": "escort_accepted", "value": true },
+        { "type": "flag_check", "key": "guard_joined", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "toast", "text": "林家护卫抱拳：既然接了活，夜里我走前头。", "color": "blue" },
+        { "type": "set_flag", "key": "guard_joined", "value": true }
+      ]
+    },
+    {
+      "id": "E15_jade_shadow",
+      "comment": "phase_3 节拍「玉简留影」：月蚀石阵",
+      "trigger": { "type": "area_enter", "zone": "月蚀石阵" },
+      "conditions": [{ "type": "flag_check", "key": "jade_shadow", "op": "missing" }],
+      "actions": [{ "type": "run_script", "script": "SY_E15_jade_shadow" }]
+    },
+    {
+      "id": "E17_escort2",
+      "comment": "二段护送：uid=25（林家商队2 位）",
+      "trigger": { "type": "interact", "uid": "25" },
+      "conditions": [{ "type": "flag_check", "key": "escort2_accepted", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "第二批车队陷在泥里了——再不去，天亮前到不了镇上。", "color": "white" },
+        { "type": "set_flag", "key": "escort2_accepted", "value": true }
+      ]
+    },
+    {
+      "id": "E18_forest_herb",
+      "comment": "★ ai.gather=herb：林中药丛",
+      "trigger": { "type": "area_enter", "zone": "林中药丛", "ai": { "gather": "herb" } },
+      "repeat": true,
+      "actions": [{ "type": "run_script", "script": "SY_E18_forest_herb" }]
+    }
+  ]
+}

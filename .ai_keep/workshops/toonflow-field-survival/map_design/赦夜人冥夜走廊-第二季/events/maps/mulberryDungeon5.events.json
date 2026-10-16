@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "map": "mulberryDungeon5",
+  "events": [
+    {
+      "id": "E44_final_floor",
+      "comment": "phase_6 终章前：最深一层",
+      "trigger": { "type": "enter_map" },
+      "conditions": [{ "type": "flag_check", "key": "final_floor_seen", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "冥夜走廊 · 五层", "duration": 3000 },
+        { "type": "toast", "text": "走廊尽头站着一个人形，背后有一道不属于他的影子。", "color": "white" },
+        { "type": "set_flag", "key": "final_floor_seen", "value": true }
+      ]
+    },
+    {
+      "id": "E45_fall_shadow_end",
+      "comment": "phase_6 终战：陨落之影 → phase_6_done",
+      "trigger": { "type": "area_enter", "zone": "陨落之影" },
+      "conditions": [{ "type": "flag_check", "key": "phase_6_done", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "陆文昭：你看见了？它不是跟着我——它是我先掉下去的那部分。", "duration": 5000 },
+        { "type": "toast", "text": "【陨落之影】终结。走廊安静下来了。", "color": "gold" },
+        { "type": "event_log", "text": "phase 6「陨落之影」完成：鳄 → 凿 → 剥 → 残忍" },
+        { "type": "set_flag", "key": "phase_6_done", "value": true }
+      ]
+    }
+  ]
+}

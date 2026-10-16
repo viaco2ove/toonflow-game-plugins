@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "map": "mulberryDungeon2",
+  "events": [
+    {
+      "id": "E32_jade_shadow_2",
+      "comment": "phase_5 节拍「玉简留影」二段：灵魂祭坛",
+      "trigger": { "type": "area_enter", "zone": "灵魂祭坛" },
+      "conditions": [{ "type": "flag_check", "key": "jade_shadow_2", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "玉简又亮了一次——这次映出的不是你的脸。", "color": "blue" },
+        { "type": "event_log", "text": "玉简留影 · 二段" },
+        { "type": "set_flag", "key": "jade_shadow_2", "value": true }
+      ]
+    },
+    {
+      "id": "E33_blood_pool",
+      "comment": "phase_5 收尾：魔血池 → phase_5_done",
+      "trigger": { "type": "area_enter", "zone": "魔血池" },
+      "conditions": [{ "type": "flag_check", "key": "phase_5_done", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "魔血试炼 · 终", "duration": 3000 },
+        { "type": "toast", "text": "血池翻了个身。它把你看完了。", "color": "red" },
+        { "type": "event_log", "text": "phase 5「锋芒」完成：魔血试炼终段" },
+        { "type": "set_flag", "key": "phase_5_done", "value": true }
+      ]
+    }
+  ]
+}

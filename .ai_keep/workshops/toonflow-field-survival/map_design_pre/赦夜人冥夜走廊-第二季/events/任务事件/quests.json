@@ -1,0 +1,328 @@
+{
+  "version": 1,
+  "quests": [
+    {
+      "id": "Q01",
+      "title": "清剿夜行尸傀",
+      "type": "kill",
+      "giver": "任务板",
+      "map": "mulberryGraveyard",
+      "desc": "乱葬岗的尸傀又多了。清掉五只，46 号按数结账。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "kill",
+          "target": "尸傀",
+          "count": 5
+        }
+      ],
+      "reward": {
+        "exp": 120,
+        "money": 80,
+        "items": [
+          {
+            "name": "暗核",
+            "count": 1
+          }
+        ]
+      },
+      "repeat": true,
+      "flags": {
+        "done": "q01_done"
+      }
+    },
+    {
+      "id": "Q02",
+      "title": "夜采三株夜合花",
+      "type": "gather",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "药圃夜里才开花。三株，够裴勇那边交差。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "gather",
+          "target": "夜合花",
+          "count": 3
+        }
+      ],
+      "reward": {
+        "exp": 90,
+        "money": 60
+      },
+      "repeat": true
+    },
+    {
+      "id": "Q03",
+      "title": "护送药材箱",
+      "type": "escort",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "把这箱夜采药材送到桑林交接点。箱子掉了这单就黄了。",
+      "level": 2,
+      "objectives": [
+        {
+          "kind": "arrive",
+          "map": "mulberryForest",
+          "x": 30,
+          "y": 18,
+          "radius": 3,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 200,
+        "money": 150,
+        "items": [
+          {
+            "name": "止血包扎",
+            "count": 2
+          }
+        ]
+      },
+      "cargo": {
+        "name": "药材箱",
+        "hp": 60
+      }
+    },
+    {
+      "id": "Q04",
+      "title": "猎杀血蝠",
+      "type": "kill",
+      "giver": "任务板",
+      "map": "mulberryForest",
+      "desc": "桑林的血蝠成群。八只，让林子夜里能走人。",
+      "level": 3,
+      "objectives": [
+        {
+          "kind": "kill",
+          "target": "血蝠",
+          "count": 8
+        }
+      ],
+      "reward": {
+        "exp": 180,
+        "money": 100
+      },
+      "repeat": true
+    },
+    {
+      "id": "Q05",
+      "title": "送药到药铺",
+      "type": "deliver",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "药铺老板催了三趟。把药瓶送过去。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "gather",
+          "target": "药瓶",
+          "count": 1
+        },
+        {
+          "kind": "arrive",
+          "map": "mulberryTown",
+          "x": 8,
+          "y": 11,
+          "radius": 3,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 80,
+        "money": 70
+      },
+      "consume": [
+        {
+          "name": "药瓶",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "Q06",
+      "title": "探查镇口动静",
+      "type": "explore",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "镇口这两夜不太平。去看一眼。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "explore",
+          "map": "mulberryTown",
+          "target": "镇口",
+          "x": 40,
+          "y": 44,
+          "radius": 4,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 60,
+        "money": 30
+      },
+      "flags": {
+        "done": "q06_done"
+      }
+    },
+    {
+      "id": "Q07",
+      "title": "去见陆文昭",
+      "type": "talk",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "陆执事点名要见你。别让他等太久。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "talk",
+          "target": "陆文昭",
+          "uid": "300",
+          "count": 1
+        }
+      ],
+      "reward": {
+        "exp": 70,
+        "money": 40
+      }
+    },
+    {
+      "id": "Q08",
+      "title": "清剿超一型",
+      "type": "kill",
+      "giver": "任务板",
+      "map": "mulberryDungeon1",
+      "desc": "走廊里的超一型不是普通湮物。三只，量力而行。",
+      "level": 5,
+      "objectives": [
+        {
+          "kind": "kill",
+          "target": "超一型",
+          "count": 3
+        }
+      ],
+      "reward": {
+        "exp": 320,
+        "money": 200,
+        "items": [
+          {
+            "name": "暗核",
+            "count": 2
+          }
+        ]
+      },
+      "repeat": true
+    },
+    {
+      "id": "Q09",
+      "title": "上交暗核",
+      "type": "deliver",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "裴勇要两颗暗核。别问做什么。",
+      "level": 2,
+      "objectives": [
+        {
+          "kind": "gather",
+          "target": "暗核",
+          "count": 2
+        },
+        {
+          "kind": "arrive",
+          "map": "mulberryTown",
+          "x": 4,
+          "y": 27,
+          "radius": 4,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 150,
+        "money": 120
+      },
+      "consume": [
+        {
+          "name": "暗核",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "Q10",
+      "title": "护送林家商队",
+      "type": "escort",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "林家商队走桑林那条道。跟到交接点。",
+      "level": 3,
+      "objectives": [
+        {
+          "kind": "arrive",
+          "map": "mulberryForest",
+          "x": 30,
+          "y": 18,
+          "radius": 3,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 260,
+        "money": 180
+      },
+      "cargo": {
+        "name": "林家货车",
+        "hp": 120
+      }
+    },
+    {
+      "id": "Q11",
+      "title": "备足柴火",
+      "type": "gather",
+      "giver": "任务板",
+      "map": "mulberryTown",
+      "desc": "冬天要来了。六份木材。",
+      "level": 1,
+      "objectives": [
+        {
+          "kind": "gather",
+          "target": "木材",
+          "count": 6
+        }
+      ],
+      "reward": {
+        "exp": 100,
+        "money": 50
+      },
+      "repeat": true
+    },
+    {
+      "id": "Q12",
+      "title": "探入冥夜走廊",
+      "type": "explore",
+      "giver": "任务板",
+      "map": "mulberryDungeon1",
+      "desc": "走廊入口在乱葬岗深处。进去，别走太深。",
+      "level": 4,
+      "objectives": [
+        {
+          "kind": "explore",
+          "map": "mulberryDungeon1",
+          "target": "走廊入口",
+          "x": 0,
+          "y": 0,
+          "radius": 6,
+          "confirm": true
+        }
+      ],
+      "reward": {
+        "exp": 200,
+        "money": 100
+      },
+      "flags": {
+        "done": "q12_done"
+      }
+    }
+  ]
+}

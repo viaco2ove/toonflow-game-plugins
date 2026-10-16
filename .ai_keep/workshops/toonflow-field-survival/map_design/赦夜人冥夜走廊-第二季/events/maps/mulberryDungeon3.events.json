@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "map": "mulberryDungeon3",
+  "events": [
+    {
+      "id": "E40_fall_shadow_open",
+      "comment": "phase_6 开场：陨落之影",
+      "trigger": { "type": "enter_map" },
+      "conditions": [{ "type": "flag_check", "key": "phase_6_active", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "冥夜走廊 · 三层 · 陨落之影", "duration": 3200 },
+        { "type": "toast", "text": "地面湿滑。黑暗里有巨大的颚骨开合声。", "color": "white" },
+        { "type": "set_flag", "key": "phase_6_active", "value": true }
+      ]
+    },
+    {
+      "id": "E41_croc",
+      "comment": "phase_6 节拍「鳄」：鳄窟伏击",
+      "trigger": { "type": "area_enter", "zone": "鳄窟" },
+      "conditions": [{ "type": "flag_check", "key": "crocbite", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "鳄——不是兽，是从人身上长出来的那张嘴。", "color": "red" },
+        { "type": "event_log", "text": "陨落之影 · 鳄" },
+        { "type": "set_flag", "key": "crocbite", "value": true }
+      ]
+    }
+  ]
+}

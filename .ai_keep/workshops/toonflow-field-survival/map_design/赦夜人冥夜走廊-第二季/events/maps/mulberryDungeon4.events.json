@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "map": "mulberryDungeon4",
+  "events": [
+    {
+      "id": "E42_chisel_2",
+      "comment": "phase_6 节拍「凿」：凿室",
+      "trigger": { "type": "area_enter", "zone": "凿室" },
+      "conditions": [{ "type": "flag_check", "key": "chisel_2", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "墙上钉着东西。凿痕一层压一层，最新的那道还在渗。", "color": "gold" },
+        { "type": "event_log", "text": "陨落之影 · 凿" },
+        { "type": "set_flag", "key": "chisel_2", "value": true }
+      ]
+    },
+    {
+      "id": "E43_peel",
+      "comment": "phase_6 节拍「剥」：剥皮间（残忍）",
+      "trigger": { "type": "area_enter", "zone": "剥皮间" },
+      "conditions": [{ "type": "flag_check", "key": "peel_done", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "残忍", "duration": 3000 },
+        { "type": "toast", "text": "剥——手法很稳，稳得像做过很多次。", "color": "red" },
+        { "type": "event_log", "text": "陨落之影 · 剥" },
+        { "type": "set_flag", "key": "peel_done", "value": true }
+      ]
+    }
+  ]
+}

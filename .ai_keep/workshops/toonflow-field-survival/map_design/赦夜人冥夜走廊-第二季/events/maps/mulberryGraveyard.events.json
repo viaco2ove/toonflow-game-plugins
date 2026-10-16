@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "map": "mulberryGraveyard",
+  "events": [
+    {
+      "id": "E20_grave_open",
+      "comment": "phase_3 开场：月蚀",
+      "trigger": { "type": "enter_map" },
+      "conditions": [{ "type": "flag_check", "key": "phase_3_active", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "月蚀 · 乱葬岗", "duration": 3200 },
+        { "type": "toast", "text": "月亮缺了一角。坟包的影子比白天长。", "color": "white" },
+        { "type": "set_flag", "key": "phase_3_active", "value": true }
+      ]
+    },
+    {
+      "id": "E21_corpse_pit",
+      "comment": "phase_3/4 战斗节拍：尸坑里的黑甲尸",
+      "trigger": { "type": "area_enter", "zone": "尸坑" },
+      "conditions": [{ "type": "flag_check", "key": "corpse_pit_seen", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "尸坑里有指甲刮石头的声音——黑甲尸醒了。", "color": "red" },
+        { "type": "event_log", "text": "尸坑：黑甲尸苏醒" },
+        { "type": "set_flag", "key": "corpse_pit_seen", "value": true }
+      ]
+    },
+    {
+      "id": "E22_soul_devour",
+      "comment": "phase_3 节拍「灵魂吞噬」：灵魂祭坛",
+      "trigger": { "type": "area_enter", "zone": "灵魂祭坛" },
+      "conditions": [{ "type": "flag_check", "key": "soul_devour", "op": "missing" }],
+      "actions": [{ "type": "run_script", "script": "SY_E22_soul_devour" }]
+    },
+    {
+      "id": "E24_chisel_break",
+      "comment": "phase_4 节拍「凿」：破甲 → phase_4_done",
+      "trigger": { "type": "area_enter", "zone": "尸坑" },
+      "repeat": true,
+      "conditions": [
+        { "type": "flag_check", "key": "corpse_pit_seen", "value": true },
+        { "type": "flag_check", "key": "chisel_break", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "toast", "text": "獠牙初现——你凿开了第一层甲。", "color": "gold" },
+        { "type": "event_log", "text": "phase 4「獠牙初现」完成：凿" },
+        { "type": "set_flag", "key": "chisel_break", "value": true },
+        { "type": "set_flag", "key": "phase_4_done", "value": true }
+      ]
+    }
+  ]
+}

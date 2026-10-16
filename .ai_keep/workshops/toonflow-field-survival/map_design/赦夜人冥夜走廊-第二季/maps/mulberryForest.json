@@ -7900,6 +7900,40 @@
           "width": 32,
           "x": 32,
           "y": 832
+        },
+        {
+          "id": 900,
+          "name": "任务板",
+          "type": "board",
+          "gid": 58,
+          "x": 640,
+          "y": 352,
+          "width": 32,
+          "height": 32,
+          "rotation": 0,
+          "visible": true,
+          "properties": [
+            {
+              "name": "entity_type",
+              "type": "string",
+              "value": "NPC"
+            },
+            {
+              "name": "full_name",
+              "type": "string",
+              "value": "任务板"
+            },
+            {
+              "name": "name",
+              "type": "string",
+              "value": "任务板"
+            },
+            {
+              "name": "dialog",
+              "type": "string",
+              "value": "BOARD"
+            }
+          ]
         }
       ],
       "opacity": 1,
@@ -7924,5 +7958,39 @@
   "tilewidth": 32,
   "type": "map",
   "version": 1.2,
-  "width": 60
+  "width": 60,
+  "name": "桑林",
+  "theme": "野外·泥泞夜",
+  "narration": "桑林的泥地吸着鞋底。腐叶下有东西在动——不是风。",
+  "notes": "魔血污染区: 洼地(东·魔血鼠/石蛇) / 月蚀石阵(北·玉简留影) / 林口(西·回桑镇)",
+  "eventZones": [
+    {
+      "name": "魔血洼地",
+      "x": 50,
+      "y": 20,
+      "rx": 6,
+      "ry": 5
+    },
+    {
+      "name": "月蚀石阵",
+      "x": 45,
+      "y": 9,
+      "rx": 5,
+      "ry": 4
+    },
+    {
+      "name": "林中药丛",
+      "x": 40,
+      "y": 8,
+      "rx": 6,
+      "ry": 4
+    },
+    {
+      "name": "林口",
+      "x": 2,
+      "y": 26,
+      "rx": 3,
+      "ry": 4
+    }
+  ]
 }

@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "map": "mulberryDungeon1",
+  "events": [
+    {
+      "id": "E30_corridor_open",
+      "comment": "phase_5 开场：锋芒",
+      "trigger": { "type": "enter_map" },
+      "conditions": [{ "type": "flag_check", "key": "phase_5_active", "op": "missing" }],
+      "actions": [
+        { "type": "subtitle", "text": "冥夜走廊 · 一层 · 锋芒", "duration": 3200 },
+        { "type": "toast", "text": "走廊两壁的火把是冷的。石面上刻着刀痕。", "color": "white" },
+        { "type": "set_flag", "key": "phase_5_active", "value": true }
+      ]
+    },
+    {
+      "id": "E31_snap_blade",
+      "comment": "phase_5 节拍「掰」：断刃",
+      "trigger": { "type": "area_enter", "zone": "锋芒前厅" },
+      "conditions": [{ "type": "flag_check", "key": "snap_blade", "op": "missing" }],
+      "actions": [
+        { "type": "toast", "text": "刀痕最深的那道，是有人在这里把什么掰断了。", "color": "gold" },
+        { "type": "event_log", "text": "锋芒 · 掰" },
+        { "type": "set_flag", "key": "snap_blade", "value": true }
+      ]
+    }
+  ]
+}

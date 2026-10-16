@@ -1291,6 +1291,7 @@
          "x":0,
          "y":0
         }],
+  "name": "地表世界",
  "nextlayerid":5,
  "nextobjectid":227,
  "orientation":"orthogonal",
