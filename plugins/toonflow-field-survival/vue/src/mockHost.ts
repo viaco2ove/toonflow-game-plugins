@@ -168,6 +168,90 @@ function mockQuestTimeout(state: any): void {
   if (changed) mockQuestView(state);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   ★ 野怪击杀奖励（standalone mock 对齐 entry.ts）
+   ─────────────────────────────────────────────────────────────
+   为什么需要：真实宿主走 entry.ts 的 damage() → dropKillChest()，
+   但 standalone（未检测到宿主）时全部逻辑在 mockHost 里跑 —— 这里原先**完全没有**
+   掉宝箱代码，也没开箱判定，表现就是「把整张图的怪杀光，地上一只宝箱都不掉」。
+   （对齐口径：概率 35%、权重抽样、开箱入 drops、走 CHEST_PICKUP_M=2 米自动开启。）
+   ------------------------------------------------------------- */
+const MOCK_KILL_DROP_CHEST_P = 0.35;
+const MOCK_CHEST_PICKUP_M = 2;
+/** ★ 开启保护期（tick，100ms/拍）：刚掉的宝箱先让玩家看见，再允许走近开启。
+ *  与 entry.ts CHEST_GRACE_TICKS 同口径 —— 否则近战击杀时宝箱落地即被吃掉，玩家看不到。 */
+const MOCK_CHEST_GRACE_TICKS = 12;
+/** 默认掉落表（与 entry.ts DEFAULT_DROP_TABLE 同权重；暗核 ≈14%） */
+const MOCK_DROP_TABLE: Array<{ name: string; w: number }> = [
+  { name: "干粮", w: 26 }, { name: "荧光石", w: 18 }, { name: "兽骨", w: 16 },
+  { name: "野兽皮", w: 14 }, { name: "锋利的爪", w: 12 }, { name: "暗核", w: 14 },
+];
+
+/** 权重抽样（与 entry.ts pickWeighted 同口径） */
+function mockPickWeighted(list: Array<{ name: string; w: number }>): { name: string; w: number } | null {
+  const total = list.reduce((a, b) => a + Math.max(0, Number(b.w) || 0), 0);
+  if (!(total > 0)) return list[0] || null;
+  let r = Math.random() * total;
+  for (const it of list) {
+    r -= Math.max(0, Number(it.w) || 0);
+    if (r <= 0) return it;
+  }
+  return list[list.length - 1] || null;
+}
+
+/** 击杀野怪 → 概率在尸体处掉一个宝箱（玩家走过去开启）。与 entry.ts dropKillChest 对齐。 */
+function mockDropKillChest(state: any, enemy: any): void {
+  if (Math.random() >= MOCK_KILL_DROP_CHEST_P) return;
+  const table: Array<{ name: string; w: number }> =
+    (Array.isArray(enemy?.dropTable) && enemy.dropTable.length ? enemy.dropTable : MOCK_DROP_TABLE);
+  const pick = mockPickWeighted(table);
+  const item = String(pick?.name || "干粮");
+  const bounty = enemy?.bounty || {};
+  const lv = Math.max(1, Math.round(Number(enemy?.level) || 1));
+  const exp = Math.max(5, Math.round((Number(bounty.exp) || 8 + lv * 4) * 0.5));
+  const money = Math.max(3, Math.round((Number(bounty.money) || 5 + lv * 3) * 0.5));
+  if (!Array.isArray(state.chests)) state.chests = [];
+  // 掉落点从尸体散开 0.7~1.7 米（不在玩家脚下）+ 记 bornTick 走保护期
+  const ang = Math.random() * Math.PI * 2;
+  const off = 0.7 + Math.random() * 1.0;
+  const cx = Number(enemy.x) + Math.cos(ang) * off;
+  const cy = Number(enemy.y) + Math.sin(ang) * off;
+  state.chests.push({
+    id: `chest_kill_${state.tick}_${state.chests.length}`,
+    x: cx,
+    y: cy,
+    opened: false,
+    tier: 1,
+    loot: { exp, money, item },
+    bornTick: Math.round(Number(state.tick) || 0),
+  });
+  state.floaters.push({ id: "f" + state.tick + "_c", text: "掉落宝箱", x: cx, y: cy - 10, life: 30, kind: "drop", color: "#ffd76a" });
+  state.events.push("[mock] " + enemy.name + " 掉落了一个宝箱");
+}
+
+/** 宝箱：玩家走近 2 米自动开启（与 entry.ts tick 内的宝箱分支对齐） */
+function mockTickChests(state: any, player: any): void {
+  if (!Array.isArray(state.chests) || !player) return;
+  const now = Math.round(Number(state.tick) || 0);
+  for (const c of state.chests) {
+    if (c.opened) continue;
+    // ★ 保护期：刚掉落的宝箱先让玩家看见（与 entry.ts CHEST_GRACE_TICKS 对齐）
+    if (c.bornTick != null && now - Math.round(Number(c.bornTick) || 0) < MOCK_CHEST_GRACE_TICKS) continue;
+    if (Math.hypot(player.x - c.x, player.y - c.y) >= MOCK_CHEST_PICKUP_M) continue;
+    c.opened = true;
+    const loot = c.loot || {};
+    const expGain = Math.round(Number(loot.exp) || 12 + Math.floor(Math.random() * 10));
+    const moneyGain = Math.round(Number(loot.money) || 15 + Math.floor(Math.random() * 20));
+    const drop = String(loot.item || ["生锈的钥匙", "干粮", "荧光石"][Math.floor(Math.random() * 3)]);
+    state.exp += expGain;
+    state.money += moneyGain;
+    state.drops.push(drop);
+    state.floaters.push({ id: "f" + state.tick + "_o", text: `宝箱 +${expGain}exp`, x: c.x, y: c.y, life: 30, kind: "drop", color: "#ffd76a" });
+    state.floaters.push({ id: "f" + state.tick + "_o2", text: `+${drop}`, x: c.x, y: c.y - 12, life: 30, kind: "drop", color: "#ffd76a" });
+    state.events.push(`[mock] 打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱`);
+  }
+}
+
 /** ★ 静态兜底 safe zone（overworld.json 对应的城镇范围，野怪不得进入城镇） */
 let mapSafeZones: Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> | null = null;
 
@@ -955,6 +1039,8 @@ function install(): void {
         state.tick++;
         // ★ 任务板：限时任务超时判失败（与 entry.ts checkQuestTimeouts 对齐）
         mockQuestTimeout(state);
+        // ★ 野怪击杀奖励：宝箱走近 2 米自动开启（与 entry.ts tick 内宝箱分支对齐）
+        mockTickChests(state, state.entities.find((x) => x.side === "player"));
         // ★ 打击感：击退速度衰减（每 tick 乘 0.75，约 6 tick 归零）
         for (const e of state.entities) tickKnockback(e);
         // ★ 修复（mock 根因②）：把 App 加载出来的地图怪物并入 mock 的 state，
@@ -1102,6 +1188,8 @@ function install(): void {
               me.exp += closest.level * 5;
               if (me.exp >= me.expToNext) levelUpEntity(me);
               state.events.push("[mock] 击杀 " + closest.name + " (+" + (closest.level * 5) + "exp +3money)");
+              // ★ 野怪击杀奖励：概率在尸体处掉宝箱（对齐 entry.ts damage() → dropKillChest）
+              mockDropKillChest(state, closest);
             }
           }
         }

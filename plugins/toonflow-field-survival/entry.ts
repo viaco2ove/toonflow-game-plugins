@@ -365,7 +365,9 @@ export interface QuestProgress {
   failReason?: "timeout" | "cargo";
 }
 
-interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
+interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>;
+  /** ★ 击杀掉落宝箱的落地 tick：用于开启保护期（先让玩家看见宝箱，再允许走近开启） */
+  bornTick?: number; }
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
   type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; effects_type?: string; }
@@ -539,6 +541,9 @@ const ALLY_ENGAGE_M = 4;
 /** 友军跟随阵位半径：2.5m（此前 12m —— 友军站位散得太开，是「打远的」帮凶） */
 const ALLY_FOLLOW_GAP_M = 2.5;
 const CHEST_PICKUP_M  = 2;
+/** ★ 击杀掉落宝箱的开启保护期（tick，100ms/拍）：1.2 秒内不许自动开箱。
+ *  否则近战击杀时玩家就站在掉落点旁 → 下一帧立刻被吃掉，玩家永远「看不见地上有宝箱」。 */
+const CHEST_GRACE_TICKS = 12;
 const POTION_PICKUP_M = 2;
 /** ★ game.md：远程野怪/远程武器/远程技能 距离 4 米（此前 30 米） */
 const SKILL_RANGE_M   = 4;
@@ -1079,16 +1084,28 @@ function dropKillChest(s: FieldSurvivalState, target: Entity): void {
   const lv = Math.max(1, Math.round(num(target.level, 1)));
   const exp = Math.max(5, Math.round(num(bounty?.exp, 8 + lv * 4) * 0.5));
   const money = Math.max(3, Math.round(num(bounty?.money, 5 + lv * 3) * 0.5));
+  // ★ fix（2026-10-16）：「杀了整张图也不见地上有宝箱」的第二个原因 ——
+  //   宝箱原来**正好掉在尸体坐标**上，而近战击杀时玩家就站在尸体旁（<CHEST_PICKUP_M=2），
+  //   于是下一 tick 的「走近自动开箱」立刻把它吃掉：宝箱存在过，但玩家**永远看不到**，
+  //   只看到一行「打开宝箱：干粮」的日志。
+  //   两处修正：
+  //     ① 掉落点从尸体随机散开 0.7~1.7 米（像"从尸体里崩出来"，不在脚下）；
+  //     ② 带 bornTick，开启判定前有 CHEST_GRACE_TICKS 的保护期，先让玩家看见宝箱落地。
+  const ang = rnd(0, Math.PI * 2);
+  const off = 0.7 + rnd(0, 1.0);
+  const cx = clampX(target.x + Math.cos(ang) * off);
+  const cy = clampY(target.y + Math.sin(ang) * off);
   s.chests = Array.isArray(s.chests) ? s.chests : [];
   s.chests.push({
     id: `chest_kill_${s.tick}_${s.chests.length}`,
-    x: clampX(target.x),
-    y: clampY(target.y),
+    x: cx,
+    y: cy,
     opened: false,
     loot: { exp, money, item },
     tier: 1,
+    bornTick: Math.round(num(s.tick, 0)),
   } as Chest);
-  floater(s, "掉落宝箱", target.x, target.y - 40);
+  floater(s, "掉落宝箱", cx, cy - 40);
   pushEvent(s, `${target.name} 掉落了一个宝箱`);
 }
 
@@ -1111,7 +1128,13 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
       (target as any).knockbackVy = (dy / d) * 0.4;
     }
   }
-    if (target.hp <= 0 && target.alive) {
+  //  ★ fix：必须加 `!(target as any).deathMs` 守卫 ——
+  //   死亡淡出期（400ms = 4 tick）内 alive 仍为 true（见下方注释，故意不清 alive），
+  //   此时再打这具尸体，`hp <= 0 && alive` 会**再次**成立 →
+  //   击杀计数/经验/金钱/掉落宝箱被重复结算（实测：连打 3 下 kills +3、掉宝箱多摇 3 次）。
+  //   表现：HUD 击杀数虚高、击杀类任务提前完成、一具尸体掉多个宝箱。
+  //   deathMs 归零时同帧会置 alive=false，所以死亡后不会再进来。
+  if (target.hp <= 0 && target.alive && !(target as any).deathMs) {
     (target as any).deathMs = 400;   // ★ P1 打击感：死亡淡出 400ms（alive 不清，等淡出结束后 tick 循环清）
     // target.alive = false;           // ← 不清！alive=false 会让前端不渲染实体，看不到淡出
     // ★ 任务板：护送货物被打掉 → 对应任务判失败（玩家可在任务板放弃后重接）
@@ -1539,6 +1562,14 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
     ex.aiState = "idle";
     ex.wanderTimer = 0;
     if ((raw as any).bounty && typeof (raw as any).bounty === "object") ex.bounty = { ...(raw as any).bounty };
+    //  ★ fix：`dropTable` 必须一起带过来 —— 地图 `enemy_archetypes[].dropTable`
+    //   是「这张图的怪掉什么」的权威配置（如走廊层 BOSS 必掉暗核）。
+    //   原来只透传 bounty，dropTable 被丢掉 → dropKillChest 只能落回 DEFAULT_DROP_TABLE，
+    //   地图配的掉落表形同虚设（前端 localEnemiesPayload 是把整份实体发过来的，字段就在里面）。
+    if (Array.isArray((raw as any).dropTable) && (raw as any).dropTable.length) {
+      ex.dropTable = (raw as any).dropTable.map((d: any) => ({ name: str(d?.name, ""), w: num(d?.w, 1) }))
+        .filter((d: any) => d.name);
+    }
     s.entities.push(e);
     built += 1;
   }
@@ -1931,6 +1962,8 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   // 宝箱：走过去开启（优先地图 loot）
   s.chests.forEach((c) => {
     if (c.opened) return;
+    // ★ 保护期：刚掉落的宝箱 1.2 秒内不许自动开（先让玩家看见它落在地上）
+    if (c.bornTick != null && Math.round(num(s.tick, 0)) - Math.round(num(c.bornTick, 0)) < CHEST_GRACE_TICKS) return;
     if (dist(player, c) < CHEST_PICKUP_M) {
       c.opened = true;
       const loot = (c as any).loot as { exp?: number; money?: number; item?: string } | undefined;

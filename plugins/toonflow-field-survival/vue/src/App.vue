@@ -2328,6 +2328,12 @@ async function switchLevel(levelName: string): Promise<void> {
           facing: 180, cooldown: 0, alive: !revived,
           homeX: mobPos.x,
           homeY: mobPos.y,
+          // ★ 击杀奖励数据透传（Tiled 对象属性 bounty / dropTable(JSON)）：
+          //   实体上带着它们 → localEnemiesPayload 整份上报 → entry.ts applyLocalEnemies
+          //   落到实体 → dropKillChest 按本怪的表抽物资（BOSS 可配「必掉暗核」）。
+          //   缺省时后端落回全局 DEFAULT_DROP_TABLE。
+          bounty: mob.bounty,
+          dropTable: mob.dropTable,
           // ★ game.md 阵营/类型/姓名透传（头顶标签、角色面板敌对判定用）
           camp,
           entity_type: mob.entity_type,
