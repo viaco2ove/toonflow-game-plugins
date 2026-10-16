@@ -135,6 +135,7 @@
          "x":0,
          "y":0
         }],
+  "name": "密室",
  "nextlayerid":5,
  "nextobjectid":4,
  "orientation":"orthogonal",

@@ -22,6 +22,7 @@
          "x":0,
          "y":0
         }],
+ "name": "被污染的森林",
  "nextobjectid":1,
  "orientation":"orthogonal",
  "renderorder":"right-down",
