@@ -128,6 +128,10 @@ export interface MapNpc {
   /** ★ 未具名 NPC（Tiled 里只有 entity_type=NPC，无 full_name/name/dialog，含农场动物）：
    *  仍会生成可对话实体，但头顶不画名字（避免刷屏），聊天面板里显示「镇民#<id>」 */
   unnamed?: boolean;
+  /** ★ 可拾取物（Tiled 对象带 pickup_item 属性）：靠近触发「是否拾取」提示，
+   *  确认后发放对应物品（走 evGiveItem → sys_item_add）并令该实体 alive=false 消失。
+   *  地图每次进入都会重新注入（注入逻辑忽略已死实体，但切图会清掉旧图 mapnpc_*，故会刷新）。 */
+  pickupItem?: string;
 }
 
 /**
@@ -445,8 +449,12 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             || "NPC";
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
-          // ★ 装饰层：所有 NPC 都画（variant = gid-1 → 图集 tile id，绘制层按 gid 出图）
-          decorations.push({
+          // ★ 可拾取物（pickup_item）：斧头等
+          const isPickup = typeof props.pickup_item === "string" && String(props.pickup_item).length > 0;
+          // ★ 装饰层：普通 NPC 都画（variant = gid-1 → 图集 tile id，绘制层按 gid 出图）；
+          //   可拾取物**不进装饰层**——由实体层 drawPickupAxe 绘制，拾取后实体 alive=false，
+          //   若残留装饰层会在拾取点画出多余的 tile-0 残图（装饰层去重只看 alive!==false 的实体）。
+          if (!isPickup) decorations.push({
             id: `n_${decIdx++}`,
             kind: "npc",
             x: wx,
@@ -474,6 +482,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             wanders: props.wanders === true,
             dialog: typeof props.dialog === "string" ? props.dialog : undefined,
             unnamed: !interactable,
+            pickupItem: isPickup ? String(props.pickup_item) : undefined,
           });
         } else if (normalizeCamp(props.camp) !== "neutral"
                    && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {

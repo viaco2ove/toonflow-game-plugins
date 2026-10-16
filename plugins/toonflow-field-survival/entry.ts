@@ -472,6 +472,8 @@ export interface FieldSurvivalState {
   writeback?: Record<string, any> | null;
   /** ★ 方案一：点击自动逼近目标（玩家点击怪物后写入，localTick 消费后清空） */
   autoApproach?: { targetId: string; skillIdx: number; phase: "moving" | "casting" } | null;
+  /** ★ 斧头破坏模式：使用斧类物品后置 true，点击障碍物可破坏（使用其他技能/物品清零） */
+  axeMode?: boolean;
   // 结算
   exp: number;
   money: number;
@@ -562,6 +564,8 @@ const DEFAULT_DROP_TABLE: Array<{ name: string; w: number }> = [
 ];
 /** 「核类物品」名命中规则（暗核 / 湮核 / 源核 / 核晶…）：使用 → 经验 + 概率 AI 授技 */
 const CORE_ITEM_RE = /暗核|湮核|源核|核晶|兽核/;
+/** 「斧类物品」名命中规则（斧头 / 铁斧 / 伐木斧…）：使用 → 进入障碍破坏模式 */
+const AXE_RE = /斧/;
 const CORE_USE_EXP = 40;          // 使用一个核类物品给的经验
 const CORE_SKILL_P = 0.5;         // 触发 AI 判定「获得什么技能」的概率
 const CORE_AGENT_TIMEOUT_MS = 20000;  // 问 AI「给什么技能」的超时（超时走兜底，不卡玩家）
@@ -3149,6 +3153,14 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
   const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
   const it = bag.find((x) => x.name === name);
   if (!it || it.count <= 0) return `「${name}」不在背包中`;
+  // ★ 斧头破坏模式：使用斧类物品 → 进入破坏模式（不消耗、不攻击）
+  if (AXE_RE.test(it.name)) {
+    s.axeMode = true;
+    pushEvent(s, `举起斧头：点击前方障碍物可进行破坏（使用其他技能/物品会收起斧头）`);
+    return `举起斧头，进入破坏模式`;
+  }
+  // ★ 使用了其他物品 → 收起斧头
+  s.axeMode = false;
   const t = it.type || "heal";
   (me as any).actionBobMs = 300;
   floater(s, `使用 ${it.name}`, me.x, me.y - 34);
@@ -4114,6 +4126,7 @@ export async function handle_action(
 
     case "skill": {
       if (s.phase !== "playing") return okResp("");
+      s.axeMode = false; // ★ 斧头破坏模式：使用技能即收起
       const idx = num(params?.index, 0);
       const slotIdx = s.skillPage * 4 + idx;
       const skill = s.skills[slotIdx];
@@ -4811,6 +4824,7 @@ export async function handle_action(
           return okResp(`AI 交互: ${ent.name} → ${tgt.name}`);
         }
         case "useSkill": {
+          s.axeMode = false; // ★ 斧头破坏模式：AI 释放技能即收起
           const skName = str(params?.skillName);
           if (!skName) return okResp("ai_command.useSkill: 缺少 skillName");
           const sk = (Array.isArray(s.skills) ? s.skills : []).find((k: any) => k && k.name === skName);

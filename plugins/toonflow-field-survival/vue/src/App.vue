@@ -53,7 +53,7 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
-import { bakeTiledMap } from "./mapBake";
+import { bakeTiledMap, eraseBakedObstacle } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
 import {
@@ -1474,6 +1474,45 @@ async function toggleOrientation_android_app_h5() {
   requestAnimationFrame(fitCanvas);
 }
 
+/** ★ 斧头破坏模式：作用距离（米）。点中前方此范围内的障碍物才生效 */
+const AXE_REACH_M = 3;
+
+/**
+ * 斧头模式下点击障碍物：破坏该格使其可通过，并强制重发碰撞网格给宿主。
+ * 返回 true 表示这次点击已被斧头逻辑消费（不再触发移动）。
+ * 破坏改三处：
+ *   1. walkGrid.blocked=0 —— 玩家碰撞（resolveGridMove）与敌人碰撞（宿主 enemyNav 经重发同步）
+ *      都源自同一份网格；
+ *   2. 烘焙图单格重绘 —— 否则碰撞放行了、树还画在屏幕上（视觉不同步）；
+ *   3. walkIndex 重建 —— 该格从"站不下"变"站得下"，连通域与寻路才会走这条新缺口。
+ * 重新进入地图会重建网格 + 换 key 重烘焙 → 破坏物自动还原（符合事件文档约定）。
+ */
+function tryAxeBreak(tx: number, ty: number): boolean {
+  const g = walkGrid;
+  if (!g) return false;
+  const me = (state.value?.entities || []).find((e: any) => e.side === "player") as any;
+  if (!me) return false;
+  const d = Math.hypot(tx - me.x, ty - me.y);
+  if (d > AXE_REACH_M) return false; // 太远，不拦截，按普通移动处理
+  const c = metersToCell(g, tx, ty);
+  if (c.gx < 0 || c.gx >= g.cols || c.gz < 0 || c.gz >= g.rows) return false;
+  const idx = c.gz * g.cols + c.gx;
+  if (!g.blocked[idx]) return false; // 不是障碍物，放行普通移动
+  g.blocked[idx] = 0;        // 破坏：该格变为可通过
+  if (g.vision) g.vision[idx] = 0;  // 视线一并打开（破坏后不再挡视野）
+  // ★ 视觉同步：把烘焙图里这一格的障碍瓦片擦掉（只留底层地面），
+  //   否则"能通过但树还在画"（tileFlags 缺则退化为只改碰撞，不崩）。
+  if (tileFlags && SHEET_TILESET.ready) {
+    eraseBakedObstacle(c.gx, c.gz, (gid) => tileFlags?.[gid - g.firstGid]?.blocked === true);
+  }
+  walkGridEpochSeq++;         // 强制下次 tick 把新网格上报宿主（敌人碰撞同步）
+  // ★ 路径索引重建：该格从不可站变可站，连通域/A* 要通过这条新缺口
+  walkIndex = buildWalkIndex(g, PLAYER_COLLIDE_R);
+  pushClickFx(tx, ty, true);
+  hudToast.value = "🪓 障碍物已破坏，可通过";
+  return true; // 已破坏，拦截移动
+}
+
 function onCanvasClick(e: MouseEvent) {
   const c = canvasEl.value;
   if (!c) return;
@@ -1521,6 +1560,9 @@ function onCanvasClick(e: MouseEvent) {
   //   旧逻辑「点中怪(2.5m)自动逼近 + 点空地5m内有怪自动锁敌去打」导致玩家
   //   想点地面走人时被迫跑去打野怪——全部砍掉。
   //   攻击入口只保留：右键普攻（onRightClick）/ 技能按钮（castSkill）。
+
+  // ★ 斧头破坏模式：点击障碍物优先破坏（不触发移动）
+  if ((state.value as any)?.axeMode && tryAxeBreak(tx, ty)) return;
   autoApproachTarget.value = null;
   input.value.moveTo = tgt;
   input.value.dx = 0;
@@ -2100,6 +2142,8 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       board: npc.dialog === "BOARD",
       // ★ 未具名 NPC（含农场动物）：可对话但头顶不画名字，避免整屏刷名字
       unnamed: npc.unnamed === true,
+      // ★ 可拾取物（地图对象带 pickup_item）：靠近触发「是否拾取」提示，确认后发物品并消失
+      pickupItem: npc.pickupItem || undefined,
     } as any);
   }
   // （装饰层无需再清理：normalizeTiledMap 已在解析时把「无名占位 NPC」提前跳过，
@@ -3396,6 +3440,80 @@ function drawQuestBoard(ctx: CanvasRenderingContext2D, px: number, py: number, p
   ctx.restore();
 }
 
+/** ★ 可拾取物绘制：地面发光的斧头图标 + 脉动光环 + 始终显示的「🪓 斧头」文字标签。
+ *  与 drawQuestBoard 同源风格，让玩家一眼看出"这是可拾取的东西"。 */
+function drawPickupAxe(ctx: CanvasRenderingContext2D, px: number, py: number, ppm: number, itemName: string): void {
+  const k = Math.max(0.6, Math.min(2.4, ppm / 20));
+  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const pulse = (now % 1200) / 1200;
+
+  // 脚底阴影
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(px, py + 4 * k, 14 * k, 5 * k, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 脉动光环（吸引注意）
+  const ringR = (16 + Math.sin(pulse * Math.PI * 2) * 3) * k;
+  ctx.save();
+  ctx.globalAlpha = 0.2 + 0.35 * (1 - Math.abs(pulse - 0.5) * 2);
+  ctx.strokeStyle = "#9fe6ff";
+  ctx.lineWidth = 3 * k;
+  ctx.beginPath();
+  ctx.ellipse(px, py - 16 * k, ringR, ringR * 0.5, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 斧头：木柄 + 斧头（斜放，像插在地上的战利品）
+  ctx.save();
+  ctx.translate(px, py - 14 * k);
+  ctx.rotate(-0.5);
+  // 木柄
+  ctx.fillStyle = "#8a5a2b";
+  ctx.fillRect(-2 * k, -2 * k, 4 * k, 26 * k);
+  // 斧头金属头
+  ctx.fillStyle = "#c9d2da";
+  ctx.strokeStyle = "#5a6470";
+  ctx.lineWidth = 1.5 * k;
+  ctx.beginPath();
+  ctx.moveTo(0, -2 * k);
+  ctx.lineTo(14 * k, -8 * k);
+  ctx.lineTo(16 * k, 2 * k);
+  ctx.lineTo(2 * k, 6 * k);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  // 斧刃高光
+  ctx.strokeStyle = "#eef3f7";
+  ctx.lineWidth = 1.5 * k;
+  ctx.beginPath();
+  ctx.moveTo(14 * k, -8 * k);
+  ctx.lineTo(16 * k, 2 * k);
+  ctx.stroke();
+  ctx.restore();
+
+  // 文字标签（始终显示，带蓝边底框）
+  const label = `🪓 ${itemName || "斧头"}`;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = `bold ${Math.round(13 * k)}px 'Microsoft YaHei', sans-serif`;
+  const tw = ctx.measureText(label).width;
+  const lx = px, ly = py - 34 * k;
+  const padX = 6 * k, padY = 3 * k;
+  ctx.fillStyle = "rgba(10,20,30,.85)";
+  rrPath(ctx, lx - tw / 2 - padX, ly - 13 * k - padY, tw + padX * 2, 16 * k + padY * 2, 6 * k);
+  ctx.fill();
+  ctx.strokeStyle = "#9fe6ff";
+  ctx.lineWidth = 1.5 * k;
+  ctx.stroke();
+  ctx.fillStyle = "#d6f3ff";
+  ctx.fillText(label, lx, ly);
+  ctx.restore();
+}
+
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement, sx?: number, sy?: number, ppm?: number) {
   // ★ v3：sx/sy 是外部算好的屏幕像素位置（不参与 ctx.scale）
   // 缺省时回退到 e.x / e.y（米），保证非世界变换下的旧调用仍能工作
@@ -3406,6 +3524,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   // ★ 任务板：专用公告板绘制（图标 + 文字 + 脉动光环），直接接管，不走通用 sprite
   if ((e as any).board === true || (e as any).dialog === "BOARD") {
     drawQuestBoard(ctx, px, py, pixelsPerMeter);
+    return;
+  }
+  // ★ 可拾取物（地图斧头等）：专用绘制（地面发光斧头图标 + 脉动光环），直接接管
+  if ((e as any).pickupItem) {
+    drawPickupAxe(ctx, px, py, pixelsPerMeter, String((e as any).pickupItem));
     return;
   }
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
@@ -5043,6 +5166,49 @@ function updateNearBoard(): void {
   if (!best && questOpen.value) questOpen.value = false;
 }
 
+/* ---------------- ★ 可拾取物：靠近触发「是否拾取」提示 ---------------- */
+/** 附近的可拾取物实体（地图 Actors 层带 pickup_item 的对象 → mapnpc_<id> 实体） */
+const nearPickup = ref<{ id: string; name: string } | null>(null);
+/** 本次靠近已点「稍后」暂时忽略（离开范围后再靠近重新提示） */
+const pickupDismissed = ref(false);
+const PICKUP_RADIUS_M = 2.5;
+
+function updateNearPickup(): void {
+  const s = state.value;
+  if (!s) { if (nearPickup.value) nearPickup.value = null; return; }
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) { if (nearPickup.value) nearPickup.value = null; return; }
+  let best: typeof nearPickup.value = null;
+  let bestDist = PICKUP_RADIUS_M;
+  for (const e of s.entities) {
+    const item = (e as any).pickupItem;
+    if (!item || e.alive === false) continue;
+    const d = Math.hypot(e.x - me.x, e.y - me.y);
+    if (d < bestDist) { bestDist = d; best = { id: String(e.id), name: String(item) }; }
+  }
+  if (best?.id !== nearPickup.value?.id) {
+    nearPickup.value = best;
+    // 切换目标（或离开范围）时重置「稍后」状态
+    pickupDismissed.value = false;
+  }
+}
+
+/** 确认拾取：发放物品（走 evGiveItem → sys_item_add 让 mockHost 接管）并令实体消失 */
+function onPickupConfirm(): void {
+  const p = nearPickup.value;
+  if (!p) return;
+  const e = (state.value?.entities ?? []).find((x) => x.id === p.id);
+  evGiveItem(p.name, 1);
+  if (e) e.alive = false;        // 立即从画面消失；切图清场后会随重新进入刷新
+  nearPickup.value = null;
+  pickupDismissed.value = false;
+}
+
+/** 暂时忽略：关闭提示，本次靠近不再弹出（离开范围后重新提示） */
+function onPickupDismiss(): void {
+  pickupDismissed.value = true;
+}
+
 /** 任务数据（宿主 state.questView 权威，前端只读） */
 const questView = computed<any>(() => (state.value as any)?.questView || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
 const questAsking = computed<boolean>(() => !!(state.value as any)?._questAsking);
@@ -5081,6 +5247,8 @@ function updateNearChat(): void {
     if (e.side === "enemy" || !e.alive || e.side === "player") continue;
     // ★ 任务板不是人：不进「💬 聊天」，改由「📜 任务」按钮接管
     if (BOARD_NAME_RE.test(String(e.name || ""))) continue;
+    // ★ 可拾取物（斧头等）不是对话对象，靠近只出「是否拾取」提示
+    if ((e as any).pickupItem) continue;
     const d = Math.hypot(e.x - me.x, e.y - me.y);
     if (d < bestDist) { bestDist = d; best = { id: e.id, name: e.name, avatarPath: e.avatarPath }; }
   }
@@ -5457,6 +5625,8 @@ function loop(ts: number) {
     updateNearChat();
     // ★ 任务板：10Hz 刷新附近任务板（走近 → 出「任务」按钮）
     updateNearBoard();
+    // ★ 可拾取物：10Hz 刷新附近可拾取物（走近 → 出「是否拾取」提示）
+    updateNearPickup();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
@@ -6458,6 +6628,18 @@ watch(() => state.value?.phase, (p) => {
         </div>
       </div>
 
+      <!-- ★ 可拾取物：靠近斧头等触发「是否拾取」提示 -->
+      <div v-if="nearPickup && !pickupDismissed" class="ev-confirm-overlay" @click.self="onPickupDismiss">
+        <div class="ev-confirm">
+          <div class="ev-confirm__title">🪓 是否拾取{{ nearPickup.name }}？</div>
+          <div class="ev-confirm__detail">拾取后物品栏「{{ nearPickup.name }}」数量 +1，地上的斧头会消失。</div>
+          <div class="ev-confirm__btns">
+            <button class="ev-confirm__cancel" @click="onPickupDismiss">稍后</button>
+            <button class="ev-confirm__ok" @click="onPickupConfirm">拾取</button>
+          </div>
+        </div>
+      </div>
+
       <!-- ★ game.md 对话功能：聊天面板 -->
       <div v-if="chatActive" class="chat-panel">
         <div class="chat-panel__header">
@@ -6594,6 +6776,7 @@ watch(() => state.value?.phase, (p) => {
         <button class="slot slot--page" @click="pageItem(1)">切换</button>
       </div>
 
+      <div v-if="state?.axeMode" class="axe-hint">🪓 斧头破坏模式：点击前方障碍物进行破坏</div>
       <div class="tips">方向键 / WASD 移动，点击空地指定目标，摇杆可拖动</div>
     </section>
 
@@ -7898,6 +8081,22 @@ body {
   color: rgba(236, 236, 236, 0.5);
   z-index: 4;
   letter-spacing: 1px;
+}
+
+.axe-hint {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  background: rgba(60, 30, 10, 0.82);
+  color: #ffd54a;
+  border: 1px solid #ffb300;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 30;
 }
 
 /* ============== 结算 ============== */
