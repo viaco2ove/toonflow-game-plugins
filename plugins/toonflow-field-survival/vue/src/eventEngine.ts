@@ -74,6 +74,31 @@ async function saveFlags(): Promise<void> {
   flagDirty = false;
 }
 
+/** ★ 清空会话内 flag 缓存（不落库）。
+ *  为什么需要：flag 是「事件引擎（Vue 侧）」与「插件后端（entry.js）」共用的同一份
+ *  t_plugin_session_data。后端在任务完成时也会写 flag（entry.ts setPlayerFlag），
+ *  系统面板也会直接写 pluginData；这些写入绕过本模块缓存 → 判定会读到陈旧值。
+ *  凡「可能已被外部改动」的时机（切图 / 重载事件 / 面板写 flag）都应先清缓存。 */
+export function invalidateFlagCache(): void {
+  flagCache = null;
+}
+
+/** ★ 强制重读 flag（返回最新值），供系统面板「重载事件」等使用 */
+export async function reloadFlags(): Promise<Record<string, unknown>> {
+  flagCache = null;
+  return await loadFlags();
+}
+
+/** ★ 走事件引擎自身通道写 flag：保证缓存与库一致（避免外部直写造成的不一致） */
+export async function setEventFlag(key: string, value: unknown): Promise<void> {
+  await makeCtx().save.setFlag(key, value);
+}
+
+/** ★ 走事件引擎自身通道删 flag */
+export async function delEventFlag(key: string): Promise<void> {
+  await makeCtx().save.delFlag(key);
+}
+
 // ─── 事件加载 ───
 // ★ 事件文件与地图同源加载：fetch events/maps/<mapFile>.events.json
 //   - dev（vite dev server）：走 /story-data/ 中间件（vite.config.ts:storyDataPlugin）读 workshops 真实文件
@@ -331,6 +356,9 @@ export function initEventEngine(h: EventHooks): void {
 
 /** 切图后调用：加载新图事件 + 触发 enter_map */
 export async function onMapEntered(mapFile: string): Promise<void> {
+  // ★ 切图是「后端进度 flag 可能已变」的天然同步点：先清缓存，
+  //   保证本次 enter_map 判定（如 q06_done → E09_q06_scouted）读到最新 flags。
+  invalidateFlagCache();
   await loadMapEvents(mapFile);
   const evs = loadedEvents.value?.events || [];
   for (const ev of evs) {

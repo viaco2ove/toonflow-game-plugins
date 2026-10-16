@@ -76,6 +76,20 @@
       "actions": [
         { "type": "run_script", "script": "E12_wood_at" }
       ]
+    },
+    {
+      "id": "E13_quest_done_advance",
+      "comment": "★ 任务完成 → 剧情推进（通用示范）：任何带 flags.done 的委托交付后（q06_done 由任务板交付时写入 player_flags），用 flag_check 串起后续剧情节拍",
+      "trigger": { "type": "enter_map" },
+      "conditions": [
+        { "type": "flag_check", "key": "q06_done", "op": "exists" },
+        { "type": "flag_check", "key": "quest_advance_seen", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "toast", "text": "【委托完成】你带回的消息被人认真记下了。", "color": "gold" },
+        { "type": "event_log", "text": "委托完成 → 剧情推进" },
+        { "type": "set_flag", "key": "quest_advance_seen", "value": true }
+      ]
     }
   ]
 }

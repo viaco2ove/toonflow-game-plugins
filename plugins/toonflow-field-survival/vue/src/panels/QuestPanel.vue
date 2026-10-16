@@ -88,6 +88,19 @@ function objText(o: any): string {
   }
   return `${KIND_LABEL[o.kind] || o.kind} ${t} ${o.have}/${o.need}`;
 }
+/** ★ 限时任务：倒计时文案（1 tick = 100ms；remainTicks<0 = 不限时） */
+function timerText(q: any): string {
+  if (typeof q?.remainTicks !== "number" || q.remainTicks < 0) return "";
+  const sec = Math.max(0, Math.ceil(q.remainTicks / 10));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m > 0 ? `⏱ ${m}:${String(s).padStart(2, "0")}` : `⏱ ${s}s`;
+}
+function timerLow(q: any): boolean {
+  return typeof q?.remainTicks === "number" && q.remainTicks >= 0 && q.remainTicks < 300;
+}
+function failText(q: any): string {
+  return q?.failReason === "timeout" ? "超时失败" : "护送失败";
+}
 </script>
 
 <template>
@@ -119,7 +132,8 @@ function objText(o: any): string {
           <span class="qp-type" :title="q.type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
           <span class="qp-title">{{ q.title }}</span>
           <span v-if="q.level > v.playerLevel + 2" class="qp-warn" :title="`推荐 Lv.${q.level}`">⚠ 偏高</span>
-          <span v-if="q.status === 'failed'" class="qp-badge qp-badge--fail">护送失败</span>
+          <span v-if="timerText(q)" class="qp-timer" :class="{ 'qp-timer--low': timerLow(q) }" title="限时任务剩余时间">{{ timerText(q) }}</span>
+          <span v-if="q.status === 'failed'" class="qp-badge qp-badge--fail">{{ failText(q) }}</span>
           <span v-if="q.repeat" class="qp-badge qp-badge--rep">可重复</span>
           <span v-if="q.status === 'away'" class="qp-badge qp-badge--away">别处发布</span>
         </div>
@@ -188,6 +202,9 @@ function objText(o: any): string {
 .qp-badge--fail { color: #ef5350; border-color: rgba(239,83,80,0.5); }
 .qp-badge--rep { color: #ffd76a; border-color: rgba(255,215,106,0.5); }
 .qp-badge--away { color: #93a2b3; }
+.qp-timer { font-size: 9px; border-radius: 3px; padding: 0 4px; border: 1px solid rgba(159,208,255,0.35); color: #9fd0ff; }
+.qp-timer--low { color: #ff6b6b; border-color: rgba(255,107,107,0.55); animation: qp-pulse 1s infinite; }
+@keyframes qp-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 .qp-desc { font-size: 11px; color: #9fb0c1; margin-top: 2px; }
 .qp-giver { font-size: 10px; color: #7f8f9f; }
 

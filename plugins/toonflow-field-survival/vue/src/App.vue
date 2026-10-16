@@ -50,7 +50,7 @@ import {
 import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
-import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents } from "./eventEngine";
+import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
 import { bakeTiledMap, eraseBakedObstacle } from "./mapBake";
@@ -782,10 +782,12 @@ function onSysSummon(card: any) {
   scheduleAllyPositionsSave();
 }
 
-/* ★ 事件系统面板 handlers：直接走 toonflowJsApi.pluginData 读写 player_flags */
+/* ★ 事件系统面板 handlers：走事件引擎自身的 setFlag/delFlag 通道
+ *   （而不是直接 toonflowJsApi.pluginData.set）——否则事件引擎的会话内 flag 缓存
+ *   会与库里的值不一致，面板刚写的 flag 要等切图/重载才生效。 */
 async function onSysSetFlag(key: string, value: unknown): Promise<void> {
   try {
-    await toonflowJsApi.pluginData.set("player_flags", { ...(sysEventFlags.value || {}), [key]: value });
+    await setEventFlag(key, value);
     sysEventFlags.value = { ...(sysEventFlags.value || {}), [key]: value };
     sysNotice.value = `flag ${key} = ${JSON.stringify(value)}`;
   } catch (e: any) {
@@ -794,9 +796,9 @@ async function onSysSetFlag(key: string, value: unknown): Promise<void> {
 }
 async function onSysDelFlag(key: string): Promise<void> {
   try {
+    await delEventFlag(key);
     const next = { ...(sysEventFlags.value || {}) };
     delete next[key];
-    await toonflowJsApi.pluginData.set("player_flags", next);
     sysEventFlags.value = next;
     sysNotice.value = `已删 flag ${key}`;
   } catch (e: any) {
@@ -810,6 +812,9 @@ async function onSysFireEvent(evId: string): Promise<void> {
 async function onSysReloadEvents(): Promise<void> {
   const f = levelNameToFileSafe(currentLevelName.value);
   if (f) await loadMapEvents(f);
+  // ★ 重载事件同时强制重读 flags：后端（任务完成）刚写的进度 flag 才能立刻参与判定
+  const fv = await reloadFlags();
+  sysEventFlags.value = fv || {};
   // 强制刷新面板响应
   sysEventDefs.value = getLoadedEvents();
   sysNotice.value = `已重载 ${f || currentLevelName.value} 的事件`;
@@ -6856,6 +6861,7 @@ watch(() => state.value?.phase, (p) => {
         :event-flags="sysEventFlags"
         :event-zones="sysEventZones"
         :event-repeat-hits="sysEventRepeatHits"
+        :quest-view="questView"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"

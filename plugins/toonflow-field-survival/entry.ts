@@ -361,6 +361,8 @@ export interface QuestProgress {
   acceptedTick?: number;
   acceptedMap?: string;
   turnedTick?: number;
+  /** 失败原因：timeout=限时超时；cargo=护送货物被打掉（缺省=货物） */
+  failReason?: "timeout" | "cargo";
 }
 
 interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
@@ -578,7 +580,8 @@ const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
 const QUEST_TITLE_MAX = 12;          // 任务标题最长字数（与技能名同口径，超了静默截断）
 const QUEST_ARRIVE_DEFAULT_R = 3;    // arrive/explore 默认判定半径（米）
 const QUEST_CARGO_PREFIX = "questcargo_";  // 护送货物实体 id 前缀
-const QUEST_AGENT_TIMEOUT_MS = 20000;      // 问 AI（生成任务 / 任务详情）超时
+const QUEST_AGENT_TIMEOUT_MS = 20000;      // 问 AI（任务详情/追问）超时
+const QUEST_GEN_TIMEOUT_MS = 25000;        // AI 生成委托超时（输出 JSON 数组，给足窗口；后端 agent 20s 内必返）
 const QUEST_TYPE_SET = new Set(["kill", "gather", "escort", "deliver", "explore", "talk"]);
 const QUEST_KIND_SET = new Set(["kill", "gather", "arrive", "talk", "explore"]);
 
@@ -1117,6 +1120,7 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
       const qp = (s.quests || {})[qid];
       if (qp && qp.status === "active") {
         qp.status = "failed";
+        qp.failReason = "cargo";
         qp.cargoId = "";
         const qd = questById(s, qid);
         s.questNotice = `护送失败：${qd ? qd.title : qid}（货物被打掉了）`;
@@ -2521,6 +2525,35 @@ function addBagItemToCard(s: FieldSurvivalState, name: string, count = 1): numbe
    ============================================================ */
 function cleanTitle(v: unknown): string { return str(v).trim().slice(0, QUEST_TITLE_MAX); }
 
+/** ★ 任务数据里的地图名归一：slug（mulberryTown）→ 运行时关卡显示名（Mulberry Town）
+ *  · quests.json / AI 产出常写文件名 slug，而 s.levelName 用的是显示名（"Mulberry Town"），
+ *    不归一会让所有带 map 的任务全被判成「别处发布」、arrive 校验永远不通过。 */
+const QUEST_MAP_SLUGS: Record<string, string> = {
+  mulberrytown: "Mulberry Town",
+  mulberryforest: "Mulberry Forest",
+  mulberrygraveyard: "Mulberry Graveyard",
+  mulberrydungeon: "Mulberry Dungeon",
+  mulberrydungeon1: "Mulberry Dungeon",
+  mulberrydungeon2: "Mulberry Dungeon 2",
+  mulberrydungeon3: "Mulberry Dungeon 3",
+  mulberrydungeon4: "Mulberry Dungeon 4",
+  mulberrydungeon5: "Mulberry Dungeon 5",
+  forestdungeon: "Forest Dungeon",
+  forestdungeon2: "Forest Dungeon 2",
+  forestdungeon3: "Forest Dungeon 3",
+  forestdungeon4: "Forest Dungeon 4",
+  forestdungeon5: "Forest Dungeon 5",
+  lichlair: "Lich Lair",
+  lootgoblinlair: "Loot Goblin Lair",
+  kingdom: "Kingdom",
+};
+function normQuestMap(v: unknown): string {
+  const s = str(v).trim();
+  if (!s) return "";
+  const hit = QUEST_MAP_SLUGS[s.toLowerCase().replace(/[\s_-]/g, "")];
+  return hit || s;
+}
+
 function questList(s: FieldSurvivalState): QuestDef[] {
   return Array.isArray(s.questBoard) ? s.questBoard.filter((q) => q && str(q.id)) : [];
 }
@@ -2673,6 +2706,28 @@ function syncQuestArriveAuto(s: FieldSurvivalState): void {
   }
 }
 
+/** ★ 进度钩子⑤（每 tick）：限时任务（timeLimitTicks）超时 → 判失败
+ *  · 只对 status=active 的任务计时（acceptedTick 在接取时写入）
+ *  · 超时后 status=failed + failReason=timeout，玩家可在任务板放弃后重接
+ *  · 1 tick = 100ms（与 state.tick 递增节奏一致） */
+function checkQuestTimeouts(s: FieldSurvivalState): void {
+  const now = Math.round(num(s.tick, 0));
+  for (const def of questList(s)) {
+    const tl = Math.round(num(def.timeLimitTicks, 0));
+    if (!(tl > 0)) continue;
+    const p = (s.quests || {})[String(def.id)];
+    if (!p || p.status !== "active") continue;
+    const at = Math.round(num(p.acceptedTick, now));
+    if (now - at < tl) continue;
+    p.status = "failed";
+    p.failReason = "timeout";
+    p.cargoId = "";
+    removeQuestCargo(s, p);
+    s.questNotice = `任务超时失败：${def.title}（限时 ${(tl / 10).toFixed(0)} 秒）`;
+    pushEvent(s, `任务超时失败：${def.title}`);
+  }
+}
+
 /** 判定玩家当前是否满足某个 arrive/explore 目标（点「到达」时校验） */
 function questArriveOk(s: FieldSurvivalState, def: QuestDef): { ok: boolean; msg: string } {
   const me = playerEntity(s);
@@ -2747,7 +2802,7 @@ function normalizeQuestDef(raw: any, idx = 0): QuestDef | null {
     if (t) obj.target = t.slice(0, 20);
     const c = Math.round(num((o as any).count, 1));
     obj.count = c > 0 ? c : 1;
-    const m = str((o as any).map).trim();
+    const m = normQuestMap((o as any).map);
     if (m) obj.map = m;
     if ((o as any).x !== undefined && (o as any).y !== undefined) {
       obj.x = num((o as any).x, 0); obj.y = num((o as any).y, 0);
@@ -2787,7 +2842,7 @@ function normalizeQuestDef(raw: any, idx = 0): QuestDef | null {
     giver: str((raw as any).giver).trim() || "任务板",
     objectives,
   };
-  const map = str((raw as any).map).trim();
+  const map = normQuestMap((raw as any).map);
   if (map) def.map = map;
   const desc = str((raw as any).desc ?? (raw as any).description).trim();
   if (desc) def.desc = desc.slice(0, 200);
@@ -2893,6 +2948,16 @@ function buildQuestView(s: FieldSurvivalState): void {
       level: Math.max(1, Math.round(num(def.level, 1))),
       status,
       repeat: def.repeat === true,
+      /** ★ 限时任务：剩余 tick（-1 = 不限时 / 非进行中）；前端据此显示倒计时 */
+      timeLimitTicks: Math.max(0, Math.round(num(def.timeLimitTicks, 0))),
+      remainTicks: (() => {
+        const tl = Math.round(num(def.timeLimitTicks, 0));
+        if (!(tl > 0) || !p || p.status !== "active") return -1;
+        const now = Math.round(num(s.tick, 0));
+        const at = Math.round(num(p.acceptedTick, now));
+        return Math.max(0, tl - (now - at));
+      })(),
+      failReason: p ? str((p as any).failReason) : "",
       objectives,
       reward: def.reward || { exp: 0, money: 0, items: [] },
       canTurnIn: status === "done",
@@ -2925,9 +2990,21 @@ function buildQuestView(s: FieldSurvivalState): void {
   (s as any).questView = { available, active, done, turned, playerLevel: Math.max(1, Math.round(num(me?.level, 1))) };
 }
 
-/** 从 pluginData["quest_defs"] 载入任务定义（只在 board 为空时，避免覆盖后下发的内容） */
+/** 从 pluginData["quest_defs"] 载入任务定义
+ *  · 板子为空 → 直接载入（避免覆盖宿主已下发的内容）
+ *  · 板子上只剩「AI 兜底」临时委托（from=ai-fallback）→ 清掉它们再载入故事任务表
+ *    （task-speaker-agent 是台词发言器，不会产出任务 JSON，兜底委托只是占位，
+ *      故事任务表一旦可用就应让位，否则板上永远只有一条同样的兜底任务） */
 async function ensureQuestDefs(ctx: PluginGameContext | undefined, s: FieldSurvivalState): Promise<number> {
-  if (Array.isArray(s.questBoard) && s.questBoard.length) return 0;
+  const board = Array.isArray(s.questBoard) ? s.questBoard : [];
+  // 兜底委托识别：from=ai-fallback（新）；历史版本 from 被误标成 "ai" 但 id 以 QAI 开头
+  const isFallback = (q: any) => {
+    const f = str((q as any).from);
+    return f === "ai-fallback" || (f === "ai" && /^QAI/.test(String((q as any).id)));
+  };
+  const onlyFallback = board.length > 0 && board.every(isFallback);
+  if (board.length && !onlyFallback) return 0;
+  if (onlyFallback) s.questBoard = [];
   const get = ctx?.tsApi?.pluginData?.get;
   if (!get) return 0;
   try {
@@ -2943,73 +3020,101 @@ async function ensureQuestDefs(ctx: PluginGameContext | undefined, s: FieldSurvi
   } catch { return 0; }
 }
 
-/** ★ AI 生成可接任务：调 task-speaker-agent，输出收敛成 QuestDef[] 并入 board */
+/** ★ 把 AI 新增的任务定义回写 pluginData["quest_defs"]，跨会话长期保留
+ *  · 与既有 quest_defs 按 id 合并（既有优先，绝不覆盖宿主/CLI 下发的故事任务表）
+ *  · 写 { version:1, quests:[...] } —— 与故事任务表 quests.json 同构，ensureQuestDefs 可直接读回 */
+async function persistQuestDefs(ctx: PluginGameContext | undefined, newDefs: QuestDef[]): Promise<void> {
+  const api = ctx?.tsApi?.pluginData;
+  const set = api?.set;
+  if (!set || !newDefs.length) return;
+  try {
+    let existing: any[] = [];
+    if (api?.get) {
+      const raw = await api.get("quest_defs");
+      existing = Array.isArray(raw) ? raw
+        : Array.isArray((raw as any)?.quests) ? (raw as any).quests
+        : Array.isArray((raw as any)?.defs) ? (raw as any).defs
+        : [];
+    }
+    const seen = new Set(existing.map((x: any) => String(x?.id ?? "")));
+    const merged = [...existing];
+    for (const d of newDefs) {
+      const id = String(d.id || "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      merged.push(d);
+    }
+    if (merged.length === existing.length) return;   // 无新增 → 不写，避免无谓落库
+    await set("quest_defs", { version: 1, quests: merged });
+  } catch { /* 落库失败不阻断玩法 */ }
+}
+
+/** ★ AI 生成可接任务：调 field-survival-quest-gener（后端专用「只输出 JSON」agent），
+ *   输出收敛成 QuestDef[] 并入 board，并回写 pluginData["quest_defs"] 长期保留。
+ *   agent 缺失 / 超时 / 输出不合法 → 兜底 3 条不同类型委托（保证面板永远可用）。 */
 async function generateQuestsByAI(s: FieldSurvivalState, ctx: PluginGameContext | undefined, n = 3): Promise<number> {
   const count = Math.max(1, Math.min(6, Math.round(num(n, 3))));
   const me = playerEntity(s);
   const lv = Math.max(1, Math.round(num(me?.level, 1)));
-  const prompt =
-    `你是任务板。请为当前地图「${str(s.levelName) || "未知"}」生成 ${count} 个适合 Lv.${lv} 的委托任务。\n` +
-    `只输出一个 JSON 数组，不要任何解释文字，每项字段：\n` +
-    `{"id":"Qxx","title":"任务名(不超过12字)","type":"kill或gather或escort或deliver或explore或talk","giver":"发布者","desc":"一句话描述","level":数字,\n` +
-    `"objectives":[{"kind":"kill或gather或arrive或talk或explore","target":"目标名","count":数字,"map":"地图名","x":数字,"y":数字,"radius":数字,"confirm":true或false}],\n` +
-    `"reward":{"exp":数字,"money":数字,"items":[{"name":"物品名","count":数字}]},"repeat":false}`;
-  let rawText = "";
+  let arr: any[] = [];
+  let fallbackUsed = false;
   try {
-    if (ctx?.tsApi?.agent) {
-      const r = await withTimeout(
-        ctx.tsApi.agent.run("task-speaker-agent", {
-          npcId: "quest_board",
-          npcName: "任务板",
-          npcCard: { id: "quest_board", name: "任务板", roleType: "npc", level: lv, description: "张贴委托的木牌，代雇主发布任务" },
-          isNeutral: true,
-          userText: prompt,
-          lastResp: null,
-          mode: "response",
-          context: { storyDigest: buildStoryDigest(ctx), playerLevel: lv, mapName: str(s.levelName) },
+    const run = ctx?.tsApi?.agent?.run;
+    if (run) {
+      const r: any = await withTimeout(
+        run("field-survival-quest-gener", {
+          storyDigest: buildStoryDigest(ctx),
+          mapName: str(s.levelName),
+          playerLevel: lv,
+          count,
+          /** 已发布任务标题，agent 据此避免重复 */
+          existingTitles: questList(s).map((q) => str(q.title)).filter(Boolean).slice(0, 40),
         }),
-        QUEST_AGENT_TIMEOUT_MS,
-        "quest agent 超时",
+        QUEST_GEN_TIMEOUT_MS,
+        "quest-gener agent 超时",
       );
-      rawText = String(r?.output?.text || "")
-        .replace(/^\s*```[a-zA-Z]*\s*/, "")
-        .replace(/\s*```\s*$/, "")
-        .trim();
+      const out = r?.output;
+      const got = Array.isArray(out?.quests) ? out.quests
+        : Array.isArray(out) ? out
+        : Array.isArray(out?.defs) ? out.defs
+        : [];
+      if (got.length) arr = got;
     }
   } catch { /* AI 不可用 → 兜底 */ }
-  let arr: any[] = [];
-  if (rawText) {
-    try {
-      const j = JSON.parse(rawText);
-      arr = Array.isArray(j) ? j : Array.isArray((j as any)?.quests) ? (j as any).quests : [j];
-    } catch { /* 非 JSON → 兜底 */ }
-  }
   if (!arr.length) {
-    arr = [{
-      id: `QAI${String(Object.keys(s.quests || {}).length + 1).padStart(2, "0")}`,
-      title: "清剿周边湮物",
-      type: "kill",
-      giver: "任务板",
-      desc: "任务板新贴出的一张委托：清掉附近的湮物。",
-      level: lv,
-      objectives: [{ kind: "kill", target: "湮物", count: 5 }],
-      reward: { exp: 60 + lv * 20, money: 40 + lv * 10 },
-      repeat: true,
-      from: "ai-fallback",
-    }];
+    // ★ 兜底：3 条不同类型委托（id 按板上已有 QAI 序号递增，保证多次生成不撞 id）
+    fallbackUsed = true;
+    let aiSeq = 0;
+    for (const q of questList(s)) {
+      const m = /^QAI(\d+)/.exec(String(q.id));
+      if (m) aiSeq = Math.max(aiSeq, Number(m[1]));
+    }
+    const nid = (k: number) => `QAI${String(aiSeq + k).padStart(2, "0")}`;
+    arr = [
+      { id: nid(1), title: "清剿周边湮物", type: "kill", objectives: [{ kind: "kill", target: "湮物", count: 5 }] },
+      { id: nid(2), title: "采集应急物资", type: "gather", objectives: [{ kind: "gather", target: "木材", count: 4 }] },
+      { id: nid(3), title: "探查附近区域", type: "explore", objectives: [{ kind: "explore", map: str(s.levelName), radius: 6, confirm: true }] },
+    ];
   }
   const existIds = new Set(questList(s).map((q) => String(q.id)));
-  let added = 0;
+  const existTitles = new Set(questList(s).map((q) => str(q.title)));
+  const addedDefs: QuestDef[] = [];
   for (const item of arr) {
-    const def = normalizeQuestDef({ ...(item || {}), from: "ai" }, added);
+    // 兜底委托标记 ai-fallback：故事任务表（quest_defs）可用时应被 ensureQuestDefs 让位
+    const def = normalizeQuestDef({ ...(item || {}), from: fallbackUsed ? "ai-fallback" : "ai" }, addedDefs.length);
     if (!def) continue;
     if (existIds.has(String(def.id))) def.id = `${def.id}_${Date.now() % 10000}`;
     existIds.add(String(def.id));
+    // 同标题已在板上（含兜底委托重复点击）→ 跳过，不再堆一模一样的任务
+    if (existTitles.has(str(def.title))) continue;
+    existTitles.add(str(def.title));
     if (!Array.isArray(s.questBoard)) s.questBoard = [];
     s.questBoard.push(def);
-    added++;
+    addedDefs.push(def);
   }
-  return added;
+  // ★ ③ AI 委托落库：跨会话长期保留（下次进游戏 ensureQuestDefs 会读回）
+  await persistQuestDefs(ctx, addedDefs);
+  return addedDefs.length;
 }
 
 /** ★ AI 回答任务详情 / 玩家追问（结果写 s.questAiText） */
@@ -3703,10 +3808,14 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
           acceptedTick: Math.round(num((v as any).acceptedTick, 0)),
           acceptedMap: str((v as any).acceptedMap, ""),
           turnedTick: Math.round(num((v as any).turnedTick, 0)),
+          failReason: (["timeout", "cargo"].includes(str((v as any).failReason)) ? str((v as any).failReason) : undefined) as QuestProgress["failReason"],
         };
       }
       s.quests = q;
     }
+    // ★ 任务进度容器兜底：库里没存过 quests 时保持 {}（否则首次 sys_quest_accept
+    //   写 s.quests[id] 会因 undefined 抛错，被宿主当作 entry.js 执行失败）。
+    if (!s.quests || typeof s.quests !== "object") s.quests = {};
     // ★ 角色位置权威（ai_story_roles）：上次会话每个角色停在哪张图、哪个坐标。
     //   开局必须按这份数据就位——否则角色会被强行拉回 start_map，上一局的驻留全丢。
     try {
@@ -4117,8 +4226,9 @@ export async function handle_action(
         (s as any)._levelAt = s.levelName;
         ensureNpcCards(s, s.levelName || "");
       }
-      // ★ 任务板：非 confirm 的到达目标走到即完成 + 护送货物跟随 + 重算任务视图
+      // ★ 任务板：非 confirm 的到达目标走到即完成 + 护送货物跟随 + 限时超时 + 重算任务视图
       syncQuestArriveAuto(s);
+      checkQuestTimeouts(s);
       buildQuestView(s);
       if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
       return okResp("");
@@ -4326,14 +4436,21 @@ export async function handle_action(
       const id = str(params?.id).trim();
       const def = questById(s, id);
       if (!def) return okResp("没有这个任务");
-      const p = ensureProg(s, def.id);
-      if (p.status === "active") return okResp(`「${def.title}」已经在进行中`);
-      if (p.status === "done") return okResp(`「${def.title}」已完成，去交任务`);
-      if (p.status === "turned" && !def.repeat) return okResp(`「${def.title}」已经交过了`);
+      // ★ fix：这里**不能**用 ensureProg() 预创建进度 —— 它会先生成 {id,status:"active"}，
+      //   紧接着的 `p.status === "active"` 守卫就把「首次接取」误判成「已经在进行中」并提前返回，
+      //   结果 acceptedTick / kill·gather·talked 计数容器 / cargoId 全部缺失：
+      //     · 限时任务（timeLimitTicks）acceptedTick 缺失 → 永不超时
+      //     · 护送任务 cargo 不生成 → 护送玩法失效
+      //   改为只读既有进度做守卫（s.quests 容器本身仍需保证存在）。
+      if (!s.quests || typeof s.quests !== "object") s.quests = {};
+      const existing = s.quests[String(def.id)];
+      if (existing && existing.status === "active") return okResp(`「${def.title}」已经在进行中`);
+      if (existing && existing.status === "done") return okResp(`「${def.title}」已完成，去交任务`);
+      if (existing && existing.status === "turned" && !def.repeat) return okResp(`「${def.title}」已经交过了`);
       // 重接 / 首次接取：清空进度
-      const prevCargo = p.cargoId;
-      if (prevCargo) removeQuestCargo(s, p);
-      s.quests![String(def.id)] = {
+      const prevCargo = existing?.cargoId;
+      if (prevCargo) removeQuestCargo(s, existing!);
+      s.quests[String(def.id)] = {
         id: String(def.id), status: "active", kill: {}, gather: {}, talked: {},
         arrived: false, cargoId: "", acceptedTick: s.tick, acceptedMap: str(s.levelName),
       };
@@ -4350,7 +4467,12 @@ export async function handle_action(
       if (!def) return okResp("没有这个任务");
       const p = (s.quests || {})[String(def.id)];
       if (!p || p.status === "turned") return okResp(`「${def.title}」已经交过了`);
-      if (p.status !== "done") return okResp(`「${def.title}」还没完成（${p.status === "failed" ? "护送失败，请放弃后重接" : "目标未达成"}）`);
+      if (p.status !== "done") {
+        const why = p.status === "failed"
+          ? (str((p as any).failReason) === "timeout" ? "限时已过，请放弃后重接" : "护送失败，请放弃后重接")
+          : "目标未达成";
+        return okResp(`「${def.title}」还没完成（${why}）`);
+      }
       // 交付：扣物品（deliver 的 consume，缺省按 gather 目标同名扣）
       const consume = Array.isArray(def.consume) && def.consume.length
         ? def.consume
@@ -4410,7 +4532,7 @@ export async function handle_action(
       refreshQuestStatus(s, def);
       buildQuestView(s);
       await persistSys(context, s);
-      const done = (s.quests![String(def.id)].status === "done");
+      const done = (s.quests || {})[String(def.id)]?.status === "done";
       return okResp(done ? `已到达目的地，「${def.title}」可以交了` : `已记录到达（${def.title}）`);
     }
 

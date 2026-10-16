@@ -324,7 +324,18 @@ window.addEventListener("message", (e) => {
   const d = e?.data;
   if (!d || d.type !== "tf_plugin_data") return;
   const { reqId, op, dataKey, value, pluginId, sessionId, story } = d;
-  const k = JSON.stringify({ p: pluginId, s: sessionId || "all", k: dataKey || "" });
+  // ★ 命名空间归一：game iframe 的 SDK（toonflowJsApi）postMessage 时不带 pluginId，
+  //   若直接用 undefined 组 key，会与 entry.js 侧（entryCtx 显式带 ENTRY_PLUGIN_ID）
+  //   落到两个不同的 key —— dev-host 下「后端写 flag / 前端读 flag」就永远对不上。
+  //   真实宿主是同一张 t_plugin_session_data（维度含 pluginId），故此处补默认值对齐。
+  const pid = pluginId || ENTRY_PLUGIN_ID;
+  // ★ 会话归一：真实宿主 POST /plugin/data 的 sessionId 是必填（z.string()，缺了直接 400），
+  //   由宿主按「当前故事会话」注入 —— 即 entry.js 的 ctx.sessionId，**不是** "all"。
+  //   而 iframe 侧 SDK 的 request() 默认不带 sessionId，dev-host 若兜底成 "all"，
+  //   就会与 entry.js 写/读的会话 scope 分家（player_flags 一个写 gs_xxx、一个读 all）。
+  //   故此处默认取故事会话，与 entryCtx 口径一致；显式传入的 sessionId（如 getTemplate 的 "all"）照旧生效。
+  const sid = sessionId || (typeof window !== "undefined" && window.__STORY_SESSION_ID__) || "all";
+  const k = JSON.stringify({ p: pid, s: sid, k: dataKey || "" });
   let result = null;
   if (op === "get") {
     const v = window.__pdGet(k);
@@ -336,7 +347,7 @@ window.addEventListener("message", (e) => {
     const keys = [];
     for (const key of window.__devHostPluginData.keys()) {
       const parsed = JSON.parse(key);
-      if (parsed.p === pluginId && parsed.s === (sessionId || "all")) keys.push(parsed.k);
+      if (parsed.p === pid && parsed.s === sid) keys.push(parsed.k);
     }
     result = { keys, dataKey: "", value: null };
   } else if (op === "remove") {
@@ -435,6 +446,37 @@ window.__pdRemove = (k) => {
 };
 
 const ENTRY_PLUGIN_ID = "com.toonflow.minigame-field-survival";
+/* ★ 拟真宿主：把故事自带的任务表播种进插件会话数据（等价于 CLI 上传 quest_defs）
+ *   仅在 quest_defs 为空时播种，不覆盖用户 / CLI 已上传的数据。
+ *   候选路径优先级：map_design（运行时故事目录）→ map_design_pre（设计目录）。
+ *   真实宿主（安装后）由 CLI 的 plugin_session_data 上传同一份 quests.json
+ *   （toon_plugins plugin_session_data --set -k quest_defs），两边口径一致。 */
+async function seedQuestDefs() {
+  // ★ 双 scope 写入：entry.js 的 ctx 用 __STORY_SESSION_ID__||"all"，iframe 侧 SDK 用 "all"，
+  //   并发 tf_plugin_loaded 可能让两者读到不同 session —— 两个 scope 都写，任何读取方都能拿到。
+  const scopes = new Set(["all"]);
+  if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
+  for (const sc of scopes) {
+    if (window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sc, "quest_defs"))) { log("✓ 任务表 quest_defs 已存在，跳过播种"); return; }
+  }
+  const cands = [
+    "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/events/任务事件/quests.json",
+    "/story-data/toonflow-field-survival/map_design_pre/" + encodeURIComponent(STORY) + "/events/任务事件/quests.json",
+  ];
+  for (const u of cands) {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) continue;
+      const j = await r.json();
+      const arr = Array.isArray(j) ? j : Array.isArray(j && j.quests) ? j.quests : [];
+      if (!arr.length) continue;
+      for (const sc of scopes) window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sc, "quest_defs"), j);
+      log("✓ 任务表已播种：" + u + "（" + arr.length + " 条委托，scope: " + [...scopes].join(",") + "）");
+      return;
+    } catch (e) { log("! 任务表播种失败 " + u + ": " + (e && e.message ? e.message : e)); }
+  }
+  log("⚠ 未找到故事任务表 quests.json（任务板为空，可点「AI 生成委托」）");
+}
 /* 拟真世界书摘要：dev-host 桩没有真实世界书服务，用 test_state.json 的
  *   description / materials / monsters 拼一份与真实宿主同口径的「常驻世界书条目 + 故事物资」，
  *   否则商城 agent 读到的 worldBookDigest 恒为空串，生成结果等同降级。 */
@@ -573,6 +615,34 @@ function buildEntryCtx() {
               } catch (err) {
                 const msg = String((err && err.message) || err);
                 log("! 角色发言器请求异常：" + msg);
+                return { ok: false, error: msg };
+              }
+            }
+            // ★ 任务板委托生成 agent：与 speaker 同路——桩无 LLM 通道，由后端 /plugin/agentRun 代跑
+            //   runPluginAgent（field-survival-quest-gener），与安装后 ctx.tsApi.agent.run 同一条执行链。
+            if (n.indexOf("quest") >= 0) {
+              try {
+                const headers = { "Content-Type": "application/json" };
+                if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+                  headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+                }
+                const r = await fetch("/toon-api/plugin/agentRun", {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({ agentName: n, input: args || {}, aiConfigKey: "storyMiniGameModel" }),
+                });
+                const j = await r.json();
+                if (j && j.code === 200 && j.data) {
+                  const cnt = Array.isArray(j.data.output && j.data.output.quests) ? j.data.output.quests.length : 0;
+                  log("✓ 任务生成 agent(真LLM) " + n + " → " + (j.data.ok ? cnt + " 条委托" : "失败 " + (j.data.error || "")));
+                  return j.data;
+                }
+                const msg = (j && (j.msg || j.message)) || "后端 agentRun 返回异常";
+                log("! 任务生成 agent 调用失败：" + msg);
+                return { ok: false, error: String(msg) };
+              } catch (err) {
+                const msg = String((err && err.message) || err);
+                log("! 任务生成 agent 请求异常：" + msg);
                 return { ok: false, error: msg };
               }
             }
@@ -1015,6 +1085,7 @@ window.addEventListener("message", async (e) => {
     if (!ok) { log("HOST: loadStoryData failed"); return; }
     await loadEntityTypes();
     await mergeLocalMaterials(); // ★ 世界书补全：服务端只回 inventory，本地 test_state.json 才是完整物资条录
+    await seedQuestDefs();        // ★ 任务表播种：故事目录 quests.json → 插件会话数据 quest_defs
     log("HOST: story+entityTypes loaded, pushing select state");
     // ★ 直接同步推 select state（不用 setTimeout，background tab 上不可靠）
     lastState = {

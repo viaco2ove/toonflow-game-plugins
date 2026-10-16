@@ -7,9 +7,10 @@ import SkillPanel from "./panels/SkillPanel.vue";
 import MapPanel from "./panels/MapPanel.vue";
 import RolePanel from "./panels/RolePanel.vue";
 import EventPanel from "./panels/EventPanel.vue";
+import QuestLogPanel from "./panels/QuestLogPanel.vue";
 import { getLevelDisplayName } from "./mapConfig";
 
-type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event";
+type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest";
 
 const props = defineProps<{
   player: any;
@@ -34,6 +35,8 @@ const props = defineProps<{
   eventFlags?: Record<string, unknown>;
   eventZones?: { name: string; x: number; y: number; rx?: number; ry?: number; r?: number }[];
   eventRepeatHits?: Record<string, number>;
+  /** 任务板：进度视图（宿主 state.questView 权威，本页签只读） */
+  questView?: any;
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
@@ -46,6 +49,7 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: "map", label: "地图", icon: "🗺" },
   { id: "role", label: "角色", icon: "👥" },
   { id: "event", label: "事件", icon: "⚡" },
+  { id: "quest", label: "任务", icon: "📜" },
 ];
 
 const activeTab = ref<TabId>("bag");
@@ -142,6 +146,11 @@ const activeTab = ref<TabId>("bag");
         @del-flag="(k: string) => emit('del-flag', k)"
         @fire-event="(id: string) => emit('fire-event', id)"
         @reload-events="() => emit('reload-events')"
+      />
+      <QuestLogPanel
+        v-else-if="activeTab === 'quest'"
+        :view="questView || null"
+        :current-map="currentMap"
       />
     </div>
 

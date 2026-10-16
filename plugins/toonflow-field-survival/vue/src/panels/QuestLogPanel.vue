@@ -1,0 +1,189 @@
+<script setup lang="ts">
+/**
+ * QuestLogPanel.vue —— 系统面板「任务」页签（只读）
+ * =====================================================
+ * 数据来源：宿主 state.questView（entry.ts buildQuestView 每 tick 重算，前端只读）
+ * 用途：接了任务后不回到任务板也能随时查看进度与状态：
+ *   进行中（active / 护送失败）· 待交（done）· 已交（turned）
+ * 交付 / 放弃等操作仍需回到地图上的任务板（本页签只读，避免误操作）。
+ */
+import { computed } from "vue";
+
+const props = defineProps<{
+  view: {
+    available: any[];
+    active: any[];
+    done: any[];
+    turned: any[];
+    playerLevel: number;
+  } | null;
+  /** 当前地图（判断 away 任务） */
+  currentMap: string;
+}>();
+
+const v = computed<any>(() => props.view || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
+const avail = computed<any[]>(() => (v.value.available || []));
+const active = computed<any[]>(() => (v.value.active || []));
+const done = computed<any[]>(() => (v.value.done || []));
+const turned = computed<any[]>(() => (v.value.turned || []));
+
+const TYPE_ICON: Record<string, string> = {
+  kill: "⚔", gather: "🌿", escort: "📦", deliver: "🎁", explore: "🧭", talk: "💬",
+};
+const TYPE_LABEL: Record<string, string> = {
+  kill: "击杀", gather: "采集", escort: "护送", deliver: "送达", explore: "探索", talk: "对话",
+};
+const KIND_LABEL: Record<string, string> = {
+  kill: "击杀", gather: "采集", arrive: "到达", talk: "对话", explore: "探索",
+};
+
+function rewardText(q: any): string {
+  const r = q?.reward || {};
+  const parts: string[] = [];
+  if (r.exp) parts.push(`${r.exp}exp`);
+  if (r.money) parts.push(`${r.money}金`);
+  for (const it of r.items || []) parts.push(`${it.name}×${it.count}`);
+  return parts.join(" · ") || "无奖励";
+}
+function objText(o: any): string {
+  const t = o.target || o.kind;
+  if (o.kind === "arrive" || o.kind === "explore") {
+    return `${o.confirm ? "到达" : "走进"} ${o.map || "本图"}${o.confirm ? "（需点「到达」）" : ""}`;
+  }
+  return `${KIND_LABEL[o.kind] || o.kind} ${t} ${o.have}/${o.need}`;
+}
+function statusBadge(q: any): { text: string; cls: string } {
+  if (q.status === "failed") {
+    return q.failReason === "timeout"
+      ? { text: "超时失败", cls: "ql-badge--fail" }
+      : { text: "护送失败", cls: "ql-badge--fail" };
+  }
+  if (q.status === "done") return { text: "待交付", cls: "ql-badge--done" };
+  if (q.status === "turned") return { text: "已交付", cls: "ql-badge--turned" };
+  if (q.status === "away") return { text: "别处发布", cls: "ql-badge--away" };
+  return { text: "进行中", cls: "ql-badge--active" };
+}
+/** ★ 限时任务倒计时：remainTicks<0 表示不限时；1 tick = 100ms */
+function timerText(q: any): string {
+  if (typeof q?.remainTicks !== "number" || q.remainTicks < 0) return "";
+  const sec = Math.max(0, Math.ceil(q.remainTicks / 10));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m > 0 ? `⏱ 剩余 ${m}:${String(s).padStart(2, "0")}` : `⏱ 剩余 ${s}s`;
+}
+function timerLow(q: any): boolean {
+  return typeof q?.remainTicks === "number" && q.remainTicks >= 0 && q.remainTicks < 300;
+}
+</script>
+
+<template>
+  <div class="ql">
+    <div class="ql-stat">
+      <span class="ql-stat__item ql-stat__item--active">⏳ 进行中 {{ active.length }}</span>
+      <span class="ql-stat__item ql-stat__item--done">✅ 待交 {{ done.length }}</span>
+      <span class="ql-stat__item">📁 已交 {{ turned.length }}</span>
+      <span class="ql-stat__item ql-stat__item--avail">📜 可接 {{ avail.length }}</span>
+    </div>
+
+    <template v-if="!active.length && !done.length && !turned.length">
+      <div class="ql-empty">
+        还没有进行中的任务。<br />
+        走近地图上的「📜 任务板」接取委托后，这里会显示进度与状态。
+      </div>
+    </template>
+
+    <!-- 进行中 -->
+    <template v-if="active.length">
+      <div class="ql-sec">⏳ 进行中</div>
+      <div v-for="q in active" :key="q.id" class="ql-row">
+        <div class="ql-head">
+          <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
+          <span class="ql-title">{{ q.title }}</span>
+          <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+          <span v-if="timerText(q)" class="ql-timer" :class="{ 'ql-timer--low': timerLow(q) }">{{ timerText(q) }}</span>
+          <span v-if="q.level > v.playerLevel + 2" class="ql-warn">⚠ 偏高</span>
+        </div>
+        <div v-if="q.desc" class="ql-desc">{{ q.desc }}</div>
+        <div class="ql-giver">发布：{{ q.giver }} · 奖励 {{ rewardText(q) }}</div>
+        <div v-for="(o, i) in q.objectives" :key="i" class="ql-obj">
+          <span class="ql-obj__t">{{ objText(o) }}</span>
+          <span class="ql-obj__bar"><i :style="{ width: Math.min(100, (o.need ? o.have / o.need : 0) * 100) + '%' }"></i></span>
+        </div>
+        <div v-if="q.type === 'escort'" class="ql-cargo">
+          货物：<b :class="q.cargoAlive ? 'ql-ok' : 'ql-bad'">{{ q.cargoAlive ? "在" : "已丢失" }}</b>
+        </div>
+      </div>
+    </template>
+
+    <!-- 待交 -->
+    <template v-if="done.length">
+      <div class="ql-sec">✅ 待交付</div>
+      <div v-for="q in done" :key="q.id" class="ql-row ql-row--done">
+        <div class="ql-head">
+          <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
+          <span class="ql-title">{{ q.title }}</span>
+          <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+        </div>
+        <div v-if="q.desc" class="ql-desc">{{ q.desc }}</div>
+        <div class="ql-giver">发布：{{ q.giver }} · 奖励 {{ rewardText(q) }}</div>
+        <div v-for="(o, i) in q.objectives" :key="i" class="ql-obj">
+          <span class="ql-obj__t">{{ objText(o) }}</span>
+          <span class="ql-obj__bar"><i :style="{ width: '100%' }"></i></span>
+        </div>
+        <div class="ql-hint">目标已达成，回任务板交付领奖</div>
+      </div>
+    </template>
+
+    <!-- 已交 -->
+    <template v-if="turned.length">
+      <div class="ql-sec">📁 已交付</div>
+      <div v-for="q in turned" :key="q.id" class="ql-row ql-row--turned">
+        <div class="ql-head">
+          <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
+          <span class="ql-title">{{ q.title }}</span>
+          <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+        </div>
+        <div class="ql-giver">发布：{{ q.giver }} · 奖励 {{ rewardText(q) }}</div>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.ql { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #dfe7ef; }
+.ql-stat { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; }
+.ql-stat__item { padding: 2px 7px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.25); color: #a9b6c4; }
+.ql-stat__item--active { color: #ffd76a; border-color: rgba(255,215,106,0.4); }
+.ql-stat__item--done { color: #66bb6a; border-color: rgba(102,187,106,0.4); }
+.ql-stat__item--avail { color: #9fd0ff; border-color: rgba(159,208,255,0.4); }
+
+.ql-sec { font-size: 11px; color: #93a2b3; margin-top: 4px; letter-spacing: 1px; }
+.ql-empty { color: #6d7c8c; font-size: 11px; padding: 14px 6px; line-height: 1.8; text-align: center; }
+
+.ql-row { padding: 6px; border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; background: rgba(0,0,0,0.18); }
+.ql-row--done { border-left: 3px solid #66bb6a; }
+.ql-row--turned { opacity: 0.75; }
+.ql-head { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.ql-title { font-size: 12px; color: #ffe8bd; }
+.ql-type { font-size: 10px; padding: 0 4px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); color: #9fd0ff; }
+.ql-warn { font-size: 10px; color: #ffb26b; }
+.ql-timer { font-size: 10px; color: #9fd0ff; border: 1px solid rgba(159,208,255,0.35); border-radius: 3px; padding: 0 4px; }
+.ql-timer--low { color: #ff6b6b; border-color: rgba(255,107,107,0.55); animation: ql-pulse 1s infinite; }
+@keyframes ql-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.ql-badge { font-size: 9px; border-radius: 3px; padding: 0 4px; border: 1px solid rgba(255,255,255,0.2); color: #cfd8e3; }
+.ql-badge--active { color: #ffd76a; border-color: rgba(255,215,106,0.5); }
+.ql-badge--done { color: #66bb6a; border-color: rgba(102,187,106,0.5); }
+.ql-badge--fail { color: #ef5350; border-color: rgba(239,83,80,0.5); }
+.ql-badge--turned { color: #93a2b3; }
+.ql-badge--away { color: #93a2b3; }
+.ql-desc { font-size: 11px; color: #9fb0c1; margin-top: 2px; }
+.ql-giver { font-size: 10px; color: #7f8f9f; margin-top: 1px; }
+
+.ql-obj { display: flex; align-items: center; gap: 6px; font-size: 11px; color: #c3cfdb; margin-top: 2px; }
+.ql-obj__t { min-width: 120px; }
+.ql-obj__bar { flex: 1 1 auto; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+.ql-obj__bar i { display: block; height: 100%; background: #66bb6a; }
+.ql-cargo { font-size: 11px; color: #93a2b3; margin-top: 2px; }
+.ql-ok { color: #66bb6a; }
+.ql-bad { color: #ef5350; }
+.ql-hint { font-size: 10px; color: #ffd76a; margin-top: 3px; }
+</style>

@@ -28,6 +28,146 @@ interface TestDataBundle {
   materials: MaterialItem[];
 }
 
+/* ── ★ 任务板（standalone mock）：与 entry.ts 对齐的兜底实现 ─────────────────────
+ *  触发场景：game.html 以 file:// 直开、或父窗口未推 tf_plugin_state（无 --conn）。
+ *  与 entry.ts 的差异：mock 侧没有 agent 通道 → 「AI 生成委托」固定给 3 条通用委托。
+ *  本节把 entry.ts 的「地图名归一 / 同标题去重 / 限时超时判失败」同步过来，
+ *  避免 standalone 模式与安装后行为分叉（历史上 mock 一直是旧的 QMK 三条、无去重）。 */
+
+/** 地图 slug（mulberryTown）→ 运行时显示名（Mulberry Town）——与 entry.ts QUEST_MAP_SLUGS 保持一致 */
+const QUEST_MAP_SLUGS: Record<string, string> = {
+  mulberrytown: "Mulberry Town",
+  mulberryforest: "Mulberry Forest",
+  mulberrygraveyard: "Mulberry Graveyard",
+  mulberrydungeon: "Mulberry Dungeon",
+  mulberrydungeon1: "Mulberry Dungeon",
+  mulberrydungeon2: "Mulberry Dungeon 2",
+  mulberrydungeon3: "Mulberry Dungeon 3",
+  mulberrydungeon4: "Mulberry Dungeon 4",
+  mulberrydungeon5: "Mulberry Dungeon 5",
+  forestdungeon: "Forest Dungeon",
+  forestdungeon2: "Forest Dungeon 2",
+  forestdungeon3: "Forest Dungeon 3",
+  forestdungeon4: "Forest Dungeon 4",
+  forestdungeon5: "Forest Dungeon 5",
+  lichlair: "Lich Lair",
+  lootgoblinlair: "Loot Goblin Lair",
+  kingdom: "Kingdom",
+};
+/** slug → 显示名；已是显示名 / 中文名则原样返回 */
+function normQuestMap(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!s) return "";
+  const hit = QUEST_MAP_SLUGS[s.toLowerCase().replace(/[\s_-]/g, "")];
+  return hit || s;
+}
+/** 归一化一条任务定义：def.map / objective.map 的 slug → 显示名；数值兜底 */
+function normMockQuestDef(d: any): any {
+  if (!d || typeof d !== "object") return d;
+  const out: any = { ...d };
+  const m = normQuestMap(out.map);
+  if (m) out.map = m; else delete out.map;
+  if (Array.isArray(out.objectives)) {
+    out.objectives = out.objectives.map((o: any) => {
+      if (!o || typeof o !== "object") return o;
+      const c = { ...o };
+      const om = normQuestMap(c.map);
+      if (om) c.map = om; else delete c.map;
+      return c;
+    });
+  }
+  const tl = Math.round(Number(out.timeLimitTicks) || 0);
+  if (tl > 0) out.timeLimitTicks = tl; else delete out.timeLimitTicks;
+  return out;
+}
+
+/** 重算 state.questView（available / active / done / turned）——对齐 entry.ts buildQuestView */
+function mockQuestView(state: any): void {
+  const board: any[] = Array.isArray(state.questBoard) ? state.questBoard : (state.questBoard = []);
+  const quests: Record<string, any> = state.quests && typeof state.quests === "object" ? state.quests : (state.quests = {});
+  const me = (state.entities || []).find((e: any) => e.side === "player");
+  const need = (o: any) => Math.max(1, Math.round(Number(o?.count) || 1));
+  const have = (o: any, p: any) => {
+    if (!p) return 0;
+    if (o.kind === "kill") return Number((p.kill || {})[String(o.target)] || 0);
+    if (o.kind === "gather") return Number((p.gather || {})[String(o.target)] || 0);
+    if (o.kind === "talk") return Number((p.talked || {})[String(o.uid || o.target)] || 0);
+    if (o.kind === "arrive" || o.kind === "explore") return p.arrived ? 1 : 0;
+    return 0;
+  };
+  const row = (d: any, status: string) => {
+    const p = quests[String(d.id)];
+    const objectives = (d.objectives || []).map((o: any) => ({
+      kind: o.kind, target: String(o.target || ""), have: have(o, p), need: need(o),
+      confirm: o.confirm === true, map: String(o.map || ""),
+    }));
+    let atDest = false;
+    for (const o of d.objectives || []) {
+      if (o.kind !== "arrive" && o.kind !== "explore") continue;
+      if (String(o.map || "") && String(o.map) !== String(state.levelName || "")) { atDest = false; break; }
+      if (o.x === undefined || o.y === undefined) { atDest = true; continue; }
+      atDest = me ? Math.hypot(me.x - Number(o.x), me.y - Number(o.y)) <= Math.max(0.5, Number(o.radius) || 3) : false;
+    }
+    const tl = Math.round(Number(d.timeLimitTicks) || 0);
+    let remainTicks = -1;
+    if (tl > 0 && p && p.status === "active") {
+      const now = Math.round(Number(state.tick) || 0);
+      const at = Math.round(Number(p.acceptedTick) || now);
+      remainTicks = Math.max(0, tl - (now - at));
+    }
+    return {
+      id: String(d.id), title: String(d.title || d.id), type: String(d.type || "kill"),
+      giver: String(d.giver || "任务板"), desc: String(d.desc || ""),
+      level: Math.max(1, Math.round(Number(d.level) || 1)), status,
+      repeat: d.repeat === true, objectives, reward: d.reward || { exp: 0, money: 0, items: [] },
+      canTurnIn: status === "done",
+      canArrive: status === "active" && (d.objectives || []).some((o: any) => (o.kind === "arrive" || o.kind === "explore") && o.confirm === true),
+      atDest, progress: objectives.map((o: any) => `${o.target || o.kind} ${o.have}/${o.need}`).join("，"),
+      cargoAlive: false,
+      timeLimitTicks: tl,
+      remainTicks,
+      failReason: p ? String(p.failReason || "") : "",
+    };
+  };
+  const groups: any = { available: [], active: [], done: [], turned: [], playerLevel: Math.max(1, Math.round(Number(me?.level) || 1)) };
+  for (const d of board) {
+    const p = quests[String(d.id)];
+    const st = p ? String(p.status) : "";
+    if (st === "active" || st === "failed") groups.active.push(row(d, st));
+    else if (st === "done") groups.done.push(row(d, "done"));
+    else if (st === "turned") { if (d.repeat) groups.available.push(row(d, "available")); else groups.turned.push(row(d, "turned")); }
+    else {
+      const dm = String(d.map || "");
+      if (!dm || !state.levelName || dm === String(state.levelName)) groups.available.push(row(d, "available"));
+      else groups.available.push(row(d, "away"));
+    }
+  }
+  state.questView = groups;
+}
+
+/** ★ 限时任务超时判失败（每 tick 调一次；与 entry.ts checkQuestTimeouts 对齐） */
+function mockQuestTimeout(state: any): void {
+  const board: any[] = Array.isArray(state.questBoard) ? state.questBoard : [];
+  const quests: Record<string, any> = state.quests && typeof state.quests === "object" ? state.quests : {};
+  const now = Math.round(Number(state.tick) || 0);
+  let changed = false;
+  for (const d of board) {
+    const tl = Math.round(Number(d?.timeLimitTicks) || 0);
+    if (!(tl > 0)) continue;
+    const p = quests[String(d.id)];
+    if (!p || p.status !== "active") continue;
+    const at = Math.round(Number(p.acceptedTick) || now);
+    if (now - at < tl) continue;
+    p.status = "failed";
+    p.failReason = "timeout";
+    p.cargoId = "";
+    state.questNotice = `任务超时失败：${d.title || d.id}（限时 ${(tl / 10).toFixed(0)} 秒）`;
+    state.events.push("[mock] 任务超时失败：" + (d.title || d.id));
+    changed = true;
+  }
+  if (changed) mockQuestView(state);
+}
+
 /** ★ 静态兜底 safe zone（overworld.json 对应的城镇范围，野怪不得进入城镇） */
 let mapSafeZones: Array<{ name: string; x: number; y: number; rx?: number; ry?: number; r?: number; kind: string }> | null = null;
 
@@ -813,6 +953,8 @@ function install(): void {
       }
       if (action === "tick") {
         state.tick++;
+        // ★ 任务板：限时任务超时判失败（与 entry.ts checkQuestTimeouts 对齐）
+        mockQuestTimeout(state);
         // ★ 打击感：击退速度衰减（每 tick 乘 0.75，约 6 tick 归零）
         for (const e of state.entities) tickKnockback(e);
         // ★ 修复（mock 根因②）：把 App 加载出来的地图怪物并入 mock 的 state，
@@ -1298,7 +1440,9 @@ function install(): void {
         || action === "sys_quest_turnin" || action === "sys_quest_abandon" || action === "sys_quest_arrive"
         || action === "sys_quest_ask" || action === "sys_quest_generate") {
         const qs = (state as any);
-        if (!Array.isArray(qs.quests)) qs.quests = {};
+        // ★ fix：quests 是「对象」（id→progress），旧代码写的是 Array.isArray 判定 →
+        //   每次都把进度重置成 {}（接完任务再打开面板进度就没了）。改为对象判定。
+        if (!qs.quests || typeof qs.quests !== "object" || Array.isArray(qs.quests)) qs.quests = {};
         if (!Array.isArray(qs.questBoard)) qs.questBoard = [];
         const board: any[] = qs.questBoard;
         const quests: Record<string, any> = qs.quests;
@@ -1314,66 +1458,45 @@ function install(): void {
         };
         const met = (d: any, p: any) => (d.objectives || []).length > 0
           && (d.objectives || []).every((o: any) => have(o, p) >= need(o));
-        const view = () => {
-          const row = (d: any, status: string) => {
-            const p = quests[String(d.id)];
-            const objectives = (d.objectives || []).map((o: any) => ({
-              kind: o.kind, target: String(o.target || ""), have: have(o, p), need: need(o),
-              confirm: o.confirm === true, map: String(o.map || ""),
-            }));
-            let atDest = false;
-            for (const o of d.objectives || []) {
-              if (o.kind !== "arrive" && o.kind !== "explore") continue;
-              if (String(o.map || "") && String(o.map) !== String(state.levelName || "")) { atDest = false; break; }
-              if (o.x === undefined || o.y === undefined) { atDest = true; continue; }
-              atDest = me ? Math.hypot(me.x - Number(o.x), me.y - Number(o.y)) <= Math.max(0.5, Number(o.radius) || 3) : false;
-            }
-            return {
-              id: String(d.id), title: String(d.title || d.id), type: String(d.type || "kill"),
-              giver: String(d.giver || "任务板"), desc: String(d.desc || ""),
-              level: Math.max(1, Math.round(Number(d.level) || 1)), status,
-              repeat: d.repeat === true, objectives, reward: d.reward || { exp: 0, money: 0, items: [] },
-              canTurnIn: status === "done",
-              canArrive: status === "active" && (d.objectives || []).some((o: any) => (o.kind === "arrive" || o.kind === "explore") && o.confirm === true),
-              atDest, progress: objectives.map((o: any) => `${o.target || o.kind} ${o.have}/${o.need}`).join("，"),
-              cargoAlive: false,
-            };
-          };
-          const groups: any = { available: [], active: [], done: [], turned: [], playerLevel: Math.max(1, Math.round(Number(me?.level) || 1)) };
-          for (const d of board) {
-            const p = quests[String(d.id)];
-            const st = p ? String(p.status) : "";
-            if (st === "active" || st === "failed") groups.active.push(row(d, st));
-            else if (st === "done") groups.done.push(row(d, "done"));
-            else if (st === "turned") { if (d.repeat) groups.available.push(row(d, "available")); else groups.turned.push(row(d, "turned")); }
-            else groups.available.push(row(d, "available"));
-          }
-          qs.questView = groups;
-        };
+        // ★ 视图与超时统一走模块级 mockQuestView / mockQuestTimeout（与 entry.ts 对齐）
+        const view = () => mockQuestView(state);
         if (action === "sys_quest_pool") {
           const defs = Array.isArray(params?.defs) ? params.defs : Array.isArray(params?.quests) ? params.quests : [];
-          for (const d of defs) {
-            if (!d || !d.id) continue;
+          for (const raw of defs) {
+            if (!raw || !raw.id) continue;
+            // ★ 地图名归一（slug → 显示名），否则 available 判定会因 map 不匹配全被标「别处发布」
+            const d = normMockQuestDef(raw);
             const i = board.findIndex((x: any) => String(x.id) === String(d.id));
             if (i >= 0) board[i] = d; else board.push(d);
           }
         }
         if (action === "sys_quest_generate") {
-          // mock 无 agent：给出三条通用委托，保证面板可用
-          const base = board.length;
-          for (let i = 0; i < 3; i++) {
-            const id = `QMK${String(base + i + 1).padStart(2, "0")}`;
+          // mock 无 agent：给 3 条不同类型通用委托（与 entry.ts 兜底一致：
+          //   QAI 序号递增避免撞 id + 同标题去重，不再堆一模一样的三条 QMK）
+          let aiSeq = 0;
+          for (const q of board) {
+            const m = /^QAI(\d+)/.exec(String(q?.id || ""));
+            if (m) aiSeq = Math.max(aiSeq, Number(m[1]));
+          }
+          const nid = (k: number) => `QAI${String(aiSeq + k).padStart(2, "0")}`;
+          const existTitles = new Set(board.map((q: any) => String(q?.title || "")));
+          const tmpl = [
+            { title: "清剿周边湮物", type: "kill", objectives: [{ kind: "kill", target: "湮物", count: 5 }] },
+            { title: "采集应急物资", type: "gather", objectives: [{ kind: "gather", target: "木材", count: 4 }] },
+            { title: "探查附近区域", type: "explore", objectives: [{ kind: "explore", map: String(state.levelName || ""), x: 0, y: 0, radius: 6, confirm: true }] },
+          ];
+          let k = 0;
+          for (const t of tmpl) {
+            if (existTitles.has(t.title)) continue;      // 同标题已在板上 → 跳过
+            existTitles.add(t.title);
+            k++;
+            const id = nid(k);
             if (board.some((x: any) => String(x.id) === id)) continue;
             board.push({
-              id, title: ["清理周边野怪", "采集一批物资", "探查附近区域"][i] || "跑腿委托",
-              type: ["kill", "gather", "explore"][i] || "kill",
+              id, title: t.title, type: t.type,
               giver: "任务板", desc: "（mock）任务板新贴出的一张委托。",
-              objectives: [
-                i === 0 ? { kind: "kill", target: "野怪", count: 3 }
-                : i === 1 ? { kind: "gather", target: "木材", count: 3 }
-                : { kind: "explore", map: String(state.levelName || ""), x: 0, y: 0, radius: 6, confirm: true },
-              ],
-              reward: { exp: 60, money: 40 }, repeat: true, from: "mock",
+              objectives: t.objectives,
+              reward: { exp: 60, money: 40 }, repeat: true, from: "ai-fallback",
             });
           }
         }
@@ -1399,6 +1522,8 @@ function install(): void {
             p.status = "turned";
             qs.response = `「${def.title}」已交付，获得 ${exp}exp、${money}金`;
             qs.questNotice = qs.response;
+          } else if (p && p.status === "failed") {
+            qs.response = `「${def.title}」已失败（${p.failReason === "timeout" ? "限时已过" : "护送失败"}），请放弃后重接`;
           } else qs.response = `「${def.title}」还没完成`;
         } else if (action === "sys_quest_abandon" && def) {
           delete quests[id];
