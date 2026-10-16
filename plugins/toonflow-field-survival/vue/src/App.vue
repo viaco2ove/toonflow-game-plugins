@@ -18,7 +18,7 @@ declare global {
  *   - zoom ∈ [10, 30]：zoom 越大 → 视野越小（放大看脚下）
  */
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
-import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat } from "./bridge";
+import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
 import { loadStoryMapBundle, getStoryFirstMap, setStoryContext } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
@@ -2016,7 +2016,11 @@ function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: numbe
       lx: Math.max(1, (__size[0] ?? 3000) / 2 - 1),
       ly: Math.max(1, (__size[1] ?? 3000) / 2 - 1),
     },
-    list: list.map((e) => ({ ...e })),
+    // ★ 致命修复（同类）：state.entities 是 Vue 响应式对象，`{...e}` 只浅拷贝 ——
+    //   实体上的嵌套字段（bounty / _aiBag / buffs）读出来仍是 Proxy，而 Proxy 不能
+    //   postMessage（DataCloneError）→ 整个 tick 被静默丢弃 → 宿主 AI/特效全停
+    //   （表现：野怪不动、技能特效不消失）。用 toCloneable 深拷贝成纯对象。
+    list: toCloneable(list) as any[],
   };
 }
 
@@ -5638,7 +5642,16 @@ function loop(ts: number) {
         input: {
           dx: input.value.dx,
           dy: input.value.dy,
-          moveTo: input.value.moveTo,
+          // ★ 致命修复（点击寻路后"世界冻结"）：input 是 ref，`input.value.moveTo`
+          //   返回的是 Vue 响应式 Proxy，而 Proxy **不能**被 postMessage 的结构化克隆
+          //   （DataCloneError: #<Object> could not be cloned）→ bridge 里 try/catch 吞掉
+          //   → 这一 tick 根本没送到宿主 → 宿主 AI/特效衰减全停：
+          //   野怪不动、技能特效不消失、飘字不散，直到玩家走完（moveTo 变 null）才恢复。
+          //   方向键/摇杆移动没有这个问题，因为 syncKeys()/stickMove() 会把 moveTo 置 null。
+          //   这里显式取原始数值构造纯对象（不是 Proxy），保证可克隆。
+          moveTo: input.value.moveTo
+            ? { x: input.value.moveTo.x, y: input.value.moveTo.y }
+            : null,
         },
         // ★ 上报本地权威位姿：宿主侧只镜像、不再积分玩家输入（消除坐标双写）
         player: lastLocalPose ? { ...lastLocalPose } : undefined,

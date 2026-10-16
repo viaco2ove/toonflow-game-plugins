@@ -39,7 +39,34 @@ function isConnMode(): boolean {
 }
 
 export function sendToHost(action: string, params: Record<string, unknown> = {}): void {
-  const msg = { type: "tf_plugin_action", action, params };
+  postSafely({ type: "tf_plugin_action", action, params });
+}
+
+/**
+ * ★ 深拷贝成"可结构化克隆"的纯对象。
+ *
+ * 为什么需要：Vue 的响应式对象是 Proxy，而 **Proxy 不能被 postMessage 结构化克隆**
+ * （DataCloneError: #<Object> could not be cloned）。一旦 payload 里混进 Proxy
+ * （例如 ref 里的对象、`state.entities` 的嵌套字段被 `{...e}` 带出），postMessage 会抛错，
+ * 旧代码在 catch 里只打了条 warn —— 整条 tick 被静默丢弃，表现为：
+ *   宿主收不到 tick → 宿主侧 AI / 特效 life 衰减全停 →「野怪不动、技能特效留在原地不消失」。
+ * 只在 postMessage 失败时降级调用一次，正常路径零开销。
+ */
+export function toCloneable(value: any, depth = 0): any {
+  if (value === null || typeof value !== "object") return value;
+  if (depth > 6) return undefined;
+  if (Array.isArray(value)) return value.map((v) => toCloneable(v, depth + 1));
+  if (value instanceof Uint8Array || value instanceof Date) return value; // 结构化克隆原生支持
+  const out: Record<string, any> = {};
+  for (const k of Object.keys(value)) out[k] = toCloneable((value as any)[k], depth + 1);
+  return out;
+}
+
+/**
+ * 统一的 iframe → 宿主投递：standalone 走同窗口 dispatchEvent（不克隆），
+ * --conn/真实宿主走 postMessage；后者失败时用 toCloneable 深拷贝重试一次。
+ */
+function postSafely(msg: Record<string, unknown>): void {
   try {
     // ★ standalone（无父窗口且非 --conn）：postMessage 只会投递给当前窗口，
     //   与 dispatchEvent 兜底重复投递同一条消息（mockHost/宿主收到两份，
@@ -49,8 +76,17 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
       return;
     }
     window.parent.postMessage(msg, "*");
-  } catch {
-    /* ignore */
+  } catch (err) {
+    try {
+      const plain = { ...msg, params: toCloneable((msg as any).params ?? {}) };
+      window.parent.postMessage(plain, "*");
+      console.warn(
+        "[bridge] 载荷含不可克隆值（多为 Vue 响应式 Proxy），已深拷贝后重发：",
+        (msg as any).action,
+      );
+    } catch (err2) {
+      console.warn("[bridge] postMessage 失败（深拷贝后仍不可克隆）：", (msg as any).action, err, err2);
+    }
   }
 }
 
@@ -64,19 +100,11 @@ export function sendToHost(action: string, params: Record<string, unknown> = {})
  * --conn 模式：宿主必须在另一个窗口（iframe 包装），绝对不能 dispatchEvent 自消费（否则会和宿主竞争）。
  */
 export function sendTick(action: string, params: Record<string, unknown> = {}): void {
-  const msg = { type: "tf_plugin_tick", action, params };
-  try {
-    // ★ 调试提示：tick 是每帧高频消息，console.log 会刷屏；只对非 tick 动作打日志
-    if (action !== "tick") console.log("[bridge] sendTick →", action, "params keys =", params ? Object.keys(params) : []);
-    // ★ 同 sendToHost：standalone 只 dispatchEvent 一次，避免宿主/mockHost 双重消费
-    if (!isConnMode() && window.parent === window) {
-      window.dispatchEvent(new MessageEvent("message", { data: msg }));
-      return;
-    }
-    window.parent.postMessage(msg, "*");
-  } catch (err) {
-    console.warn("[bridge] sendTick 异常：", err, "msg =", msg);
-  }
+  // ★ 调试提示：tick 是每帧高频消息，console.log 会刷屏；只对非 tick 动作打日志
+  if (action !== "tick") console.log("[bridge] sendTick →", action, "params keys =", params ? Object.keys(params) : []);
+  // ★ 投递统一走 postSafely：payload 里混入 Vue 响应式 Proxy 时（曾导致"点击寻路后
+  //   宿主收不到 tick → 野怪不动 / 特效不消失"），会深拷贝成纯对象自动重试一次。
+  postSafely({ type: "tf_plugin_tick", action, params });
 }
 
 let loadedNotifyTimer: number | null = null;
