@@ -1057,7 +1057,7 @@ function onPropApply() {
     <div class="sep"></div>
     <div class="toolbar-group">
       <label class="inline">工具：</label>
-      <button class="btn" :class="{active: tool==='select'}" @click="setTool('select')" title="选择 (V)，ctrl +左键 移动地图,alt +左键 移动对象">🖱</button>
+      <button class="btn" :class="{active: tool==='select'}" @click="setTool('select')" title="选择 (V)，ctrl +左键 移动地图,alt +左键 移动对象,T +左键 查看xy 坐标">🖱</button>
       <button class="btn" :class="{active: tool==='draw'}" @click="setTool('draw')" title="绘制 (B)，Shift+左键连刷">🖌</button>
       <button class="btn" :class="{active: tool==='erase'}" @click="setTool('erase')" title="擦除 (E)">🧹</button>
       <button class="btn" :class="{active: tool==='place'}" @click="setTool('place')" title="放置 (P)">➕</button>
