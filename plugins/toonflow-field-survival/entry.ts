@@ -305,6 +305,64 @@ interface Entity {
   homeY?: number;
 }
 
+/* ── ★ 任务板系统（spec：events/任务事件/任务板.事件.md + 任务参考.list.md）────────
+   数据契约见 workshops/.../赦夜人冥夜走廊-第二季/events/任务事件/任务参考.list.md
+   任务定义 questBoard 可由三种来源下发：
+     · CLI 上传故事包 → pluginData["quest_defs"]
+     · 宿主/事件脚本 → action sys_quest_pool
+     · AI 生成      → action sys_quest_generate（task-speaker-agent）
+   进度 s.quests 只在宿主侧权威，随 sys_state 持久化。
+   ────────────────────────────────────────────────────────── */
+export interface QuestObjective {
+  kind: "kill" | "gather" | "arrive" | "talk" | "explore";
+  /** kill=野怪名（包含匹配）/ gather=物品名 / talk·explore=NPC 名或 zone 名 */
+  target?: string;
+  count?: number;
+  /** arrive/explore 的目标地图（前端关卡名） */
+  map?: string;
+  x?: number;
+  y?: number;
+  radius?: number;
+  /** true = 必须玩家点「到达/交付」按钮（护送·送达） */
+  confirm?: boolean;
+  uid?: string;
+}
+export interface QuestDef {
+  id: string;
+  title: string;
+  type: "kill" | "gather" | "escort" | "deliver" | "explore" | "talk";
+  giver?: string;
+  map?: string;
+  desc?: string;
+  level?: number;
+  objectives: QuestObjective[];
+  reward?: { exp?: number; money?: number; items?: Array<{ name: string; count: number }> };
+  repeat?: boolean;
+  /** 限时（tick，1 tick = 100ms）；0/缺省 = 不限时 */
+  timeLimitTicks?: number;
+  turnInMap?: string;
+  /** 护送/送达：接取时生成的跟随货物 */
+  cargo?: { name?: string; hp?: number; gid?: number };
+  /** 交付时从背包扣除的物品；缺省按 objectives 里 gather 目标同名扣 */
+  consume?: Array<{ name: string; count: number }>;
+  /** 完成时写的玩家 flag（供事件系统 flag_check 用） */
+  flags?: { accept?: string; done?: string };
+  /** AI 生成时的来源标记 */
+  from?: string;
+}
+export interface QuestProgress {
+  id: string;
+  status: "active" | "done" | "turned" | "failed";
+  kill?: Record<string, number>;
+  gather?: Record<string, number>;
+  arrived?: boolean;
+  talked?: Record<string, number>;
+  cargoId?: string;
+  acceptedTick?: number;
+  acceptedMap?: string;
+  turnedTick?: number;
+}
+
 interface Chest { id: string; x: number; y: number; opened: boolean; tier?: number; loot?: Record<string, any>; }
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
@@ -332,6 +390,30 @@ export interface FieldSurvivalState {
   skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string; effects_type?: string }>;
   /** ★ game.md 物品修改：用户改过的物品参数（按展示名存），持久化到 t_plugin_session_data */
   itemMeta?: Record<string, ItemMeta>;
+  /** ★ 野怪击杀奖励：全局掉落表（[{name,w}]）；地图 archetype.dropTable 优先 */
+  dropTable?: Array<{ name: string; w: number }>;
+  /** ★ 野怪击杀奖励：暗核授予技能的候选池（宿主/前端用 sys_skill_pool 下发）；空 = 让 AI 自由生成 */
+  skillPool?: string[];
+  /** ★ 野怪击杀奖励：本次使用核类物品命中了「AI 判技能」骰子（handle_action 消费后清） */
+  _pendingCoreGrant?: boolean;
+  /** ★ 任务板：可接/已接任务定义（宿主/CLI/AI 下发，随 sys_state 持久化） */
+  questBoard?: QuestDef[];
+  /** ★ 任务板：玩家任务进度（宿主侧权威，key = QuestDef.id） */
+  quests?: Record<string, QuestProgress>;
+  /** ★ 任务板：最近一次操作的反馈文案（前端 toast） */
+  questNotice?: string;
+  /** ★ 任务板：AI 对某个任务的回答（sys_quest_ask 结果） */
+  questAiText?: string;
+  /** ★ 任务板：正在等待 AI 回答（前端显示「思考中」） */
+  _questAsking?: boolean;
+  /** ★ 任务板：前端渲染视图（宿主每 tick 重算，前端只读） */
+  questView?: {
+    available: Array<Record<string, any>>;
+    active: Array<Record<string, any>>;
+    done: Array<Record<string, any>>;
+    turned: Array<Record<string, any>>;
+    playerLevel: number;
+  };
   // 用户参数卡派生
   skills: SkillSlot[];
   items: ItemSlot[];
@@ -463,8 +545,38 @@ const AI_GATHER_COOLDOWN_TICKS = 200;  // 采集点冷却（tick）
 const AI_GATHER_ARRIVE_M = 1.2;        // 采集到达判定（米）
 const AI_INTERACT_M = 2;               // 交互到达判定（米）
 const AI_BAG_MAX_SLOTS = 8;            // AI 私藏格数上限（与 sensor.ts inventoryFull 判据一致）
+
+/* ── ★ 野怪击杀奖励（spec：events/野怪击杀奖励.事件.md）────────────────
+   链路：击杀野怪 → 概率在尸体处掉宝箱 → 走过去开启 → 物资（含暗核）
+        → 使用暗核 → 经验 + 有概率触发 AI 判定获得什么技能
+   数据驱动点（都不是硬编码故事内容）：
+     · 掉落表：地图 enemy_archetypes[].dropTable 或 s.dropTable（[{name,w}]）
+     · 技能池：s.skillPool（宿主/前端可下发，action sys_skill_pool）
+     · 核类物品判定：itemMeta[name].grant==="skill" 或 CORE_ITEM_RE
+   ────────────────────────────────────────────────────────── */
+const KILL_DROP_CHEST_P = 0.35;   // 击杀掉宝箱概率
+/** 宝箱物资默认掉落表（w=权重；地图 archetype.dropTable 可整体覆盖） */
+const DEFAULT_DROP_TABLE: Array<{ name: string; w: number }> = [
+  { name: "干粮", w: 26 }, { name: "荧光石", w: 18 }, { name: "兽骨", w: 16 },
+  { name: "野兽皮", w: 14 }, { name: "锋利的爪", w: 12 }, { name: "暗核", w: 14 },
+];
+/** 「核类物品」名命中规则（暗核 / 湮核 / 源核 / 核晶…）：使用 → 经验 + 概率 AI 授技 */
+const CORE_ITEM_RE = /暗核|湮核|源核|核晶|兽核/;
+const CORE_USE_EXP = 40;          // 使用一个核类物品给的经验
+const CORE_SKILL_P = 0.5;         // 触发 AI 判定「获得什么技能」的概率
+const CORE_AGENT_TIMEOUT_MS = 20000;  // 问 AI「给什么技能」的超时（超时走兜底，不卡玩家）
+/** AI 未返回 / 未命中池子时的兜底技能名（仍走 inferSkillType 推断类型） */
+const CORE_FALLBACK_SKILLS = ["碎石击", "疾风步", "回气术"];
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) =>
   Math.hypot(a.x - b.x, a.y - b.y);
+
+/* ── ★ 任务板常量 ───────────────────────────────────────────── */
+const QUEST_TITLE_MAX = 12;          // 任务标题最长字数（与技能名同口径，超了静默截断）
+const QUEST_ARRIVE_DEFAULT_R = 3;    // arrive/explore 默认判定半径（米）
+const QUEST_CARGO_PREFIX = "questcargo_";  // 护送货物实体 id 前缀
+const QUEST_AGENT_TIMEOUT_MS = 20000;      // 问 AI（生成任务 / 任务详情）超时
+const QUEST_TYPE_SET = new Set(["kill", "gather", "escort", "deliver", "explore", "talk"]);
+const QUEST_KIND_SET = new Set(["kill", "gather", "arrive", "talk", "explore"]);
 
 /* ============================================================
    ★ v4 区域刷新（Region Respawn）+ 城镇安全区 + 敌人探测/脱战
@@ -918,6 +1030,61 @@ function tickAIOrders(s: any) {
   });
 }
 
+/** 按权重抽一项（掉落表用）。表空 / 权重全 0 → null */
+function pickWeighted<T extends { w?: number }>(list: T[] | undefined | null): T | null {
+  const arr = Array.isArray(list) ? list.filter((x) => x && typeof x === "object") : [];
+  if (!arr.length) return null;
+  const total = arr.reduce((a, b) => a + Math.max(0, num((b as any).w, 1)), 0);
+  if (total <= 0) return arr[Math.floor(rnd(0, arr.length))] || null;
+  let r = rnd(0, total);
+  for (const it of arr) {
+    r -= Math.max(0, num((it as any).w, 1));
+    if (r <= 0) return it;
+  }
+  return arr[arr.length - 1] || null;
+}
+
+/** 是否「核类物品」（暗核）：使用 → 给经验 + 有概率触发 AI 判技能。
+ *  判定顺序：itemMeta[name].grant === "skill" / .core === true（数据驱动）→ 名字命中 CORE_ITEM_RE */
+function isCoreItem(s: FieldSurvivalState, it: { name?: string } | undefined): boolean {
+  const nm = str(it?.name);
+  if (!nm) return false;
+  const meta = ((s.itemMeta || {}) as Record<string, any>)[nm];
+  if (meta && typeof meta === "object") {
+    if (String(meta.grant || "") === "skill" || meta.core === true) return true;
+  }
+  return CORE_ITEM_RE.test(nm);
+}
+
+/** ★ 野怪击杀奖励①：击杀野怪 → 概率在尸体处掉一个宝箱（走过去开启）
+ *  掉落表优先级：实体 dropTable（来自地图 enemy_archetypes[].dropTable）→ s.dropTable → DEFAULT_DROP_TABLE */
+function dropKillChest(s: FieldSurvivalState, target: Entity): void {
+  if (Math.random() >= KILL_DROP_CHEST_P) return;
+  const table =
+    (Array.isArray((target as any).dropTable) && (target as any).dropTable.length
+      ? (target as any).dropTable
+      : Array.isArray(s.dropTable) && s.dropTable.length
+        ? s.dropTable
+        : DEFAULT_DROP_TABLE) as Array<{ name: string; w: number }>;
+  const pick = pickWeighted(table);
+  const item = str(pick?.name, "干粮");
+  const bounty = (target as any).bounty as { exp?: number; money?: number } | undefined;
+  const lv = Math.max(1, Math.round(num(target.level, 1)));
+  const exp = Math.max(5, Math.round(num(bounty?.exp, 8 + lv * 4) * 0.5));
+  const money = Math.max(3, Math.round(num(bounty?.money, 5 + lv * 3) * 0.5));
+  s.chests = Array.isArray(s.chests) ? s.chests : [];
+  s.chests.push({
+    id: `chest_kill_${s.tick}_${s.chests.length}`,
+    x: clampX(target.x),
+    y: clampY(target.y),
+    opened: false,
+    loot: { exp, money, item },
+    tier: 1,
+  } as Chest);
+  floater(s, "掉落宝箱", target.x, target.y - 40);
+  pushEvent(s, `${target.name} 掉落了一个宝箱`);
+}
+
 function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity) {
   target.hp = clamp(target.hp - amount, 0, target.maxHp);
   // ★ game.md 普攻特效：被击者白闪 + 命中火花/爆炸；攻击者小跳（amount=0 的「未命中」占位不触发）
@@ -940,6 +1107,18 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
     if (target.hp <= 0 && target.alive) {
     (target as any).deathMs = 400;   // ★ P1 打击感：死亡淡出 400ms（alive 不清，等淡出结束后 tick 循环清）
     // target.alive = false;           // ← 不清！alive=false 会让前端不渲染实体，看不到淡出
+    // ★ 任务板：护送货物被打掉 → 对应任务判失败（玩家可在任务板放弃后重接）
+    if (String(target.id).startsWith(QUEST_CARGO_PREFIX)) {
+      const qid = String(target.id).slice(QUEST_CARGO_PREFIX.length);
+      const qp = (s.quests || {})[qid];
+      if (qp && qp.status === "active") {
+        qp.status = "failed";
+        qp.cargoId = "";
+        const qd = questById(s, qid);
+        s.questNotice = `护送失败：${qd ? qd.title : qid}（货物被打掉了）`;
+        pushEvent(s, `护送失败：${qd ? qd.title : qid}`);
+      }
+    }
     if (target.side === "enemy") {
       s.kills += 1;
       // 优先地图 archetype 的赏金（map-gener agent 产出）
@@ -952,6 +1131,10 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
         const drop = ["野兽皮", "锋利的爪", "兽骨"][Math.floor(Math.random() * 3)];
         s.drops.push(drop);
       }
+      // ★ 野怪击杀奖励①：概率在尸体处掉宝箱（玩家走过去开启，loot 里可能开出暗核）
+      dropKillChest(s, target);
+      // ★ 任务板：击杀类任务进度（名字包含匹配："尸傀王" 也算 "尸傀"）
+      noteQuestKill(s, target.name);
       pushEvent(s, `击败 ${target.name}，获得 ${expGain} 经验、${moneyGain} 金钱`);
       // ★ v5：与用户组队的角色分享经验并升级
       grantPartyExp(s, expGain);
@@ -1749,7 +1932,10 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       gainPlayerExp(s, expGain);      // ★ 等级系统：开箱经验同样走升级判定
       s.money += moneyGain;
       s.drops.push(drop);
+      // ★ 野怪击杀奖励：开箱物资真的进背包（原本只进 s.drops 日志，暗核点不到「使用」）
+      addBagItemToCard(s, drop, 1);
       floater(s, `宝箱 +${expGain}exp`, c.x, c.y);
+      floater(s, `+${drop}`, c.x, c.y - 22);
       pushEvent(s, `打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱`);
     }
   });
@@ -2303,6 +2489,659 @@ function applyBagAttributes(s: FieldSurvivalState, opts?: { full?: boolean }): v
  *   无专属特效的统一走「角色小跳 + 飘字」（actionBobMs + floater）
  *   durability：-1 永久；>0 每用一次 -1，用完损毁 1 个；attribute 使用不消耗
  */
+/** 把物品合并进玩家背包（参数卡 items 链），返回合并后的数量。
+ *  ★ 野怪击杀奖励：开箱产出的物资（含暗核）必须真的进背包，否则玩家点不到「使用」。 */
+function addBagItemToCard(s: FieldSurvivalState, name: string, count = 1): number {
+  const nm = str(name).trim().slice(0, 20);
+  const n = Math.max(1, Math.round(num(count, 1)));
+  if (!nm) return 0;
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  const exist = bag.find((x) => sameName(x.name, nm));
+  if (exist) exist.count += n;
+  else bag.push({ name: nm, count: n, kind: guessKind(nm), heal: 0, mp: 0 } as BagItem);
+  patchCard(s, { items: serializeBag(bag, card.items) });   // patchCard 内会重建 s.items
+  applyBagAttributes(s);
+  // ★ 任务板：采集类任务进度（记累计获得，用掉不影响已完成的进度）
+  noteQuestGather(s, nm, n);
+  return exist ? exist.count : n;
+}
+
+/* ============================================================
+   ★ 任务板系统（quests）
+   ------------------------------------------------------------
+   定义来源：pluginData["quest_defs"]（CLI 上传） / sys_quest_pool（宿主·事件）
+             / sys_quest_generate（AI 生成）
+   进度来源：damage() 击杀 · addBagItemToCard 入包 · sys_chat 对话 · sys_quest_arrive 到达
+   状态机：active → done（目标达成，待交）→ turned（已领奖）｜active → failed（护送货物被打掉）
+   ============================================================ */
+function cleanTitle(v: unknown): string { return str(v).trim().slice(0, QUEST_TITLE_MAX); }
+
+function questList(s: FieldSurvivalState): QuestDef[] {
+  return Array.isArray(s.questBoard) ? s.questBoard.filter((q) => q && str(q.id)) : [];
+}
+function questById(s: FieldSurvivalState, id: string): QuestDef | null {
+  const k = str(id).trim();
+  return questList(s).find((q) => String(q.id) === k) || null;
+}
+function ensureProg(s: FieldSurvivalState, id: string): QuestProgress {
+  if (!s.quests || typeof s.quests !== "object") s.quests = {};
+  const k = String(id);
+  if (!s.quests[k]) s.quests[k] = { id: k, status: "active" };
+  return s.quests[k];
+}
+
+/** 目标需求数量（缺省 1） */
+function objNeed(o: QuestObjective): number {
+  const c = Math.round(num(o.count, 1));
+  return c > 0 ? c : 1;
+}
+/** 目标已有数量（按 objective 的 target 记 key，包含匹配在累加侧处理） */
+function objHave(o: QuestObjective, p: QuestProgress): number {
+  if (o.kind === "kill") return num((p.kill || {})[str(o.target)], 0);
+  if (o.kind === "gather") return num((p.gather || {})[str(o.target)], 0);
+  if (o.kind === "talk") return num((p.talked || {})[str(o.uid || o.target)], 0);
+  if (o.kind === "arrive" || o.kind === "explore") return p.arrived ? 1 : 0;
+  return 0;
+}
+function objectivesMet(def: QuestDef, p: QuestProgress): boolean {
+  const objs = Array.isArray(def.objectives) ? def.objectives : [];
+  if (!objs.length) return false;
+  return objs.every((o) => objHave(o, p) >= objNeed(o));
+}
+
+/** 目标达成 → status 转 done（只做一次，用于弹「可交任务」提示） */
+function refreshQuestStatus(s: FieldSurvivalState, def: QuestDef): void {
+  const p = (s.quests || {})[String(def.id)];
+  if (!p || p.status !== "active") return;
+  if (!objectivesMet(def, p)) return;
+  p.status = "done";
+  s.questNotice = `「${def.title}」已完成，回任务板交任务`;
+  pushEvent(s, `任务完成：${def.title}`);
+}
+
+/** ★ 进度钩子①：击杀野怪（名字包含匹配，"尸傀王" 也算 "尸傀"） */
+function noteQuestKill(s: FieldSurvivalState, mobName: string): void {
+  const nm = str(mobName).trim();
+  if (!nm) return;
+  for (const def of questList(s)) {
+    const p = (s.quests || {})[String(def.id)];
+    if (!p || p.status !== "active") continue;
+    let hit = false;
+    for (const o of def.objectives || []) {
+      if (o.kind !== "kill") continue;
+      const t = str(o.target).trim();
+      if (!t) continue;
+      if (nm === t || nm.includes(t) || t.includes(nm)) {
+        if (!p.kill) p.kill = {};
+        p.kill[t] = num(p.kill[t], 0) + 1;
+        hit = true;
+      }
+    }
+    if (hit) refreshQuestStatus(s, def);
+  }
+}
+
+/** ★ 进度钩子②：物品入包（记累计获得，用掉不影响） */
+function noteQuestGather(s: FieldSurvivalState, itemName: string, count = 1): void {
+  const nm = str(itemName).trim();
+  const n = Math.max(1, Math.round(num(count, 1)));
+  if (!nm) return;
+  for (const def of questList(s)) {
+    const p = (s.quests || {})[String(def.id)];
+    if (!p || p.status !== "active") continue;
+    let hit = false;
+    for (const o of def.objectives || []) {
+      if (o.kind !== "gather") continue;
+      const t = str(o.target).trim();
+      if (!t) continue;
+      if (nm === t || nm.includes(t) || t.includes(nm)) {
+        if (!p.gather) p.gather = {};
+        p.gather[t] = num(p.gather[t], 0) + n;
+        hit = true;
+      }
+    }
+    if (hit) refreshQuestStatus(s, def);
+  }
+}
+
+/** ★ 进度钩子③：与目标 NPC 对话过（sys_chat 命中 uid 或名字） */
+function noteQuestTalk(s: FieldSurvivalState, uid: string, npcName: string): void {
+  const u = str(uid).trim();
+  const nm = str(npcName).trim();
+  if (!u && !nm) return;
+  for (const def of questList(s)) {
+    const p = (s.quests || {})[String(def.id)];
+    if (!p || p.status !== "active") continue;
+    let hit = false;
+    for (const o of def.objectives || []) {
+      if (o.kind !== "talk") continue;
+      const key = str(o.uid || o.target).trim();
+      if (!key) continue;
+      if ((u && key === u) || (nm && (key === nm || nm.includes(key) || key.includes(nm)))) {
+        if (!p.talked) p.talked = {};
+        p.talked[key] = num(p.talked[key], 0) + 1;
+        hit = true;
+      }
+    }
+    if (hit) refreshQuestStatus(s, def);
+  }
+}
+
+/** ★ 进度钩子④（每 tick）：非 confirm 的 arrive/explore 目标走到即完成；护送货物跟随玩家 */
+function syncQuestArriveAuto(s: FieldSurvivalState): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const lv = str(s.levelName);
+  for (const def of questList(s)) {
+    const p = (s.quests || {})[String(def.id)];
+    if (!p) continue;
+    // 护送货物：跟随玩家（不依赖队伍/组队逻辑，自持一段跟随）
+    if (p.status === "active" && p.cargoId) {
+      const cargo = (s.entities || []).find((e) => String(e.id) === String(p.cargoId));
+      if (cargo && cargo.alive !== false) {
+        const d = dist(cargo, me);
+        // ★ 直接位移跟随（不依赖 step() 的速度积分，避免货物被其它 AI 分支抢走控制权）
+        if (d > 2.2) {
+          const stepLen = Math.min(d - 2.0, 0.32);   // 每 tick 上限 ≈ 3.2 m/s
+          const ux = (me.x - cargo.x) / (d || 1);
+          const uy = (me.y - cargo.y) / (d || 1);
+          (cargo as Entity).x += ux * stepLen;
+          (cargo as Entity).y += uy * stepLen;
+          (cargo as Entity).facing = ux > 0 ? 0 : 180;
+        }
+        (cargo as Entity).vx = 0;
+        (cargo as Entity).vy = 0;
+      }
+    }
+    if (p.status !== "active") continue;
+    for (const o of def.objectives || []) {
+      if (o.kind !== "arrive" && o.kind !== "explore") continue;
+      if (o.confirm === true) continue;      // 要点按钮的交给 sys_quest_arrive
+      if (str(o.map) && str(o.map) !== lv) continue;
+      if (o.x === undefined || o.y === undefined) continue;
+      const r = Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R));
+      if (dist(me, { x: num(o.x, 0), y: num(o.y, 0) }) <= r) {
+        p.arrived = true;
+        refreshQuestStatus(s, def);
+      }
+    }
+  }
+}
+
+/** 判定玩家当前是否满足某个 arrive/explore 目标（点「到达」时校验） */
+function questArriveOk(s: FieldSurvivalState, def: QuestDef): { ok: boolean; msg: string } {
+  const me = playerEntity(s);
+  if (!me) return { ok: false, msg: "玩家不存在" };
+  const lv = str(s.levelName);
+  for (const o of def.objectives || []) {
+    if (o.kind !== "arrive" && o.kind !== "explore") continue;
+    const r = Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R));
+    if (str(o.map) && str(o.map) !== lv) return { ok: false, msg: `还没到 ${o.map}` };
+    if (o.x === undefined || o.y === undefined) return { ok: true, msg: "" };
+    const d = dist(me, { x: num(o.x, 0), y: num(o.y, 0) });
+    if (d > r) return { ok: false, msg: `还差 ${d.toFixed(1)} 米到目的地` };
+  }
+  return { ok: true, msg: "" };
+}
+
+/** 接取护送任务：在玩家身边生成货物实体 */
+function spawnQuestCargo(s: FieldSurvivalState, def: QuestDef, p: QuestProgress): void {
+  const me = playerEntity(s);
+  if (!me) return;
+  const cfg = (def.cargo || {}) as { name?: string; hp?: number; gid?: number };
+  const hp = Math.max(1, Math.round(num(cfg.hp, 50)));
+  const id = QUEST_CARGO_PREFIX + String(def.id);
+  if ((s.entities || []).some((e) => String(e.id) === id)) { p.cargoId = id; return; }
+  const ang = rnd(0, Math.PI * 2);
+  const e = {
+    id,
+    name: str(cfg.name).trim().slice(0, 12) || "货物",
+    side: "ally",
+    x: me.x + Math.cos(ang) * 1.2,
+    y: me.y + Math.sin(ang) * 1.2,
+    vx: 0, vy: 0,
+    hp, maxHp: hp,
+    mp: 0, maxMp: 0,
+    exp: 0, expToNext: 0,
+    level: Math.max(1, Math.round(num(def.level, 1))),
+    atk: 0, def: 0, speed: 2.2,
+    facing: 180, cooldown: 0, alive: true,
+    homeX: me.x, homeY: me.y,
+    camp: "friendly",
+    entity_type: "QUEST_CARGO",
+    gid: num(cfg.gid, 0) || undefined,
+    _questCargo: String(def.id),
+  } as unknown as Entity;
+  (s.entities as Entity[]).push(e);
+  p.cargoId = id;
+}
+function removeQuestCargo(s: FieldSurvivalState, p: QuestProgress): void {
+  const id = str(p.cargoId);
+  if (!id) return;
+  const i = (s.entities || []).findIndex((e) => String(e.id) === id);
+  if (i >= 0) s.entities.splice(i, 1);
+  p.cargoId = "";
+}
+
+/** 把任意来源（AI / JSON / 参数卡）的任务对象收敛成合法 QuestDef；非法返回 null */
+function normalizeQuestDef(raw: any, idx = 0): QuestDef | null {
+  if (!raw || typeof raw !== "object") return null;
+  const id = str(raw.id).trim() || `Q${String(idx + 1).padStart(2, "0")}`;
+  const title = cleanTitle(raw.title || raw.name || id);
+  if (!title) return null;
+
+  // objectives
+  const objectives: QuestObjective[] = [];
+  const rawObjs = Array.isArray(raw.objectives) ? raw.objectives : [];
+  for (const o of rawObjs) {
+    if (!o || typeof o !== "object") continue;
+    const kind = str((o as any).kind).trim();
+    if (!QUEST_KIND_SET.has(kind)) continue;
+    const obj: QuestObjective = { kind: kind as QuestObjective["kind"] };
+    const t = str((o as any).target).trim();
+    if (t) obj.target = t.slice(0, 20);
+    const c = Math.round(num((o as any).count, 1));
+    obj.count = c > 0 ? c : 1;
+    const m = str((o as any).map).trim();
+    if (m) obj.map = m;
+    if ((o as any).x !== undefined && (o as any).y !== undefined) {
+      obj.x = num((o as any).x, 0); obj.y = num((o as any).y, 0);
+    }
+    if ((o as any).radius !== undefined) obj.radius = Math.max(0.5, num((o as any).radius, QUEST_ARRIVE_DEFAULT_R));
+    if ((o as any).confirm === true) obj.confirm = true;
+    const u = str((o as any).uid).trim();
+    if (u) obj.uid = u;
+    objectives.push(obj);
+  }
+  if (!objectives.length) {
+    // 没有 objectives → 从 type/target/count 推断一条
+    const t = str((raw as any).target).trim().slice(0, 20);
+    const c = Math.max(1, Math.round(num((raw as any).count, 1)));
+    if (t && c > 0) {
+      const inferred: QuestObjective = { kind: "kill", target: t, count: c };
+      objectives.push(inferred);
+    }
+  }
+
+  // type：显式合法 > 从 objectives 推断 > 兜底
+  let type = str((raw as any).type).trim();
+  if (!QUEST_TYPE_SET.has(type)) {
+    const first = objectives[0];
+    if (first?.kind === "kill") type = "kill";
+    else if (first?.kind === "gather") type = "gather";
+    else if (first?.kind === "talk") type = "talk";
+    else if (first?.kind === "arrive" || first?.kind === "explore") {
+      type = (raw as any).cargo ? "escort" : (first.kind === "explore" ? "explore" : "deliver");
+    } else type = "explore";
+  }
+
+  const def: QuestDef = {
+    id,
+    title,
+    type: type as QuestDef["type"],
+    giver: str((raw as any).giver).trim() || "任务板",
+    objectives,
+  };
+  const map = str((raw as any).map).trim();
+  if (map) def.map = map;
+  const desc = str((raw as any).desc ?? (raw as any).description).trim();
+  if (desc) def.desc = desc.slice(0, 200);
+  const lv = Math.round(num((raw as any).level, 0));
+  if (lv > 0) def.level = lv;
+  if ((raw as any).repeat === true) def.repeat = true;
+  const tl = Math.round(num((raw as any).timeLimitTicks, 0));
+  if (tl > 0) def.timeLimitTicks = tl;
+  const tim = str((raw as any).turnInMap).trim();
+  if (tim) def.turnInMap = tim;
+  if ((raw as any).cargo && typeof (raw as any).cargo === "object") {
+    def.cargo = {
+      name: str((raw as any).cargo.name).trim().slice(0, 12) || "货物",
+      hp: Math.max(1, Math.round(num((raw as any).cargo.hp, 50))),
+      gid: Math.round(num((raw as any).cargo.gid, 0)) || undefined,
+    };
+  }
+  if (Array.isArray((raw as any).consume)) {
+    const cs = (raw as any).consume
+      .map((c: any) => ({ name: str(c?.name).trim().slice(0, 20), count: Math.max(1, Math.round(num(c?.count, 1))) }))
+      .filter((c: any) => !!c.name);
+    if (cs.length) def.consume = cs;
+  }
+  if ((raw as any).flags && typeof (raw as any).flags === "object") {
+    const f = (raw as any).flags as Record<string, any>;
+    const fl: { accept?: string; done?: string } = {};
+    if (str(f.accept).trim()) fl.accept = str(f.accept).trim();
+    if (str(f.done).trim()) fl.done = str(f.done).trim();
+    if (fl.accept || fl.done) def.flags = fl;
+  }
+  const rw = (raw as any).reward;
+  if (rw && typeof rw === "object") {
+    const reward: QuestDef["reward"] = {};
+    const exp = Math.round(num((rw as any).exp, 0));
+    const money = Math.round(num((rw as any).money, 0));
+    if (exp > 0) reward.exp = exp;
+    if (money > 0) reward.money = money;
+    const items = Array.isArray((rw as any).items)
+      ? (rw as any).items
+          .map((it: any) => ({ name: str(it?.name).trim().slice(0, 20), count: Math.max(1, Math.round(num(it?.count, 1))) }))
+          .filter((it: any) => !!it.name)
+      : [];
+    if (items.length) reward.items = items;
+    if (reward.exp || reward.money || reward.items) def.reward = reward;
+  }
+  const from = str((raw as any).from).trim();
+  if (from) def.from = from;
+  return def;
+}
+
+/** 写玩家 flag（与事件系统同源：t_plugin_session_data，key=player_flags） */
+async function setPlayerFlag(ctx: PluginGameContext | undefined, key: string, value: unknown): Promise<void> {
+  const api = ctx?.tsApi?.pluginData;
+  if (!api?.get || !api?.set) return;
+  const k = str(key).trim();
+  if (!k) return;
+  try {
+    const cur = (await api.get("player_flags")) as Record<string, unknown> | null;
+    const next = { ...((cur && typeof cur === "object" ? cur : {}) as Record<string, unknown>), [k]: value };
+    await api.set("player_flags", next);
+  } catch { /* 落库失败不阻断玩法 */ }
+}
+
+/** 从玩家背包扣物品（交任务消耗用） */
+function removeBagItemFromCard(s: FieldSurvivalState, name: string, count = 1): number {
+  const nm = str(name).trim();
+  const n = Math.max(1, Math.round(num(count, 1)));
+  if (!nm) return 0;
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  const slot = bag.find((x) => sameName(x.name, nm));
+  if (!slot) return 0;
+  const take = Math.min(n, Math.max(0, Math.round(num(slot.count, 0))));
+  slot.count -= take;
+  const next = bag.filter((x) => Math.round(num(x.count, 0)) > 0);
+  patchCard(s, { items: serializeBag(next, card.items) });
+  applyBagAttributes(s);
+  return take;
+}
+
+/** 供前端渲染的任务视图（available / active / done / turned） */
+function buildQuestView(s: FieldSurvivalState): void {
+  const board = questList(s);
+  const me = playerEntity(s);
+  const lv = str(s.levelName);
+  const mapRow = (def: QuestDef, status: string) => {
+    const p = (s.quests || {})[String(def.id)];
+    const objectives = (def.objectives || []).map((o) => ({
+      kind: o.kind,
+      target: str(o.target),
+      have: p ? objHave(o, p) : 0,
+      need: objNeed(o),
+      confirm: o.confirm === true,
+      map: str(o.map),
+    }));
+    const met = p ? objectivesMet(def, p) : false;
+    return {
+      id: String(def.id),
+      title: def.title,
+      type: def.type,
+      giver: str(def.giver) || "任务板",
+      desc: str(def.desc),
+      level: Math.max(1, Math.round(num(def.level, 1))),
+      status,
+      repeat: def.repeat === true,
+      objectives,
+      reward: def.reward || { exp: 0, money: 0, items: [] },
+      canTurnIn: status === "done",
+      canArrive: status === "active" && (def.objectives || []).some((o) => (o.kind === "arrive" || o.kind === "explore") && o.confirm === true),
+      /** 当前位置是否已满足 arrive 判定（前端据此点亮「到达」） */
+      atDest: status === "active" ? questArriveOk(s, def).ok : false,
+      progress: objectives.map((o) => `${o.target || o.kind} ${o.have}/${o.need}`).join("，"),
+      met,
+      cargoAlive: p && p.cargoId ? !!(s.entities || []).find((e) => String(e.id) === String(p.cargoId) && e.alive !== false) : false,
+    };
+  };
+  // 可接：本图（或全图）任务 + 未接 / 已放弃 / repeat 且已交
+  const available: any[] = [];
+  const active: any[] = [];
+  const done: any[] = [];
+  const turned: any[] = [];
+  for (const def of board) {
+    const p = (s.quests || {})[String(def.id)];
+    const st = p ? String(p.status) : "";
+    if (st === "active" || st === "failed") active.push(mapRow(def, st));
+    else if (st === "done") done.push(mapRow(def, "done"));
+    else if (st === "turned") {
+      if (def.repeat) available.push(mapRow(def, "available"));
+      else turned.push(mapRow(def, "turned"));
+    } else {
+      if (!def.map || !lv || def.map === lv) available.push(mapRow(def, "available"));
+      else available.push(mapRow(def, "away"));
+    }
+  }
+  (s as any).questView = { available, active, done, turned, playerLevel: Math.max(1, Math.round(num(me?.level, 1))) };
+}
+
+/** 从 pluginData["quest_defs"] 载入任务定义（只在 board 为空时，避免覆盖后下发的内容） */
+async function ensureQuestDefs(ctx: PluginGameContext | undefined, s: FieldSurvivalState): Promise<number> {
+  if (Array.isArray(s.questBoard) && s.questBoard.length) return 0;
+  const get = ctx?.tsApi?.pluginData?.get;
+  if (!get) return 0;
+  try {
+    const raw = await get("quest_defs");
+    const arr = Array.isArray(raw) ? raw
+      : Array.isArray((raw as any)?.quests) ? (raw as any).quests
+      : Array.isArray((raw as any)?.defs) ? (raw as any).defs
+      : [];
+    const defs = arr.map((x: any, i: number) => normalizeQuestDef(x, i)).filter(Boolean) as QuestDef[];
+    if (!defs.length) return 0;
+    s.questBoard = defs;
+    return defs.length;
+  } catch { return 0; }
+}
+
+/** ★ AI 生成可接任务：调 task-speaker-agent，输出收敛成 QuestDef[] 并入 board */
+async function generateQuestsByAI(s: FieldSurvivalState, ctx: PluginGameContext | undefined, n = 3): Promise<number> {
+  const count = Math.max(1, Math.min(6, Math.round(num(n, 3))));
+  const me = playerEntity(s);
+  const lv = Math.max(1, Math.round(num(me?.level, 1)));
+  const prompt =
+    `你是任务板。请为当前地图「${str(s.levelName) || "未知"}」生成 ${count} 个适合 Lv.${lv} 的委托任务。\n` +
+    `只输出一个 JSON 数组，不要任何解释文字，每项字段：\n` +
+    `{"id":"Qxx","title":"任务名(不超过12字)","type":"kill或gather或escort或deliver或explore或talk","giver":"发布者","desc":"一句话描述","level":数字,\n` +
+    `"objectives":[{"kind":"kill或gather或arrive或talk或explore","target":"目标名","count":数字,"map":"地图名","x":数字,"y":数字,"radius":数字,"confirm":true或false}],\n` +
+    `"reward":{"exp":数字,"money":数字,"items":[{"name":"物品名","count":数字}]},"repeat":false}`;
+  let rawText = "";
+  try {
+    if (ctx?.tsApi?.agent) {
+      const r = await withTimeout(
+        ctx.tsApi.agent.run("task-speaker-agent", {
+          npcId: "quest_board",
+          npcName: "任务板",
+          npcCard: { id: "quest_board", name: "任务板", roleType: "npc", level: lv, description: "张贴委托的木牌，代雇主发布任务" },
+          isNeutral: true,
+          userText: prompt,
+          lastResp: null,
+          mode: "response",
+          context: { storyDigest: buildStoryDigest(ctx), playerLevel: lv, mapName: str(s.levelName) },
+        }),
+        QUEST_AGENT_TIMEOUT_MS,
+        "quest agent 超时",
+      );
+      rawText = String(r?.output?.text || "")
+        .replace(/^\s*```[a-zA-Z]*\s*/, "")
+        .replace(/\s*```\s*$/, "")
+        .trim();
+    }
+  } catch { /* AI 不可用 → 兜底 */ }
+  let arr: any[] = [];
+  if (rawText) {
+    try {
+      const j = JSON.parse(rawText);
+      arr = Array.isArray(j) ? j : Array.isArray((j as any)?.quests) ? (j as any).quests : [j];
+    } catch { /* 非 JSON → 兜底 */ }
+  }
+  if (!arr.length) {
+    arr = [{
+      id: `QAI${String(Object.keys(s.quests || {}).length + 1).padStart(2, "0")}`,
+      title: "清剿周边湮物",
+      type: "kill",
+      giver: "任务板",
+      desc: "任务板新贴出的一张委托：清掉附近的湮物。",
+      level: lv,
+      objectives: [{ kind: "kill", target: "湮物", count: 5 }],
+      reward: { exp: 60 + lv * 20, money: 40 + lv * 10 },
+      repeat: true,
+      from: "ai-fallback",
+    }];
+  }
+  const existIds = new Set(questList(s).map((q) => String(q.id)));
+  let added = 0;
+  for (const item of arr) {
+    const def = normalizeQuestDef({ ...(item || {}), from: "ai" }, added);
+    if (!def) continue;
+    if (existIds.has(String(def.id))) def.id = `${def.id}_${Date.now() % 10000}`;
+    existIds.add(String(def.id));
+    if (!Array.isArray(s.questBoard)) s.questBoard = [];
+    s.questBoard.push(def);
+    added++;
+  }
+  return added;
+}
+
+/** ★ AI 回答任务详情 / 玩家追问（结果写 s.questAiText） */
+async function askQuestByAI(s: FieldSurvivalState, ctx: PluginGameContext | undefined, def: QuestDef, question: string): Promise<string> {
+  const me = playerEntity(s);
+  const lv = Math.max(1, Math.round(num(me?.level, 1)));
+  const p = (s.quests || {})[String(def.id)];
+  const prog = (def.objectives || [])
+    .map((o) => `${o.kind}:${str(o.target) || ""} ${p ? objHave(o, p) : 0}/${objNeed(o)}`)
+    .join("；");
+  const prompt =
+    `任务：${def.title}（${def.type}）\n描述：${str(def.desc)}\n进度：${prog || "未接取"}\n` +
+    `奖励：${num(def.reward?.exp, 0)}exp / ${num(def.reward?.money, 0)}金\n` +
+    `玩家问题：${question || "这个任务该怎么做？给我一点提示。"}\n` +
+    `用任务板/雇主的口吻回答，不超过 80 字，只输出回答本身。`;
+  try {
+    if (!ctx?.tsApi?.agent) return "（任务板没人应答——宿主未接入 AI）";
+    const r = await withTimeout(
+      ctx.tsApi.agent.run("task-speaker-agent", {
+        npcId: "quest_board",
+        npcName: "任务板",
+        npcCard: { id: "quest_board", name: "任务板", roleType: "npc", level: lv, description: str(def.desc) || "张贴委托的木牌" },
+        isNeutral: true,
+        userText: prompt,
+        lastResp: null,
+        mode: "response",
+        context: { storyDigest: buildStoryDigest(ctx), playerLevel: lv },
+      }),
+      QUEST_AGENT_TIMEOUT_MS,
+      "quest agent 超时",
+    );
+    const t = String(r?.output?.text || "").trim();
+    return t || "（任务板沉默了一会，什么也没说）";
+  } catch {
+    return "（任务板没人应答——AI 超时或不可用）";
+  }
+}
+
+/** ★ 野怪击杀奖励③：问 AI「吸收暗核后获得什么技能」，写进 skillMeta + 参数卡技能列表。
+ *  · 有 `s.skillPool` → AI 只从池里挑一个（故事一致性最好）
+ *  · 无池 → AI 按故事自由生成一个（字段仍被收敛进合法枚举）
+ *  · AI 不可用 / 超时 / 输出不合法 → 兜底随机（池内优先，其次 CORE_FALLBACK_SKILLS）
+ *  · 已拥有同名技能 → 不重复占格，改为 lv+1（威力 ×1.25） */
+async function grantCoreSkill(s: FieldSurvivalState, ctx?: PluginGameContext): Promise<string> {
+  const pool = Array.isArray(s.skillPool)
+    ? Array.from(new Set(s.skillPool.map((x) => cleanSkillName(x).slice(0, 12)).filter(Boolean)))
+    : [];
+  const me = playerEntity(s);
+  const lv = Math.max(1, Math.round(num(me?.level, 1)));
+  const prompt = pool.length
+    ? `宿主吸收了一枚暗核。请只从下列技能里选一个最契合当前处境的，只输出这一个技能名，不要任何解释文字：\n${pool.map((n) => "- " + n).join("\n")}`
+    : `宿主吸收了一枚暗核，湮源要赋予宿主一项新技能。只输出一个 JSON 对象，不要任何解释文字：\n{"name":"技能名(不超过12个字)","power":30到80的整数,"cost":0到20的整数,"cd":30到120的整数,"type":"atk或heal或buff","range":"melee或ranged","effects_type":"dark或fire或water或thunder或wind或earth或metal或wood或light或poison或bleed或normal","desc":"一句描述"}`;
+
+  let picked = "";
+  let meta: Record<string, any> | null = null;
+  try {
+    if (ctx?.tsApi?.agent) {
+      const r = await withTimeout(
+        ctx.tsApi.agent.run("task-speaker-agent", {
+          npcId: "core",
+          npcName: "湮源",
+          npcCard: { id: "core", name: "湮源", roleType: "npc", level: lv, description: "寄生在宿主体内的湮源意识体，解析暗核并把力量赋予宿主" },
+          isNeutral: false,
+          userText: prompt,
+          lastResp: null,
+          mode: "response",
+          context: { storyDigest: buildStoryDigest(ctx), playerLevel: lv },
+        }),
+        CORE_AGENT_TIMEOUT_MS,
+        "core agent 超时",
+      );
+      const raw = String(r?.output?.text || "")
+        .replace(/^\s*```[a-zA-Z]*\s*/, "")
+        .replace(/\s*```\s*$/, "")
+        .trim();
+      if (raw) {
+        try {
+          const j = JSON.parse(raw);
+          if (j && str((j as any).name)) { picked = cleanSkillName((j as any).name).slice(0, 12); meta = j as Record<string, any>; }
+        } catch { /* 不是 JSON → 纯文本 */ }
+        if (!picked && pool.length) {
+          picked = pool.find((n) => raw.includes(n)) || "";
+        }
+        if (!picked) picked = cleanSkillName(raw.split(/\n/)[0]).slice(0, 12);
+      }
+    }
+  } catch { /* AI 不可用 / 超时 → 走兜底 */ }
+
+  if (pool.length && !pool.includes(picked)) picked = "";   // 有池时绝不接受池外名字
+  if (!picked) {
+    picked = pool.length
+      ? (pool[Math.floor(rnd(0, pool.length))] || "")
+      : (CORE_FALLBACK_SKILLS[Math.floor(rnd(0, CORE_FALLBACK_SKILLS.length))] || "碎石击");
+  }
+  if (!picked) return "";
+
+  const key = skillKey(picked);
+  const prevMeta = ((s.skillMeta || {}) as Record<string, any>)[key] || {};
+  const prevSlot = (s.skills || []).find((k) => skillKey(k.name) === key);
+  const base = inferSkillType(picked);
+  const isUp = !!prevSlot;
+  const newLv = Math.max(1, Math.round(num(prevSlot?.lv, num(prevMeta.lv, 1))) + (isUp ? 1 : 0));
+  const basePower = num(prevMeta.power, isUp ? num(prevSlot?.power, 12) : 12 + Math.floor(rnd(0, 10)));
+  const m = {
+    power: Math.max(1, Math.round(num(meta?.power, isUp ? basePower * 1.25 : basePower))),
+    cost: Math.max(0, Math.round(num(meta?.cost, num(prevMeta.cost, isUp ? num(prevSlot?.cost, 0) : 0)))),
+    cd: Math.max(1, Math.round(num(meta?.cd, num(prevMeta.cd, isUp ? num(prevSlot?.cd, 24) : 24 + Math.floor(rnd(0, 18)))))),
+    type: (["atk", "heal", "buff"] as const).includes(String(meta?.type) as any) ? String(meta?.type) : (prevMeta.type || base.type),
+    range: String(meta?.range) === "ranged" ? "ranged" : (prevMeta.range || base.range),
+    lv: newLv,
+    buff_type: BUFF_TYPES.includes(String(meta?.buff_type)) ? String(meta?.buff_type) : (prevMeta.buff_type || ""),
+    effects_type: typeof meta?.effects_type === "string" ? meta.effects_type : (prevMeta.effects_type || ""),
+  };
+  s.skillMeta = { ...(s.skillMeta || {}), [key]: m };
+
+  // 参数卡「技能」只存名字列表：已有 → 替换成新 lv 注记；没有 → 追加
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const flat: string[] = [];
+  (Array.isArray(card.skills) ? card.skills : []).forEach((x: any) => {
+    if (typeof x === "string") splitSkillList(x).forEach((p: string) => { if (cleanSkillName(p)) flat.push(p.trim()); });
+    else { const n = str(x?.name); if (n) flat.push(n); }
+  });
+  const annotated = newLv > 1 ? `${picked}（lv${newLv}）` : picked;
+  const at = flat.findIndex((x) => skillKey(x) === key);
+  if (at >= 0) flat[at] = annotated; else flat.push(annotated);
+  patchCard(s, { skills: flat });   // patchCard 内部会自动 s.skills = buildSkills(...)
+
+  const tLabel = m.type === "heal" ? "治疗" : m.type === "buff" ? `强化(${m.buff_type || "-"})` : (m.range === "ranged" ? "远程" : "近战");
+  pushEvent(s, isUp ? `暗核共鸣：「${picked}」提升至 lv${newLv}（${tLabel}）` : `暗核解析完成：习得「${picked}」（${tLabel}·lv${newLv}）`);
+  if (me) {
+    floater(s, isUp ? `${picked} lv${newLv}` : `习得 ${picked}`, me.x, me.y - 60);
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(m.effects_type, "#9CCFFF"), icon: effectIcon(m.effects_type), size: 1.0 });
+  }
+  return isUp ? `，「${picked}」提升至 lv${newLv}` : `，湮源解析出技能「${picked}」`;
+}
+
 function useBagItem(s: FieldSurvivalState, name: string): string {
   const me = playerEntity(s);
   if (!me || !me.alive) return "角色不可用";
@@ -2315,7 +3154,16 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
   floater(s, `使用 ${it.name}`, me.x, me.y - 34);
   let consumed = true;
   let msg = `使用 ${it.name}`;
-  if (t === "heal") {
+  if (isCoreItem(s, it)) {
+    // ★ 野怪击杀奖励②：核类物品（暗核）→ 吸收：给经验 + 有概率触发 AI 判定「获得什么技能」
+    //   技能本身由 handle_action 在本次请求里异步问 AI 后写入（_pendingCoreGrant 标记）
+    gainPlayerExp(s, CORE_USE_EXP);
+    pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor((it as any).effects_type, "#9CCFFF"), icon: effectIcon((it as any).effects_type), size: 1.0 });
+    floater(s, `+${CORE_USE_EXP}exp`, me.x, me.y - 52);
+    pushEvent(s, `吸收 ${it.name}，+${CORE_USE_EXP} 经验`);
+    msg += `，湮源吸收 +${CORE_USE_EXP} 经验`;
+    if (Math.random() < CORE_SKILL_P) (s as any)._pendingCoreGrant = true;
+  } else if (t === "heal") {
     const heal = it.heal || defaultHeal(it.name, it.kind);
     const before = me.hp;
     if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
@@ -2723,6 +3571,9 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       level: s.levelName || "",
       skillMeta: s.skillMeta || {},
       itemMeta: s.itemMeta || {},
+      // ★ 任务板：任务定义 + 玩家进度（掉线重连按 id 续上）
+      questBoard: s.questBoard || [],
+      quests: s.quests || {},
       // ★ 角色驻留地图：ally/spectator 角色停在别的地图（s.parked）→ 持久化到 t_plugin_session_data
       parked: (s as any).parked || {},
     });
@@ -2820,6 +3671,30 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (str(d.level)) s.levelName = str(d.level, "");
     // ★ 角色驻留地图：恢复 s.parked（ally/spectator 角色停在别的地图的位置）
     if (d.parked && typeof d.parked === "object") (s as any).parked = d.parked;
+    // ★ 任务板：恢复任务定义与玩家进度（按 id 续上，不清零）
+    if (Array.isArray(d.questBoard)) {
+      s.questBoard = d.questBoard.map((x: any, i: number) => normalizeQuestDef(x, i)).filter(Boolean) as QuestDef[];
+    }
+    if (d.quests && typeof d.quests === "object") {
+      const q: Record<string, QuestProgress> = {};
+      for (const [k, v] of Object.entries(d.quests as Record<string, any>)) {
+        if (!v || typeof v !== "object") continue;
+        const st2 = str((v as any).status, "active");
+        q[String(k)] = {
+          id: String(k),
+          status: (["active", "done", "turned", "failed"].includes(st2) ? st2 : "active") as QuestProgress["status"],
+          kill: (v as any).kill && typeof (v as any).kill === "object" ? (v as any).kill : {},
+          gather: (v as any).gather && typeof (v as any).gather === "object" ? (v as any).gather : {},
+          talked: (v as any).talked && typeof (v as any).talked === "object" ? (v as any).talked : {},
+          arrived: (v as any).arrived === true,
+          cargoId: str((v as any).cargoId, ""),
+          acceptedTick: Math.round(num((v as any).acceptedTick, 0)),
+          acceptedMap: str((v as any).acceptedMap, ""),
+          turnedTick: Math.round(num((v as any).turnedTick, 0)),
+        };
+      }
+      s.quests = q;
+    }
     // ★ 角色位置权威（ai_story_roles）：上次会话每个角色停在哪张图、哪个坐标。
     //   开局必须按这份数据就位——否则角色会被强行拉回 start_map，上一局的驻留全丢。
     try {
@@ -2972,6 +3847,9 @@ export async function handle_action(
       await restoreSys(context, s);
       (s as any)._sysRestored = true;
       if (!(s as any).parked || typeof (s as any).parked !== "object") (s as any).parked = {};
+      // ★ 任务板：库里没恢复出任务定义时，读 CLI 上传的 quest_defs（故事包自带任务表）
+      await ensureQuestDefs(context, s);
+      buildQuestView(s);
       // ★ 本局关卡：库里上局 level 优先（按库恢复），其次前端上报，最后兜底 start_map
       const curLv = str(str((params as any)?.levelName) || s.levelName || "", "") || "Mulberry Town";
       s.levelName = curLv;
@@ -3227,6 +4105,9 @@ export async function handle_action(
         (s as any)._levelAt = s.levelName;
         ensureNpcCards(s, s.levelName || "");
       }
+      // ★ 任务板：非 confirm 的到达目标走到即完成 + 护送货物跟随 + 重算任务视图
+      syncQuestArriveAuto(s);
+      buildQuestView(s);
       if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
       return okResp("");
     }
@@ -3354,8 +4235,192 @@ export async function handle_action(
       // 背包 / 物品栏点击使用：type 分路特效 / 耐久 / 属性逻辑统一在 useBagItem
       const name = str(params?.name);
       const msg = useBagItem(s, name);
+      // ★ 野怪击杀奖励③：核类物品命中骰子 → 问 AI「获得什么技能」并写入参数卡
+      let tail = "";
+      if ((s as any)._pendingCoreGrant) {
+        (s as any)._pendingCoreGrant = false;
+        tail = await grantCoreSkill(s, context);
+      }
       await persistSys(context, s);
-      return okResp(msg);
+      return okResp(msg + tail);
+    }
+
+    case "sys_skill_pool": {
+      // ★ 野怪击杀奖励：下发「暗核可授予的技能池」（宿主 / 前端 / 事件脚本可调用）
+      //   params.pool: string[]；params.meta: { 技能名: skillMeta 字段 }（可选，缺省按名字推断）
+      const pool = Array.isArray(params?.pool) ? params.pool.map((x: unknown) => cleanSkillName(x).slice(0, 12)).filter(Boolean) : [];
+      s.skillPool = pool;
+      const metaIn = (params?.meta && typeof params.meta === "object" ? params.meta : null) as Record<string, any> | null;
+      if (metaIn) {
+        s.skillMeta = { ...(s.skillMeta || {}) };
+        Object.keys(metaIn).forEach((k) => {
+          const nm = cleanSkillName(k).slice(0, 12);
+          if (!nm) return;
+          const m = metaIn[k] || {};
+          (s.skillMeta as any)[skillKey(nm)] = {
+            power: Math.max(0, Math.round(num(m.power, 12))),
+            cost: Math.max(0, Math.round(num(m.cost, 0))),
+            cd: Math.max(1, Math.round(num(m.cd, 24))),
+            type: (["atk", "heal", "buff"] as const).includes(String(m.type) as any) ? String(m.type) : inferSkillType(nm).type,
+            range: String(m.range) === "ranged" ? "ranged" : inferSkillType(nm).range,
+            lv: Math.max(1, Math.round(num(m.lv, 1))),
+            buff_type: BUFF_TYPES.includes(String(m.buff_type)) ? String(m.buff_type) : "",
+            effects_type: typeof m.effects_type === "string" ? m.effects_type : "",
+          };
+        });
+        s.skills = buildSkills(s.playerCard || {}, 8, s.skillMeta);
+      }
+      await persistSys(context, s);
+      return okResp(`技能池已更新（${pool.length} 项）：${pool.slice(0, 8).join("、")}`);
+    }
+
+    /* ============================================================
+       ★ 任务板（spec：events/任务事件/任务板.事件.md）
+       ============================================================ */
+    case "sys_quest_pool": {
+      // 下发/覆盖任务定义（宿主 / 事件脚本 / CLI 上传 quest_defs）
+      const arr = Array.isArray(params?.defs) ? params.defs
+        : Array.isArray(params?.quests) ? params.quests
+        : Array.isArray(params) ? (params as any)
+        : [];
+      const defs = arr.map((x: any, i: number) => normalizeQuestDef(x, i)).filter(Boolean) as QuestDef[];
+      if (!defs.length) return okResp("任务池为空（未提供 defs）");
+      const mode = str(params?.mode, "merge");
+      if (mode === "replace") s.questBoard = defs;
+      else {
+        const map = new Map(questList(s).map((q) => [String(q.id), q]));
+        defs.forEach((d) => map.set(String(d.id), d));
+        s.questBoard = Array.from(map.values());
+      }
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp(`任务板已更新（${s.questBoard.length} 条，本次 ${defs.length} 条）`);
+    }
+
+    case "sys_quest_board": {
+      // 打开任务板：重算视图（可接 / 进行中 / 待交 / 已交）
+      if (!Array.isArray(s.questBoard) || !s.questBoard.length) {
+        const n = await ensureQuestDefs(context, s);
+        if (n > 0) pushEvent(s, `任务板载入 ${n} 条委托`);
+      }
+      syncQuestArriveAuto(s);
+      buildQuestView(s);
+      const v = (s as any).questView || { available: [], active: [], done: [], turned: [] };
+      return okResp(`任务板：可接 ${v.available.length} · 进行中 ${v.active.length} · 待交 ${v.done.length}`);
+    }
+
+    case "sys_quest_accept": {
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const p = ensureProg(s, def.id);
+      if (p.status === "active") return okResp(`「${def.title}」已经在进行中`);
+      if (p.status === "done") return okResp(`「${def.title}」已完成，去交任务`);
+      if (p.status === "turned" && !def.repeat) return okResp(`「${def.title}」已经交过了`);
+      // 重接 / 首次接取：清空进度
+      const prevCargo = p.cargoId;
+      if (prevCargo) removeQuestCargo(s, p);
+      s.quests![String(def.id)] = {
+        id: String(def.id), status: "active", kill: {}, gather: {}, talked: {},
+        arrived: false, cargoId: "", acceptedTick: s.tick, acceptedMap: str(s.levelName),
+      };
+      if (def.type === "escort" || def.cargo) spawnQuestCargo(s, def, ensureProg(s, def.id));
+      if (def.flags?.accept) await setPlayerFlag(context, def.flags.accept, true);
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp(`已接取「${def.title}」${def.cargo ? "（货物已交给你，别弄丢了）" : ""}`);
+    }
+
+    case "sys_quest_turnin": {
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const p = (s.quests || {})[String(def.id)];
+      if (!p || p.status === "turned") return okResp(`「${def.title}」已经交过了`);
+      if (p.status !== "done") return okResp(`「${def.title}」还没完成（${p.status === "failed" ? "护送失败，请放弃后重接" : "目标未达成"}）`);
+      // 交付：扣物品（deliver 的 consume，缺省按 gather 目标同名扣）
+      const consume = Array.isArray(def.consume) && def.consume.length
+        ? def.consume
+        : (def.objectives || []).filter((o) => o.kind === "gather" && str(o.target))
+            .map((o) => ({ name: str(o.target), count: objNeed(o) }));
+      for (const c of consume) {
+        if (!str(c.name)) continue;
+        removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+      }
+      // 发奖
+      const exp = Math.round(num(def.reward?.exp, 0));
+      const money = Math.round(num(def.reward?.money, 0));
+      if (exp > 0) gainPlayerExp(s, exp);
+      if (money > 0) s.money += money;
+      const got: string[] = [];
+      for (const it of def.reward?.items || []) {
+        if (!str(it.name)) continue;
+        addBagItemToCard(s, str(it.name), Math.max(1, Math.round(num(it.count, 1))));
+        got.push(`${it.name}×${Math.max(1, Math.round(num(it.count, 1)))}`);
+      }
+      removeQuestCargo(s, p);
+      p.status = "turned";
+      p.turnedTick = s.tick;
+      p.cargoId = "";
+      if (def.flags?.done) await setPlayerFlag(context, def.flags.done, true);
+      const rw = [exp > 0 ? `${exp}exp` : "", money > 0 ? `${money}金` : "", got.join("、")].filter(Boolean).join("、");
+      s.questNotice = `「${def.title}」已交，奖励：${rw || "无"}`;
+      pushEvent(s, `交还任务：${def.title}（${rw || "无奖励"}）`);
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp(`「${def.title}」已交付，获得 ${rw || "无奖励"}`);
+    }
+
+    case "sys_quest_abandon": {
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const p = (s.quests || {})[String(def.id)];
+      if (!p || p.status === "turned") return okResp(`「${def.title}」无需放弃`);
+      removeQuestCargo(s, p);
+      delete (s.quests || {})[String(def.id)];
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp(`已放弃「${def.title}」${def.repeat ? "（可重新接取）" : ""}`);
+    }
+
+    case "sys_quest_arrive": {
+      // 点「到达」/「交付」：校验玩家真的在目的地（或目标地图）才认
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const p = (s.quests || {})[String(def.id)];
+      if (!p || p.status !== "active") return okResp(`「${def.title}」不在进行中`);
+      const chk = questArriveOk(s, def);
+      if (!chk.ok) return okResp(chk.msg || "还没到目的地");
+      p.arrived = true;
+      refreshQuestStatus(s, def);
+      buildQuestView(s);
+      await persistSys(context, s);
+      const done = (s.quests![String(def.id)].status === "done");
+      return okResp(done ? `已到达目的地，「${def.title}」可以交了` : `已记录到达（${def.title}）`);
+    }
+
+    case "sys_quest_ask": {
+      // 问 AI 任务详情 / 玩家追问（结果写 s.questAiText，前端按 _questAsking 显示思考中）
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const q = str(params?.question ?? params?.text).trim();
+      s._questAsking = true;
+      const ans = await askQuestByAI(s, context, def, q);
+      s._questAsking = false;
+      s.questAiText = ans;
+      return okResp(ans);
+    }
+
+    case "sys_quest_generate": {
+      // AI 按故事生成本图可接任务（并入 questBoard）
+      const n = Math.round(num(params?.n, num(params?.count, 3)));
+      const added = await generateQuestsByAI(s, context, n);
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp(added > 0 ? `任务板新增 ${added} 条委托` : "AI 没能生成新委托（可稍后再试）");
     }
 
     case "sys_sort": {
@@ -3981,6 +5046,8 @@ export async function handle_action(
       /** ★ 前端生成的请求 id：结果写进 state.chatResult，前端按它配对取回（HTTP 回包会被 tick 覆盖） */
       const reqId = str(params?.reqId, "");
       if (!npcId) return okResp("缺少角色标识");
+      // ★ 任务板：对话类任务进度（uid 取 mapnpc_<uid>_<ts> 的第 2 段，与事件系统同口径）
+      noteQuestTalk(s, String(npcId).split("_")[1] || "", npcName);
 
       // 查找角色
       const npcEntity = s.entities.find((e) => e.id === npcId);

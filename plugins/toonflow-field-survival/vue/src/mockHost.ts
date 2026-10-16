@@ -1293,6 +1293,129 @@ function install(): void {
         push();
         return;
       }
+      // ── ★ 任务板（对齐 entry.ts 的 quest 状态机，mock 侧精简实现）──────────────
+      if (action === "sys_quest_pool" || action === "sys_quest_board" || action === "sys_quest_accept"
+        || action === "sys_quest_turnin" || action === "sys_quest_abandon" || action === "sys_quest_arrive"
+        || action === "sys_quest_ask" || action === "sys_quest_generate") {
+        const qs = (state as any);
+        if (!Array.isArray(qs.quests)) qs.quests = {};
+        if (!Array.isArray(qs.questBoard)) qs.questBoard = [];
+        const board: any[] = qs.questBoard;
+        const quests: Record<string, any> = qs.quests;
+        const me = (state.entities || []).find((e: any) => e.side === "player");
+        const need = (o: any) => Math.max(1, Math.round(Number(o?.count) || 1));
+        const have = (o: any, p: any) => {
+          if (!p) return 0;
+          if (o.kind === "kill") return Number((p.kill || {})[String(o.target)] || 0);
+          if (o.kind === "gather") return Number((p.gather || {})[String(o.target)] || 0);
+          if (o.kind === "talk") return Number((p.talked || {})[String(o.uid || o.target)] || 0);
+          if (o.kind === "arrive" || o.kind === "explore") return p.arrived ? 1 : 0;
+          return 0;
+        };
+        const met = (d: any, p: any) => (d.objectives || []).length > 0
+          && (d.objectives || []).every((o: any) => have(o, p) >= need(o));
+        const view = () => {
+          const row = (d: any, status: string) => {
+            const p = quests[String(d.id)];
+            const objectives = (d.objectives || []).map((o: any) => ({
+              kind: o.kind, target: String(o.target || ""), have: have(o, p), need: need(o),
+              confirm: o.confirm === true, map: String(o.map || ""),
+            }));
+            let atDest = false;
+            for (const o of d.objectives || []) {
+              if (o.kind !== "arrive" && o.kind !== "explore") continue;
+              if (String(o.map || "") && String(o.map) !== String(state.levelName || "")) { atDest = false; break; }
+              if (o.x === undefined || o.y === undefined) { atDest = true; continue; }
+              atDest = me ? Math.hypot(me.x - Number(o.x), me.y - Number(o.y)) <= Math.max(0.5, Number(o.radius) || 3) : false;
+            }
+            return {
+              id: String(d.id), title: String(d.title || d.id), type: String(d.type || "kill"),
+              giver: String(d.giver || "任务板"), desc: String(d.desc || ""),
+              level: Math.max(1, Math.round(Number(d.level) || 1)), status,
+              repeat: d.repeat === true, objectives, reward: d.reward || { exp: 0, money: 0, items: [] },
+              canTurnIn: status === "done",
+              canArrive: status === "active" && (d.objectives || []).some((o: any) => (o.kind === "arrive" || o.kind === "explore") && o.confirm === true),
+              atDest, progress: objectives.map((o: any) => `${o.target || o.kind} ${o.have}/${o.need}`).join("，"),
+              cargoAlive: false,
+            };
+          };
+          const groups: any = { available: [], active: [], done: [], turned: [], playerLevel: Math.max(1, Math.round(Number(me?.level) || 1)) };
+          for (const d of board) {
+            const p = quests[String(d.id)];
+            const st = p ? String(p.status) : "";
+            if (st === "active" || st === "failed") groups.active.push(row(d, st));
+            else if (st === "done") groups.done.push(row(d, "done"));
+            else if (st === "turned") { if (d.repeat) groups.available.push(row(d, "available")); else groups.turned.push(row(d, "turned")); }
+            else groups.available.push(row(d, "available"));
+          }
+          qs.questView = groups;
+        };
+        if (action === "sys_quest_pool") {
+          const defs = Array.isArray(params?.defs) ? params.defs : Array.isArray(params?.quests) ? params.quests : [];
+          for (const d of defs) {
+            if (!d || !d.id) continue;
+            const i = board.findIndex((x: any) => String(x.id) === String(d.id));
+            if (i >= 0) board[i] = d; else board.push(d);
+          }
+        }
+        if (action === "sys_quest_generate") {
+          // mock 无 agent：给出三条通用委托，保证面板可用
+          const base = board.length;
+          for (let i = 0; i < 3; i++) {
+            const id = `QMK${String(base + i + 1).padStart(2, "0")}`;
+            if (board.some((x: any) => String(x.id) === id)) continue;
+            board.push({
+              id, title: ["清理周边野怪", "采集一批物资", "探查附近区域"][i] || "跑腿委托",
+              type: ["kill", "gather", "explore"][i] || "kill",
+              giver: "任务板", desc: "（mock）任务板新贴出的一张委托。",
+              objectives: [
+                i === 0 ? { kind: "kill", target: "野怪", count: 3 }
+                : i === 1 ? { kind: "gather", target: "木材", count: 3 }
+                : { kind: "explore", map: String(state.levelName || ""), x: 0, y: 0, radius: 6, confirm: true },
+              ],
+              reward: { exp: 60, money: 40 }, repeat: true, from: "mock",
+            });
+          }
+        }
+        const id = String(params?.id || "").trim();
+        const def = id ? board.find((d: any) => String(d.id) === id) : null;
+        if (action === "sys_quest_accept" && def) {
+          quests[id] = { id, status: "active", kill: {}, gather: {}, talked: {}, arrived: false, cargoId: "", acceptedTick: state.tick };
+          qs.response = `已接取「${def.title}」`;
+        } else if (action === "sys_quest_arrive" && def) {
+          const p = quests[id];
+          if (p && p.status === "active") {
+            p.arrived = true;
+            if (met(def, p)) { p.status = "done"; qs.questNotice = `「${def.title}」已完成，回任务板交任务`; }
+          }
+          qs.response = `已记录到达（${def.title}）`;
+        } else if (action === "sys_quest_turnin" && def) {
+          const p = quests[id];
+          if (p && p.status === "done") {
+            const exp = Math.round(Number(def.reward?.exp) || 0);
+            const money = Math.round(Number(def.reward?.money) || 0);
+            if (me && exp) me.exp = Number(me.exp || 0) + exp;
+            state.money = Number(state.money || 0) + money;
+            p.status = "turned";
+            qs.response = `「${def.title}」已交付，获得 ${exp}exp、${money}金`;
+            qs.questNotice = qs.response;
+          } else qs.response = `「${def.title}」还没完成`;
+        } else if (action === "sys_quest_abandon" && def) {
+          delete quests[id];
+          qs.response = `已放弃「${def.title}」`;
+        } else if (action === "sys_quest_ask" && def) {
+          qs.questAiText = "（mock 模式没有 AI：按任务描述去做就行，目标达成后回任务板交任务。）";
+          qs.response = qs.questAiText;
+        }
+        // 每次操作后重算完成状态（mock 侧也接 kill/gather 钩子：直接按 state.kills 粗算不做，保持简单）
+        for (const d of board) {
+          const p = quests[String(d.id)];
+          if (p && p.status === "active" && met(d, p)) { p.status = "done"; qs.questNotice = `「${d.title}」已完成，回任务板交任务`; }
+        }
+        view();
+        push();
+        return;
+      }
       if (action === "sys_chat") {
         // ★ game.md 对话功能：mockHost 无 agent，不兜底，返回错误让前端明确提示
         const npcId = String(params?.npcId || "");

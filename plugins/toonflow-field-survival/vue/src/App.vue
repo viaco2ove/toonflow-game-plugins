@@ -25,6 +25,7 @@ import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
+import QuestPanel from "./panels/QuestPanel.vue";
 import {
   TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
   TILE_WATER_ID, TILE_POTION_ID,
@@ -4916,6 +4917,49 @@ function updateNearBed(): void {
   if (v !== nearBed.value) nearBed.value = v;
 }
 
+/* ---------------- ★ 任务板：靠近任务板触发「任务」按钮 ---------------- */
+/** 附近的任务板实体（地图 Actors 层 name=任务板 → mapnpc_<id> 实体） */
+const nearBoard = ref<{ id: string; name: string } | null>(null);
+const BOARD_RADIUS_M = 2.8;
+/** 任务板面板 */
+const questOpen = ref(false);
+const BOARD_NAME_RE = /任务板|委托板|公告板/;
+
+function updateNearBoard(): void {
+  const s = state.value;
+  if (!s) { if (nearBoard.value) nearBoard.value = null; return; }
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) { if (nearBoard.value) nearBoard.value = null; return; }
+  let best: typeof nearBoard.value = null;
+  let bestDist = BOARD_RADIUS_M;
+  for (const e of s.entities) {
+    const nm = String(e.name || "");
+    if (!BOARD_NAME_RE.test(nm)) continue;
+    const d = Math.hypot(e.x - me.x, e.y - me.y);
+    if (d < bestDist) { bestDist = d; best = { id: String(e.id), name: nm }; }
+  }
+  if (best?.id !== nearBoard.value?.id) nearBoard.value = best;
+  // 走远了自动收起面板
+  if (!best && questOpen.value) questOpen.value = false;
+}
+
+/** 任务数据（宿主 state.questView 权威，前端只读） */
+const questView = computed<any>(() => (state.value as any)?.questView || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
+const questAsking = computed<boolean>(() => !!(state.value as any)?._questAsking);
+const questAiText = computed<string>(() => String((state.value as any)?.questAiText || ""));
+
+function onQuestOpen(): void {
+  if (!nearBoard.value) return;
+  runSysCmd("sys_quest_board", {});
+  questOpen.value = true;
+}
+function onQuestAccept(id: string): void { runSysCmd("sys_quest_accept", { id }); }
+function onQuestTurnin(id: string): void { runSysCmd("sys_quest_turnin", { id }); }
+function onQuestAbandon(id: string): void { runSysCmd("sys_quest_abandon", { id }); }
+function onQuestArrive(id: string): void { runSysCmd("sys_quest_arrive", { id }); }
+function onQuestAsk(id: string, question: string): void { runSysCmd("sys_quest_ask", { id, question }); }
+function onQuestGenerate(): void { runSysCmd("sys_quest_generate", { n: 3 }); }
+
 /* ---------------- ★ game.md 对话功能：靠近角色触发出聊按钮 ---------------- */
 /** 可对话的最近角色（非敌人），随 tick 10Hz 刷新 */
 const nearChat = ref<{ id: string; name: string; avatarPath?: string } | null>(null);
@@ -4935,6 +4979,8 @@ function updateNearChat(): void {
   let bestDist = CHAT_RADIUS_M;
   for (const e of s.entities) {
     if (e.side === "enemy" || !e.alive || e.side === "player") continue;
+    // ★ 任务板不是人：不进「💬 聊天」，改由「📜 任务」按钮接管
+    if (BOARD_NAME_RE.test(String(e.name || ""))) continue;
     const d = Math.hypot(e.x - me.x, e.y - me.y);
     if (d < bestDist) { bestDist = d; best = { id: e.id, name: e.name, avatarPath: e.avatarPath }; }
   }
@@ -5309,6 +5355,8 @@ function loop(ts: number) {
     updateNearBed();
     // ★ game.md 对话功能：10Hz 刷新附近可对话角色
     updateNearChat();
+    // ★ 任务板：10Hz 刷新附近任务板（走近 → 出「任务」按钮）
+    updateNearBoard();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
@@ -6269,6 +6317,30 @@ watch(() => state.value?.phase, (p) => {
         <button v-if="nearBed" class="btn btn--sleep" title="在床上睡一觉：恢复满血满蓝" @click="onSleep">🛏 睡眠</button>
         <!-- ★ game.md 对话功能：靠近角色触发出聊按钮 -->
         <button v-if="nearChat" class="btn btn--chat" title="与角色对话" @click="onChatStart">💬 聊天</button>
+        <!-- ★ 任务板：靠近任务板触发出任务按钮 -->
+        <button v-if="nearBoard" class="btn btn--quest" title="打开任务板：接取 / 交还 / 放弃委托" @click="onQuestOpen">📜 任务</button>
+      </div>
+
+      <!-- ★ 任务板面板（走近任务板点击「任务」打开） -->
+      <div v-if="questOpen" class="quest-panel">
+        <div class="quest-panel__header">
+          <span class="quest-panel__title">📜 {{ nearBoard?.name || "任务板" }}</span>
+          <button class="quest-panel__close" @click="questOpen = false">✕</button>
+        </div>
+        <div class="quest-panel__body">
+          <QuestPanel
+            :view="questView"
+            :asking="questAsking"
+            :ai-text="questAiText"
+            :current-map="currentLevelName || ''"
+            @accept="onQuestAccept"
+            @turnin="onQuestTurnin"
+            @abandon="onQuestAbandon"
+            @arrive="onQuestArrive"
+            @ask="(id: string, q: string) => onQuestAsk(id, q)"
+            @generate="onQuestGenerate"
+          />
+        </div>
       </div>
 
       <!-- ★ 睡眠恢复等 HUD 级提示（系统面板未打开时也能看到） -->
@@ -7247,6 +7319,54 @@ body {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.2); }
 }
+
+/* ★ 任务板：靠近任务板出的「任务」按钮 */
+.btn--quest {
+  border: 2px solid #5a4a1a;
+  border-radius: 0;
+  padding: 2px 6px;
+  cursor: pointer;
+  background: #8a6520;
+  color: #ffe8bd;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 0 #3a2a0a;
+}
+.btn--quest:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #3a2a0a;
+}
+
+/* ★ 任务板面板 */
+.quest-panel {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9997;
+  width: min(520px, 94vw);
+  max-height: 52vh;
+  background: rgba(18, 20, 26, 0.97);
+  border: 2px solid #8a6520;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+}
+.quest-panel__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(138, 101, 32, 0.28);
+}
+.quest-panel__title { font-size: 12px; color: #ffe8bd; font-weight: 700; flex: 1 1 auto; }
+.quest-panel__close {
+  background: transparent; border: none; color: #cfd8e3; font-size: 14px; cursor: pointer; line-height: 1;
+}
+.quest-panel__body { padding: 6px 8px 8px; overflow-y: auto; }
 
 /* ★ game.md 对话功能：聊天面板 */
 .chat-panel {

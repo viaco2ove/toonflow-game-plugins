@@ -22,6 +22,8 @@
 import type { Entity, GameState } from "../types";
 import type { AIAction } from "./types";
 import { getEventZones } from "../eventEngine";
+import { readMapKnowledge } from "./mapKnowledge";
+import type { GatherKind } from "./mapKnowledge";
 import { getOrCreateAIState, setAIEnabled } from "./brain";
 import { executeAction, isActionComplete } from "./spine";
 import { updatePerception } from "./sensor";
@@ -41,38 +43,50 @@ export interface AIChatOutcome {
 /** 关键词 → 动作生成器 */
 const KEYWORD_RULES: Array<{ pattern: RegExp; build: (cmd: string, ent: Entity, state: GameState) => { action: AIAction; say: string } | null }> = [
   {
-    // 收集木材 / 砍柴 / 伐木
+    // 收集木材 / 砍柴 / 伐木 —— ★ 改由地图集声明驱动（events.json 的 trigger.ai.gather）
     pattern: /(木材|砍柴|伐木|柴火|木柴)/i,
-    build: (_cmd, _ent, _state) => {
-      const z = findZone(_state, "木材堆");
+    build: (_cmd, ent, _state) => {
+      const z = findGatherZone(ent, "wood");
       if (!z) return null;
       return {
         action: { type: "gather", target: { x: z.x, y: z.y, name: z.name }, zoneName: z.name, priority: 70, context: "去收集木材" },
-        say: "好的，我去看看木材堆。",
+        say: `好的，我去${z.name}看看。`,
       };
     },
   },
   {
-    // 收集药草 / 采药 / 农田
-    pattern: /(药草|采药|药材|草药|农田)/i,
-    build: (_cmd, _ent, _state) => {
-      const z = findZone(_state, "农田");
+    // 收集药草 / 采药 / 夜采
+    pattern: /(药草|采药|药材|草药|农田|夜采|药圃)/i,
+    build: (_cmd, ent, _state) => {
+      const z = findGatherZone(ent, "herb");
       if (!z) return null;
       return {
         action: { type: "gather", target: { x: z.x, y: z.y, name: z.name }, zoneName: z.name, priority: 70, context: "去采集药草" },
-        say: "好的，我去农田看看。",
+        say: `好的，我去${z.name}采药。`,
       };
     },
   },
   {
-    // 钓鱼 / 捕鱼 / 喷水池
+    // 钓鱼 / 捕鱼
     pattern: /(钓鱼|捕鱼|鱼|喷水|水池)/i,
-    build: (_cmd, _ent, _state) => {
-      const z = findZone(_state, "喷水池");
+    build: (_cmd, ent, _state) => {
+      const z = findGatherZone(ent, "fish");
       if (!z) return null;
       return {
         action: { type: "gather", target: { x: z.x, y: z.y, name: z.name }, zoneName: z.name, priority: 70, context: "去钓鱼" },
-        say: "好的，我去喷水池钓鱼。",
+        say: `好的，我去${z.name}钓鱼。`,
+      };
+    },
+  },
+  {
+    // 采矿 / 挖矿
+    pattern: /(采矿|挖矿|矿石|矿石堆)/i,
+    build: (_cmd, ent, _state) => {
+      const z = findGatherZone(ent, "ore");
+      if (!z) return null;
+      return {
+        action: { type: "gather", target: { x: z.x, y: z.y, name: z.name }, zoneName: z.name, priority: 70, context: "去采矿" },
+        say: `好的，我去${z.name}采矿。`,
       };
     },
   },
@@ -137,8 +151,46 @@ const KEYWORD_RULES: Array<{ pattern: RegExp; build: (cmd: string, ent: Entity, 
     },
   },
   {
+    // ★ 数据驱动：护送 / 找人 —— 按名字关键词在场上找最近的非敌对实体
+    //   （赦夜人：林家商队 / 林家护卫 / 陆文昭；别的地图集换成自己的 NPC 名即可，不用改插件）
+    pattern: /(商队|护送|护卫|陆文昭|执事|暮光)/i,
+    build: (cmd, ent, state) => {
+      const kw = /(商队|护送)/i.test(cmd) ? /商队|林家/ : /(护卫)/i.test(cmd) ? /护卫/ : /陆文昭|执事|暮光/;
+      const cands = (state.entities || []).filter(
+        (e) => e.side !== "enemy" && e.alive !== false && e.id !== ent.id && kw.test(String(e.name || "")),
+      );
+      if (!cands.length) return null;
+      let near = cands[0];
+      let minD = Infinity;
+      for (const e of cands) {
+        const d = Math.hypot(e.x - ent.x, e.y - ent.y);
+        if (d < minD) { minD = d; near = e; }
+      }
+      return {
+        action: { type: "interact", target: { id: near.id, x: near.x, y: near.y, name: near.name }, priority: 60, context: `去找 ${near.name}` },
+        say: `好的，我去找${near.name}。`,
+      };
+    },
+  },
+  {
+    // ★ 数据驱动：去某个区域（zone 名来自地图 eventZones，不写死任何故事专属名）
+    pattern: /(?:去|到|前往)([^\s，。！？]{2,8})/,
+    build: (cmd, ent, _state) => {
+      const m = cmd.match(/(?:去|到|前往)([^\s，。！？]{2,8})/);
+      if (!m) return null;
+      const want = m[1];
+      const zones = getEventZones();
+      const hit = zones.find((z) => z.name === want) || zones.find((z) => z.name.includes(want) || want.includes(z.name));
+      if (!hit) return null;
+      return {
+        action: { type: "move", target: { x: hit.x, y: hit.y, name: hit.name }, priority: 50, context: `前往 ${hit.name}` },
+        say: `好的，我去${hit.name}。`,
+      };
+    },
+  },
+  {
     // 逃跑 / 后退
-    pattern: /(逃跑|撤退|跑|退|走开|离开)/i,
+    pattern: /(逃跑|撤退|跑|退|走开|离开|离去)/i,
     build: () => {
       return {
         action: { type: "flee", priority: 85, context: "撤退" },
@@ -158,13 +210,26 @@ const KEYWORD_RULES: Array<{ pattern: RegExp; build: (cmd: string, ent: Entity, 
   },
 ];
 
-/** 从 eventZones 找匹配名称的 zone */
-function findZone(_state: GameState, name: string): { name: string; x: number; y: number } | null {
-  const zones = getEventZones();
+/**
+ * ★ 按采集类型找本图最近的采集点 —— 数据来自地图集声明（mapKnowledge），
+ *   插件不再写死「农田 / 喷水池」这类某个故事才有的 zone 名。
+ *
+ *   mapKnowledge 的判定优先级（见 ai/mapKnowledge.ts）：
+ *     ① events.json 的 trigger.ai.gather 显式声明
+ *     ② 事件 id 推断  ③ zone 名关键词推断
+ *   所以赦夜人的「夜采药圃」/「林中药丛」（herb）与通天传授的「农田」（herb）
+ *   都能被同一条规则命中，无需改插件代码。
+ */
+function findGatherZone(ent: Entity, kind: GatherKind): { name: string; x: number; y: number } | null {
+  const zones = readMapKnowledge().gatherZones.filter((z) => z.kind === kind);
+  if (!zones.length) return null;
+  let best = zones[0];
+  let minD = Infinity;
   for (const z of zones) {
-    if (z.name === name) return z;
+    const d = Math.hypot(z.x - ent.x, z.y - ent.y);
+    if (d < minD) { minD = d; best = z; }
   }
-  return null;
+  return { name: best.name, x: best.x, y: best.y };
 }
 
 /** ★ 主编排：处理用户的 #ai 指令 */
