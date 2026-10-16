@@ -2095,6 +2095,9 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       npc_wanders: npc.wanders,
       // ★ game.md：外观由 object.gid 决定（drawEntity 按 gid 切图集），缺省回退 side 角色表
       gid: npc.gid,
+      // ★ 任务板标记：dialog=BOARD 的地图 NPC → drawEntity 走专用公告板绘制（图标+文字+光环）
+      dialog: npc.dialog,
+      board: npc.dialog === "BOARD",
       // ★ 未具名 NPC（含农场动物）：可对话但头顶不画名字，避免整屏刷名字
       unnamed: npc.unnamed === true,
     } as any);
@@ -3301,6 +3304,98 @@ function entityDisplayPos(e: Entity, dtSec: number): { x: number; y: number } {
   return cur;
 }
 
+/** 圆角矩形路径（兼容旧浏览器，不用 ctx.roundRect） */
+function rrPath(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+/**
+ * ★ 任务板专用绘制：明显的「公告板」图标 + 始终显示的「📜 任务板」文字标签 + 脉动光环。
+ *   取代原来 gid=58（箱子）贴图，解决「任务板长得像宝箱、不明显」的问题。
+ */
+function drawQuestBoard(ctx: CanvasRenderingContext2D, px: number, py: number, ppm: number): void {
+  const k = Math.max(0.6, Math.min(2.4, ppm / 20));   // 随 zoom 缩放
+  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const pulse = (now % 1400) / 1400;                  // 0→1 循环
+
+  // 脚底阴影
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(px, py + 4 * k, 15 * k, 5 * k, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 脉动光环（吸引注意）
+  const ringR = (20 + Math.sin(pulse * Math.PI * 2) * 4) * k;
+  ctx.save();
+  ctx.globalAlpha = 0.25 + 0.35 * (1 - Math.abs(pulse - 0.5) * 2);
+  ctx.strokeStyle = "#ffd54a";
+  ctx.lineWidth = 3 * k;
+  ctx.beginPath();
+  ctx.ellipse(px, py - 20 * k, ringR, ringR * 0.5, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 木柱
+  const postW = 6 * k, postH = 24 * k;
+  ctx.save();
+  ctx.fillStyle = "#6b4a2b";
+  ctx.fillRect(px - postW / 2, py - postH, postW, postH);
+
+  // 公告板面板
+  const bw = 30 * k, bh = 23 * k;
+  const bx = px - bw / 2, by = py - postH - bh + 4 * k;
+  ctx.fillStyle = "#caa472";
+  ctx.strokeStyle = "#5a3b1e";
+  ctx.lineWidth = 2 * k;
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeRect(bx, by, bw, bh);
+  // 内纸
+  ctx.fillStyle = "#f3e2bd";
+  ctx.fillRect(bx + 3 * k, by + 3 * k, bw - 6 * k, bh - 6 * k);
+  // 拟公告横线
+  ctx.fillStyle = "#7a5a32";
+  ctx.fillRect(bx + 6 * k, by + 6 * k, bw - 12 * k, 2 * k);
+  ctx.fillRect(bx + 6 * k, by + 11 * k, bw - 14 * k, 2 * k);
+  ctx.fillRect(bx + 6 * k, by + 16 * k, bw - 10 * k, 2 * k);
+  // 顶部红旗
+  ctx.fillStyle = "#d64545";
+  ctx.beginPath();
+  ctx.moveTo(px, by - 9 * k);
+  ctx.lineTo(px + 11 * k, by - 2 * k);
+  ctx.lineTo(px, by + 2 * k);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // 文字标签（始终显示，带黄边底框）
+  const label = "📜 任务板";
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = `bold ${Math.round(13 * k)}px 'Microsoft YaHei', sans-serif`;
+  const tw = ctx.measureText(label).width;
+  const lx = px, ly = by - 16 * k;
+  const padX = 6 * k, padY = 3 * k;
+  ctx.fillStyle = "rgba(20,16,8,.85)";
+  rrPath(ctx, lx - tw / 2 - padX, ly - 13 * k - padY, tw + padX * 2, 16 * k + padY * 2, 6 * k);
+  ctx.fill();
+  ctx.strokeStyle = "#ffd54a";
+  ctx.lineWidth = 1.5 * k;
+  ctx.stroke();
+  ctx.fillStyle = "#ffe9a8";
+  ctx.fillText(label, lx, ly);
+  ctx.restore();
+}
+
 function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLImageElement, sx?: number, sy?: number, ppm?: number) {
   // ★ v3：sx/sy 是外部算好的屏幕像素位置（不参与 ctx.scale）
   // 缺省时回退到 e.x / e.y（米），保证非世界变换下的旧调用仍能工作
@@ -3308,6 +3403,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   const py = (sy ?? (e.y * DEPTH + H_DEFAULT / 2));
   // ★ v3：sprite 尺寸 = 米数 × ppm（与 zoom 关联，随 zoom 缩放）
   const pixelsPerMeter = (ppm ?? 20);
+  // ★ 任务板：专用公告板绘制（图标 + 文字 + 脉动光环），直接接管，不走通用 sprite
+  if ((e as any).board === true || (e as any).dialog === "BOARD") {
+    drawQuestBoard(ctx, px, py, pixelsPerMeter);
+    return;
+  }
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）
   //   ★ game.md：外观由 object.gid 指向图集，entity_type/side 只决定行为类——
   //     实体带 gid 时直接按 gid 出图（城镇 NPC 不再一律画成蓝袍法师、牛显示成牛），
