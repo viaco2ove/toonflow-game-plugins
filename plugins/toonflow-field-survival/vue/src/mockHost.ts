@@ -1561,8 +1561,9 @@ function install(): void {
         return;
       }
       // ── ★ 任务板（对齐 entry.ts 的 quest 状态机，mock 侧精简实现）──────────────
-      if (action === "sys_quest_pool" || action === "sys_quest_board" || action === "sys_quest_accept"
+        if (action === "sys_quest_pool" || action === "sys_quest_board" || action === "sys_quest_accept"
         || action === "sys_quest_turnin" || action === "sys_quest_abandon" || action === "sys_quest_arrive"
+        || action === "sys_quest_recover_cargo"
         || action === "sys_quest_ask" || action === "sys_quest_generate") {
         const qs = (state as any);
         // ★ fix：quests 是「对象」（id→progress），旧代码写的是 Array.isArray 判定 →
@@ -1650,6 +1651,46 @@ function install(): void {
           } else if (p && p.status === "failed") {
             qs.response = `「${def.title}」已失败（${p.failReason === "timeout" ? "限时已过" : "护送失败"}），请放弃后重接`;
           } else qs.response = `「${def.title}」还没完成`;
+        } else if (action === "sys_quest_recover_cargo" && def) {
+          // ★ 找回丢失的护送货物（对齐 entry.ts sys_quest_recover_cargo）：
+          //   在玩家身边重新生成；若任务因货物被打掉而失败 → 连任务一起救活并重置计时。
+          const p = quests[id];
+          const wasFailedByCargo = p && p.status === "failed" && p.failReason === "cargo";
+          if (p && (p.status === "active" || p.status === "failed")) {
+            const cargoId = `questcargo_${id}`;
+            const existAlive = (state.entities || []).some((e: any) => String(e.id) === cargoId && e.alive !== false);
+            if (!(existAlive && p.cargoId)) {
+              // 先清残留（含尸体），再在玩家身边生成
+              for (let i = (state.entities || []).length - 1; i >= 0; i--) {
+                if (String((state.entities || [])[i].id) === cargoId) (state.entities as any[]).splice(i, 1);
+              }
+              const cfg = (def.cargo || {}) as any;
+              const hp = Math.max(1, Math.round(Number(cfg.hp) || 50));
+              if (me) {
+                (state.entities as any[]).push({
+                  id: cargoId, name: String(cfg.name || "货物").slice(0, 12),
+                  side: "ally", x: me.x + 1.2, y: me.y + 1.2, vx: 0, vy: 0,
+                  hp, maxHp: hp, mp: 0, maxMp: 0, exp: 0, expToNext: 0,
+                  level: Math.max(1, Math.round(Number(def.level) || 1)),
+                  atk: 0, def: 0, speed: 2.2, facing: 180, cooldown: 0, alive: true,
+                  camp: "friendly", entity_type: "QUEST_CARGO", _questCargo: String(id),
+                });
+              }
+              p.cargoId = cargoId;
+              if (wasFailedByCargo) {
+                p.status = "active";
+                p.failReason = "";
+                p.acceptedTick = state.tick;
+              }
+              qs.response = wasFailedByCargo
+                ? `货物已找回（「${def.title}」重新开始，箱子就在你身边）`
+                : `货物已找回（${def.title}），就在你身边`;
+            } else {
+              qs.response = "货物还在，不用找回";
+            }
+          } else {
+            qs.response = `「${def.title}」不在进行中，无法找回货物`;
+          }
         } else if (action === "sys_quest_abandon" && def) {
           delete quests[id];
           qs.response = `已放弃「${def.title}」`;

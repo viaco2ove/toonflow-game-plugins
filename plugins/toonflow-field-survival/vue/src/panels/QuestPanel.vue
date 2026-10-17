@@ -7,7 +7,7 @@
  *   active    进行中 / 护送失败
  *   done      已完成待交
  *   turned    已交（不可重复）
- * 操作：接取 / 到达（护送·送达点「到达」）/ 交任务领奖 / 放弃 / 详情（AI 回答）
+ * 操作：接取 / 寻路（自动走到目的地）/ 到达（护送·送达点「到达」）/ 找回货物 / 交任务领奖 / 放弃 / 详情（AI 回答）
  *       AI 生成委托（sys_quest_generate）
  */
 import { ref, computed } from "vue";
@@ -33,6 +33,8 @@ const emit = defineEmits<{
   (e: "turnin", id: string): void;
   (e: "abandon", id: string): void;
   (e: "arrive", id: string): void;
+  (e: "go", id: string): void;
+  (e: "recover", id: string): void;
   (e: "ask", id: string, question: string): void;
   (e: "generate"): void;
 }>();
@@ -84,7 +86,12 @@ function rewardText(q: any): string {
 function objText(o: any): string {
   const t = o.target || o.kind;
   if (o.kind === "arrive" || o.kind === "explore") {
-    return `${o.confirm ? "到达" : "走进"} ${o.map || "本图"}${o.confirm ? "（需点「到达」）" : ""}`;
+    const where = o.map || "本图";
+    // ★ 有坐标就把坐标写出来（玩家知道往哪走；寻路按钮也会带过去）
+    const pos = (o.x !== undefined && o.y !== undefined)
+      ? `（${Math.round(Number(o.x))}, ${Math.round(Number(o.y))}，${Math.max(0.5, Math.round(Number(o.radius) || 3))}m 内）`
+      : "";
+    return `${o.confirm ? "到达" : "走进"} ${where}${pos}${o.confirm ? "，需点「到达」" : ""}`;
   }
   return `${KIND_LABEL[o.kind] || o.kind} ${t} ${o.have}/${o.need}`;
 }
@@ -145,15 +152,34 @@ function failText(q: any): string {
           <span class="qp-obj__t">{{ objText(o) }}</span>
           <span class="qp-obj__bar"><i :style="{ width: Math.min(100, (o.need ? o.have / o.need : 0) * 100) + '%' }"></i></span>
         </div>
-        <div v-if="q.type === 'escort' && q.status === 'active'" class="qp-cargo">
+        <div v-if="q.type === 'escort' && (q.status === 'active' || q.status === 'failed')" class="qp-cargo">
           货物：<b :class="q.cargoAlive ? 'qp-ok' : 'qp-bad'">{{ q.cargoAlive ? "在" : "已丢失" }}</b>
+          <button
+            v-if="q.cargoLost"
+            class="qp-btn qp-btn--recover"
+            title="货物不见了：把它召回到你身边（任务超时失败的不救）"
+            @click="emit('recover', q.id)"
+          >🔄 找回货物</button>
         </div>
 
         <div class="qp-ops">
           <button v-if="q.status === 'available' || q.status === 'away'" class="qp-btn" @click="emit('accept', q.id)">接取</button>
-          <button v-if="q.canArrive && !q.arrived" class="qp-btn qp-btn--go" :disabled="!q.atDest" :title="q.atDest ? '点击到达' : '还没走到目的地'" @click="emit('arrive', q.id)">
+          <button
+            v-if="q.canArrive && !q.arrived"
+            class="qp-btn qp-btn--go"
+            :disabled="!q.atDest"
+            :title="q.atDest ? '点击到达' : '还没走到目的地（可点「寻路」自动走过去）'"
+            @click="emit('arrive', q.id)"
+          >
             {{ q.atDest ? "到达" : "未到目的地" }}
           </button>
+          <!-- ★ 寻路：点击后自动走到目的地（同图 A*；跨图先传送再走） -->
+          <button
+            v-if="q.destX !== undefined && q.destY !== undefined"
+            class="qp-btn qp-btn--nav"
+            :title="q.destMap && q.destMap !== currentMap ? `目的地在${q.destMap}，先传送再自动走` : '自动寻路到目的地'"
+            @click="emit('go', q.id)"
+          >🧭 寻路</button>
           <button v-if="q.canTurnIn" class="qp-btn qp-btn--ok" @click="emit('turnin', q.id)">交任务</button>
           <button v-if="q.status === 'active' || q.status === 'failed' || q.status === 'done'" class="qp-btn qp-btn--ghost" @click="emit('abandon', q.id)">放弃</button>
           <button class="qp-btn qp-btn--ghost" @click="toggleDetail(q.id)">{{ detailId === q.id ? "收起" : "详情" }}</button>
@@ -222,6 +248,9 @@ function failText(q: any): string {
 .qp-btn--ok { border-color: #4caf50; background: #2e7d32; }
 .qp-btn--go { border-color: #d4a13e; background: #8a6520; }
 .qp-btn--ghost { border-color: rgba(255,255,255,0.25); background: rgba(255,255,255,0.08); color: #cfd8e3; }
+/* ★ 寻路（青色）+ 找回货物（紫红） */
+.qp-btn--nav { border-color: #4db8e8; background: #1d5f80; }
+.qp-btn--recover { border-color: #e07fb8; background: #7a2f56; margin-left: 6px; }
 
 .qp-detail { margin-top: 5px; padding: 6px; border: 1px solid rgba(255,255,255,0.12); border-radius: 5px; background: rgba(0,0,0,0.28); }
 .qp-detail__meta { font-size: 10px; color: #7f8f9f; }

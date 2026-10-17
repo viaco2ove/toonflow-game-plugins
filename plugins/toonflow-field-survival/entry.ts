@@ -2850,7 +2850,12 @@ function spawnQuestCargo(s: FieldSurvivalState, def: QuestDef, p: QuestProgress)
   const cfg = (def.cargo || {}) as { name?: string; hp?: number; gid?: number };
   const hp = Math.max(1, Math.round(num(cfg.hp, 50)));
   const id = QUEST_CARGO_PREFIX + String(def.id);
-  if ((s.entities || []).some((e) => String(e.id) === id)) { p.cargoId = id; return; }
+  // ★ 先把场上同 id 的残留（含死亡淡出中的尸体 / 上一具被打掉的壳）清掉再生成，
+  //   否则 `some(e => e.id === id)` 早退会让「找回货物」复活的是一具死尸。
+  for (let i = (s.entities || []).length - 1; i >= 0; i--) {
+    if (String((s.entities || [])[i].id) === id) (s.entities as Entity[]).splice(i, 1);
+  }
+  p.cargoId = id;
   const ang = rnd(0, Math.PI * 2);
   const e = {
     id,
@@ -3036,6 +3041,10 @@ function buildQuestView(s: FieldSurvivalState): void {
       need: objNeed(o),
       confirm: o.confirm === true,
       map: str(o.map),
+      /** ★ arrive/explore 目的地坐标（前端寻路 + 画「目的地」图标用） */
+      x: o.x,
+      y: o.y,
+      radius: o.radius,
     }));
     const met = p ? objectivesMet(def, p) : false;
     return {
@@ -3066,6 +3075,26 @@ function buildQuestView(s: FieldSurvivalState): void {
       progress: objectives.map((o) => `${o.target || o.kind} ${o.have}/${o.need}`).join("，"),
       met,
       cargoAlive: p && p.cargoId ? !!(s.entities || []).find((e) => String(e.id) === String(p.cargoId) && e.alive !== false) : false,
+      /** ★ 货物是否丢失（护送任务进行中/因货失败时）—— 前端据此显示「找回货物」 */
+      cargoLost: !!(p && p.cargoId && (p.status === "active" || p.status === "failed")
+        && !(s.entities || []).find((e) => String(e.id) === String(p.cargoId) && e.alive !== false)),
+      /** ★ 第一个 arrive/explore 目标的便捷字段（寻路 / 地图标 / 到达按钮共用） */
+      destMap: (() => {
+        const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+        return o ? str(o.map) : "";
+      })(),
+      destX: (() => {
+        const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+        return o ? o.x : undefined;
+      })(),
+      destY: (() => {
+        const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+        return o ? o.y : undefined;
+      })(),
+      destRadius: (() => {
+        const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+        return o ? Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R)) : QUEST_ARRIVE_DEFAULT_R;
+      })(),
     };
   };
   // 可接：本图（或全图）任务 + 未接 / 已放弃 / repeat 且已交
@@ -3708,6 +3737,24 @@ function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
   const stay: Entity[] = [];
   (s.entities || []).forEach((e2) => {
     if (e2.side === "player") { (e2 as any).mapName = lv; stay.push(e2); seen.add(roleKeyOf(e2)); return; }
+    // ★ 护送货物（questcargo_<questId>）：必须跟随玩家跨图。
+    //   否则它会走下面的「ally 分支」——没有 mapName → 默认回 start_map、又不在 partyIds
+    //   → 被 parkRole 停回原图，玩家到新图后 s.entities 里找不到它 → cargoAlive=false
+    //   → 任务板显示「货物：已丢失」（2026-10-17 实测：护送去 Mulberry Forest 一传送就丢）。
+    if (String(e2.id).startsWith(QUEST_CARGO_PREFIX) || String((e2 as any).entity_type) === "QUEST_CARGO") {
+      (e2 as any).mapName = lv;
+      if (snapParty && player) {
+        const ang = rnd(0, Math.PI * 2);
+        const cb = clampToBound(s, player.x + Math.cos(ang) * ALLY_FOLLOW_GAP_M, player.y + Math.sin(ang) * ALLY_FOLLOW_GAP_M);
+        e2.x = cb.x;
+        e2.y = cb.y;
+        e2.vx = 0;
+        e2.vy = 0;
+      }
+      stay.push(e2);
+      seen.add(roleKeyOf(e2));
+      return;
+    }
     if (String(e2.side) === "enemy") {
       // 本地怪（mapmob_/localmob_/zone_）由前端 localEnemies 按当前地图重建；
       // 切图时若不丢弃，会被带入下一张图（如 Town 出现 Dungeon 的怪）。
@@ -4644,6 +4691,42 @@ export async function handle_action(
       buildQuestView(s);
       await persistSys(context, s);
       return okResp(`「${def.title}」已交付，获得 ${rw || "无奖励"}`);
+    }
+
+    case "sys_quest_recover_cargo": {
+      // ★ 找回丢失的护送货物：在玩家身边重新生成（"直接回到用户旁边"）。
+      //   · 进行中但货物被打掉 → 原地补一个；
+      //   · 因货物被打掉而 failed → 连任务一起救活（status 回 active、重置限时计时），
+      //     超时失败的不救（那是玩家自己没赶上，救回来会立刻再超时）。
+      const id = str(params?.id).trim();
+      const def = questById(s, id);
+      if (!def) return okResp("没有这个任务");
+      const p = (s.quests || {})[String(def.id)];
+      if (!p || (p.status !== "active" && p.status !== "failed")) {
+        return okResp(`「${def.title}」不在进行中，无法找回货物`);
+      }
+      // 已有活货物 → 不用找回
+      const alive = (s.entities || []).find(
+        (e) => String(e.id) === String(p.cargoId) && e.alive !== false,
+      );
+      if (alive && p.cargoId) return okResp("货物还在，不用找回");
+      const wasFailedByCargo = p.status === "failed" && str((p as any).failReason) === "cargo";
+      spawnQuestCargo(s, def, p);
+      if (wasFailedByCargo) {
+        p.status = "active";
+        (p as any).failReason = "";
+        // 限时任务：按"重新接取"计（否则 acceptedTick 还是老的，下一 tick 立刻又判超时）
+        p.acceptedTick = Math.round(num(s.tick, 0));
+      }
+      refreshQuestStatus(s, def);
+      buildQuestView(s);
+      await persistSys(context, s);
+      pushEvent(s, `找回货物：${def.title}`);
+      return okResp(
+        wasFailedByCargo
+          ? `货物已找回（「${def.title}」重新开始，箱子就在你身边）`
+          : `货物已找回（${def.title}），就在你身边`,
+      );
     }
 
     case "sys_quest_abandon": {

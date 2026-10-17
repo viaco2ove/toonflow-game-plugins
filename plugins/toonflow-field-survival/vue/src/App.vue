@@ -569,6 +569,135 @@ const sysPlayerY = computed(() => state.value?.entities.find(e => e.side === "pl
 /** 已上报过的关卡名列表（避免重复上报） */
 let sysLevelsReported = "";
 
+/* ============================================================
+   ★ 护送货物 / 任务目的地（找回货物 · 寻路 · 目的地图标 · 到达按钮）
+   ------------------------------------------------------------
+   与 entry.ts 的约定：
+   - 货物实体 id = "questcargo_<questId>"，entity_type = "QUEST_CARGO"（side "ally"）
+   - questView.active[].objectives[] 里 arrive/explore 带 x/y/radius/map
+   - questView.active[].cargoLost = 货物不见了（被打掉 / 历史数据丢的）
+   ============================================================ */
+/** 是否护送货物实体（切图 / 清 ally 时必须放行） */
+function isQuestCargo(e: any): boolean {
+  return !!e && (String(e.id || "").startsWith("questcargo_") || String(e.entity_type) === "QUEST_CARGO");
+}
+
+/** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮） */
+const questDestinations = computed<any[]>(() => {
+  const out: any[] = [];
+  const seen = new Set<string>();
+  for (const q of (questView.value.active || [])) {
+    if (q.status !== "active") continue;
+    const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
+    if (!o || o.x === undefined || o.y === undefined) continue;
+    if (o.map && o.map !== currentLevelName.value) continue;   // 目的地不在这张图
+    const key = String(q.id);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: key,
+      title: String(q.title || ""),
+      x: Number(o.x),
+      y: Number(o.y),
+      radius: Math.max(0.5, Number(o.radius) || 3),
+      needConfirm: o.confirm === true,
+      atDest: !!q.atDest,
+      type: String(q.type || ""),
+    });
+  }
+  return out;
+});
+
+/** 玩家与某个目的地的距离（米） */
+function questDestDist(d: { x: number; y: number }): number {
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (!me) return Infinity;
+  return Math.hypot(d.x - me.x, d.y - me.y);
+}
+
+/** 切图落地后要继续走的任务目标（null = 无） */
+let pendingQuestWalk: { x: number; y: number; map: string; title: string } | null = null;
+
+/** ★ 寻路：点击后玩家自动走向任务目的地（复用已有 A* moveTo；跨图先传送再走） */
+function questGoToDest(id: string): void {
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (!me) { showToast("玩家还没进场"); return; }
+  const local = questDestinations.value.find((x) => x.id === id);
+  if (local) {
+    input.value.dx = 0;
+    input.value.dy = 0;
+    input.value.moveTo = { x: local.x, y: local.y };
+    recomputeMoveToPath(local.x, local.y);
+    showToast(local.title ? `自动寻路中：${local.title}` : "自动寻路中…");
+    return;
+  }
+  // 本图没有 → 找跨图目的地：先传送，落地后 pendingQuestWalk 接着走
+  for (const q of (questView.value.active || [])) {
+    if (String(q.id) !== id || q.status !== "active") continue;
+    const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
+    if (!o || o.x === undefined || o.y === undefined) { showToast("这个任务没有可寻路的目的地"); return; }
+    if (!o.map || o.map === currentLevelName.value) { showToast("目的地没有坐标，先打开地图看看"); return; }
+    pendingQuestWalk = { x: Number(o.x), y: Number(o.y), map: String(o.map), title: String(q.title || "") };
+    showToast(`目的地在${o.map}，先传送过去再走`);
+    onSysTravel(String(o.map));
+    return;
+  }
+  showToast("这个任务没有可寻路的目的地");
+}
+
+/** 找回丢失的护送货物（货物回到玩家身边） */
+function questRecoverCargo(id: string): void {
+  showToast("正在找回货物…");
+  runSysCmd("sys_quest_recover_cargo", { id });
+}
+
+/** ★ 走近目的地点的「到达」：先确认到达；若全部目标就此达成 → 自动交任务并发奖励。
+ *  （用户要求："走近显示『到达』按钮，点击后任务完成，进行奖励"。
+ *   达成不了的（还要采集/击杀）只确认到达，提示去任务板看进度。） */
+function onQuestArriveAtDest(id: string): void {
+  onQuestArrive(id);
+  let tries = 0;
+  const tryTurnIn = () => {
+    tries++;
+    const done = (questView.value.done || []).find((x: any) => String(x.id) === String(id));
+    if (done && done.status === "done") {
+      onQuestTurnin(id);
+      showToast(`「${String(done.title || "任务")}」完成，奖励已发放`);
+      return;
+    }
+    if (tries < 8) { setTimeout(tryTurnIn, 150); return; }   // 等宿主回推新 state（最多 ~1.2s）
+    showToast("已确认到达；目标还没全达成，打开任务板看看进度");
+  };
+  setTimeout(tryTurnIn, 220);
+}
+
+/** ★ 走近目的地时显示的「到达」浮动按钮（DOM，位置由 render() 每帧同步到 canvas 坐标） */
+const questArriveBtn = ref<{ id: string; label: string; x: number; y: number } | null>(null);
+const questArriveBtnEl = ref<HTMLDivElement | null>(null);
+
+/** 10Hz 刷新「到达」按钮的显隐与目标（render() 只负责摆位置） */
+function updateQuestArriveBtn(): void {
+  const me = state.value?.entities.find((e) => e.side === "player");
+  if (!me || state.value?.phase !== "playing") {
+    if (questArriveBtn.value) questArriveBtn.value = null;
+    return;
+  }
+  let best: (typeof questArriveBtn)["value"] = null;
+  let bestD = Infinity;
+  for (const d of questDestinations.value) {
+    // 只有「需要点按钮确认」的目的地才弹「到达」（普通走进就完成的不打扰玩家）
+    if (!d.needConfirm) continue;
+    const dist = Math.hypot(d.x - me.x, d.y - me.y);
+    if (dist <= d.radius && dist < bestD) {
+      bestD = dist;
+      best = { id: d.id, label: d.atDest ? "交付" : "到达", x: d.x, y: d.y };
+    }
+  }
+  const same = best && questArriveBtn.value && best.id === questArriveBtn.value.id && best.label === questArriveBtn.value.label;
+  if (!same) questArriveBtn.value = best;
+}
+
+
 function reportLevels(): void {
   let items: { id: string; display: string }[] = [];
   try {
@@ -2250,6 +2379,17 @@ async function switchLevel(levelName: string): Promise<void> {
       lastLocalPose = { x: me.x, y: me.y, facing: me.facing };
     }
     portalLatchPending = true;
+    // ★ 任务寻路（跨图）：若是为了任务目的地而传送过来的，落地后立刻接着 A* 走过去
+    if (pendingQuestWalk && pendingQuestWalk.map === levelName) {
+      const pw = pendingQuestWalk;
+      pendingQuestWalk = null;
+      // 等一帧让 walkGrid / mapCfg 就绪后再设 moveTo（下面 rebuildWalkGrid 已完成，可直接设）
+      input.value.dx = 0;
+      input.value.dy = 0;
+      input.value.moveTo = { x: pw.x, y: pw.y };
+      recomputeMoveToPath(pw.x, pw.y);
+      showToast(`已到达${levelName}，继续走向目的地：${pw.title || ""}`);
+    }
     // 清掉本图野怪（旧图的怪不跟过来）
     // ★ 旧图 NPC（mapnpc_*）同样不跟过来 —— 否则城镇→森林后，城镇 NPC 坐标恰好落在
     //   新图出生点几十米内（坐标都是各自图内的米制），直接"串场"显示在森林里。
@@ -2260,13 +2400,26 @@ async function switchLevel(levelName: string): Promise<void> {
       );
     // ★ ally 只在 start_map 出现：玩家离开起始地图后清除所有 allies，
     //   避免"所有地图都出现霍魁"的全图漫游 bug。
-    //   获取 start_map 时用 DEFAULT_START_LEVEL 兜底（永不抛错）。
+    //   ⚠️ 但护送货物（questcargo_*）必须**跟着玩家跨图** —— 它也是 side:"ally"，
+    //      一起清掉就变成「一传送货物就丢失」（任务板显示 货物：已丢失）。
+    //      获取 start_map 时用 DEFAULT_START_LEVEL 兜底（永不抛错）。
     const startMap = (await import("./mapConfig")).DEFAULT_START_LEVEL;
     if (s && levelName !== startMap) {
       const before = s.entities.length;
-      s.entities = s.entities.filter((e) => e.side !== "ally");
+      s.entities = s.entities.filter((e) => e.side !== "ally" || isQuestCargo(e));
       if (before !== s.entities.length) {
         console.info("[field-survival] 离开起始地图 " + startMap + " → 清除 " + (before - s.entities.length) + " 个 allies");
+      }
+      // 货物贴到玩家新落点旁边（后端 syncQuestArriveAuto 之后每 tick 也会拉过来）
+      if (me) {
+        for (const e of s.entities) {
+          if (!isQuestCargo(e)) continue;
+          const ang = Math.random() * Math.PI * 2;
+          e.x = me.x + Math.cos(ang) * 1.2;
+          e.y = me.y + Math.sin(ang) * 1.2;
+          (e as any).vx = 0;
+          (e as any).vy = 0;
+        }
       }
     }
     // ★ game.md 68-69（刷新机制）：离开地图时记住"该图此刻的死怪"和离开时刻；
@@ -3908,6 +4061,78 @@ function drawVfxLayer(
      2) A* 路径：从玩家到目标点的虚线（帮助确认寻路真的绕开了墙）
      3) 目标标记：脉冲圆环 + 中心十字，移动中一直显示
    ============================================================ */
+/** ★ 任务目的地图标：旗帜 + 任务名 + 判定范围圈。
+ *  走近（玩家进入 radius）时旗帜变金、圈变实线，提示「可以交付了」。
+ *  目的地在别的图时不画（questDestinations 已过滤）。 */
+function drawQuestDestLayer(
+  ctx: CanvasRenderingContext2D,
+  wx2px: (mx: number) => number,
+  wz2py: (mz: number) => number,
+  m2px: (m: number) => number,
+): void {
+  const dests = questDestinations.value;
+  if (!dests.length) return;
+  const me = state.value?.entities.find((e) => e.side === "player");
+  const bob = Math.sin(_animTick * 0.08) * 3;   // 旗帜上下浮动
+  for (const d of dests) {
+    const px = wx2px(d.x);
+    const py = wz2py(d.y);
+    const near = me ? Math.hypot(d.x - me.x, d.y - me.y) <= d.radius : false;
+    const rPx = Math.max(8, m2px(d.radius));
+    ctx.save();
+    // 判定范围圈：走近=金色实线，远=青色虚线
+    ctx.globalAlpha = near ? 0.9 : 0.45;
+    ctx.strokeStyle = near ? "#ffd76a" : "#6ec6ff";
+    ctx.lineWidth = near ? 2.5 : 1.5;
+    ctx.setLineDash(near ? [] : [5, 4]);
+    ctx.beginPath();
+    ctx.ellipse(px, py, rPx, rPx * 0.55, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // 圈内淡填充（走近更明显）
+    ctx.globalAlpha = near ? 0.16 : 0.07;
+    ctx.fillStyle = near ? "#ffd76a" : "#6ec6ff";
+    ctx.beginPath();
+    ctx.ellipse(px, py, rPx, rPx * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // 旗杆
+    ctx.globalAlpha = 1;
+    const poleH = 26;
+    ctx.strokeStyle = "#e8e2d0";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px, py + bob);
+    ctx.lineTo(px, py - poleH + bob);
+    ctx.stroke();
+    // 旗面（三角）：走近变金色
+    ctx.fillStyle = near ? "#ffd76a" : "#6ec6ff";
+    ctx.beginPath();
+    ctx.moveTo(px, py - poleH + bob);
+    ctx.lineTo(px + 15, py - poleH + 6 + bob);
+    ctx.lineTo(px, py - poleH + 12 + bob);
+    ctx.closePath();
+    ctx.fill();
+    // 目的地文字（带黑描边，任何底色都看得清）
+    ctx.globalAlpha = 1;
+    ctx.font = "bold 12px 'Microsoft YaHei', sans-serif";
+    ctx.textAlign = "center";
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,.65)";
+    const label = d.title ? `📍 ${d.title}` : "📍 目的地";
+    ctx.strokeText(label, px, py - poleH - 8 + bob);
+    ctx.fillStyle = near ? "#ffe9a8" : "#cfe8ff";
+    ctx.fillText(label, px, py - poleH - 8 + bob);
+    // 走近时的提示
+    if (near) {
+      ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
+      ctx.strokeText("可以交付", px, py + 16);
+      ctx.fillStyle = "#ffd76a";
+      ctx.fillText("可以交付", px, py + 16);
+    }
+    ctx.restore();
+  }
+}
+
 function drawClickFxLayer(
   ctx: CanvasRenderingContext2D,
   wx2px: (mx: number) => number,
@@ -4664,6 +4889,9 @@ function render() {
   // —— ★ 点击寻路可视化：A* 路径虚线 + 目标标记 + 点击涟漪 ——
   drawClickFxLayer(ctx, wx2px, wz2py, sx);
 
+  // —— ★ 任务目的地图标：旗帜 + 名字 + 判定范围圈（走近点亮）——
+  drawQuestDestLayer(ctx, wx2px, wz2py, m2px);
+
   // ★ 方案一：自动逼近目标高亮（玩家正在走过去时，怪物脚下画脉冲红圈）
   const aaTarget = autoApproachTarget.value;
   if (aaTarget) {
@@ -4721,6 +4949,36 @@ function render() {
       ctx.restore();
     }
   }
+
+  // —— ★ 「到达」浮动按钮：把 DOM 按钮摆到目的地的 canvas 坐标上（每帧同步）——
+  //   scale：render() 的逻辑像素 → CSS 像素；ox/oy：canvas 在 .stage-rotate 内的偏移
+  //   （.stage-rotate 是 position:absolute 的定位祖先，且 canvas 是 flex 居中，可能有黑边偏移）
+  syncQuestArriveBtnPos(wx2px, wz2py, {
+    scale: (c.clientWidth || c.width) / (W || 1),
+    ox: c.offsetLeft || 0,
+    oy: c.offsetTop || 0,
+    vw: c.clientWidth || c.width,
+    vh: c.clientHeight || c.height,
+  });
+}
+
+/** 把「到达」浮动按钮的 DOM 位置同步到目的地屏幕坐标（canvas 逻辑像素 → CSS 像素）。 */
+function syncQuestArriveBtnPos(
+  wx2px: (mx: number) => number,
+  wz2py: (mz: number) => number,
+  cv: { scale: number; ox: number; oy: number; vw: number; vh: number },
+): void {
+  const el = questArriveBtnEl.value;
+  const btn = questArriveBtn.value;
+  if (!el || !btn) return;
+  const px = cv.ox + wx2px(btn.x) * cv.scale;
+  const py = cv.oy + wz2py(btn.y) * cv.scale;
+  el.style.left = `${px.toFixed(1)}px`;
+  el.style.top = `${py.toFixed(1)}px`;
+  // 走出画面就隐藏（避免按钮卡在边缘外）
+  const off = px < -40 || py < -40 || px > cv.vw + 40 || py > cv.vh + 40;
+  el.style.opacity = off ? "0" : "1";
+  el.style.pointerEvents = off ? "none" : "auto";
 }
 
 /**
@@ -5670,6 +5928,8 @@ function loop(ts: number) {
     updateNearBoard();
     // ★ 可拾取物：10Hz 刷新附近可拾取物（走近 → 出「是否拾取」提示）
     updateNearPickup();
+    // ★ 任务目的地：10Hz 刷新「到达」浮动按钮的显隐
+    updateQuestArriveBtn();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
     if (ts - lastSendAt >= SEND_MS) {
       lastSendAt = ts;
@@ -6669,6 +6929,8 @@ watch(() => state.value?.phase, (p) => {
             @turnin="onQuestTurnin"
             @abandon="onQuestAbandon"
             @arrive="onQuestArrive"
+            @go="questGoToDest"
+            @recover="questRecoverCargo"
             @ask="(id: string, q: string) => onQuestAsk(id, q)"
             @generate="onQuestGenerate"
           />
@@ -6808,6 +7070,17 @@ watch(() => state.value?.phase, (p) => {
           @click="onCanvasClick"
           @contextmenu.prevent="onRightClick"
         ></canvas>
+        <!-- ★ 任务目的地「到达」浮动按钮：走近目的地才出现（render() 每帧同步位置） -->
+        <div
+          v-if="questArriveBtn"
+          ref="questArriveBtnEl"
+          class="quest-arrive-fab"
+          :title="questArriveBtn.label === '交付' ? '目标已达成，点击交付' : '已到达目的地，点击确认'"
+          @click.stop="onQuestArriveAtDest(questArriveBtn.id)"
+        >
+          <span class="quest-arrive-fab__icon">📍</span>
+          <span class="quest-arrive-fab__txt">{{ questArriveBtn.label }}</span>
+        </div>
       </div>
 
       <div class="events">
@@ -7281,6 +7554,34 @@ body {
 .stage-rotate--on {
   transform: rotate(90deg);
   /* 旋转 90° 后，原本"宽度"变成"高度"——再 transform-origin: center */
+}
+/* ★ 任务目的地「到达」浮动按钮（DOM 覆盖在 canvas 上，位置由 render() 每帧同步） */
+.quest-arrive-fab {
+  position: absolute;
+  transform: translate(-50%, -120%);   /* 锚在目的地图标上方 */
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 215, 106, 0.85);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(70, 54, 20, 0.95), rgba(40, 30, 10, 0.95));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.55), 0 0 12px rgba(255, 215, 106, 0.25);
+  color: #ffe9a8;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  animation: qafab-in 0.18s ease-out;
+  transition: opacity 0.12s linear;
+}
+.quest-arrive-fab:active { transform: translate(-50%, -120%) scale(0.96); }
+.quest-arrive-fab__icon { font-size: 13px; }
+.quest-arrive-fab__txt { letter-spacing: 0.5px; }
+@keyframes qafab-in {
+  from { opacity: 0; transform: translate(-50%, -110%) scale(0.85); }
+  to   { opacity: 1; transform: translate(-50%, -120%) scale(1); }
 }
 .stage {
   display: block;
