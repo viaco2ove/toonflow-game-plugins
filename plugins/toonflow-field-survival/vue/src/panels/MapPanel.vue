@@ -117,7 +117,7 @@ watch(
     <div class="mp-list">
       <div class="mp-list__head">全部地图（{{ mapPts.length }}）</div>
       <div v-for="n in mapPts" :key="'row' + n.name" class="mp-row" :class="{ 'mp-row--cur': n.name === currentMap }">
-        <span class="mp-row__name">{{ n.display || n.name }}</span>
+        <span class="mp-row__name">{{ n.display || n.name }}({{n.name }})</span>
         <span v-if="levelRangeLabel(n.name)" class="mp-row__lv">{{ levelRangeLabel(n.name) }}</span>
         <span v-if="n.name === currentMap" class="mp-row__tag">当前</span>
         <button class="mp-row__btn" :disabled="n.name === currentMap" @click="emit('travel', n.name)">传送</button>
