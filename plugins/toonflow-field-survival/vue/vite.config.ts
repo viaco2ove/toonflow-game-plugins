@@ -55,6 +55,20 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
           res.end("Not found: " + filePath);
           return;
         }
+        // ★ 二进制资源（.tbg 是 base64+zip 的视觉地图包）必须按 Buffer 原样回，
+        //   不能 readFileSync(...,"utf-8") —— 非法字节会被替换成 U+FFFD，zip 直接损坏。
+        if (/\.(tbg|zip|png|jpg|jpeg|webp|tmx|tsx|bin)$/i.test(filePath)) {
+          try {
+            const buf = readFileSync(filePath);
+            res.setHeader("Content-Type", "application/octet-stream");
+            res.setHeader("Content-Length", String(buf.length));
+            res.end(buf);
+          } catch (e) {
+            res.statusCode = 500;
+            res.end(String(e));
+          }
+          return;
+        }
         try {
           const content = readFileSync(filePath, "utf-8");
           res.setHeader("Content-Type", "application/json");
@@ -477,7 +491,42 @@ async function seedQuestDefs() {
   }
   log("⚠ 未找到故事任务表 quests.json（任务板为空，可点「AI 生成委托」）");
 }
-/* 拟真世界书摘要：dev-host 桩没有真实世界书服务，用 test_state.json 的
+/* ★ 拟真视觉地图包：把 map_design/<story>.tbg 播种成插件模板数据
+ *   dataKey = "map_visual:<story>"（sessionId="all"）—— 与真宿主机上
+ *   python -m toon_plugins plugin_session_data -u ... -story <story> 写的是同一个 key。
+ *   不播种的后果（2026-10-17 实测）：dev-host 下 storyMap.loadStoryMapBundle() 取不到模板 →
+ *   bundle=null → mapConfig.listLevelNames() 返回空（LEVEL_FILES 已清空）→
+ *   上报关卡的兜底分支把「当前关 + 后端回显的 mapNodes」当列表，而 mapNodes 又是前端上报产生的
+ *   → 每轮自增，地图面板出现 4 个一模一样的「森林」。 */
+async function seedStoryVisualMap() {
+  const tplKey = "map_visual:" + STORY;
+  const scopes = new Set(["all"]);
+  if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
+  for (const sc of scopes) {
+    if (window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sc, tplKey))) { log("✓ 视觉地图模板已存在，跳过播种: " + tplKey); return; }
+  }
+  const cands = [
+    "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + ".tbg",
+    "/story-data/toonflow-field-survival/map_design_pre/" + encodeURIComponent(STORY) + ".tbg",
+  ];
+  for (const u of cands) {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) continue;
+      const buf = await r.arrayBuffer();
+      let bin = "";
+      const bytes = new Uint8Array(buf);
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      const b64 = btoa(bin);
+      const value = { format: "tbg", encoding: "base64+zip", data: b64, story: STORY };
+      for (const sc of scopes) window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sc, tplKey), value);
+      log("✓ 视觉地图模板已播种：" + u + " → " + tplKey + "（" + bytes.length + "B → base64 " + b64.length + "，scope: " + [...scopes].join(",") + "）");
+      return;
+    } catch (e) { log("! 视觉地图模板播种失败 " + u + ": " + (e && e.message ? e.message : e)); }
+  }
+  log("⚠ 未找到 " + STORY + " 的 .tbg 视觉地图包（地图面板会退化成只有当前关；可用 -build 命令重新打包）");
+}
+/* ★ 拟真世界书摘要：dev-host 桩没有真实世界书服务，用 test_state.json 的
  *   description / materials / monsters 拼一份与真实宿主同口径的「常驻世界书条目 + 故事物资」，
  *   否则商城 agent 读到的 worldBookDigest 恒为空串，生成结果等同降级。 */
 function buildWorldBookDigest() {
@@ -567,6 +616,13 @@ function buildEntryCtx() {
     pluginId: ENTRY_PLUGIN_ID,
     userId: 1,
     sessionId,
+    // ★ 世界身份：entry.ensureStoryVisualMap 靠 worldName 去查 "map_visual:<story>" 模板，
+    //   缺失时会直接 SKIP → 会话里永远没有视觉地图包（地图面板只剩当前关）。
+    worldName: STORY,
+    // ★ 注意：本函数在 PAGE 模板的 <script> 里，是原样下发浏览器的裸 JS —— 严禁 TS 语法（as any / 类型标注），
+    //   否则运行时 Uncaught SyntaxError: Unexpected identifier 'as'。
+    worldId: (typeof window !== "undefined" && window.__STORY_WORLD_ID__) || undefined,
+    storyId: (typeof window !== "undefined" && window.__STORY_WORLD_ID__) || undefined,
     roles: (storyData && storyData.roles) || [],
     playerCard: (window.__STORY_PLAYER_CARD__ || {}),
     worldBookDigest: buildWorldBookDigest(),
@@ -575,6 +631,9 @@ function buildEntryCtx() {
         get: async (k) => { const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return rec ? rec.value : null; },
         set: async (k, v) => { window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k), v); return null; },
         remove: async (k) => { window.__pdRemove(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return null; },
+        // ★ 模板读取（sessionId="all" 跨会话共享）：真实宿主 toonflowTsApi 提供同名方法。
+        //   缺它会让 entry.ensureStoryVisualMap 打印「SKIP: getTemplate 不存在（旧后端）」。
+        getTemplate: async (k) => { const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, "all", k)); return rec ? rec.value : null; },
         list: async () => {
           const out = [];
           for (const key of window.__devHostPluginData.keys()) {
@@ -954,6 +1013,8 @@ async function loadStoryData() {
     };
     // ★ 把 sessionId 暴露给 game iframe（系统面板买/卖物品要发请求到服务器）
     if (typeof window !== "undefined") window.__STORY_SESSION_ID__ = sessionId;
+    // ★ worldId 暴露出来：buildEntryCtx 要拼进 ctx（entry.ensureStoryVisualMap 用 worldName 查模板）
+    if (typeof window !== "undefined") window.__STORY_WORLD_ID__ = worldId || undefined;
     log("✓ loaded story from server: " + STORY + " (roles: " + roles.length + ", materials: " + materials.length + ", session: " + sessionId + ")");
     return true;
   } catch (e) {
@@ -1086,6 +1147,7 @@ window.addEventListener("message", async (e) => {
     await loadEntityTypes();
     await mergeLocalMaterials(); // ★ 世界书补全：服务端只回 inventory，本地 test_state.json 才是完整物资条录
     await seedQuestDefs();        // ★ 任务表播种：故事目录 quests.json → 插件会话数据 quest_defs
+    await seedStoryVisualMap();   // ★ 视觉地图包播种：map_design/<story>.tbg → 模板 map_visual:<story>
     log("HOST: story+entityTypes loaded, pushing select state");
     // ★ 直接同步推 select state（不用 setTimeout，background tab 上不可靠）
     lastState = {

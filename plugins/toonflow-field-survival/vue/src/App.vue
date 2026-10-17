@@ -578,11 +578,16 @@ function reportLevels(): void {
     items = [];
   }
   if (!items.length) {
-    items = [
-      { id: currentLevelName.value, display: getLevelDisplayName(currentLevelName.value) },
-      ...sysMapNodes.value.map((n: any) => ({ id: String(n?.name || ""), display: String(n?.display || n?.name || "") }))
-    ].filter((i: any) => i.id);
+    // ★ 兜底：拿不到关卡清单（故事视觉地图包没加载上）时，至少报当前关。
+    //   ⚠️ 不要再拼 sysMapNodes —— 那是后端按「我们上报的 levels」回显的 mapNodes，
+    //      拼进来会形成回声环：本轮上报 [当前关] → 回显 1 个节点 → 下轮报 [当前关,节点]
+    //      → 回显 2 个……地图面板出现一排同名关卡（2026-10-17 实测 4 个「森林」）。
+    items = [{ id: currentLevelName.value, display: getLevelDisplayName(currentLevelName.value) }]
+      .filter((i: any) => i.id);
   }
+  // ★ 双保险：按 id 去重（同一个关名出现多次只保留第一次）
+  const seen = new Set<string>();
+  items = items.filter((i) => (seen.has(i.id) ? false : (seen.add(i.id), true)));
   const key = items.map(i => i.id).join("|");
   if (!items.length || key === sysLevelsReported) return;
   sysLevelsReported = key;
