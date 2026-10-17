@@ -1377,11 +1377,12 @@ function install(): void {
       if (action === "page") {
         const k = params?.kind;
         const d2 = params?.delta || 0;
+        // ★ 对齐 entry.js case "page"：4 格一页，最后一页再点回到第一页（total 至少 1，防 %0 = NaN）
         if (k === "skill") {
-          const total = Math.ceil(state.skills.length / 4);
+          const total = Math.max(1, Math.ceil((state.skills || []).length / 4));
           state.skillPage = ((state.skillPage + d2) % total + total) % total;
         } else if (k === "item") {
-          const total = Math.ceil(state.items.length / 4);
+          const total = Math.max(1, Math.ceil((state.items || []).length / 4));
           state.itemPage = ((state.itemPage + d2) % total + total) % total;
         }
         push();
@@ -1457,6 +1458,42 @@ function install(): void {
           rewriteCardItem(name, Math.max(0, Number(it.count) || 0), String((it as any).desc || ""));
         } else {
           state.events.push(`[mock] 「${name}」不在背包中`);
+        }
+        push();
+        return;
+      }
+      if (action === "sys_sort") {
+        // ★ 对齐 entry.js case "sys_sort"：kind=item 重排背包 / kind=skill 重排技能栏
+        const kind = String(params?.kind || "item");
+        const order: string[] = Array.isArray(params?.order)
+          ? params.order.map((x: any) => String(x || "")).filter(Boolean)
+          : [];
+        if (kind === "skill") {
+          const keyOf = (v: any) => String(v || "")
+            .replace(/[（(][^）)]*[）)]/g, " ").replace(/lv\s*\d+/gi, " ").trim().toLowerCase();
+          const groups = new Map<string, any[]>();
+          const seq: string[] = [];
+          (state.skills || []).forEach((sk: any) => {
+            const k = keyOf(sk.name);
+            if (!k) return;
+            let g = groups.get(k);
+            if (!g) { g = []; groups.set(k, g); seq.push(k); }
+            g.push(sk);
+          });
+          if (groups.size) {
+            const keys = order.map(keyOf).filter((k) => k && groups.has(k));
+            seq.forEach((k) => { if (!keys.includes(k)) keys.push(k); });
+            state.skills = keys.flatMap((k) => groups.get(k) as any[]);
+            state.events.push("[mock] 技能顺序已更新");
+          }
+        } else {
+          const byName = new Map((state.items || []).map((x: any) => [String(x.name), x]));
+          const next: any[] = [];
+          order.forEach((n) => { const it = byName.get(n); if (it) { next.push(it); byName.delete(n); } });
+          byName.forEach((it) => next.push(it));
+          state.items = next;
+          (state as any).bagOrder = next.map((x: any) => String(x.name));
+          state.events.push("[mock] 背包顺序已更新");
         }
         push();
         return;

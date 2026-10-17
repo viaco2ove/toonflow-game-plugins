@@ -370,8 +370,12 @@ interface Chest { id: string; x: number; y: number; opened: boolean; tier?: numb
   bornTick?: number; }
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
-  type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; effects_type?: string; }
-interface ItemSlot { name: string; count: number; heal: number; kind?: string; }
+  type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; effects_type?: string;
+  /** ★ 快捷栏占位空格（补齐到 4 的整数倍用）：前端置灰、点击无效 */
+  empty?: boolean; }
+interface ItemSlot { name: string; count: number; heal: number; kind?: string;
+  /** ★ 快捷栏占位空格（补齐到 4 的整数倍用）：前端置灰、点击无效 */
+  empty?: boolean; }
 
 export interface FieldSurvivalState {
   phase: "select" | "playing" | "over";
@@ -463,6 +467,8 @@ export interface FieldSurvivalState {
   bagMeta?: Record<string, BagItem>;
   /** ★ v5：背包自定义排列顺序（物品名数组） */
   bagOrder?: string[];
+  /** ★ 技能栏自定义排列顺序（skillKey 数组；与快捷栏、技能面板同步） */
+  skillOrder?: string[];
   /** ★ v5：商城商品 */
   shopGoods?: ShopGood[];
   shopSource?: "agent" | "builtin";
@@ -692,10 +698,66 @@ function splitSkillList(raw) {
   if (buf.trim()) out.push(buf);
   return out;
 }
-/** 从用户参数卡取技能（拆分/去重/lv 解析），套用 skillMeta 用户修改，补足占位技能 */
-function buildSkills(card: Record<string, unknown> | undefined, n = 8, meta?: Record<string, any>): SkillSlot[] {
+/** ★ 快捷栏一页几格（HUD 物品栏 / 技能栏固定 4 列；前后端必须一致） */
+const QUICKBAR_PAGE_SIZE = 4;
+
+/** ★ 快捷栏补齐：把列表补到 padTo 的整数倍（至少一页），空格用 empty 占位。
+ *  以前是「补齐到固定 8 格」，结果背包/技能超过 8 个时第 9 个起永远翻不出来。 */
+function padQuickbar<T>(list: T[], padTo: number, make: () => T): T[] {
+  const target = Math.max(padTo, Math.ceil(list.length / padTo) * padTo);
+  while (list.length < target) list.push(make());
+  return list;
+}
+
+/** ★ 快捷栏页码夹紧：物品/技能列表变短（用光/丢弃）后，页码不能停在不存在的页上 */
+function clampQuickbarPages(s: FieldSurvivalState): void {
+  const ip = Math.max(1, Math.ceil((s.items || []).length / QUICKBAR_PAGE_SIZE));
+  const sp = Math.max(1, Math.ceil((s.skills || []).length / QUICKBAR_PAGE_SIZE));
+  s.itemPage = Math.min(Math.max(0, Math.round(num(s.itemPage, 0))), ip - 1);
+  s.skillPage = Math.min(Math.max(0, Math.round(num(s.skillPage, 0))), sp - 1);
+}
+
+/** ★ 技能排序：参数卡 skills 是「源之力（lv1，失控）（lv1）」这种带注记的脏字符串，
+ *  直接按下标移动会把注记也一起搬乱。这里按 skillKey 分组（同名技能的多份原始条目
+ *  算一组，内部相对顺序不变），再按 order 给出的名字顺序重排；
+ *  order 里没点到的技能保持原相对顺序排在后面。返回重排后的原始条目数组。 */
+function reorderCardSkills(card: Record<string, any> | undefined, order: string[]): unknown[] {
+  const raw = Array.isArray(card?.skills) ? (card as Record<string, any>).skills as unknown[] : [];
+  const groups = new Map<string, unknown[]>();
+  const seq: string[] = [];
+  raw.forEach((x) => {
+    const k = skillKey(x);
+    if (!k) return;
+    let g = groups.get(k);
+    if (!g) { g = []; groups.set(k, g); seq.push(k); }
+    g.push(x);
+  });
+  if (!groups.size) return [];
+  const keys = (order || []).map((n) => skillKey(n)).filter((k) => !!k && groups.has(k));
+  seq.forEach((k) => { if (!keys.includes(k)) keys.push(k); });
+  const out: unknown[] = [];
+  keys.forEach((k) => { (groups.get(k) as unknown[]).forEach((x) => out.push(x)); });
+  return out;
+}
+
+/** ★ 断线重连 / 宿主参数卡回灌时，按 s.skillOrder 还原技能顺序
+ *  （宿主可能还没收到写回，直接用它下发的 skills 会把顺序冲掉） */
+function applyCardSkillOrder(card: Record<string, any>, order?: string[]): void {
+  if (!Array.isArray(order) || !order.length) return;
+  if (!Array.isArray(card?.skills) || !card.skills.length) return;
+  const next = reorderCardSkills(card, order);
+  if (next.length) card.skills = next;
+}
+
+/** 从用户参数卡取技能（拆分 / 同名合并取最高 lv），套用 skillMeta 用户修改。
+ *  ★ fix①：原实现「同名技能按出现次数改名」→ 参数卡里重复出现的技能会变成
+ *    「暗核共鸣2 / 暗核共鸣3 / 源之力2 / 源之力3」这种**假技能**占满快捷栏，
+ *    把真正的新技能挤到第 9 格之后（快捷栏只有 8 格 → 永远翻不出来）。
+ *    现在同名只保留一格，lv 取最大值。
+ *  ★ fix②：不再硬编码 8 格上限，只补到 4 的整数倍（快捷栏一页 4 格）。 */
+function buildSkills(card: Record<string, unknown> | undefined, padTo = QUICKBAR_PAGE_SIZE, meta?: Record<string, any>): SkillSlot[] {
   const raw = Array.isArray(card?.skills) ? (card!.skills as unknown[]) : [];
-  const seen = new Map<string, number>();
+  const seen = new Map<string, number>(); // 归一化技能名 → names 下标
   const names: string[] = [];
   const lvs: number[] = [];
   raw.forEach((s) => {
@@ -705,18 +767,20 @@ function buildSkills(card: Record<string, unknown> | undefined, n = 8, meta?: Re
       if (!nm) return;
       const lvM = String(typeof p === "string" ? p : str((p as any)?.name)).match(/lv\s*(\d+)/i);
       const lv = lvM ? Math.max(1, Math.round(Number(lvM[1]))) : 1;
-      const c = (seen.get(nm) || 0) + 1;
-      seen.set(nm, c);
-      names.push(c === 1 ? nm : `${nm}${c}`);
-      lvs.push(lv);
+      const at = seen.get(nm.toLowerCase());
+      if (at == null) {
+        seen.set(nm.toLowerCase(), names.length);
+        names.push(nm);
+        lvs.push(lv);
+      } else {
+        lvs[at] = Math.max(lvs[at] || 1, lv);
+      }
     });
   });
-  const out: SkillSlot[] = [];
-  for (let i = 0; i < n; i++) {
-    const name = names[i] || (i < 4 ? `技能${i + 1}` : `备用技${i - 3}`);
+  const out: SkillSlot[] = names.map((name, i) => {
     const base = inferSkillType(name);
     const m = meta && meta[skillKey(name)];
-    out.push({
+    return {
       name,
       power: num(m?.power, 12 + i * 3),
       cost: num(m?.cost, 0),
@@ -727,46 +791,48 @@ function buildSkills(card: Record<string, unknown> | undefined, n = 8, meta?: Re
       lv: num(m?.lv, lvs[i] || 1),
       buff_type: m?.buff_type || "",
       effects_type: m?.effects_type || "",
-    });
-  }
-  return out;
+    };
+  });
+  return padQuickbar(out, padTo, () => ({
+    name: "", power: 0, cost: 0, cd: 0, cdLeft: 0, empty: true,
+  }));
 }
 
 /** 从用户参数卡取物品，补足占位物品。
  * ★ HUD 物品栏显示修复：原来直接把 "银鲳×16（钓鱼累积…）" 整串当 name + 写死 count=2，
  *   导致 HUD 显示 "银鲳×16（…）×2"，且 useItem 拿带尾巴的字符串去 useBagItem.find(name)
  *   匹配不到合并后的纯名 "银鲳" → 静默返回 "不在背包中" → 点击没反应、不消耗、无特效。
- *   现在按 parseItemRaw 解析（剥注记/×N），用纯名 + 实际合并数量；同名多份合并到一格。 */
-function buildItems(card: Record<string, unknown> | undefined, n = 8): ItemSlot[] {
+ *   现在按 parseItemRaw 解析（剥注记/×N），用纯名 + 实际合并数量；同名多份合并到一格。
+ * ★ fix③：原来只生成固定 8 格（`n=8`），第 9 件起的物品**永远翻不出来**
+ *   （快捷栏一页 4 格 → 最多 2 页就回到第一页，用户看到的现象）。
+ *   现在不设上限，只补到 4 的整数倍。
+ * ★ fix④：同名合并原来写的是 `counts[counts.length-1] += p.count`，只对**连续**同名正确；
+ *   背包里出现 A,B,A 这种非连续同名时，A 的数量会被加到 B 上。改为按名下标累加。 */
+function buildItems(card: Record<string, unknown> | undefined, padTo = QUICKBAR_PAGE_SIZE): ItemSlot[] {
   const raw = Array.isArray(card?.items) ? (card!.items as unknown[]) : [];
   const parsed = raw.map(parseItemRaw).filter((p) => p && p.name && p.count > 0);
-  const seen = new Map<string, number>();
+  const seen = new Map<string, number>(); // 归一化物品名 → 下标
   const names: string[] = [];
   const counts: number[] = [];
   parsed.forEach((p) => {
     const k = itemKey(p.name);
     if (!k) return;
-    const c = (seen.get(k) || 0) + 1;
-    seen.set(k, c);
-    if (c === 1) {
+    const at = seen.get(k);
+    if (at == null) {
+      seen.set(k, names.length);
       names.push(p.name);
       counts.push(p.count);
     } else {
-      counts[counts.length - 1] += p.count;
+      counts[at] += p.count;
     }
   });
-  const out: ItemSlot[] = [];
-  for (let i = 0; i < n; i++) {
-    if (names[i]) {
-      const meta = parsed.find((p) => itemKey(p.name) === itemKey(names[i]));
-      const kind = meta?.kind || guessKind(names[i]);
-      const heal = meta?.heal ?? defaultHeal(names[i], kind);
-      out.push({ name: names[i], count: counts[i], kind, heal });
-    } else {
-      out.push({ name: i < 4 ? `物品${i + 1}` : `备用物${i - 3}`, count: 1, heal: 20 });
-    }
-  }
-  return out;
+  const out: ItemSlot[] = names.map((name, i) => {
+    const meta = parsed.find((p) => itemKey(p.name) === itemKey(name));
+    const kind = meta?.kind || guessKind(name);
+    const heal = meta?.heal ?? defaultHeal(name, kind);
+    return { name, count: counts[i], kind, heal };
+  });
+  return padQuickbar(out, padTo, () => ({ name: "", count: 0, heal: 0, empty: true }));
 }
 
 function makeEntity(
@@ -3381,8 +3447,8 @@ function patchCard(s: FieldSurvivalState, patch: Record<string, any>): void {
   s.playerCard = card;
   s.writeback = { ...((s.writeback || {}) as Record<string, any>), ...patch };
   s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-  if (Array.isArray(patch.items)) s.items = buildItems(card, 8);
-  if (Array.isArray(patch.skills)) s.skills = buildSkills(card, 8, s.skillMeta);
+  if (Array.isArray(patch.items)) { s.items = buildItems(card); clampQuickbarPages(s); }
+  if (Array.isArray(patch.skills)) { s.skills = buildSkills(card, QUICKBAR_PAGE_SIZE, s.skillMeta); clampQuickbarPages(s); }
 }
 
 /** 宿主注入的参数卡若被外部改动，以宿主为准（保证与动态参数卡同步） */
@@ -3395,9 +3461,18 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
     c?.level ?? null, c?.exp ?? null, c?.hp ?? null, c?.mp ?? null,   // ★ 等级系统字段
   ]);
   if (sig(card) === sig(cur)) return;
-  s.playerCard = card;
-  s.items = buildItems(card, 8);
-  s.skills = buildSkills(card, 8, s.skillMeta);
+  // ★ 技能排序：宿主下发的参数卡可能还没收到写回（顺序是旧的），
+  //   先用持久化的 skillOrder 还原再 build，避免排序被冲掉。
+  //   这里只对 skills 做浅拷贝，避免改到宿主 context 对象本身。
+  let cardForBuild: Record<string, any> = card as Record<string, any>;
+  if (Array.isArray(s.skillOrder) && s.skillOrder.length) {
+    cardForBuild = { ...(card as Record<string, any>) };
+    applyCardSkillOrder(cardForBuild, s.skillOrder);
+  }
+  s.playerCard = cardForBuild;
+  s.items = buildItems(cardForBuild);
+  s.skills = buildSkills(cardForBuild, QUICKBAR_PAGE_SIZE, s.skillMeta);
+  clampQuickbarPages(s);
   // ★ 等级系统：AI 剧情在角色卡上直接改动的 等级/经验/HP/MP 回灌到玩家实体（数据一致性）
   const me = playerEntity(s);
   if (me) {
@@ -3717,6 +3792,7 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       npcCards: s.npcCards || [],
       bagMeta: s.bagMeta || {},
       bagOrder: s.bagOrder || [],
+      skillOrder: s.skillOrder || [],
       shop: s.shopGoods || [],
       level: s.levelName || "",
       skillMeta: s.skillMeta || {},
@@ -3817,6 +3893,8 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
     if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
+    // ★ 技能排序：恢复 skillOrder（随后在 syncCardFromContext 里套回参数卡 skills 顺序）
+    if (Array.isArray(d.skillOrder)) s.skillOrder = d.skillOrder.map(String).filter(Boolean);
     if (Array.isArray(d.shop) && d.shop.length) s.shopGoods = d.shop;
     if (str(d.level)) s.levelName = str(d.level, "");
     // ★ 角色驻留地图：恢复 s.parked（ally/spectator 角色停在别的地图的位置）
@@ -3954,6 +4032,29 @@ function isPlayerRole(cand: any, playerRole: any): boolean {
   return false;
 }
 
+/** ★ 兼容旧存档：旧版 buildItems / buildSkills 会把空格子写成「物品4 / 备用物1」，
+ *  并把重复出现的技能改名成「暗核共鸣2 / 暗核共鸣3」占格。
+ *  老存档不重建的话，用户刷新页面看到的还是那批假格子（要等下一局 start 才清）。
+ *  这里按「假名字特征」一次性识别并从参数卡重建。 */
+function normalizeQuickbarLegacy(s: FieldSurvivalState): void {
+  const items = Array.isArray(s.items) ? s.items : [];
+  const skills = Array.isArray(s.skills) ? s.skills : [];
+  const card = (s.playerCard || {}) as Record<string, unknown>;
+  const badItem = items.some((it) => /^(物品\d+|备用物\d+)$/.test(String(it?.name || "")));
+  const names = new Set(skills.map((k) => String(k?.name || "")));
+  const badSkill = skills.some((k) => {
+    const n = String(k?.name || "");
+    if (/^(技能\d+|备用技\d+)$/.test(n)) return true;
+    // 去重残留：X2 / X3，且同一列表里还存在 X
+    const m = n.match(/^(.+?)(\d+)$/);
+    return !!m && names.has(m[1]);
+  });
+  if (!badItem && !badSkill) return;
+  if (badItem && Array.isArray(card.items)) s.items = buildItems(card);
+  if (badSkill && Array.isArray(card.skills)) s.skills = buildSkills(card, QUICKBAR_PAGE_SIZE, s.skillMeta);
+  clampQuickbarPages(s);
+}
+
 export async function handle_action(
   action: string,
   params: Record<string, any>,
@@ -3966,6 +4067,9 @@ export async function handle_action(
       : emptyState(context);
 
   const okResp = (msg: string) => ({ code: 0, message: "ok", state: s, response: msg });
+
+  // ★ 旧存档里的「备用物N / 暗核共鸣2」等假格子：进任何 action 时顺手重建一次
+  normalizeQuickbarLegacy(s);
 
   switch (action) {
     case "init":
@@ -4153,7 +4257,9 @@ export async function handle_action(
       if (!(s as any)._sysRestored) await restoreSys(context, s);
       // ★ 修复：restoreSys 恢复 skillMeta 后必须重跑 buildSkills（否则 syncCardFromContext
       //   可能因 card 未变而 return，skills 仍是空 effects_type）
-      s.skills = buildSkills(s.playerCard || {}, 8, s.skillMeta);
+      s.skills = buildSkills(s.playerCard || {}, QUICKBAR_PAGE_SIZE, s.skillMeta);
+      s.items = buildItems(s.playerCard || {});   // ★ 开局重建物品栏（顺带清掉旧存档里的「备用物N」假格子）
+      clampQuickbarPages(s);
       syncCardFromContext(s, context); // ★ start 也同步参数卡
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
       // ★ fix：开局 levelName 与前端对齐（前端 DEFAULT_START_LEVEL = "Mulberry Town"）。
@@ -4271,10 +4377,10 @@ export async function handle_action(
       if (s.phase !== "playing") return okResp("");
       s.axeMode = false; // ★ 斧头破坏模式：使用技能即收起
       const idx = num(params?.index, 0);
-      const slotIdx = s.skillPage * 4 + idx;
+      const slotIdx = s.skillPage * QUICKBAR_PAGE_SIZE + idx;
       const skill = s.skills[slotIdx];
       const player = s.entities.find((e) => e.side === "player");
-      if (!skill || !player || !player.alive) return okResp("");
+      if (!skill || skill.empty || !skill.name || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
       // ★ 空放：无目标也正常施放（特效/CD 照常），只是没有伤害结算
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
@@ -4337,9 +4443,9 @@ export async function handle_action(
     case "item": {
       if (s.phase !== "playing") return okResp("");
       const idx = num(params?.index, 0);
-      const slotIdx = s.itemPage * 4 + idx;
+      const slotIdx = s.itemPage * QUICKBAR_PAGE_SIZE + idx;
       const item = s.items[slotIdx];
-      if (!item) return okResp("");
+      if (!item || item.empty || !item.name || item.count <= 0) return okResp("");
       // ★ game.md 物品栏使用：与背包面板同一套 type 分路特效 / 耐久 / 属性逻辑
       return okResp(useBagItem(s, item.name));
     }
@@ -4424,7 +4530,8 @@ export async function handle_action(
             effects_type: typeof m.effects_type === "string" ? m.effects_type : "",
           };
         });
-        s.skills = buildSkills(s.playerCard || {}, 8, s.skillMeta);
+        s.skills = buildSkills(s.playerCard || {}, QUICKBAR_PAGE_SIZE, s.skillMeta);
+        clampQuickbarPages(s);
       }
       await persistSys(context, s);
       return okResp(`技能池已更新（${pool.length} 项）：${pool.slice(0, 8).join("、")}`);
@@ -4592,9 +4699,20 @@ export async function handle_action(
     }
 
     case "sys_sort": {
-      // 背包排列顺序（前端上移/下移/置顶后提交）
-      const order = Array.isArray(params?.order) ? params.order.map(String) : [];
+      // 排列顺序：kind=item（默认，背包）/ kind=skill（技能栏）
+      // 前端「上移 / 下移」按钮与拖拽排序都走这里（提交完整顺序数组）
+      const kind = str(params?.kind, "item");
+      const order = Array.isArray(params?.order) ? params.order.map(String).filter(Boolean) : [];
       const card = (s.playerCard || {}) as Record<string, any>;
+      if (kind === "skill") {
+        const next = reorderCardSkills(card, order);
+        if (!next.length) return okResp("技能栏为空，无法排序");
+        // skillOrder 存归一化技能名：断线重连/宿主回灌时用来还原顺序
+        s.skillOrder = next.map((x) => skillKey(x)).filter(Boolean);
+        patchCard(s, { skills: next });
+        await persistSys(context, s);
+        return okResp("技能顺序已更新");
+      }
       const bag = mergeBag(itemsFromCard(card), s.bagMeta, order.length ? order : s.bagOrder);
       s.bagOrder = bag.map((x) => x.name);
       patchCard(s, { items: serializeBag(bag, card.items) });
@@ -5328,14 +5446,16 @@ export async function handle_action(
 
     case "page": {
       const kind = str(params?.kind, "skill");
-      const delta = num(params?.delta, 1);
+      const delta = Math.round(num(params?.delta, 1));
+      // ★ 翻页：4 格一页，最后一页再点回到第一页（前后端同一条规则）
       if (kind === "item") {
-        const pages = Math.ceil(s.items.length / 4) || 1;
-        s.itemPage = (s.itemPage + delta + pages) % pages;
+        const pages = Math.max(1, Math.ceil((s.items || []).length / QUICKBAR_PAGE_SIZE));
+        s.itemPage = (((Math.round(num(s.itemPage, 0)) + delta) % pages) + pages) % pages;
       } else {
-        const pages = Math.ceil(s.skills.length / 4) || 1;
-        s.skillPage = (s.skillPage + delta + pages) % pages;
+        const pages = Math.max(1, Math.ceil((s.skills || []).length / QUICKBAR_PAGE_SIZE));
+        s.skillPage = (((Math.round(num(s.skillPage, 0)) + delta) % pages) + pages) % pages;
       }
+      clampQuickbarPages(s);
       return okResp("");
     }
 

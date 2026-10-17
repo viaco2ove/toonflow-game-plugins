@@ -84,6 +84,7 @@ const activeTab = ref<TabId>("bag");
         @use-item="(it: any) => emit('use-item', it)"
         @sort="(a: number, b: number) => emit('sort', a, b)"
         @sort-auto="() => emit('sort-auto')"
+        @move-item="(i: number, dir: number) => emit('move-item', i, dir)"
         @edit-item="(p: any) => emit('edit-item', p)"
       />
       <RingPanel
@@ -112,6 +113,7 @@ const activeTab = ref<TabId>("bag");
         :current-max-mp="currentMaxMp"
         @use-skill="(s: any, i: number) => emit('use-skill', s, i)"
         @edit-skill="(p: any) => emit('edit-skill', p)"
+        @move-skill="(i: number, dir: number) => emit('move-skill', i, dir)"
       />
       <MapPanel
         v-else-if="activeTab === 'map'"

@@ -418,23 +418,30 @@ const sysBagItems = computed<SysItem[]>(() => {
   return list;
 });
 
-/** 技能栏：插件下发的 skills（第 i 项对应快捷栏第 i 格）；type/range/lv/buff_type 透传给技能面板（game.md 修改/特效归类） */
+/** 技能栏：插件下发的 skills（第 i 项对应快捷栏第 i 格）；type/range/lv/buff_type 透传给技能面板（game.md 修改/特效归类）
+ *  ★ 过滤掉快捷栏的占位空格（empty:true）——面板只列真技能；index 保留在完整数组里的原始下标，
+ *    这样「使用 / 修改 / 上下移」回传后仍能对上后端 s.skills 的槽位。 */
 const sysSkills = computed<SysSkill[]>(() => {
   const arr = ((state.value as any)?.skills || []) as any[];
-  return arr.map((s, i) => ({
-    id: String(s.name || "skill") + "_" + i,
-    name: String(s.name || "技能"),
-    power: Number(s.power || 0),
-    cost: Number(s.cost || 0),
-    cd: Number(s.cd || 0),
-    cdLeft: Number(s.cdLeft || 0),
-    type: s.type,
-    range: s.range,
-    lv: s.lv,
-    buff_type: s.buff_type,
-    effects_type: s.effects_type || "",   // ★ P2 属性特效
-    index: i,
-  }));
+  const out: SysSkill[] = [];
+  arr.forEach((s, i) => {
+    if (!s || s.empty || !s.name) return;
+    out.push({
+      id: String(s.name || "skill") + "_" + i,
+      name: String(s.name || "技能"),
+      power: Number(s.power || 0),
+      cost: Number(s.cost || 0),
+      cd: Number(s.cd || 0),
+      cdLeft: Number(s.cdLeft || 0),
+      type: s.type,
+      range: s.range,
+      lv: s.lv,
+      buff_type: s.buff_type,
+      effects_type: s.effects_type || "",   // ★ P2 属性特效
+      index: i,
+    });
+  });
+  return out;
 });
 
 /** 纳戒（插件落盘在 t_plugin_session_data） */
@@ -667,8 +674,24 @@ function onSysSort(from: number, to: number) {
 function onSysSortAuto() {
   const names = sysBagItems.value.map(it => it.name).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
   sysNotice.value = "背包已按名称排序";
-  runSysCmd("sys_sort", { order: names });
+  runSysCmd("sys_sort", { kind: "item", order: names });
 }
+
+/** ★ 背包 / 技能「上移 / 下移一位」：与拖拽排序同一个 sys_sort 通道，
+ *  提交完整顺序数组；技能顺序会同步到 HUD 技能栏（快捷栏）。 */
+function moveSysOrder(kind: "item" | "skill", i: number, dir: number) {
+  const names = kind === "item"
+    ? sysBagItems.value.map(it => it.name)
+    : sysSkills.value.map(s => s.name);
+  const to = i + dir;
+  if (i < 0 || i >= names.length || to < 0 || to >= names.length) return;
+  const [moved] = names.splice(i, 1);
+  names.splice(to, 0, moved);
+  sysNotice.value = kind === "item" ? "背包顺序已更新" : "技能顺序已更新（快捷栏同步）";
+  runSysCmd("sys_sort", { kind, order: names });
+}
+function onSysMoveItem(i: number, dir: number) { moveSysOrder("item", i, dir); }
+function onSysMoveSkill(i: number, dir: number) { moveSysOrder("skill", i, dir); }
 
 function onSysRingMove(name: string, to: string) {
   runSysCmd("sys_ring_move", { kind: "item", name, to: to === "bag" ? "bag" : "ring", count: 1 });
@@ -5681,10 +5704,12 @@ function loop(ts: number) {
 }
 
 /* ---------------- 技能 / 物品 ---------------- */
-const skillPage = computed(() => state.value?.skills.slice((state.value.skillPage || 0) * 4, (state.value.skillPage || 0) * 4 + 4) || []);
-const itemPage = computed(() => state.value?.items.slice((state.value.itemPage || 0) * 4, (state.value.itemPage || 0) * 4 + 4) || []);
-const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / 4)));
-const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / 4)));
+/** ★ 快捷栏一页 4 格（与 entry.ts 的 QUICKBAR_PAGE_SIZE 必须一致） */
+const QUICKBAR_PAGE_SIZE = 4;
+const skillPage = computed(() => state.value?.skills.slice((state.value.skillPage || 0) * QUICKBAR_PAGE_SIZE, (state.value.skillPage || 0) * QUICKBAR_PAGE_SIZE + QUICKBAR_PAGE_SIZE) || []);
+const itemPage = computed(() => state.value?.items.slice((state.value.itemPage || 0) * QUICKBAR_PAGE_SIZE, (state.value.itemPage || 0) * QUICKBAR_PAGE_SIZE + QUICKBAR_PAGE_SIZE) || []);
+const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / QUICKBAR_PAGE_SIZE)));
+const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / QUICKBAR_PAGE_SIZE)));
 
 /** ★ 技能目标（本地权威）：由前端按自己那份坐标系选出「30 米内最近的至多 3 只」，
  *   随 skill 请求一并下发；宿主优先按这份 id 清单结算，避免宿主侧野怪/玩家坐标
@@ -5702,13 +5727,21 @@ function pickSkillTargets(): string[] {
     .map((r) => r.id);
 }
 function castSkill(i: number) {
+  // ★ 空格子（补齐用的占位）点了不施放
+  const slot: any = skillPage.value[i];
+  if (!slot || slot.empty || !slot.name) return;
   sendTick("skill", {
     index: i,
     targets: pickSkillTargets(),
     player: lastLocalPose ? { ...lastLocalPose } : undefined,
   });
 }
-function useItem(i: number) { sendTick("item", { index: i }); }
+function useItem(i: number) {
+  // ★ 空格子 / 数量为 0 的物品点了不发送
+  const it: any = itemPage.value[i];
+  if (!it || it.empty || !it.name || (it.count ?? 0) <= 0) return;
+  sendTick("item", { index: i });
+}
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
 function pageItem(d: number) { sendTick("page", { kind: "item", delta: d }); }
 function exitGame() {
@@ -6783,21 +6816,31 @@ watch(() => state.value?.phase, (p) => {
       </div>
 
       <div class="slots slots--skill">
-        <button v-for="(s, i) in skillPage" :key="i" class="slot"
-                :class="{ 'slot--cd': s.cdLeft > 0 }" @click="castSkill(i)">
+        <button v-for="(s, i) in skillPage" :key="'sk' + i" class="slot"
+                :class="{ 'slot--cd': s.cdLeft > 0, 'slot--empty': s.empty || !s.name }"
+                :title="s.name || '空技能格'" @click="castSkill(i)">
           <span class="slot__name">{{ s.name }}</span>
           <span v-if="s.cdLeft > 0" class="slot__cd">{{ Math.ceil(s.cdLeft / 10) }}</span>
         </button>
-        <button class="slot slot--page" @click="pageSkill(1)">切换</button>
+        <button class="slot slot--page" @click="pageSkill(1)"
+                :title="`技能 第 ${(state?.skillPage || 0) + 1}/${skillPages} 页`">
+          <span>切换</span>
+          <span class="slot__page">{{ (state?.skillPage || 0) + 1 }}/{{ skillPages }}</span>
+        </button>
       </div>
 
       <div class="slots slots--item">
-        <button v-for="(it, i) in itemPage" :key="i" class="slot"
-                :class="{ 'slot--empty': it.count <= 0 }" @click="useItem(i)">
+        <button v-for="(it, i) in itemPage" :key="'it' + i" class="slot"
+                :class="{ 'slot--empty': it.empty || it.count <= 0 }"
+                :title="it.empty ? '空物品格' : `${it.name} ×${it.count}`" @click="useItem(i)">
           <span class="slot__name">{{ it.name }}</span>
-          <span class="slot__count">×{{ it.count }}</span>
+          <span v-if="!it.empty" class="slot__count">×{{ it.count }}</span>
         </button>
-        <button class="slot slot--page" @click="pageItem(1)">切换</button>
+        <button class="slot slot--page" @click="pageItem(1)"
+                :title="`物品 第 ${(state?.itemPage || 0) + 1}/${itemPages} 页`">
+          <span>切换</span>
+          <span class="slot__page">{{ (state?.itemPage || 0) + 1 }}/{{ itemPages }}</span>
+        </button>
       </div>
 
       <div v-if="state?.axeMode" class="axe-hint">🪓 斧头破坏模式：点击前方障碍物进行破坏</div>
@@ -6873,6 +6916,7 @@ watch(() => state.value?.phase, (p) => {
         @use-item="onSysUseItem"
         @sort="onSysSort"
         @sort-auto="onSysSortAuto"
+        @move-item="onSysMoveItem"
         @edit-item="onSysEditItem"
         @ring-move="onSysRingMove"
         @ring-skill-move="onSysRingSkillMove"
@@ -6881,6 +6925,7 @@ watch(() => state.value?.phase, (p) => {
         @buy="onSysBuyItem"
         @use-skill="onSysUseSkill"
         @edit-skill="onSysEditSkill"
+        @move-skill="onSysMoveSkill"
         @teleport="onSysTeleport"
         @travel="onSysTravel"
         @follow="onSysFollow"
@@ -8091,6 +8136,15 @@ body {
   border-color: #6a6a6a;
   color: #d4a13e;
   font-weight: 700;
+  gap: 0;
+}
+
+/* ★ 翻页按钮上的「当前页/总页数」小字 */
+.slot__page {
+  font-size: 8px;
+  line-height: 1;
+  color: #9a9a9a;
+  font-weight: 600;
 }
 
 .slot--page:hover {

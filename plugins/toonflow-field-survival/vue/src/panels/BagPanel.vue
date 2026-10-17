@@ -115,12 +115,13 @@ function onDrop(i: number) {
   if (dragFrom >= 0 && dragFrom !== i) emit("sort", dragFrom, i);
   dragFrom = -1;
 }
+function onMove(i: number, dir: number) { emit("move-item", i, dir); }
 </script>
 
 <template>
   <div class="bpi">
     <div class="bpi-bar">
-      <span>背包（{{ items.length }} 种）· 拖拽排序</span>
+      <span>背包（{{ items.length }} 种）· 拖拽 / ↑↓ 排序</span>
       <button class="bpi-mini" @click="emit('sort-auto')">按名称排序</button>
     </div>
 
@@ -136,6 +137,12 @@ function onDrop(i: number) {
       @dragover="onDragOver"
       @drop="onDrop(i)"
     >
+      <div class="bpi-moves">
+        <button class="bpi-mini bpi-mini--move" :disabled="i === 0" title="上移一位（与快捷栏同步）"
+                aria-label="上移" @click="onMove(i, -1)">↑</button>
+        <button class="bpi-mini bpi-mini--move" :disabled="i === items.length - 1" title="下移一位（与快捷栏同步）"
+                aria-label="下移" @click="onMove(i, 1)">↓</button>
+      </div>
       <div class="bpi-info">
         <div class="bpi-name">
           {{ it.name }}<span class="bpi-count">×{{ it.count }}</span>
@@ -249,4 +256,7 @@ function onDrop(i: number) {
 .bpi-mini { padding: 3px 8px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.06); color: #cfd8e3; cursor: pointer; font-size: 11px; }
 .bpi-mini--go { border-color: #ffb04a; color: #ffd76a; }
 .bpi-empty, .bpi-hint { color: #93a2b3; font-size: 11px; }
+.bpi-moves { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
+.bpi-mini--move { padding: 1px 7px; font-size: 12px; line-height: 1.4; color: #cfd8e3; }
+.bpi-mini--move:disabled { opacity: 0.3; cursor: default; }
 </style>

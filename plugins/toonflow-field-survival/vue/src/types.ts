@@ -143,6 +143,8 @@ export interface SkillSlot {
   range: "melee" | "ranged";
   /** ★ 属性特效类型（为空则走默认 VFX） */
   effects_type?: EffectType;
+  /** ★ 快捷栏占位空格（后端补齐到 4 的整数倍用）：置灰、点击无效 */
+  empty?: boolean;
 }
 export interface ItemSlot {
   name: string;
@@ -164,6 +166,8 @@ export interface ItemSlot {
   singleUse?: boolean;
   /** ★ 属性特效类型（为空则走默认 VFX） */
   effects_type?: EffectType;
+  /** ★ 快捷栏占位空格（后端补齐到 4 的整数倍用）：置灰、点击无效 */
+  empty?: boolean;
 }
 
 export interface RoleOption {

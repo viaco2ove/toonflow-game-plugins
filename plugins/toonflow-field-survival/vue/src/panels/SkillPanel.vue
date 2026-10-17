@@ -51,9 +51,11 @@ function startEdit(s: any, i: number) {
   form.buff_type = BUFF_TYPES.includes(s.buff_type) ? s.buff_type : "";
   form.effects_type = String(s.effects_type || "");
 }
-function submitEdit(i: number) {
+function submitEdit(s: any, i: number) {
+  // ★ 面板列表可能已过滤掉快捷栏占位空格，行号 i 与后端 s.skills 下标不再相等；
+  //   优先用 s.index（App.vue sysSkills 保留的原始下标）
   emit("edit-skill", {
-    index: i,
+    index: Math.max(0, Math.round(Number(s?.index ?? i) || 0)),
     name: form.name.trim() || "",
     power: form.power,
     cost: form.cost,
@@ -66,13 +68,20 @@ function submitEdit(i: number) {
   });
   editing.value = -1;
 }
+function onMove(i: number, dir: number) { emit("move-skill", i, dir); }
 </script>
 
 <template>
   <div class="skp">
-    <div class="skp-bar">MP {{ currentMp }}/{{ currentMaxMp }} · 技能 {{ skills.length }} 项</div>
+    <div class="skp-bar">MP {{ currentMp }}/{{ currentMaxMp }} · 技能 {{ skills.length }} 项 · ↑↓ 排序</div>
 
     <div v-for="(s, i) in skills" :key="s.name + i" class="skp-row" :class="{ 'skp-row--cd': s.cdLeft > 0 }">
+      <div class="skp-moves">
+        <button class="skp-btn skp-btn--move" :disabled="i === 0" title="上移一位（与快捷栏同步）"
+                aria-label="上移" @click="onMove(i, -1)">↑</button>
+        <button class="skp-btn skp-btn--move" :disabled="i === skills.length - 1" title="下移一位（与快捷栏同步）"
+                aria-label="下移" @click="onMove(i, 1)">↓</button>
+      </div>
       <div class="skp-info">
         <div class="skp-name">
           {{ s.name }}<span v-if="s.lv && s.lv > 1" class="skp-lv">lv{{ s.lv }}</span>
@@ -116,7 +125,7 @@ function submitEdit(i: number) {
         </label>
         <label>等级 lv<input v-model.number="form.lv" type="number" min="1" /></label>
         <div class="skp-edit__ops">
-          <button class="skp-btn" @click="submitEdit(i)">保存</button>
+          <button class="skp-btn" @click="submitEdit(s, i)">保存</button>
           <button class="skp-btn skp-btn--ghost" @click="editing = -1">取消</button>
         </div>
         <div class="skp-edit__hint">修改后参数保存到 t_plugin_session_data；特效按类型沿用：攻击近战→冲斩刀光 / 攻击远程→火球 / 治疗→治疗环 / 强化→护盾环。</div>
@@ -147,6 +156,9 @@ function submitEdit(i: number) {
 .skp-btn:disabled { opacity: 0.5; cursor: default; }
 .skp-btn--edit { border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: #cfd8e3; }
 .skp-btn--ghost { border-color: rgba(255, 255, 255, 0.2); background: transparent; color: #93a2b3; }
+.skp-moves { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
+.skp-btn--move { padding: 1px 7px; font-size: 12px; line-height: 1.4; border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: #cfd8e3; }
+.skp-btn--move:disabled { opacity: 0.3; cursor: default; }
 .skp-edit { flex-basis: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 6px; background: rgba(0, 0, 0, 0.25); }
 .skp-edit label { display: flex; flex-direction: column; gap: 2px; font-size: 10px; color: #93a2b3; }
 .skp-edit input, .skp-edit select { background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 4px; color: #e6eef6; font-size: 11px; padding: 3px 5px; }
