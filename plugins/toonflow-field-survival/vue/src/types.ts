@@ -32,6 +32,11 @@ export interface Entity {
   wanderY?: number;
   wanderTimer?: number;
   bounty?: { exp?: number; money?: number };
+  /** ★ 击杀掉落表（`{name,w}[]`）：本怪掉宝箱时从这张表抽物资。
+   *  优先级高于全局 DEFAULT_DROP_TABLE —— 地图可给 BOSS 配「必掉暗核」。
+   *  来源：Tiled 对象属性 dropTable(JSON) → 前端实体 → localEnemiesPayload 上报 →
+   *  entry.ts applyLocalEnemies → dropKillChest。 */
+  dropTable?: Array<{ name: string; w: number }>;
   /** ★ 远程怪（默认 false；远程攻击范围 4 米） */
   isRanged?: boolean;
   /** ★ 受击红闪剩余毫秒（渲染时叠加红色 tint） */
@@ -60,7 +65,17 @@ export interface Entity {
   buffs?: string[];
 }
 
-export interface Chest { id: string; x: number; y: number; opened: boolean; }
+export interface Chest {
+  id: string;
+  x: number;
+  y: number;
+  opened: boolean;
+  tier?: number;
+  /** ★ 开箱奖励（击杀掉落的宝箱带 loot；地图铺设的宝箱可有可无） */
+  loot?: { exp?: number; money?: number; item?: string };
+  /** ★ 落地 tick：开启保护期用（刚掉的宝箱先让玩家看见，不立刻被吃掉） */
+  bornTick?: number;
+}
 export interface Potion { id: string; x: number; y: number; heal: number; mp?: number; }
 
 /** ★ VFX 粒子（屏幕像素空间：x/y 都是已转换的屏幕像素） */

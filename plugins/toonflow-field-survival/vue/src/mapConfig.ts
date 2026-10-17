@@ -104,6 +104,11 @@ export interface MapMob {
   camp: "neutral" | "hostile" | "friendly";
   /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」；未标注则只显示类型中文名 */
   full_name?: string;
+  /** ★ 击杀赏金（Tiled 对象属性 bounty(JSON)，如 {"exp":60,"money":40}） */
+  bounty?: { exp?: number; money?: number };
+  /** ★ 击杀掉落表（Tiled 对象属性 dropTable(JSON)，如 [{"name":"暗核","w":100}]）。
+   *  dropKillChest 优先用它，缺省落回全局 DEFAULT_DROP_TABLE。 */
+  dropTable?: Array<{ name: string; w: number }>;
 }
 
 /**
@@ -496,6 +501,11 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           const mobName = String(props.name || obj.name || "野怪");
           const archLevel = MOB_ARCHETYPES[props.entity_type]?.level ?? 1;
           const mobLevel = Number.isFinite(props.level) ? Number(props.level) : archLevel;
+          // ★ 击杀奖励：Tiled 对象属性里可写 bounty / dropTable（JSON 字符串）——
+          //   这是「地图集参与击杀奖励」的唯一入口（事件引擎没有 kill_count 挂载点，见
+          //   野怪击杀奖励.事件.md §1）。解析失败静默忽略，回退全局默认表。
+          const bountyProp = parseJsonProp(props.bounty);
+          const dropProp = parseJsonProp(props.dropTable) ?? parseJsonProp(props.drops);
           mobs.push({
             id: obj.id,
             name: mobName,
@@ -506,6 +516,17 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             level: mobLevel,
             camp: normalizeCamp(props.camp) || "hostile",
             full_name: props.full_name != null ? String(props.full_name) : undefined,
+            bounty: bountyProp && typeof bountyProp === "object" && !Array.isArray(bountyProp)
+              ? {
+                  exp: bountyProp.exp != null ? num(bountyProp.exp, 0) : undefined,
+                  money: bountyProp.money != null ? num(bountyProp.money, 0) : undefined,
+                }
+              : undefined,
+            dropTable: Array.isArray(dropProp)
+              ? dropProp
+                  .filter((d: any) => d && d.name != null)
+                  .map((d: any) => ({ name: String(d.name), w: num(d.w, 1) }))
+              : undefined,
           });
         } else if (normalizeCamp(props.camp) === "neutral" && !NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
           // ★ camp=neutral 的实体型对象（如中立野怪/商人怪）→ NPC 装饰物（不参战、头顶显示姓名）
@@ -1058,6 +1079,18 @@ export function normalizeMapConfig(raw: unknown, levelName?: string): MapConfig 
 }
 
 // ────── helpers ──────
+/** 解析 Tiled 对象属性里的 JSON（对象/数组字面量）。Tiled 的 string 属性是纯文本，
+ *  设计师写 bounty/dropTable 时只能填 JSON 串，这里统一解析；已是对象则原样返回；
+ *  解析失败返回 undefined（调用方静默回退默认值）。 */
+function parseJsonProp(v: unknown): any {
+  if (v == null) return undefined;
+  if (typeof v === "object") return v;
+  const s = String(v).trim();
+  if (!s) return undefined;
+  const c = s[0];
+  if (c !== "{" && c !== "[") return undefined;
+  try { return JSON.parse(s); } catch { return undefined; }
+}
 function num(v: unknown, d = 0): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : d;
