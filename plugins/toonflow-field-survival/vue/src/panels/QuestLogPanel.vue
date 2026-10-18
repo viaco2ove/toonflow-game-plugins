@@ -14,6 +14,8 @@
  * 交付仍需回任务板领取奖励（交任务按钮会触 consume 链，那里是唯一合法入口）。
  */
 import { computed } from "vue";
+// ★ 采集任务寻路：物品 → 采集区 zone 名映射（与 App.vue questDestinations 同步）
+import { GATHER_ZONES_BY_ITEM } from "../questGatherMap";
 
 const emit = defineEmits<{
   (e: "go", id: string): void;
@@ -30,8 +32,10 @@ const props = defineProps<{
     turned: any[];
     playerLevel: number;
   } | null;
-  /** 当前地图（判断 away 任务） */
+  /** 当前地图（判断 away 任务 / 本图采集区是否可用） */
   currentMap: string;
+  /** 当前地图的 eventZones（来自 App.vue eventZonesRef，zone 名→坐标） */
+  eventZones?: { name: string; x: number; y: number; r?: number }[];
 }>();
 
 const v = computed<any>(() => props.view || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
@@ -86,14 +90,26 @@ function timerText(q: any): string {
 function timerLow(q: any): boolean {
   return typeof q?.remainTicks === "number" && q.remainTicks >= 0 && q.remainTicks < 300;
 }
-/** 是否有可寻路的目的地（arrive / explore / deliver 的 arrive 部分） */
+/** 是否有可寻路的目的地（arrive / explore / deliver 的 arrive 部分）
+ *  ★ 2026-10-18 新增：gather 类任务 —— 目标物品在映射表里且本图有对应采集区 */
 function hasNavigableDest(q: any): boolean {
   if (!q) return false;
   if (typeof q.destX === "number" && typeof q.destY === "number" && (q.destMap || q.destMapRaw)) return true;
   const objs = q.objectives || [];
-  return objs.some((o: any) => (o.kind === "arrive" || o.kind === "explore")
+  if (objs.some((o: any) => (o.kind === "arrive" || o.kind === "explore")
     && typeof o.x === "number" && typeof o.y === "number"
-    && (o.map || o.mapRaw || q.destMap || q.destMapRaw));
+    && (o.map || o.mapRaw || q.destMap || q.destMapRaw))) return true;
+  // ── gather 类（★ 新增）：目标物品在采集映射表里 ──
+  if (q.type === "gather" && q.status === "active") {
+    const unfinished = objs.find((o: any) => o.kind === "gather"
+      && (Number(o.have) || 0) < (Number(o.need) || 1));
+    if (!unfinished) return false;
+    const candidates = GATHER_ZONES_BY_ITEM[String(unfinished.target || "")];
+    if (!candidates || !candidates.length) return false;
+    // 只要映射表登记了就能寻路（App.vue questGoToDest 会处理跨图/本地解析）
+    return true;
+  }
+  return false;
 }
 </script>
 

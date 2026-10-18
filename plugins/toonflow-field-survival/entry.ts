@@ -2943,6 +2943,9 @@ function questArriveOk(s: FieldSurvivalState, def: QuestDef): { ok: boolean; msg
   const me = playerEntity(s);
   if (!me) return { ok: false, msg: "玩家不存在" };
   const lv = str(s.levelName);
+  // ★ 2026-10-18：纯 gather 任务没有 arrive 目标 → 永不 atDest（之前循环跑空就 ok:true，误弹「到达」）
+  const hasArrive = (def.objectives || []).some((o) => o.kind === "arrive" || o.kind === "explore");
+  if (!hasArrive) return { ok: false, msg: "无 arrive 目标" };
   for (const o of def.objectives || []) {
     if (o.kind !== "arrive" && o.kind !== "explore") continue;
     const r = Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R));

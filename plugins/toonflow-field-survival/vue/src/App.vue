@@ -55,6 +55,8 @@ import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUi
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
 import { bakeTiledMap, eraseBakedObstacle } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
+// ★ 采集任务寻路：物品 → 采集区 zone 名静态映射（含跨图 mapKey）
+import { GATHER_ZONES_BY_ITEM } from "./questGatherMap";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
 import {
   loadTileFlags,
@@ -621,10 +623,14 @@ function sameLevel(a: string, b: string): boolean {
   return !!ka && !!kb && ka === kb;
 }
 
-/** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮） */
+/** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮）
+ *  ★ 2026-10-18 新增：gather 类任务也通过 GATHER_ZONES_BY_ITEM 映射
+ *     找到最近的采集区，生成虚拟目的地（x/y/r 从 eventZones 实时读取）。 */
 const questDestinations = computed<any[]>(() => {
   const out: any[] = [];
   const seen = new Set<string>();
+
+  // ── arrive / explore 类（原有逻辑）────────────────────────────────
   for (const q of (questView.value.active || [])) {
     if (q.status !== "active") continue;
     const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
@@ -644,8 +650,69 @@ const questDestinations = computed<any[]>(() => {
       /** 全部目标是否已达成（决定按钮文案：达成=交付，未达成=到达） */
       met: !!q.met,
       type: String(q.type || ""),
+      /** 采集区名（gather 类用）；arrive/explore 类为空 */
+      gatherZone: "",
     });
   }
+
+  // ── gather 类（新增）──────────────────────────────────────────────
+  const zones = getEventZones() || [];
+  const me = state.value?.entities.find((e) => e.side === "player");
+
+  for (const q of (questView.value.active || [])) {
+    if (q.status !== "active" || q.type !== "gather") continue;
+    const key = String(q.id);
+    if (seen.has(key)) continue;
+
+    // 找第一个还没完成的目标
+    const o = (q.objectives || []).find((x: any) => {
+      if (x.kind !== "gather") return false;
+      const have = Number(x.have) || 0;
+      const need = Number(x.need) || 1;
+      return have < need;
+    });
+    if (!o) continue; // 全部完成了，不需要寻路
+
+    const target = String(o.target || "");
+    const candidates = GATHER_ZONES_BY_ITEM[target];
+    if (!candidates || candidates.length === 0) continue;
+
+    // 选「最近的」采集区（本图优先 → 距离最近）
+    // ★ 候选在本图的两种情况：① mapKey 为空（默认本图）；② mapKey 解析后就是当前图
+    //   （例：玩家在桑林，「林中药丛」的 mapKey=mulberryForest 就等于本图）
+    const allCandidates = [...candidates].sort((a, b) => (a.mapKey ? 1 : 0) - (b.mapKey ? 1 : 0));
+    let best: { zone: string; kind: string; mapKey?: string; x: number; y: number; r: number; dist: number } | null = null;
+
+    for (const c of allCandidates) {
+      const isLocal = !c.mapKey || sameLevel(c.mapKey, currentLevelName.value);
+      if (!isLocal) continue;
+      const z = zones.find((z2) => z2.name === c.zone);
+      if (!z) continue;
+      const dist = me ? Math.hypot(z.x - me.x, z.y - me.y) : 0;
+      if (!best || dist < best.dist) {
+        best = { zone: c.zone, kind: c.kind, mapKey: undefined, x: z.x, y: z.y, r: z.r || 3, dist };
+      }
+    }
+
+    if (!best) continue; // 本图找不到该采集区（可能在别的图）→ 不生成本图虚拟目的地
+
+    seen.add(key);
+    out.push({
+      id: key,
+      title: String(q.title || ""),
+      x: best.x,
+      y: best.y,
+      radius: best.r,
+      needConfirm: false,
+      atDest: false,
+      /** gather 类全部目标是否已达成 */
+      met: !!(q.met),
+      type: "gather",
+      /** 采集区名（显示用） */
+      gatherZone: best.zone,
+    });
+  }
+
   return out;
 });
 
@@ -687,6 +754,45 @@ function questGoToDest(id: string): void {
   // 本图没有 → 找跨图目的地：先传送，落地后 pendingQuestWalk 接着走
   for (const q of (questView.value.active || [])) {
     if (String(q.id) !== id || q.status !== "active") continue;
+
+    // ── gather 类（★ 新增）：目标物品 → 采集区，可能跨图 ──
+    if (q.type === "gather") {
+      const go = (q.objectives || []).find((x: any) => x.kind === "gather" && (Number(x.have) || 0) < (Number(x.need) || 1));
+      if (!go) { showToast("采集目标已全部达成，回任务板交付吧"); return; }
+      const candidates = GATHER_ZONES_BY_ITEM[String(go.target || "")];
+      if (!candidates || !candidates.length) { showToast("「" + String(go.target || "") + "」没有登记采集点"); return; }
+      // 本图有采集区但 questDestinations 漏判（zone 名对不上等）→ 提示
+      const localCands = candidates.filter((c) => !c.mapKey);
+      if (localCands.length) {
+        const z = (getEventZones() || []).find((z2) => z2.name === localCands[0].zone);
+        if (z) {
+          input.value.dx = 0;
+          input.value.dy = 0;
+          input.value.moveTo = { x: z.x, y: z.y };
+          recomputeMoveToPath(z.x, z.y);
+          showToast(`自动寻路中：${q.title || ""}（采集点：${localCands[0].zone}）`);
+          return;
+        }
+      }
+      // 跨图：选第一个跨图候选（有多个时选 levelKeyOf 能解析的）
+      for (const c of candidates) {
+        if (!c.mapKey) continue;
+        const travelMap = levelKeyOf(c.mapKey);
+        if (!travelMap) continue;
+        if (sameLevel(travelMap, currentLevelName.value)) continue; // 本图情况上面处理过
+        pendingQuestWalk = { x: 0, y: 0, map: travelMap, title: String(q.title || "") + "（采集点：" + c.zone + "）" };
+        // 落地后续走：questDestinations 会按 eventZones 重新解析 zone 坐标，
+        // 所以这里 pendingQuestWalk 的 x/y 只是占位，落地后走 zone 真坐标。
+        // 简化：落地后直接弹 toast 提示再点一次寻路（zone 坐标此时已可解析）。
+        showToast(`采集点「${c.zone}」在「${getLevelDisplayName(travelMap) || travelMap}」，先传送过去`);
+        onSysTravel(travelMap);
+        return;
+      }
+      showToast("采集点所在地图无法识别"); 
+      return;
+    }
+
+    // ── arrive / explore 类（原有逻辑）──
     const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
     if (!o || o.x === undefined || o.y === undefined) { showToast("这个任务没有可寻路的目的地"); return; }
     if (!o.map && !o.mapRaw && !q.destMapRaw) { showToast("目的地没有地图信息，先打开地图看看"); return; }
