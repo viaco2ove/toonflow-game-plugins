@@ -7303,6 +7303,10 @@ watch(() => state.value?.phase, (p) => {
         @del-flag="onSysDelFlag"
         @fire-event="onSysFireEvent"
         @reload-events="onSysReloadEvents"
+        @quest-go="questGoToDest"
+        @quest-recover="questRecoverCargo"
+        @quest-arrive="onQuestArriveAtDest"
+        @quest-abandon="onQuestAbandon"
         @close="showSystemPanel = false"
       />
     </div>

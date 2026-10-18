@@ -153,6 +153,10 @@ const activeTab = ref<TabId>("bag");
         v-else-if="activeTab === 'quest'"
         :view="questView || null"
         :current-map="currentMap"
+        @go="(id: string) => emit('quest-go', id)"
+        @recover="(id: string) => emit('quest-recover', id)"
+        @arrive="(id: string) => emit('quest-arrive', id)"
+        @abandon="(id: string) => emit('quest-abandon', id)"
       />
     </div>
 

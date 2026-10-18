@@ -1,13 +1,26 @@
 <script setup lang="ts">
 /**
- * QuestLogPanel.vue —— 系统面板「任务」页签（只读）
+ * QuestLogPanel.vue —— 系统面板「任务」页签（只读 + 快捷操作）
  * =====================================================
  * 数据来源：宿主 state.questView（entry.ts buildQuestView 每 tick 重算，前端只读）
  * 用途：接了任务后不回到任务板也能随时查看进度与状态：
  *   进行中（active / 护送失败）· 待交（done）· 已交（turned）
- * 交付 / 放弃等操作仍需回到地图上的任务板（本页签只读，避免误操作）。
+ * ★ 2026-10-18：active 任务上加 4 类快捷按钮，
+ *   不再强迫玩家「回任务板才能寻路/找回/到达/放弃」：
+ *   · 寻路：active 且有目的地（arrive/explore/deliver gather→arrive）
+ *   · 找回：active escort 且 cargoLost=true
+ *   · 到达：active 且 atDest=true（走近目的地时浮起的「到达」按钮同款）
+ *   · 放弃：active（任何类型）
+ * 交付仍需回任务板领取奖励（交任务按钮会触 consume 链，那里是唯一合法入口）。
  */
 import { computed } from "vue";
+
+const emit = defineEmits<{
+  (e: "go", id: string): void;
+  (e: "recover", id: string): void;
+  (e: "arrive", id: string): void;
+  (e: "abandon", id: string): void;
+}>();
 
 const props = defineProps<{
   view: {
@@ -73,6 +86,15 @@ function timerText(q: any): string {
 function timerLow(q: any): boolean {
   return typeof q?.remainTicks === "number" && q.remainTicks >= 0 && q.remainTicks < 300;
 }
+/** 是否有可寻路的目的地（arrive / explore / deliver 的 arrive 部分） */
+function hasNavigableDest(q: any): boolean {
+  if (!q) return false;
+  if (typeof q.destX === "number" && typeof q.destY === "number" && (q.destMap || q.destMapRaw)) return true;
+  const objs = q.objectives || [];
+  return objs.some((o: any) => (o.kind === "arrive" || o.kind === "explore")
+    && typeof o.x === "number" && typeof o.y === "number"
+    && (o.map || o.mapRaw || q.destMap || q.destMapRaw));
+}
 </script>
 
 <template>
@@ -110,6 +132,17 @@ function timerLow(q: any): boolean {
         </div>
         <div v-if="q.type === 'escort'" class="ql-cargo">
           货物：<b :class="q.cargoAlive ? 'ql-ok' : 'ql-bad'">{{ q.cargoAlive ? "在" : "已丢失" }}</b>
+        </div>
+        <!-- ★ 2026-10-18：active 任务的快捷操作（寻路 / 找回 / 到达 / 放弃） -->
+        <div class="ql-ops">
+          <button v-if="hasNavigableDest(q) && q.status === 'active'"
+                  class="ql-btn ql-btn--nav" @click="emit('go', q.id)" title="自动走向任务目的地">🧭 寻路</button>
+          <button v-if="q.type === 'escort' && q.cargoLost"
+                  class="ql-btn ql-btn--recover" @click="emit('recover', q.id)" title="货物在 6m 范围内被找到（实测 ≈1.2m 贴身）">🔄 找回货物</button>
+          <button v-if="q.atDest"
+                  class="ql-btn ql-btn--arrive" @click="emit('arrive', q.id)" title="已走到目的地，点击完成到达校验">📍到达</button>
+          <button v-if="q.status === 'active'"
+                  class="ql-btn ql-btn--abandon" @click="emit('abandon', q.id)" title="放弃该任务（失败态/已完成态不可放弃）">放弃</button>
         </div>
       </div>
     </template>
@@ -186,4 +219,26 @@ function timerLow(q: any): boolean {
 .ql-ok { color: #66bb6a; }
 .ql-bad { color: #ef5350; }
 .ql-hint { font-size: 10px; color: #ffd76a; margin-top: 3px; }
+
+/* ★ 快捷操作按钮（与 QuestPanel .qp-btn 风格一致，便于玩家认知） */
+.ql-ops { display: flex; gap: 5px; margin-top: 4px; flex-wrap: wrap; }
+.ql-btn {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.06);
+  color: #dfe7ef;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.ql-btn:hover { background: rgba(255,255,255,0.16); }
+.ql-btn--nav { color: #9fd0ff; border-color: rgba(159,208,255,0.4); }
+.ql-btn--nav:hover { background: rgba(159,208,255,0.18); }
+.ql-btn--recover { color: #ffb26b; border-color: rgba(255,178,107,0.4); }
+.ql-btn--recover:hover { background: rgba(255,178,107,0.18); }
+.ql-btn--arrive { color: #66bb6a; border-color: rgba(102,187,106,0.4); background: rgba(102,187,106,0.15); }
+.ql-btn--arrive:hover { background: rgba(102,187,106,0.28); }
+.ql-btn--abandon { color: #ef5350; border-color: rgba(239,83,80,0.35); }
+.ql-btn--abandon:hover { background: rgba(239,83,80,0.15); }
 </style>
