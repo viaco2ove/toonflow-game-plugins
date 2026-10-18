@@ -550,6 +550,8 @@ const ALLY_ATK_M   = 0.5;
 const ALLY_ENGAGE_M = 4;
 /** 友军跟随阵位半径：2.5m（此前 12m —— 友军站位散得太开，是「打远的」帮凶） */
 const ALLY_FOLLOW_GAP_M = 2.5;
+/** 护送货物离玩家超过这个距离 → 判定为「坐标还留在旧图 / 刚跨图」，直接贴回身边（不再慢慢追） */
+const QUEST_CARGO_SNAP_M = 6;
 const CHEST_PICKUP_M  = 2;
 /** ★ 击杀掉落宝箱的开启保护期（tick，100ms/拍）：1.2 秒内不许自动开箱。
  *  否则近战击杀时玩家就站在掉落点旁 → 下一帧立刻被吃掉，玩家永远「看不见地上有宝箱」。 */
@@ -2844,15 +2846,25 @@ function syncQuestArriveAuto(s: FieldSurvivalState): void {
         const d = dist(cargo, me);
         // ★ 直接位移跟随（不依赖 step() 的速度积分，避免货物被其它 AI 分支抢走控制权）
         if (d > 2.2) {
-          const stepLen = Math.min(d - 2.0, 0.32);   // 每 tick 上限 ≈ 3.2 m/s
-          const ux = (me.x - cargo.x) / (d || 1);
-          const uy = (me.y - cargo.y) / (d || 1);
-          (cargo as Entity).x += ux * stepLen;
-          (cargo as Entity).y += uy * stepLen;
-          (cargo as Entity).facing = ux > 0 ? 0 : 180;
+          if (d > QUEST_CARGO_SNAP_M) {
+            // ★ 离得太远 = 切图/传送后它还带着旧图坐标（或玩家刚跨图）→ 直接贴回身边。
+            //   靠 3.2m/s 的跟随要追十几秒，玩家会以为「货物跟丢了」（2026-10-18 实测 38m）。
+            const ang = rnd(0, Math.PI * 2);
+            (cargo as Entity).x = me.x + Math.cos(ang) * ALLY_FOLLOW_GAP_M;
+            (cargo as Entity).y = me.y + Math.sin(ang) * ALLY_FOLLOW_GAP_M;
+          } else {
+            const stepLen = Math.min(d - 2.0, 0.32);   // 每 tick 上限 ≈ 3.2 m/s
+            const ux = (me.x - cargo.x) / (d || 1);
+            const uy = (me.y - cargo.y) / (d || 1);
+            (cargo as Entity).x += ux * stepLen;
+            (cargo as Entity).y += uy * stepLen;
+            (cargo as Entity).facing = ux > 0 ? 0 : 180;
+          }
         }
         (cargo as Entity).vx = 0;
         (cargo as Entity).vy = 0;
+        // 货物地图名始终跟玩家当前图一致（跨图后 handleLevelChange 若没跑到也不会误判丢失）
+        if (String((cargo as any).mapName) !== lv) (cargo as any).mapName = lv;
       }
     }
     if (p.status !== "active") continue;
@@ -3821,7 +3833,11 @@ function handleLevelChange(s: FieldSurvivalState, snapParty: boolean): void {
     //   → 任务板显示「货物：已丢失」（2026-10-17 实测：护送去 Mulberry Forest 一传送就丢）。
     if (String(e2.id).startsWith(QUEST_CARGO_PREFIX) || String((e2 as any).entity_type) === "QUEST_CARGO") {
       (e2 as any).mapName = lv;
-      if (snapParty && player) {
+      // ★ 吸附**不能**依赖 snapParty：sys_travel 走的是 handleLevelChange(s, false)，
+      //   不吸附的话货物会带着旧图坐标留在原地，只能靠每 tick 3.2m/s 的跟随慢慢追
+      //   （2026-10-18 实测：跨图传送后货物在 38m 外，要追十几秒，像「跟丢了」）。
+      //   护送货物本来就该黏在玩家身上，任何切图都直接贴过去。
+      if (player) {
         const ang = rnd(0, Math.PI * 2);
         const cb = clampToBound(s, player.x + Math.cos(ang) * ALLY_FOLLOW_GAP_M, player.y + Math.sin(ang) * ALLY_FOLLOW_GAP_M);
         e2.x = cb.x;
