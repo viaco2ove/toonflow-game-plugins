@@ -320,6 +320,10 @@ export interface QuestObjective {
   count?: number;
   /** arrive/explore 的目标地图（前端关卡名） */
   map?: string;
+  /** ★ 原始地图写法（quests.json 里的 slug，如 mulberryDungeon1）。
+   *  map 会被 normQuestMap 归一成运行时显示名（"Mulberry Dungeon"），但前端 switchLevel /
+   *  sys_travel 认的是关卡 key（slug）——跨图寻路必须用这个原始值，否则传送目标不存在。 */
+  mapRaw?: string;
   x?: number;
   y?: number;
   radius?: number;
@@ -2627,30 +2631,91 @@ function cleanTitle(v: unknown): string { return str(v).trim().slice(0, QUEST_TI
 /** ★ 任务数据里的地图名归一：slug（mulberryTown）→ 运行时关卡显示名（Mulberry Town）
  *  · quests.json / AI 产出常写文件名 slug，而 s.levelName 用的是显示名（"Mulberry Town"），
  *    不归一会让所有带 map 的任务全被判成「别处发布」、arrive 校验永远不通过。 */
+/** ★ key 必须写成**真实地图文件名**的 camelCase（maps/mulberryDungeon1.json）：
+ *  反查表会把它直接当关卡 key 透给前端 switchLevel，全小写会 loadLevelByName 找不到文件。 */
 const QUEST_MAP_SLUGS: Record<string, string> = {
-  mulberrytown: "Mulberry Town",
-  mulberryforest: "Mulberry Forest",
-  mulberrygraveyard: "Mulberry Graveyard",
-  mulberrydungeon: "Mulberry Dungeon",
-  mulberrydungeon1: "Mulberry Dungeon",
-  mulberrydungeon2: "Mulberry Dungeon 2",
-  mulberrydungeon3: "Mulberry Dungeon 3",
-  mulberrydungeon4: "Mulberry Dungeon 4",
-  mulberrydungeon5: "Mulberry Dungeon 5",
-  forestdungeon: "Forest Dungeon",
-  forestdungeon2: "Forest Dungeon 2",
-  forestdungeon3: "Forest Dungeon 3",
-  forestdungeon4: "Forest Dungeon 4",
-  forestdungeon5: "Forest Dungeon 5",
-  lichlair: "Lich Lair",
-  lootgoblinlair: "Loot Goblin Lair",
+  mulberryTown: "Mulberry Town",
+  mulberryForest: "Mulberry Forest",
+  mulberryGraveyard: "Mulberry Graveyard",
+  mulberryDungeon: "Mulberry Dungeon",
+  /** ★ 故意与上一行同值：老存档把 mulberryDungeon1 归一成了 "Mulberry Dungeon"（层号丢失），
+   *  反查表按「同显示名取最长 slug」就能还原成 mulberryDungeon1（真实地图文件）。改这里会破坏自愈。 */
+  mulberryDungeon1: "Mulberry Dungeon",
+  mulberryDungeon2: "Mulberry Dungeon 2",
+  mulberryDungeon3: "Mulberry Dungeon 3",
+  mulberryDungeon4: "Mulberry Dungeon 4",
+  mulberryDungeon5: "Mulberry Dungeon 5",
+  forestDungeon: "Forest Dungeon",
+  forestDungeon1: "Forest Dungeon 1",
+  forestDungeon2: "Forest Dungeon 2",
+  forestDungeon3: "Forest Dungeon 3",
+  forestDungeon4: "Forest Dungeon 4",
+  forestDungeon5: "Forest Dungeon 5",
+  lichLair: "Lich Lair",
+  lootGoblinLair: "Loot Goblin Lair",
   kingdom: "Kingdom",
 };
+/** slug 查找索引（大小写 / 空格 / 下划线 / 连字符都不敏感） */
+const QUEST_MAP_SLUG_INDEX: Record<string, string> = (() => {
+  const idx: Record<string, string> = {};
+  for (const [slug, disp] of Object.entries(QUEST_MAP_SLUGS)) idx[slug.toLowerCase()] = disp;
+  return idx;
+})();
+/** 紧凑写法 → 真实 camelCase key（"mulberrydungeon1" → "mulberryDungeon1"） */
+const QUEST_MAP_COMPACT: Record<string, string> = (() => {
+  const idx: Record<string, string> = {};
+  for (const slug of Object.keys(QUEST_MAP_SLUGS)) idx[slug.toLowerCase().replace(/[\s_-]/g, "")] = slug;
+  return idx;
+})();
 function normQuestMap(v: unknown): string {
   const s = str(v).trim();
   if (!s) return "";
-  const hit = QUEST_MAP_SLUGS[s.toLowerCase().replace(/[\s_-]/g, "")];
+  const hit = QUEST_MAP_SLUG_INDEX[s.toLowerCase().replace(/[\s_-]/g, "")];
   return hit || s;
+}
+
+/** ★ 归一显示名 → 关卡 key 反查表（修历史存档污染）
+ *  老版本持久化 questBoard 时只存了归一后的 map（"Mulberry Dungeon"），新版本恢复时
+ *  （见 restoreQuestBoard）会把它当成 raw 再归一次，于是 mapRaw 被写成显示名，
+ *  跨图寻路拿这个非关卡 key 去 switchLevel → loadLevelByName 找不到文件 → 静默失败
+ *  （表现：点了寻路，玩家原地不动、任务一直挂着）。
+ *  · 同一显示名对应多个 slug（mulberrydungeon / mulberrydungeon1 都是 "Mulberry Dungeon"）
+ *    时取**更长的**那个 —— 带层号的才是真实关卡文件（maps/mulberryDungeon1.json）。 */
+const QUEST_MAP_KEY_REV: Record<string, string> = (() => {
+  const rev: Record<string, string> = {};
+  for (const [slug, disp] of Object.entries(QUEST_MAP_SLUGS)) {
+    const k = disp.trim().toLowerCase();
+    const prev = rev[k];
+    if (!prev || slug.length > prev.length) rev[k] = slug;
+  }
+  return rev;
+})();
+
+/** 任务里的原始地图写法 → 关卡 key（camelCase 原样保留，如 "mulberryDungeon1"）
+ *  · 已是 slug → 原样返回（新数据走这条）
+ *  · 是归一名 / 中文显示名（老存档）→ 反查回 slug
+ *  · 完全陌生 → 原样返回（前端还有一层按 mapFiles 的兜底解析） */
+function rawQuestMapKey(v: unknown): string {
+  const s = str(v).trim();
+  if (!s) return "";
+  const rev = QUEST_MAP_KEY_REV[s.toLowerCase()];
+  if (rev) return rev;                        // 显示名（含老存档污染）→ 真实关卡 key
+  const compact = QUEST_MAP_COMPACT[s.toLowerCase().replace(/[\s_-]/g, "")];
+  if (compact) return compact;                // 大小写 / 分隔符变体 → 真实 key
+  return s;                                   // 已是 key 或未知写法 → 原样
+}
+
+/** 任意地图写法 → 可比较的紧凑 key（"Mulberry Town" / "mulberryTown" 等价）。
+ *  仅用于**判定是否同一张图**，不要拿它去切图（切图要原始 camelCase key）。 */
+function questMapKey(v: unknown): string {
+  const s = str(v).trim();
+  if (!s) return "";
+  const rev = QUEST_MAP_KEY_REV[s.toLowerCase()];
+  const base = (rev || s).toLowerCase();
+  const compact = base.replace(/[^0-9a-z]/g, "");
+  // ⚠️ 纯中文 / 纯符号名（"桑镇"）紧凑化后是空串 —— 必须退回原文，
+  //    否则「桑镇」和「桑林」都会变成 ""，被误判成同一张图（到达校验直接放行）。
+  return compact || base;
 }
 
 function questList(s: FieldSurvivalState): QuestDef[] {
@@ -2794,7 +2859,7 @@ function syncQuestArriveAuto(s: FieldSurvivalState): void {
     for (const o of def.objectives || []) {
       if (o.kind !== "arrive" && o.kind !== "explore") continue;
       if (o.confirm === true) continue;      // 要点按钮的交给 sys_quest_arrive
-      if (str(o.map) && str(o.map) !== lv) continue;
+      if (str(o.map) && questMapKey(str(o.map)) !== questMapKey(lv)) continue;
       if (o.x === undefined || o.y === undefined) continue;
       const r = Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R));
       if (dist(me, { x: num(o.x, 0), y: num(o.y, 0) }) <= r) {
@@ -2835,7 +2900,7 @@ function questArriveOk(s: FieldSurvivalState, def: QuestDef): { ok: boolean; msg
   for (const o of def.objectives || []) {
     if (o.kind !== "arrive" && o.kind !== "explore") continue;
     const r = Math.max(0.5, num(o.radius, QUEST_ARRIVE_DEFAULT_R));
-    if (str(o.map) && str(o.map) !== lv) return { ok: false, msg: `还没到 ${o.map}` };
+    if (str(o.map) && questMapKey(str(o.map)) !== questMapKey(lv)) return { ok: false, msg: `还没到 ${o.map}` };
     if (o.x === undefined || o.y === undefined) return { ok: true, msg: "" };
     const d = dist(me, { x: num(o.x, 0), y: num(o.y, 0) });
     if (d > r) return { ok: false, msg: `还差 ${d.toFixed(1)} 米到目的地` };
@@ -2906,8 +2971,12 @@ function normalizeQuestDef(raw: any, idx = 0): QuestDef | null {
     if (t) obj.target = t.slice(0, 20);
     const c = Math.round(num((o as any).count, 1));
     obj.count = c > 0 ? c : 1;
-    const m = normQuestMap((o as any).map);
+    const mRaw = str((o as any).map).trim();
+    const m = normQuestMap(mRaw);
     if (m) obj.map = m;
+    // ★ mapRaw 必须是**关卡 key**（maps/<key>.json），前端跨图寻路直接拿它切图。
+    //   历史存档里 map 被归一过，这里反查回 slug；新数据（quests.json 原始 slug）原样保留。
+    if (mRaw) obj.mapRaw = rawQuestMapKey(mRaw);
     if ((o as any).x !== undefined && (o as any).y !== undefined) {
       obj.x = num((o as any).x, 0); obj.y = num((o as any).y, 0);
     }
@@ -3041,6 +3110,10 @@ function buildQuestView(s: FieldSurvivalState): void {
       need: objNeed(o),
       confirm: o.confirm === true,
       map: str(o.map),
+      /** ★ 原始关卡 key（跨图寻路传送用；map 是归一后的运行时名）
+       *  读时再兜一层 rawQuestMapKey：某些恢复路径会跳过 normalizeQuestDef（老存档 / 直接赋值），
+       *  这里保证前端**永远**拿到能直接喂给 switchLevel 的 key。 */
+      mapRaw: rawQuestMapKey(str(o.mapRaw) || str(o.map)),
       /** ★ arrive/explore 目的地坐标（前端寻路 + 画「目的地」图标用） */
       x: o.x,
       y: o.y,
@@ -3083,6 +3156,11 @@ function buildQuestView(s: FieldSurvivalState): void {
         const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
         return o ? str(o.map) : "";
       })(),
+      /** ★ 目的地关卡 key（跨图寻路 sys_travel / switchLevel 用） */
+      destMapRaw: (() => {
+        const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+        return o ? rawQuestMapKey(str(o.mapRaw) || str(o.map)) : "";
+      })(),
       destX: (() => {
         const o = (def.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
         return o ? o.x : undefined;
@@ -3111,7 +3189,7 @@ function buildQuestView(s: FieldSurvivalState): void {
       if (def.repeat) available.push(mapRow(def, "available"));
       else turned.push(mapRow(def, "turned"));
     } else {
-      if (!def.map || !lv || def.map === lv) available.push(mapRow(def, "available"));
+      if (!def.map || !lv || questMapKey(def.map) === questMapKey(lv)) available.push(mapRow(def, "available"));
       else available.push(mapRow(def, "away"));
     }
   }

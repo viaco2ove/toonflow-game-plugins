@@ -582,6 +582,45 @@ function isQuestCargo(e: any): boolean {
   return !!e && (String(e.id || "").startsWith("questcargo_") || String(e.entity_type) === "QUEST_CARGO");
 }
 
+/**
+ * ★ 任意地图写法 → 真实关卡 key（switchLevel / listLevelNames 认的那个）。
+ *  任务数据里的 map 有三种写法并存：
+ *    ① 关卡 key（slug）      "mulberryDungeon1"  ← quests.json 原始值，最准
+ *    ② 归一的英文名          "Mulberry Dungeon"  ← 老存档 / normQuestMap 的产物（层号可能丢）
+ *    ③ 中文显示名            "冥夜走廊·一层"      ← Tiled name / 地图面板展示用
+ *  只有 ① 能直接切图，②③ 都要在这里解析回 key，否则 loadLevelByName 找不到文件 →
+ *  静默失败（玩家点了寻路原地不动）。解析不出来时原样返回，交给调用方提示。
+ */
+function levelKeyOf(name: string): string {
+  const raw = String(name || "").trim();
+  if (!raw) return "";
+  let names: string[] = [];
+  try { names = listLevelNames(); } catch { names = []; }
+  if (!names.length) return raw;
+  if (names.includes(raw)) return raw;                       // ① 已经是 key
+  for (const n of names) {
+    try { if (getLevelDisplayName(n) === raw) return n; } catch { /* 单图读不到就跳过 */ }
+  }
+  const compact = raw.toLowerCase().replace(/[^0-9a-z]/g, "");
+  // ⚠️ compact 为空（纯中文 / 纯符号名，如「未知地图」）时必须跳过紧凑匹配与前缀兜底：
+  //   否则 startsWith("") 恒为真 → 任何中文名都会被误解析成列表里第一张图。
+  if (!compact) return raw;
+  for (const n of names) {
+    if (n.toLowerCase().replace(/[^0-9a-z]/g, "") === compact) return n;   // ② 大小写/分隔符差异
+  }
+  // ③ 前缀兜底：老存档把 "mulberryDungeon1" 归一成 "Mulberry Dungeon"（层号丢了）
+  //    → 取第一个以该紧凑 key 开头的关卡（mulberryDungeon1）
+  const pref = names.find((n) => n.toLowerCase().replace(/[^0-9a-z]/g, "").startsWith(compact));
+  return pref || raw;
+}
+
+/** 两个地图写法是否指同一张图（slug / 英文名 / 中文名 任意混用都能判对） */
+function sameLevel(a: string, b: string): boolean {
+  const ka = levelKeyOf(a);
+  const kb = levelKeyOf(b);
+  return !!ka && !!kb && ka === kb;
+}
+
 /** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮） */
 const questDestinations = computed<any[]>(() => {
   const out: any[] = [];
@@ -590,7 +629,7 @@ const questDestinations = computed<any[]>(() => {
     if (q.status !== "active") continue;
     const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
     if (!o || o.x === undefined || o.y === undefined) continue;
-    if (o.map && o.map !== currentLevelName.value) continue;   // 目的地不在这张图
+    if (o.map && !sameLevel(o.map, currentLevelName.value)) continue;   // 目的地不在这张图
     const key = String(q.id);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -602,6 +641,8 @@ const questDestinations = computed<any[]>(() => {
       radius: Math.max(0.5, Number(o.radius) || 3),
       needConfirm: o.confirm === true,
       atDest: !!q.atDest,
+      /** 全部目标是否已达成（决定按钮文案：达成=交付，未达成=到达） */
+      met: !!q.met,
       type: String(q.type || ""),
     });
   }
@@ -628,6 +669,18 @@ function questGoToDest(id: string): void {
     input.value.dy = 0;
     input.value.moveTo = { x: local.x, y: local.y };
     recomputeMoveToPath(local.x, local.y);
+    // ★ 目的地坐标越界（任务数据写到了地图外）→ 明确告知，否则玩家会看到「寻路后原地不动」
+    const g = walkGrid;
+    const wi = walkIndex;
+    if (g && wi) {
+      const cx = Math.floor(local.x + g.cols / 2);
+      const cz = Math.floor(local.y + g.rows / 2);
+      const inb = cx >= 0 && cz >= 0 && cx < g.cols && cz < g.rows;
+      if (!inb || wi.standable[cz * g.cols + cx] !== 1) {
+        showToast("⚠ 目的地在地图可走区域外（任务坐标可能有误），已尽量靠近");
+        return;
+      }
+    }
     showToast(local.title ? `自动寻路中：${local.title}` : "自动寻路中…");
     return;
   }
@@ -636,10 +689,24 @@ function questGoToDest(id: string): void {
     if (String(q.id) !== id || q.status !== "active") continue;
     const o = (q.objectives || []).find((x: any) => (x.kind === "arrive" || x.kind === "explore"));
     if (!o || o.x === undefined || o.y === undefined) { showToast("这个任务没有可寻路的目的地"); return; }
-    if (!o.map || o.map === currentLevelName.value) { showToast("目的地没有坐标，先打开地图看看"); return; }
-    pendingQuestWalk = { x: Number(o.x), y: Number(o.y), map: String(o.map), title: String(q.title || "") };
-    showToast(`目的地在${o.map}，先传送过去再走`);
-    onSysTravel(String(o.map));
+    if (!o.map && !o.mapRaw && !q.destMapRaw) { showToast("目的地没有地图信息，先打开地图看看"); return; }
+    // ★ 目的地解析成**真实关卡 key**：老存档的 mapRaw 可能是英文名/中文名，甚至丢了层号
+    //   （"Mulberry Dungeon" 其实是 mulberryDungeon1）—— 只有 key 才能被 switchLevel 加载
+    const travelMap = levelKeyOf(String(o.mapRaw || q.destMapRaw || o.map));
+    if (!travelMap) { showToast("目的地地图无法识别，请在地图面板手动传送"); return; }
+    // 解析后其实就是本图 → 直接走（questDestinations 因写法差异漏判时会落到这里）
+    if (sameLevel(travelMap, currentLevelName.value)) {
+      input.value.dx = 0;
+      input.value.dy = 0;
+      input.value.moveTo = { x: Number(o.x), y: Number(o.y) };
+      recomputeMoveToPath(Number(o.x), Number(o.y));
+      showToast(`自动寻路中：${q.title || ""}`);
+      return;
+    }
+    // pendingQuestWalk.map 必须和 switchLevel 的 levelName 参数（关卡 key）完全一致，才能落地后接着走
+    pendingQuestWalk = { x: Number(o.x), y: Number(o.y), map: travelMap, title: String(q.title || "") };
+    showToast(`目的地在「${getLevelDisplayName(travelMap) || travelMap}」，先传送过去再走`);
+    onSysTravel(travelMap);
     return;
   }
   showToast("这个任务没有可寻路的目的地");
@@ -690,7 +757,9 @@ function updateQuestArriveBtn(): void {
     const dist = Math.hypot(d.x - me.x, d.y - me.y);
     if (dist <= d.radius && dist < bestD) {
       bestD = dist;
-      best = { id: d.id, label: d.atDest ? "交付" : "到达", x: d.x, y: d.y };
+      // ★ 文案：全部目标达成 → 「交付」（点了直接领奖）；只走到目的地 → 「到达」（只确认到达）
+      //   不能用 atDest 判断——按钮本来就只在进圈后出现，atDest 必然为 true，会导致永远显示「交付」。
+      best = { id: d.id, label: d.met ? "交付" : "到达", x: d.x, y: d.y };
     }
   }
   const same = best && questArriveBtn.value && best.id === questArriveBtn.value.id && best.label === questArriveBtn.value.label;
@@ -772,8 +841,11 @@ watch(
 
 /** 传送：先切图（若目标不在本图），再落点 */
 async function applyTeleport(tp: any): Promise<void> {
-  if (tp?.mapName && tp.mapName !== currentLevelName.value) {
-    await switchLevel(String(tp.mapName));
+  const target = String(tp?.mapName || "");
+  if (target && !sameLevel(target, currentLevelName.value)) {
+    // ★ 切图失败就不要再落点：否则会把玩家坐标写进旧图的坐标空间（越界 / 卡墙）
+    const ok = await switchLevel(levelKeyOf(target) || target);
+    if (!ok) return;
   }
   const me = state.value?.entities.find(e => e.side === "player");
   if (me) {
@@ -781,6 +853,11 @@ async function applyTeleport(tp: any): Promise<void> {
     const spot = freeEnemySpot(Number(tp?.x) || 0, Number(tp?.y) || 0);
     me.x = spot.x;
     me.y = spot.y;
+    // ★ 落点变了 → 任务寻路的 A* 路径必须按新落点重算：
+    //   switchLevel 里算路径时玩家还在 settleSpawn，这里再挪一次会让路径起点对不上
+    //   （表现：跨图寻路落地后朝反方向走 / 原地打转 / 卡在墙边）
+    const mt = input.value.moveTo;
+    if (mt) recomputeMoveToPath(Number(mt.x), Number(mt.y));
     if (state.value?.events) state.value.events.push(`[传送] 已传送到 ${tp?.name || "目标位置"}`);
   }
 }
@@ -878,9 +955,11 @@ function onSysTeleport(card: SysRole) {
 }
 
 function onSysTravel(mapName: string) {
-  if (!mapName || mapName === currentLevelName.value) return;
+  // ★ 用 sameLevel 判同图：任务/地图面板给的可能分别是 slug、英文名、中文名，
+  //   直接比字符串会把「已经在桑镇却传桑镇」当成跨图（或反之漏判）
+  if (!mapName || sameLevel(mapName, currentLevelName.value)) return;
   sysNotice.value = `传送至 ${mapName}`;
-  runSysCmd("sys_travel", { mapName });
+  runSysCmd("sys_travel", { mapName: levelKeyOf(mapName) || mapName });
 }
 
 function onSysFollow(id: string, on: boolean) {
@@ -2335,15 +2414,19 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
  * ★ 关卡切换（Rotten-Soup changeLevels 等价）：
  *   加载目标地图 → 重建 chunk 索引 → 玩家挪到新图中心
  */
-async function switchLevel(levelName: string): Promise<void> {
-  if (levelSwitching.value) return;
+async function switchLevel(levelName: string): Promise<boolean> {
+  if (levelSwitching.value) return false;
   levelSwitching.value = true;
   switchingLevel.value = true;
   try {
     const next = await loadLevelByName(levelName);
     if (!next) {
       console.warn("[field-survival] 关卡不存在：", levelName);
-      return;
+      // ★ 不能静默失败：跨图寻路 / 地图面板传送都靠这里落地。失败时玩家只会看到
+      //   「点了没反应」，必须明确提示，并清掉等着在这张图继续走的任务目标。
+      if (pendingQuestWalk && sameLevel(pendingQuestWalk.map, levelName)) pendingQuestWalk = null;
+      showToast(`⚠ 关卡「${levelName}」加载失败（地图文件缺失）`);
+      return false;
     }
     mapCfg.value = next;
     currentLevelName.value = levelName;
@@ -2380,7 +2463,7 @@ async function switchLevel(levelName: string): Promise<void> {
     }
     portalLatchPending = true;
     // ★ 任务寻路（跨图）：若是为了任务目的地而传送过来的，落地后立刻接着 A* 走过去
-    if (pendingQuestWalk && pendingQuestWalk.map === levelName) {
+    if (pendingQuestWalk && sameLevel(pendingQuestWalk.map, levelName)) {
       const pw = pendingQuestWalk;
       pendingQuestWalk = null;
       // 等一帧让 walkGrid / mapCfg 就绪后再设 moveTo（下面 rebuildWalkGrid 已完成，可直接设）
@@ -2544,6 +2627,12 @@ async function switchLevel(levelName: string): Promise<void> {
     // ★ 事件系统：切图后加载新图事件 + 触发 enter_map + 注入 eventZones
     const evMapFile = levelNameToFileSafe(levelName);
     if (evMapFile) void afterMapSwitchForEvents(evMapFile);
+    return true;
+  } catch (e) {
+    console.error("[field-survival] 切图异常：", levelName, e);
+    if (pendingQuestWalk && sameLevel(pendingQuestWalk.map, levelName)) pendingQuestWalk = null;
+    showToast(`⚠ 切换到「${levelName}」失败`);
+    return false;
   } finally {
     levelSwitching.value = false;
     switchingLevel.value = false;
@@ -3344,7 +3433,7 @@ function localTick(): void {
     } else {
       for (const p of portals) {
         if (distTo(p) < PORTAL_TRIGGER_M) {
-          void switchLevel((p as any).name);
+          void switchLevel(levelKeyOf(String((p as any).name)) || String((p as any).name));
           break;
         }
       }
@@ -4122,8 +4211,9 @@ function drawQuestDestLayer(
     ctx.strokeText(label, px, py - poleH - 8 + bob);
     ctx.fillStyle = near ? "#ffe9a8" : "#cfe8ff";
     ctx.fillText(label, px, py - poleH - 8 + bob);
-    // 走近时的提示
-    if (near) {
+    // 走近时的提示：只有「全部目标已达成」才写「可以交付」；
+    // 未达成时由浮动「到达」按钮负责提示，这里不写文案（避免误导玩家以为能交任务）
+    if (near && d.met) {
       ctx.font = "bold 11px 'Microsoft YaHei', sans-serif";
       ctx.strokeText("可以交付", px, py + 16);
       ctx.fillStyle = "#ffd76a";
@@ -6662,8 +6752,8 @@ onMounted(async () => {
             const sm = String((fm as any)?.start_map?.value ?? (fm as any)?.start_map ?? "").trim();
             if (sm) lv = sm;
           }
-          if (lv && lv !== currentLevelName.value) {
-            await switchLevel(lv);
+          if (lv && !sameLevel(lv, currentLevelName.value)) {
+            await switchLevel(levelKeyOf(lv) || lv);
           } else {
             const cfg = await loadMapConfig(currentLevelName.value);
             mapCfg.value = cfg;

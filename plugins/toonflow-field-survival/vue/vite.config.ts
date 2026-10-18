@@ -470,9 +470,6 @@ async function seedQuestDefs() {
   //   并发 tf_plugin_loaded 可能让两者读到不同 session —— 两个 scope 都写，任何读取方都能拿到。
   const scopes = new Set(["all"]);
   if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
-  for (const sc of scopes) {
-    if (window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sc, "quest_defs"))) { log("✓ 任务表 quest_defs 已存在，跳过播种"); return; }
-  }
   const cands = [
     "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/events/任务事件/quests.json",
     "/story-data/toonflow-field-survival/map_design_pre/" + encodeURIComponent(STORY) + "/events/任务事件/quests.json",
@@ -484,8 +481,38 @@ async function seedQuestDefs() {
       const j = await r.json();
       const arr = Array.isArray(j) ? j : Array.isArray(j && j.quests) ? j.quests : [];
       if (!arr.length) continue;
-      for (const sc of scopes) window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sc, "quest_defs"), j);
-      log("✓ 任务表已播种：" + u + "（" + arr.length + " 条委托，scope: " + [...scopes].join(",") + "）");
+      // ★ 合并补齐（不是「已存在就整体跳过」）：
+      //   之前只要 key 存在就 return，导致 ①故事任务表改了坐标/新增委托后 dev-host 永远用旧数据
+      //   ②测试脚本往 quest_defs 注入过占位任务后，真实故事任务表再也播不进来。
+      //   规则：既有条目优先（不覆盖 AI 新增 / 手工调整），缺的按 id 补上。
+      let added = 0;
+      for (const sc of scopes) {
+        const key = window.__pdKey(ENTRY_PLUGIN_ID, sc, "quest_defs");
+        const rec = window.__pdGet(key);
+        // __pdGet 返回 {value, updatedAt} 包装体（与真宿主 pluginData.get 语义不同），先解包
+        const old = rec && typeof rec === "object" && "value" in rec ? rec.value : rec;
+        const oldArr = Array.isArray(old) ? old
+          : Array.isArray(old && old.quests) ? old.quests
+          : Array.isArray(old && old.defs) ? old.defs
+          : [];
+        if (!oldArr.length) {
+          window.__pdSet(key, j);
+          added += arr.length;
+          continue;
+        }
+        const seen = new Set(oldArr.map(function (x) { return String((x && x.id) || ""); }));
+        const merged = oldArr.slice();
+        for (const q of arr) {
+          if (seen.has(String(q && q.id))) continue;
+          seen.add(String(q && q.id));
+          merged.push(q);
+          added++;
+        }
+        if (merged.length !== oldArr.length) {
+          window.__pdSet(key, { version: (j && j.version) || 1, quests: merged });
+        }
+      }
+      log("✓ 任务表已播种：" + u + "（故事 " + arr.length + " 条，新增 " + added + " 条，scope: " + [...scopes].join(",") + "）");
       return;
     } catch (e) { log("! 任务表播种失败 " + u + ": " + (e && e.message ? e.message : e)); }
   }
