@@ -7934,6 +7934,39 @@
               "value": "BOARD"
             }
           ]
+        },
+        {
+          "id": 901,
+          "name": "斧头",
+          "type": "pickup",
+          "x": 736,
+          "y": 352,
+          "width": 32,
+          "height": 32,
+          "rotation": 0,
+          "visible": true,
+          "properties": [
+            {
+              "name": "entity_type",
+              "type": "string",
+              "value": "NPC"
+            },
+            {
+              "name": "full_name",
+              "type": "string",
+              "value": "斧头"
+            },
+            {
+              "name": "name",
+              "type": "string",
+              "value": "斧头"
+            },
+            {
+              "name": "pickup_item",
+              "type": "string",
+              "value": "斧头"
+            }
+          ]
         }
       ],
       "opacity": 1,

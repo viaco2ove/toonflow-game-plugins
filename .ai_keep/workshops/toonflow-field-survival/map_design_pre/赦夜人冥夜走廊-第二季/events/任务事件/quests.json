@@ -60,12 +60,13 @@
       "map": "mulberryTown",
       "desc": "把这箱夜采药材送到桑林交接点。箱子掉了这单就黄了。",
       "level": 2,
+      "timeLimitTicks": 6000,
       "objectives": [
         {
           "kind": "arrive",
           "map": "mulberryForest",
-          "x": 30,
-          "y": 18,
+          "x": 22,
+          "y": 12,
           "radius": 3,
           "confirm": true
         }
@@ -148,13 +149,14 @@
       "map": "mulberryTown",
       "desc": "镇口这两夜不太平。去看一眼。",
       "level": 1,
+      "timeLimitTicks": 3000,
       "objectives": [
         {
           "kind": "explore",
           "map": "mulberryTown",
           "target": "镇口",
-          "x": 40,
-          "y": 44,
+          "x": 13.5,
+          "y": 6,
           "radius": 4,
           "confirm": true
         }
@@ -261,8 +263,8 @@
         {
           "kind": "arrive",
           "map": "mulberryForest",
-          "x": 30,
-          "y": 18,
+          "x": 22,
+          "y": 12,
           "radius": 3,
           "confirm": true
         }

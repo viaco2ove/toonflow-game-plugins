@@ -78,6 +78,20 @@
       "trigger": { "type": "area_enter", "zone": "木材堆", "ai": { "gather": "wood" } },
       "repeat": true,
       "actions": [{ "type": "run_script", "script": "SY_E08_wood_at" }]
+    },
+    {
+      "id": "E09_q06_scouted",
+      "comment": "★ 任务完成 → 剧情推进：交付 Q06「探查镇口动静」后（q06_done 由任务板交付时写入 player_flags），镇口线报解锁",
+      "trigger": { "type": "enter_map" },
+      "conditions": [
+        { "type": "flag_check", "key": "q06_done", "op": "exists" },
+        { "type": "flag_check", "key": "town_gate_scouted", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "toast", "text": "镇口探过了。你带回的消息让镇长脸色变了——他知道该往哪条道上想。", "color": "gold" },
+        { "type": "event_log", "text": "委托完成：探查镇口动静 → 镇口线报解锁" },
+        { "type": "set_flag", "key": "town_gate_scouted", "value": true }
+      ]
     }
   ]
 }

@@ -23,6 +23,21 @@
         { "type": "event_log", "text": "锋芒 · 掰" },
         { "type": "set_flag", "key": "snap_blade", "value": true }
       ]
+    },
+    {
+      "id": "E32_q12_entered",
+      "comment": "★ 任务完成 → 剧情推进：交付 Q12「探入冥夜走廊」后（q12_done 由任务板交付时写入 player_flags），走廊入口确认可通行",
+      "trigger": { "type": "enter_map" },
+      "conditions": [
+        { "type": "flag_check", "key": "q12_done", "op": "exists" },
+        { "type": "flag_check", "key": "corridor_entered", "op": "missing" }
+      ],
+      "actions": [
+        { "type": "subtitle", "text": "冥夜走廊 · 入口确认", "duration": 3200 },
+        { "type": "toast", "text": "你把入口记下了。这条走廊可以走——但也只能走一步看一步。", "color": "gold" },
+        { "type": "event_log", "text": "委托完成：探入冥夜走廊 → 入口确认可通行" },
+        { "type": "set_flag", "key": "corridor_entered", "value": true }
+      ]
     }
   ]
 }
