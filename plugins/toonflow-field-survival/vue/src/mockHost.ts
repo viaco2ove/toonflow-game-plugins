@@ -185,6 +185,7 @@ const MOCK_CHEST_GRACE_TICKS = 12;
 const MOCK_DROP_TABLE: Array<{ name: string; w: number }> = [
   { name: "干粮", w: 26 }, { name: "荧光石", w: 18 }, { name: "兽骨", w: 16 },
   { name: "野兽皮", w: 14 }, { name: "锋利的爪", w: 12 }, { name: "暗核", w: 14 },
+  { name: "药瓶", w: 10 },   // 与 entry.ts 同权重：Q05「送药到药铺」的唯一来源
 ];
 
 /** 权重抽样（与 entry.ts pickWeighted 同口径） */

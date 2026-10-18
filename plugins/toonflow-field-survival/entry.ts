@@ -580,6 +580,9 @@ const KILL_DROP_CHEST_P = 0.35;   // 击杀掉宝箱概率
 const DEFAULT_DROP_TABLE: Array<{ name: string; w: number }> = [
   { name: "干粮", w: 26 }, { name: "荧光石", w: 18 }, { name: "兽骨", w: 16 },
   { name: "野兽皮", w: 14 }, { name: "锋利的爪", w: 12 }, { name: "暗核", w: 14 },
+  // ★ 药瓶（2026-10-18）：Q05「送药到药铺」要求采集 药瓶×1，但全工程没有任何产出口
+  //   → 该任务永远交不了。宝箱里放成药（药品补给）是最自然的兜底来源，权重给低一点。
+  { name: "药瓶", w: 10 },
 ];
 /** 「核类物品」名命中规则（暗核 / 湮核 / 源核 / 核晶…）：使用 → 经验 + 概率 AI 授技 */
 const CORE_ITEM_RE = /暗核|湮核|源核|核晶|兽核/;
@@ -601,6 +604,18 @@ const QUEST_AGENT_TIMEOUT_MS = 20000;      // 问 AI（任务详情/追问）超
 const QUEST_GEN_TIMEOUT_MS = 25000;        // AI 生成委托超时（输出 JSON 数组，给足窗口；后端 agent 20s 内必返）
 const QUEST_TYPE_SET = new Set(["kill", "gather", "escort", "deliver", "explore", "talk"]);
 const QUEST_KIND_SET = new Set(["kill", "gather", "arrive", "talk", "explore"]);
+/** ★ 采集目标别名表（上位词 → 具体物名）。
+ *  背景：任务写「木材」、事件脚本产出「松木 / 沉香木 / 朽木」——双向 includes 都不成立
+ *  （"松木".includes("木材")=false、"木材".includes("松木")=false）→ 进度永远 0，
+ *  Q11「备足柴火」实测卡死。这里把目标展开成可接受物名集合再求交。
+ *  ★ 只加「上位词→具体物名」这一种方向；具体物名之间的宽松匹配交给原 includes 逻辑。
+ *  新增词条只追加数组，不影响已有匹配。 */
+const QUEST_GATHER_ALIAS: Record<string, string[]> = {
+  木材: ["松木", "沉香木", "朽木", "木料", "木柴"],
+  木料: ["松木", "沉香木", "朽木", "木材", "木柴"],
+  药材: ["夜合花", "血参", "当归", "黄芪", "灵芝"],
+  草药: ["夜合花", "血参", "当归", "黄芪", "灵芝"],
+};
 
 /* ============================================================
    ★ v4 区域刷新（Region Respawn）+ 城镇安全区 + 敌人探测/脱战
@@ -2785,6 +2800,25 @@ function noteQuestKill(s: FieldSurvivalState, mobName: string): void {
   }
 }
 
+/** ★ 物品名是否满足采集目标（原双向 includes + 别名表展开）。
+ *  · "夜行尸傀" 命中 "尸傀" → includes 就够
+ *  · "松木" 命中 "木材" → 必须走 QUEST_GATHER_ALIAS
+ */
+function questGatherMatch(itemName: string, target: string): boolean {
+  const nm = str(itemName).trim();
+  const t = str(target).trim();
+  if (!nm || !t) return false;
+  if (nm === t || nm.includes(t) || t.includes(nm)) return true;
+  const alias = QUEST_GATHER_ALIAS[t];
+  if (alias) {
+    for (const a of alias) {
+      if (!a) continue;
+      if (nm === a || nm.includes(a) || a.includes(nm)) return true;
+    }
+  }
+  return false;
+}
+
 /** ★ 进度钩子②：物品入包（记累计获得，用掉不影响） */
 function noteQuestGather(s: FieldSurvivalState, itemName: string, count = 1): void {
   const nm = str(itemName).trim();
@@ -2798,7 +2832,7 @@ function noteQuestGather(s: FieldSurvivalState, itemName: string, count = 1): vo
       if (o.kind !== "gather") continue;
       const t = str(o.target).trim();
       if (!t) continue;
-      if (nm === t || nm.includes(t) || t.includes(nm)) {
+      if (questGatherMatch(nm, t)) {
         if (!p.gather) p.gather = {};
         p.gather[t] = num(p.gather[t], 0) + n;
         hit = true;
@@ -5160,6 +5194,9 @@ export async function handle_action(
         [good.name]: { name: good.name, count: 0, kind: good.kind, rarity: good.rarity, heal: good.heal, price: good.price, desc: good.desc },
       };
       patchCard(s, { items: serializeBag(bag, card.items), money: money - cost });
+      // ★ 买东西也算「获得」（与 addBagItemToCard 同口径）——否则「去商城买齐材料」的
+      //   采集类任务永远不计进度。
+      noteQuestGather(s, good.name, ask);
       pushEvent(s, `购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
       const me = playerEntity(s);
       if (me) floater(s, `-${cost} 金`, me.x, me.y - 30);
@@ -5175,13 +5212,11 @@ export async function handle_action(
       const addName = str(params?.name).trim().slice(0, 20);
       const addCount = Math.max(1, Math.round(num(params?.count, 1)));
       if (!addName) return okResp("sys_item_add: 缺少 name");
-      const addCard = (s.playerCard || {}) as Record<string, any>;
-      const addBag = mergeBag(itemsFromCard(addCard), s.bagMeta, s.bagOrder, s.itemMeta);
-      const addExist = addBag.find((x) => sameName(x.name, addName));
-      if (addExist) addExist.count += addCount;
-      else addBag.push({ name: addName, count: addCount, kind: guessKind(addName), heal: 0, mp: 0 } as BagItem);
-      patchCard(s, { items: serializeBag(addBag, addCard.items) });
-      applyBagAttributes(s);
+      // ★ 必须走 addBagItemToCard（内部含 noteQuestGather）。
+      //   原先这里手写了一遍 mergeBag + patchCard，**绕过了采集进度钩子** →
+      //   事件脚本（夜采药圃 / 木材堆 / 林中采药）的产出永远不给任务计数，
+      //   Q02「夜合花×3」、Q11「木材×6」进度恒 0（2026-10-18 实测）。
+      addBagItemToCard(s, addName, addCount);
       pushEvent(s, `获得 ${addName}×${addCount}`);
       const meAdd = playerEntity(s);
       if (meAdd) floater(s, `+${addName}`, meAdd.x, meAdd.y - 30);

@@ -25,14 +25,20 @@ export default async function main(ctx: Ctx): Promise<void> {
     ctx.bag.give("夜合花", 1);
     ctx.ui.toast(`${who}掐下一朵夜合花，只在子时开。`, "blue");
     ctx.ui.event("夜采获得 夜合花×1");
-  } else if (r < 0.6) {
+  } else if (r < 0.58) {
     ctx.bag.give("血参", 1);
     ctx.ui.toast(`${who}挖出一根血参，断面发暗红。`, "blue");
     ctx.ui.event("夜采获得 血参×1");
-  } else if (r < 0.85) {
+  } else if (r < 0.78) {
     ctx.bag.give("当归", 1);
     ctx.ui.toast(`${who}采到一簇当归，叶细香浓。`, "blue");
     ctx.ui.event("夜采获得 当归×1");
+  } else if (r < 0.9) {
+    // ★ 药瓶来源（2026-10-18）：Q05「送药到药铺」要 药瓶×1，全工程原先没有任何产出口
+    //   → 任务永远交不了。药圃土里埋着别人存下的成药，是最贴合剧情的来源。
+    ctx.bag.give("药瓶", 1);
+    ctx.ui.toast(`${who}刨出半埋的陶制药瓶，塞子还封着。`, "blue");
+    ctx.ui.event("夜采获得 药瓶×1");
   } else {
     ctx.ui.toast(`${who}翻遍草丛，一无所获。`, "white");
     ctx.ui.event("夜采空手而归");
