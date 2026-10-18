@@ -3451,9 +3451,14 @@ async function grantCoreSkill(s: FieldSurvivalState, ctx?: PluginGameContext): P
           if (j && str((j as any).name)) { picked = cleanSkillName((j as any).name).slice(0, 12); meta = j as Record<string, any>; }
         } catch { /* 不是 JSON → 纯文本 */ }
         if (!picked && pool.length) {
+          // ★ 有池时池内匹配；纯描述文字（"暗核已解析……宿主"）一律不收
+          //   之前会把整段描述截 12 字当技能名 → 出现"暗核已解析......宿主"这种诡异条目
           picked = pool.find((n) => raw.includes(n)) || "";
         }
-        if (!picked) picked = cleanSkillName(raw.split(/\n/)[0]).slice(0, 12);
+        if (!picked && !pool.length) {
+          // ★ 仅在无池（自由生成）时才接受纯文本第一行作为技能名
+          picked = cleanSkillName(raw.split(/\n/)[0]).slice(0, 12);
+        }
       }
     }
   } catch { /* AI 不可用 / 超时 → 走兜底 */ }
