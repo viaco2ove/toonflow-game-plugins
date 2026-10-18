@@ -392,6 +392,23 @@ const __impl = async (agentName, args) => {
     await new Promise((r) => setTimeout(r, 240));
     return runMockShopAgent(args);
   }
+  // ★ 任务生成：直接发 /toon-api/plugin/agentRun（与 PAGE 模板内 ctx.tsApi.agent.run 同源），
+  //   失败/无后端时再退到本文件末尾的 runMockQuestGener（hoisting 可达）。
+  if (n.indexOf("quest") >= 0 && n.indexOf("gener") >= 0) {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+        headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+      }
+      const r = await fetch("/toon-api/plugin/agentRun", {
+        method: "POST", headers,
+        body: JSON.stringify({ agentName: n, input: args || {}, aiConfigKey: "storyMiniGameModel" }),
+      });
+      const j = await r.json();
+      if (j && j.code === 200 && j.data) return j.data;
+    } catch { /* fallthrough → 本地兜底 */ }
+    return await runMockQuestGener(args);
+  }
   // ★ task-speaker-agent mock（dev-host 专用，返回 3 个选项 + 角色发言）
   if (n.indexOf("speaker") >= 0 || n.indexOf("task-speaker") >= 0) {
     await new Promise((r) => setTimeout(r, 600));
@@ -706,6 +723,9 @@ function buildEntryCtx() {
             }
             // ★ 任务板委托生成 agent：与 speaker 同路——桩无 LLM 通道，由后端 /plugin/agentRun 代跑
             //   runPluginAgent（field-survival-quest-gener），与安装后 ctx.tsApi.agent.run 同一条执行链。
+            //   2026-10-18：fetch 失败 / 后端无此 agent → 退到本页内的 runMockQuestGener
+            //   兜底（function 声明在 PAGE 模板内，与本 agent.run 共享同个 <script> 闭包）。
+            //   禁止反引号（同 PAGE 模板）。
             if (n.indexOf("quest") >= 0) {
               try {
                 const headers = { "Content-Type": "application/json" };
@@ -723,14 +743,16 @@ function buildEntryCtx() {
                   log("✓ 任务生成 agent(真LLM) " + n + " → " + (j.data.ok ? cnt + " 条委托" : "失败 " + (j.data.error || "")));
                   return j.data;
                 }
-                const msg = (j && (j.msg || j.message)) || "后端 agentRun 返回异常";
-                log("! 任务生成 agent 调用失败：" + msg);
-                return { ok: false, error: String(msg) };
+                log("! 任务生成 agent(真LLM) " + n + " 失败 → 退到本地兜底");
               } catch (err) {
-                const msg = String((err && err.message) || err);
-                log("! 任务生成 agent 请求异常：" + msg);
-                return { ok: false, error: msg };
+                log("! 任务生成 agent(真LLM) " + n + " 异常：" + String((err && err.message) || err) + " → 退到本地兜底");
               }
+              const out = await runMockQuestGener(args);
+              if (out && out.ok && Array.isArray(out.output && out.output.quests) && out.output.quests.length) {
+                log("✓ 任务生成 agent(本地兜底) " + n + " → " + out.output.quests.length + " 条委托");
+                return out;
+              }
+              return out || { ok: false, error: "本地任务生成器未产出" };
             }
             if (n.indexOf("shop") >= 0) {
               await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
@@ -1610,6 +1632,116 @@ window.addEventListener("message", async (e) => {
     log("host→ revive → phase=playing");
   }
 });
+
+/* ── 任务生成 agent 本地兜底（dev-host 专用）────────────────────────
+ *  真实宿主走 ctx.tsApi.agent.run("field-survival-quest-gener") → 走真 LLM。
+ *  dev-host 桩里没有 LLM 通道，调用本函数按现有标题去重 + 故事模板产出 N 条
+ *  不同类型委托（与 entry.ts normalizeQuestDef 接收的字段对齐）。
+ *  ★ 严禁使用反引号模板字符串（同 PAGE 模板 <script>）。 */
+const QUEST_GENER_TEMPLATES = [
+  {
+    type: "kill",
+    titleFn: (lv, m) => "清剿" + (m || "周边") + "湮物（lv" + lv + "）",
+    desc: "最近有湮物出没，清理一下。",
+    build: (lv) => ({ kind: "kill", target: "湮物", count: 3 + Math.min(5, Math.max(0, Math.floor(lv / 2))) }),
+  },
+  {
+    type: "gather",
+    titleFn: () => "采集应急物资",
+    desc: "药圃里能采到不少东西。",
+    build: () => ({ kind: "gather", target: "夜合花", count: 3 }),
+  },
+  {
+    type: "gather",
+    titleFn: () => "再攒一份木材",
+    desc: "木材堆就在镇口。",
+    build: () => ({ kind: "gather", target: "木材", count: 4 }),
+  },
+  {
+    type: "deliver",
+    titleFn: () => "送药到药铺",
+    desc: "药铺老板催了好几趟。",
+    build: (lv, m) => ({
+      objectives: [
+        { kind: "gather", target: "药瓶", count: 1 },
+        { kind: "arrive", map: m || "Mulberry Town", x: 8, y: 11, radius: 3, confirm: true },
+      ],
+      reward: { exp: 60 + lv * 5, money: 50 },
+    }),
+  },
+  {
+    type: "explore",
+    titleFn: (lv, m) => "探查" + (m || "附近") + "异动",
+    desc: "去看一眼。",
+    build: (lv, m) => ({
+      kind: "explore",
+      map: m || "Mulberry Town",
+      x: 0, y: 0, radius: 6, confirm: true,
+      reward: { exp: 40 + lv * 4, money: 30 },
+    }),
+  },
+  {
+    type: "escort",
+    titleFn: () => "护送商队过镇",
+    desc: "商队去桑林，路上不太平。",
+    build: (lv) => ({
+      kind: "arrive", map: "Mulberry Forest", x: 22, y: 12, radius: 3, confirm: true,
+      reward: { exp: 80 + lv * 6, money: 60 },
+      cargo: { name: "货车", hp: 50, gid: 0 },
+    }),
+  },
+];
+
+async function runMockQuestGener(args) {
+  const a = args || {};
+  const count = Math.max(1, Math.min(6, Math.round(Number(a.count || 3))));
+  const mapName = String(a.mapName || "Mulberry Town");
+  const lv = Math.max(1, Math.round(Number(a.playerLevel || 1)));
+  const existing = Array.isArray(a.existingTitles) ? a.existingTitles.map((x) => String(x || "")).filter(Boolean) : [];
+  const have = new Set(existing);
+  const out = [];
+  // ★ 与 entry.ts generateQuestsByAI 对齐：去重标题（即便同模板也只出一次），最多 count 条
+  const shuffled = QUEST_GENER_TEMPLATES.slice().sort(() => Math.random() - 0.5);
+  for (let i = 0; i < shuffled.length && out.length < count; i++) {
+    const t = shuffled[i];
+    const title = t.titleFn(lv, mapName);
+    if (have.has(title)) continue;
+    have.add(title);
+    const body = t.build(lv, mapName);
+    const def = {
+      id: "QAI" + String(Date.now() % 1000000) + "_" + (out.length + 1),
+      title,
+      type: t.type,
+      giver: "任务板",
+      desc: t.desc,
+      level: lv,
+      objectives: [],
+      reward: { exp: 50 + lv * 5, money: 30 + lv * 2 },
+    };
+    if (body.kind) {
+      def.objectives = [body];
+    } else if (Array.isArray(body.objectives)) {
+      def.objectives = body.objectives;
+      if (body.reward) def.reward = Object.assign({}, def.reward, body.reward);
+    }
+    if (body.cargo) def.cargo = body.cargo;
+    out.push(def);
+  }
+  // ★ 若所有模板都撞已有标题（极端情况：任务板很满），仍保证至少 1 条
+  if (!out.length) {
+    out.push({
+      id: "QAI" + String(Date.now() % 1000000) + "_fallback",
+      title: "清剿周边湮物（追加）",
+      type: "kill",
+      giver: "任务板",
+      desc: "刚冒头的湮物。",
+      level: lv,
+      objectives: [{ kind: "kill", target: "湮物", count: 3 }],
+      reward: { exp: 50, money: 30 },
+    });
+  }
+  return { ok: true, output: { quests: out } };
+}
 </script>
 </body>
 </html>`;
