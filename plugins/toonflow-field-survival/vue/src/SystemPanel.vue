@@ -113,6 +113,7 @@ const activeTab = ref<TabId>("bag");
         :current-max-mp="currentMaxMp"
         @use-skill="(s: any, i: number) => emit('use-skill', s, i)"
         @edit-skill="(p: any) => emit('edit-skill', p)"
+        @sell-skill="(s: any, idx: number) => emit('sell-skill', s, idx)"
         @move-skill="(i: number, dir: number) => emit('move-skill', i, dir)"
       />
       <MapPanel

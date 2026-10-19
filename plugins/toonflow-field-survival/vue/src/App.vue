@@ -1046,6 +1046,13 @@ function onSysEditSkill(p: any) {
   runSysCmd("sys_skill_edit", p);
 }
 
+/** 系统面板-技能页签：卖出技能（统一价 5 金） */
+function onSysSellSkill(_s: any, idx: number) {
+  if (idx < 0) return;
+  sysNotice.value = `卖出技能（+5 金）`;
+  runSysCmd("sys_skill_sell", { index: idx });
+}
+
 /** game.md 物品修改：参数保存到 t_plugin_session_data（entry 侧 itemMeta + 参数卡物品名列表） */
 function onSysEditItem(p: any) {
   if (!p || p.index < 0) return;
@@ -7399,6 +7406,7 @@ watch(() => state.value?.phase, (p) => {
         @buy="onSysBuyItem"
         @use-skill="onSysUseSkill"
         @edit-skill="onSysEditSkill"
+        @sell-skill="onSysSellSkill"
         @move-skill="onSysMoveSkill"
         @teleport="onSysTeleport"
         @travel="onSysTravel"

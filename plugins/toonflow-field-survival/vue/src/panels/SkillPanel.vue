@@ -69,6 +69,11 @@ function submitEdit(s: any, i: number) {
   editing.value = -1;
 }
 function onMove(i: number, dir: number) { emit("move-skill", i, dir); }
+/** 卖出：把面板列表下标 i 转成 s.skills 下标（s.index 由 App.vue sysSkills 注入） */
+function onSell(s: any, i: number) {
+  const idx = Math.max(0, Math.round(Number(s && s.index != null ? s.index : i) || 0));
+  emit("sell-skill", s, idx);
+}
 </script>
 
 <template>
@@ -93,6 +98,7 @@ function onMove(i: number, dir: number) { emit("move-skill", i, dir); }
       </div>
       <button class="skp-btn" :disabled="s.cdLeft > 0" @click="emit('use-skill', s, i)">{{ s.cdLeft > 0 ? "冷却中" : "使用" }}</button>
       <button class="skp-btn skp-btn--edit" @click="startEdit(s, i)">{{ editing === i ? "收起" : "修改" }}</button>
+      <button class="skp-btn skp-btn--sell" title="售出，获得 5 金" @click="onSell(s, i)">💰 卖出</button>
 
       <div v-if="editing === i" class="skp-edit">
         <label>名称<input v-model="form.name" maxlength="12" /></label>
@@ -155,6 +161,8 @@ function onMove(i: number, dir: number) { emit("move-skill", i, dir); }
 .skp-btn { padding: 4px 10px; border-radius: 5px; border: 1px solid #5a9bff; background: #2f6fd0; color: #fff; font-size: 11px; cursor: pointer; }
 .skp-btn:disabled { opacity: 0.5; cursor: default; }
 .skp-btn--edit { border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: #cfd8e3; }
+.skp-btn--sell { border-color: rgba(255, 200, 100, 0.5); background: rgba(255, 178, 107, 0.18); color: #ffd6a8; }
+.skp-btn--sell:hover { background: rgba(255, 178, 107, 0.32); }
 .skp-btn--ghost { border-color: rgba(255, 255, 255, 0.2); background: transparent; color: #93a2b3; }
 .skp-moves { display: flex; flex-direction: column; gap: 2px; flex: 0 0 auto; }
 .skp-btn--move { padding: 1px 7px; font-size: 12px; line-height: 1.4; border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.08); color: #cfd8e3; }

@@ -5101,6 +5101,28 @@ export async function handle_action(
       return okResp(`「${nm}」已保存（${tLabel}·lv${sk.lv}）`);
     }
 
+    case "sys_skill_sell": {
+      // ★ 系统面板-技能页签：统一卖出价 5 金；skillMeta 保留（将来可再学回而不丢等级）
+      //   金钱加到 playerCard.money（与 sys_sell 物品卖出保持一致）
+      const idx = Math.round(num(params?.index, -1));
+      const card = (s.playerCard || {}) as Record<string, any>;
+      const flat: string[] = [];
+      (Array.isArray(card.skills) ? card.skills : []).forEach((x: any) => {
+        if (typeof x === "string") splitSkillList(x).forEach((p: string) => { if (cleanSkillName(p)) flat.push(p.trim()); });
+        else { const n = str(x?.name); if (n) flat.push(n); }
+      });
+      const skill = flat[idx];
+      if (!skill) return okResp(`技能不存在（下标 ${idx} 越界）`);
+      const GAIN = 5;
+      flat.splice(idx, 1);   // 从参数卡技能列表移除
+      patchCard(s, { skills: flat, money: Math.round(num(card.money, 0)) + GAIN });
+      pushEvent(s, `售出「${skill}」，获得 ${GAIN} 金`);
+      const me = playerEntity(s);
+      if (me) floater(s, `+${GAIN} 金`, me.x, me.y - 30);
+      await persistSys(context, s);
+      return okResp(`卖出「${skill}」（+${GAIN} 金）`);
+    }
+
     case "sys_item_edit": {
       // ★ game.md 物品修改：修改后保存到 t_plugin_session_data（itemMeta + 参数卡物品名列表）
       const idx = Math.round(num(params?.index, -1));
