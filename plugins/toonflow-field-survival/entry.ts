@@ -3612,22 +3612,48 @@ function patchCard(s: FieldSurvivalState, patch: Record<string, any>): void {
   if (Array.isArray(patch.skills)) { s.skills = buildSkills(card, QUICKBAR_PAGE_SIZE, s.skillMeta); clampQuickbarPages(s); }
 }
 
-/** 宿主注入的参数卡若被外部改动，以宿主为准（保证与动态参数卡同步） */
+/** 宿主注入的参数卡若被外部改动，以宿主为准（保证与动态参数卡同步）
+ *  ★ 2026-10-19 修复（刷新丢物品的根因）：
+ *    ctx.playerCard 是「开局快照」——商城买卖 / 暗核吸收 / 技能卖出只写插件自己的
+ *    sys_state 与 s.playerCard，服务端卡永远不知道这些操作。若每次同步都整体以 ctx
+ *    为准，刷新后 restoreSys 刚恢复出来的物品、扣掉的金币、卖掉的技能会被立刻冲回
+ *    旧值（dev-host 实测：买完 9 件/86323 金 → 刷新变回 8 件/86418 金；
+ *    卖出技能也会在下一个 tick 原地复活）。
+ *    字段归属规则：
+ *      ① items / money / skills 归插件会话所有 —— 已恢复存档时以 s 为准
+ *         （s 连该字段都没有时才退回 ctx）；
+ *      ② level / exp / hp / mp 等剧情字段仍以 ctx 为准
+ *         （AI 剧情直接改角色卡 → 回灌玩家实体，这是既有设计）。
+ */
 function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): void {
   const card = (ctx?.playerCard || {}) as Record<string, any>;
   if (!card || !Object.keys(card).length) return;
   const cur = (s.playerCard || {}) as Record<string, any>;
+  const restored = (s as any)._sysRestored === true;
+  const cardItems = Array.isArray(card.items) ? card.items.length : 0;
+  const curItems = Array.isArray(cur.items) ? cur.items.length : 0;
+  if (!restored && cardItems === 0 && curItems > 0) {
+    // 未恢复存档但 s 已有物品（本会话刚买过）→ 同样保留，别被空卡冲掉
+    return;
+  }
+  // 已恢复存档：以 ctx 为底（剧情字段），但 items/money/skills 用 s 的（插件经济权威）
+  const base: Record<string, any> = restored ? { ...card } : (card as Record<string, any>);
+  if (restored) {
+    if (Array.isArray(cur.items)) base.items = cur.items;
+    if (cur.money != null) base.money = cur.money;
+    if (Array.isArray(cur.skills) && cur.skills.length) base.skills = cur.skills;
+  }
   const sig = (c: any) => JSON.stringify([
     c?.items ?? null, c?.money ?? null, c?.skills ?? null,
     c?.level ?? null, c?.exp ?? null, c?.hp ?? null, c?.mp ?? null,   // ★ 等级系统字段
   ]);
-  if (sig(card) === sig(cur)) return;
+  if (sig(base) === sig(cur)) return;
   // ★ 技能排序：宿主下发的参数卡可能还没收到写回（顺序是旧的），
   //   先用持久化的 skillOrder 还原再 build，避免排序被冲掉。
   //   这里只对 skills 做浅拷贝，避免改到宿主 context 对象本身。
-  let cardForBuild: Record<string, any> = card as Record<string, any>;
+  let cardForBuild: Record<string, any> = base;
   if (Array.isArray(s.skillOrder) && s.skillOrder.length) {
-    cardForBuild = { ...(card as Record<string, any>) };
+    cardForBuild = { ...base };
     applyCardSkillOrder(cardForBuild, s.skillOrder);
   }
   s.playerCard = cardForBuild;
@@ -3980,6 +4006,19 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       level: s.levelName || "",
       skillMeta: s.skillMeta || {},
       itemMeta: s.itemMeta || {},
+      // ★ 2026-10-19 修复：刷新丢物品/钱
+      //   旧版只存 bagMeta/bagOrder 但 itemsFromCard(card) 只读 card.items，
+      //   刷新后 card.items 是默认空数组 → 商城买的东西全部消失。
+      //   现在把 playerCard 的关键字段一起持久化；restoreSys 反向读回。
+      card: {
+        items: Array.isArray((s.playerCard || {}).items) ? (s.playerCard as any).items : [],
+        money: Math.round(num((s.playerCard as any)?.money, 0)),
+        level: Math.round(num((s.playerCard as any)?.level, 1)) || 1,
+        exp: Math.round(num((s.playerCard as any)?.exp, 0)),
+        hp: Math.round(num((s.playerCard as any)?.hp, 0)),
+        mp: Math.round(num((s.playerCard as any)?.mp, 0)),
+        skills: Array.isArray((s.playerCard as any)?.skills) ? (s.playerCard as any).skills : [],
+      },
       // ★ 任务板：任务定义 + 玩家进度（掉线重连按 id 续上）
       questBoard: s.questBoard || [],
       quests: s.quests || {},
@@ -4076,6 +4115,21 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
     if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
+    // ★ 2026-10-19 修复：刷新丢物品/钱
+    //   把持久化的 playerCard 关键字段灌回 s.playerCard（与 persistSys 对齐）
+    //   必须在 buildItems/buildSkills 之前调用 → s.items / s.skills 才能拿到对的数量
+    if (d.card && typeof d.card === "object") {
+      const cur = (s.playerCard || {}) as Record<string, any>;
+      const next = { ...cur };
+      if (Array.isArray(d.card.items)) next.items = d.card.items.map((x: any) => x);
+      if (typeof d.card.money === "number") next.money = d.card.money;
+      if (typeof d.card.level === "number") next.level = d.card.level;
+      if (typeof d.card.exp === "number") next.exp = d.card.exp;
+      if (typeof d.card.hp === "number") next.hp = d.card.hp;
+      if (typeof d.card.mp === "number") next.mp = d.card.mp;
+      if (Array.isArray(d.card.skills)) next.skills = d.card.skills.map((x: any) => x);
+      s.playerCard = next;
+    }
     // ★ 技能排序：恢复 skillOrder（随后在 syncCardFromContext 里套回参数卡 skills 顺序）
     if (Array.isArray(d.skillOrder)) s.skillOrder = d.skillOrder.map(String).filter(Boolean);
     if (Array.isArray(d.shop) && d.shop.length) s.shopGoods = d.shop;

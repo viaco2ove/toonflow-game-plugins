@@ -1,6 +1,6 @@
 import { defineConfig, loadEnv, Plugin } from "vite";
 import { resolve } from "path";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, statSync } from "fs";
 import http from "http";
 import { spawnSync } from "child_process";
 // @ts-ignore
@@ -112,12 +112,33 @@ function devHostPlugin(conn: string, story: string): Plugin {
         const repoEntryTs = resolve(__dirname, "../entry.ts");
         const repoEntryJs = resolve(__dirname, "../entry.js");
         if (existsSync(repoEntryTs)) {
-          const r = spawnSync(
-            "npx", ["--no-install", "esbuild", repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"],
-            { stdio: ["ignore", "pipe", "pipe"], timeout: 30000 },
-          );
-          if (r.status === 0) console.log("[dev-host] 仓库 entry.js 现编完成（" + repoEntryJs + "）");
-          else console.log("[dev-host] 仓库 entry.js 现编失败（不影响启动）: " + (r.stderr?.toString().slice(0, 200) ?? r.error?.message ?? ""));
+          // ★ 2026-10-19：原 spawnSync("npx", ...) 在 dev-host 子进程 PATH 下 ENOENT。
+          //   优先级：① node + esbuild/bin/esbuild（真 CLI；★ 不能走 lib/main.js——
+          //            那是库入口不是 CLI，跑它 exit 0 但什么都不写，曾让这里的
+          //            「现编」静默变 no-op）→
+          //            ② 项目内 .bin/esbuild.cmd + shell:true → ③ spawnSync("npx") 兜底
+          //   校验：只看 exit code 不够（main.js 就是 exit 0 不干活），必须确认
+          //   entry.js 的 mtime 真的前进过，否则换下一个候选。
+          const esbuildCands: Array<{ cmd: string; args: string[]; shell?: boolean }> = [
+            { cmd: process.execPath, args: [resolve(__dirname, "node_modules/esbuild/bin/esbuild"), repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"] },
+            { cmd: resolve(__dirname, "node_modules/.bin/esbuild.cmd"), args: [repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"], shell: true },
+            { cmd: "npx", args: ["--no-install", "esbuild", repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"], shell: process.platform === "win32" },
+          ];
+          const before = existsSync(repoEntryJs) ? statSync(repoEntryJs).mtimeMs : 0;
+          let built = false;
+          let lastErr = "";
+          for (const c of esbuildCands) {
+            if (!existsSync(c.cmd) && c.cmd !== "npx") continue;
+            try {
+              const r: { status: number | null; stderr?: Buffer | null; error?: Error } =
+                spawnSync(c.cmd, c.args, { stdio: ["ignore", "pipe", "pipe"], timeout: 30000, shell: !!c.shell });
+              const after = existsSync(repoEntryJs) ? statSync(repoEntryJs).mtimeMs : 0;
+              if (r.status === 0 && after > before) { built = true; break; }
+              lastErr = r.stderr?.toString().slice(0, 200) ?? r.error?.message ?? ("exit=" + r.status + " mtime未变");
+            } catch (e: any) { lastErr = e?.message ?? String(e); }
+          }
+          if (built) console.log("[dev-host] 仓库 entry.js 现编完成（" + repoEntryJs + "）");
+          else console.log("[dev-host] 仓库 entry.js 现编失败（不影响启动）: " + lastErr);
         }
       } catch (e: any) {
         console.log("[dev-host] 仓库 entry.js 现编异常（不影响启动）: " + (e?.message ?? e));
