@@ -115,6 +115,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
         <div class="rlc-meta">HP {{ player.hp }}/{{ player.maxHp }} · 经验 {{ expPct(player) }}% · {{ place(player) }}</div>
       </div>
       <div class="rlc-ops">
+        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', player)">形象</button>
         <button class="rlc-btn rlc-btn--ghost" @click="toggleCard('PLAYER')">{{ isOpen('PLAYER') ? '收起参数卡' : '参数卡' }}</button>
       </div>
       <!-- ★ 动态参数卡（用户）：结构化展开，可切回原文核对 -->
@@ -156,6 +157,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
         <div class="rlc-meta">HP {{ c.hp }}/{{ c.maxHp }} · {{ place(c) }}</div>
       </div>
       <div class="rlc-ops">
+        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', c)">形象</button>
         <button class="rlc-btn rlc-btn--ghost" @click="toggleCard(c.id)">{{ isOpen(c.id) ? '收起参数卡' : '参数卡' }}</button>
         <button class="rlc-btn" @click="emit('teleport', c)">传送到</button>
         <button class="rlc-btn rlc-btn--summon" :disabled="!canParty(c)" @click="emit('summon', c)" title="召唤到身边（不跟随、不入队）">召唤</button>
@@ -216,6 +218,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
 .rlc-btn { padding: 3px 8px; border-radius: 5px; border: 1px solid #5a9bff; background: #2f6fd0; color: #fff; font-size: 11px; cursor: pointer; }
 .rlc-btn:disabled { border-color: #4a5563; background: #3a434f; color: #8b98a6; cursor: not-allowed; }
 .rlc-btn--summon { border-color: #7acc7a; background: #2a7a2a; }
+.rlc-btn--skin { border-color: #a07ccf; background: #4a2d7a; color: #d4b8ff; }
 .rlc-btn--ghost { border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.06); color: #cfd8e3; }
 .rlc-btn--mini { padding: 1px 6px; font-size: 10px; }
 .rlc-chk--ai { color: #d4a13e; }

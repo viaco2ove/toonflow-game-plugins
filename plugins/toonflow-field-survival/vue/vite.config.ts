@@ -775,6 +775,34 @@ function buildEntryCtx() {
               }
               return out || { ok: false, error: "本地任务生成器未产出" };
             }
+            // ★ 实体形象生图 agent：与 speaker/quest 同路——后端无 LLM 通道，由后端 /plugin/agentRun 代跑
+            //   runPluginAgent（field-survival-sprite-gener）。后端走 u.ai.image（storyImageModel 配置）。
+            //   2026-10-19：fetch 失败 / 后端无此 agent → 退到本页外的 runMockSpriteGener
+            //   兜底（function 声明在 PAGE 模板外顶部，与本 agent.run 共享同个 <script> 闭包）。
+            if (n === "field-survival-sprite-gener" || n.indexOf("sprite") >= 0) {
+              try {
+                const headers = { "Content-Type": "application/json" };
+                if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+                  headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+                }
+                const r = await fetch("/toon-api/plugin/agentRun", {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({ agentName: n, input: args || {}, aiConfigKey: "storyImageModel" }),
+                });
+                const j = await r.json();
+                if (j && j.code === 200 && j.data && j.data.ok && j.data.output && (j.data.output.image || j.data.output.url)) {
+                  log("✓ 生图 agent(真LLM) " + n + " → " + (j.data.output.image || j.data.output.url).slice(0, 24) + "…");
+                  return j.data;
+                }
+                log("! 生图 agent(真LLM)失败：" + ((j && j.data && j.data.error) || "未知错误") + " → 退到 mock");
+              } catch (err) {
+                log("! 生图 agent(真LLM)异常：" + String((err && err.message) || err) + " → 退到 mock");
+              }
+              const out = await runMockSpriteGener(args);
+              if (out && out.ok) log("✓ 生图 agent(mock) → data:URL " + String((out.output && out.output.image || "")).slice(0, 24) + "…");
+              return out || { ok: false, error: "生图 mock 未产出" };
+            }
             if (n.indexOf("shop") >= 0) {
               await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
               return runMockShopAgent(args);
@@ -1762,6 +1790,134 @@ async function runMockQuestGener(args) {
     });
   }
   return { ok: true, output: { quests: out } };
+}
+
+/* ============================================================
+ * ★ dev-host 生图 agent mock（field-survival-sprite-gener）
+ *
+ * 真实宿主走 PluginAgentRunner → u.ai.image → 把图存 oss 后返 URL；
+ * dev-host 桩没有图片模型通道，--conn 模式仍可走真实后端（见下方 agent.run 路由），
+ * 本 mock 仅在「既没装后端又没注册 image model」时作为离线兜底：
+ *   - 用 prompt hash + 文本关键词做种子
+ *   - 拼一张 256x256 程序化头像（色块 + 像素字符 + 简单头发/衣领形状）
+ *   - 返回 data:image/png;base64,...（插件 entry.ts 会原样接收并入图库）
+ * ============================================================ */
+function djb2(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
+  return h >>> 0;
+}
+function pickRng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 0xffffffff; };
+}
+const HAIR_KEYS = ["银发", "白发", "黑发", "棕发", "金发", "红发"];
+const CLOTH_KEYS = ["黑衣", "白衣", "红衣", "蓝衣", "绿衣", "紫衣"];
+const SKIN_KEYS = ["#f6d0a8", "#e3b187", "#c98864", "#9b6c45", "#6f4d2e"];
+const HAIR_COLORS = ["#e6e6e6", "#d6d6d6", "#2c2a35", "#7b4a26", "#e6c64a", "#c33c3c"];
+const CLOTH_COLORS = ["#2a2a35", "#f1f1f1", "#c43c3c", "#3c5fc4", "#3c8a4a", "#7b4ab8"];
+function pickColor(rng, list) { return list[Math.floor(rng() * list.length)]; }
+function findKeyColor(text, keys, colors) {
+  for (let i = 0; i < keys.length; i++) if (text.indexOf(keys[i]) >= 0) return colors[i];
+  return null;
+}
+async function renderMockAvatar(args) {
+  const a = args || {};
+  const prompt = String(a.prompt || "未知形象");
+  const seed = djb2(prompt) ^ 0x53504c; // 0x53504c = "SPL"
+  const rng = pickRng(seed);
+  const hairCol = findKeyColor(prompt, HAIR_KEYS, HAIR_COLORS) || pickColor(rng, HAIR_COLORS);
+  const clothCol = findKeyColor(prompt, CLOTH_KEYS, CLOTH_COLORS) || pickColor(rng, CLOTH_COLORS);
+  const skinCol = pickColor(rng, SKIN_KEYS);
+  const bgHue = Math.floor(rng() * 360);
+  const bgL1 = 18 + Math.floor(rng() * 12);
+  const bgCol = "hsl(" + bgHue + ", 18%, " + bgL1 + "%)";
+
+  // 用 node 端的 canvas 不行（dev-host 跑在浏览器）；改用纯像素数组自己编码 PNG。
+  // 目标：256x256 像素艺术头像，1x1 像素重复 8 次做 chunky 块。
+  const W = 256, H = 256, CHUNK = 8;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = bgCol;
+  ctx.fillRect(0, 0, W, H);
+  // 衣服（底色梯形）
+  ctx.fillStyle = clothCol;
+  ctx.beginPath();
+  ctx.moveTo(60, 256);
+  ctx.lineTo(96, 168);
+  ctx.lineTo(160, 168);
+  ctx.lineTo(196, 256);
+  ctx.closePath();
+  ctx.fill();
+  // 脸
+  ctx.fillStyle = skinCol;
+  ctx.fillRect(96, 96, 64, 64);
+  // 头发（头顶 + 两侧）
+  ctx.fillStyle = hairCol;
+  ctx.fillRect(88, 64, 80, 40);
+  ctx.fillRect(80, 96, 16, 32);
+  ctx.fillRect(160, 96, 16, 32);
+  // 眼睛（两像素）
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(112, 124, 8, 8);
+  ctx.fillRect(136, 124, 8, 8);
+  // 嘴
+  ctx.fillStyle = "#7a3a3a";
+  ctx.fillRect(120, 148, 16, 4);
+  // 衣物高光（领口）
+  ctx.fillStyle = "rgba(255,255,255,0.18)";
+  ctx.fillRect(112, 168, 32, 8);
+  // 噪点：1x1 像素以 8x8 块重复做 chunky 颗粒感
+  const data = ctx.getImageData(0, 0, W, H);
+  const px = data.data;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      if ((x % CHUNK === 0) && (y % CHUNK === 0)) {
+        const n = (rng() - 0.5) * 24;
+        px[i] = Math.max(0, Math.min(255, px[i] + n));
+        px[i + 1] = Math.max(0, Math.min(255, px[i + 1] + n));
+        px[i + 2] = Math.max(0, Math.min(255, px[i + 2] + n));
+      }
+    }
+  }
+  // 像素化下采样
+  for (let cy = 0; cy < H; cy += CHUNK) {
+    for (let cx = 0; cx < W; cx += CHUNK) {
+      const i = (cy * W + cx) * 4;
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      for (let yy = 0; yy < CHUNK; yy++) {
+        for (let xx = 0; xx < CHUNK; xx++) {
+          const j = ((cy + yy) * W + (cx + xx)) * 4;
+          px[j] = r; px[j + 1] = g; px[j + 2] = b;
+        }
+      }
+    }
+  }
+  ctx.putImageData(data, 0, 0);
+  // 边框
+  ctx.strokeStyle = "rgba(0,0,0,0.5)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(0, 0, W, H);
+  return canvas.toDataURL("image/png");
+}
+
+async function runMockSpriteGener(args) {
+  const a = args || {};
+  const prompt = String(a.prompt || "").trim();
+  if (!prompt) return { ok: false, error: "缺提示词" };
+  // 模拟推理耗时
+  await new Promise((r) => setTimeout(r, 600));
+  try {
+    const dataUrl = await renderMockAvatar(a);
+    if (!dataUrl) return { ok: false, error: "mock 画布不可用" };
+    return { ok: true, output: { image: dataUrl, prompt, source: "mock" } };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
 }
 </script>
 </body>

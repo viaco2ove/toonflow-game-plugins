@@ -135,6 +135,7 @@ const activeTab = ref<TabId>("bag");
         @follow="(id: string, on: boolean) => emit('follow', id, on)"
         @summon="(c: any) => emit('summon', c)"
         @ai-toggle="(id: string, on: boolean) => emit('ai-toggle', id, on)"
+        @open-appearance="(c: any) => emit('open-appearance', c)"
       />
       <EventPanel
         v-else-if="activeTab === 'event'"

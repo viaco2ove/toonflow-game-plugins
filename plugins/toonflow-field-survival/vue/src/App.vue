@@ -25,6 +25,7 @@ import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
+import AppearanceModal from "./panels/AppearanceModal.vue";
 import QuestPanel from "./panels/QuestPanel.vue";
 import {
   TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
@@ -902,7 +903,11 @@ const pendingSys = ref("");
 let sysCmdTimer = 0;
 
 /** 各系统命令的结果等待窗口：默认 3s；商城 agent 宿主侧要跑 15~20s，窗口必须盖住它 */
-const SYS_CMD_WAIT_MS: Record<string, number> = { sys_shop_refresh: 25000 };
+const SYS_CMD_WAIT_MS: Record<string, number> = {
+  sys_shop_refresh: 25000,
+  // ★ AI 生图：图片模型推理通常 30~90s；150s 还失败即视为网络/配置异常
+  sys_sprite_generate: 150000,
+};
 
 function runSysCmd(action: string, params: Record<string, any> = {}): void {
   pendingSys.value = action;
@@ -1051,6 +1056,56 @@ function onSysSellSkill(_s: any, idx: number) {
   if (idx < 0) return;
   sysNotice.value = `卖出技能（+5 金）`;
   runSysCmd("sys_skill_sell", { index: idx });
+}
+
+/* ============================================================
+   ★ 实体形象弹窗（系统 → 角色 → 形象）
+   ============================================================ */
+const showAppearanceModal = ref(false);
+const appearanceTarget = ref<string>("PLAYER");
+const appearanceTargets = computed<any[]>(() => {
+  const out: any[] = [];
+  const me = sysPlayerRole.value;
+  if (me) out.push({ id: me.id || "PLAYER", name: me.name || "用户", avatarPath: me.avatarPath, isPlayer: true });
+  for (const c of sysNpcCards.value || []) {
+    if (!c || !c.id) continue;
+    out.push({ id: c.id, name: c.name || c.id, avatarPath: c.avatarPath });
+  }
+  return out;
+});
+const appearanceGallery = computed(() => Array.isArray((state.value as any)?.spriteGallery) ? (state.value as any).spriteGallery : []);
+const appearanceBinds = computed<Record<string, string>>(() => ((state.value as any)?.avatarBinds && typeof (state.value as any).avatarBinds === "object") ? (state.value as any).avatarBinds : {});
+const appearanceGen = computed(() => (state.value as any)?.spriteGen || null);
+
+function onOpenAppearance(c: any) {
+  const id = c && c.id ? c.id : "PLAYER";
+  appearanceTarget.value = id;
+  showAppearanceModal.value = true;
+}
+function onAppearancePickTarget(id: string) {
+  if (id) appearanceTarget.value = id;
+}
+function onAppearanceBind(target: string, image: string) {
+  if (!image) return;
+  const key = appearanceTargets.value.find((t) => t.id === target) ? target : "PLAYER";
+  sysNotice.value = "正在更换形象…";
+  runSysCmd("sys_sprite_bind", { target: key, image });
+}
+function onAppearanceUnbind(target: string) {
+  sysNotice.value = "正在恢复原始形象…";
+  runSysCmd("sys_sprite_unbind", { target });
+}
+function onAppearanceGenerate(prompt: string, refs: string[]) {
+  sysNotice.value = "正在生成形象…";
+  runSysCmd("sys_sprite_generate", { prompt, refImages: refs });
+}
+function onAppearanceDelete(id: string) {
+  sysNotice.value = "正在删除形象…";
+  runSysCmd("sys_sprite_gallery_del", { id });
+}
+function onAppearanceClear() {
+  sysNotice.value = "正在清空形象…";
+  runSysCmd("sys_sprite_gallery_clear", {});
 }
 
 /** game.md 物品修改：参数保存到 t_plugin_session_data（entry 侧 itemMeta + 参数卡物品名列表） */
@@ -1249,10 +1304,11 @@ function loadAvatar(avatarPath: string): HTMLImageElement {
   const img = new Image();
   // ★ 头像路径解析：
   //   http(s) → 完整 URL（AI 故事角色头像）
+  //   data:   → 直接内联（用户 AI 生成 / 上传的形象）
   //   ./ 开头 → 插件自身资源（走 assetUrl：dev=Vite，prod=data URL）
   //   / 开头 → 宿主站内资源（补 origin）
   //   其他    → 当作相对路径走 assetUrl
-  if (avatarPath.startsWith("http")) {
+  if (avatarPath.startsWith("http") || avatarPath.startsWith("data:") || avatarPath.startsWith("blob:")) {
     img.src = avatarPath;
   } else if (avatarPath.startsWith("./")) {
     img.src = assetUrl(avatarPath.slice(2));
@@ -1281,9 +1337,9 @@ function entityAvatarPath(e: Entity): string | undefined {
   return role?.avatarPath || undefined;
 }
 
-/** 与 loadAvatar 完全一致的路径解析（http / ./ / 站内绝对路径 / 相对路径） */
+/** 与 loadAvatar 完全一致的路径解析（http / data: / ./ / 站内绝对路径 / 相对路径） */
 function avatarUrlOf(avatarPath: string): string {
-  if (avatarPath.startsWith("http")) return avatarPath;
+  if (avatarPath.startsWith("http") || avatarPath.startsWith("data:") || avatarPath.startsWith("blob:")) return avatarPath;
   if (avatarPath.startsWith("./")) return assetUrl(avatarPath.slice(2));
   if (avatarPath.startsWith("/")) return location.origin + avatarPath;
   return assetUrl(avatarPath);
@@ -7421,9 +7477,28 @@ watch(() => state.value?.phase, (p) => {
         @quest-recover="questRecoverCargo"
         @quest-arrive="onQuestArriveAtDest"
         @quest-abandon="onQuestAbandon"
+        @open-appearance="onOpenAppearance"
         @close="showSystemPanel = false"
       />
     </div>
+
+    <!-- 实体形象弹窗 -->
+    <AppearanceModal
+      v-if="showAppearanceModal"
+      :open="showAppearanceModal"
+      :target-id="appearanceTarget"
+      :targets="appearanceTargets"
+      :gallery="appearanceGallery"
+      :binds="appearanceBinds"
+      :gen="appearanceGen"
+      @close="showAppearanceModal = false"
+      @pick-target="onAppearancePickTarget"
+      @bind="onAppearanceBind"
+      @unbind="onAppearanceUnbind"
+      @generate="onAppearanceGenerate"
+      @delete="onAppearanceDelete"
+      @clear="onAppearanceClear"
+    />
   </div>
 </template>
 
