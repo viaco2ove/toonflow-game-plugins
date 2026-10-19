@@ -26,18 +26,22 @@ const props = defineProps<{
   targetId: string;
   targets: Target[];
   gallery: any[];
-  binds: Record<string, string>;
+  /** 角色 → 绑定条目（含 image / prompt / source / createdAt） */
+  binds: Record<string, { image: string; prompt?: string; source?: string; createdAt?: number }>;
   gen: { status?: string; message?: string } | null;
 }>();
 
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "pick-target", id: string): void;
-  (e: "bind", target: string, image: string): void;
+  /** 绑定：image 是 data:URL 或插件内相对路径；source/prompt 透传给后端 */
+  (e: "bind", target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number }): void;
   (e: "unbind", target: string): void;
   (e: "generate", prompt: string, refs: string[]): void;
   (e: "delete", id: string): void;
   (e: "clear"): void;
+  /** 上传图片并立即绑定（不走 AI） */
+  (e: "upload-bind", target: string, dataUrl: string): void;
 }>();
 
 const MAX_REFS = 3;
@@ -47,13 +51,15 @@ const prompt = ref("");
 /** 参考图：preset = 内置形象路径；upload = 已压成 data:URL 的上传图 */
 const refs = ref<Array<{ key: string; url: string; kind: "preset" | "upload" }>>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
+const uploadFileInput = ref<HTMLInputElement | null>(null);
 const preparing = ref(false);
 
 const busy = computed(() => String(props.gen && props.gen.status || "") === "running");
 const current = computed<Target | null>(() => props.targets.find((t) => t.id === props.targetId) || null);
 const currentImage = computed(() => {
-  const b = props.binds || {};
-  return b[props.targetId] || (current.value && current.value.avatarPath) || "";
+  const b = (props.binds || {})[props.targetId];
+  if (b && b.image) return b.image;
+  return (current.value && current.value.avatarPath) || "";
 });
 const hasBind = computed(() => !!(props.binds || {})[props.targetId]);
 const gallery = computed(() => (Array.isArray(props.gallery) ? props.gallery : []));
@@ -82,6 +88,22 @@ function onPickTarget(ev: Event): void {
 }
 function pickFile(): void {
   if (fileInput.value) fileInput.value.click();
+}
+function pickUploadFile(): void {
+  // ★ 上传作为形象：单独走隐藏 input（避免与「上传参考图」共用而误进 refs）
+  if (uploadFileInput.value) uploadFileInput.value.click();
+}
+
+async function onUploadFile(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement;
+  const f = input.files && input.files[0];
+  input.value = "";
+  if (!f || !/^image\//i.test(f.type || "")) return;
+  try {
+    const data = await shrinkImage(f);
+    // 单图直接作为「形象」上传并绑定，不进 refs
+    emit("upload-bind", props.targetId, data);
+  } catch { /* 上传失败不提示，安静忽略 */ }
 }
 
 /** 上传图压到 ≤512px 的 JPEG：参考图不需要原图，压完 data:URL 约 20~60KB */
@@ -194,6 +216,7 @@ watch(
               {{ t.isPlayer ? "用户 · " : "" }}{{ t.name }}
             </option>
           </select>
+          <button class="apm-btn apm-btn--upload" title="选一张本地图片直接作为该角色的实体形象" @click="pickUploadFile">📁 上传</button>
           <button class="apm-x" title="关闭" @click="emit('close')">×</button>
         </div>
 
@@ -224,7 +247,7 @@ watch(
               class="apm-cell"
               :class="{ 'apm-cell--on': currentImage === p.path }"
               :title="p.label + '（点击使用）'"
-              @click="emit('bind', targetId, p.path)"
+              @click="emit('bind', targetId, p.path, { source: 'preset' })"
             >
               <img :src="imgSrc(p.path)" alt="" />
             </button>
@@ -277,6 +300,7 @@ watch(
               参考图会作为「角色外观参考」发给图片模型；只用文字也能生成。
             </div>
             <input ref="fileInput" class="apm-file" type="file" accept="image/*" multiple @change="onFiles" />
+            <input ref="uploadFileInput" class="apm-file" type="file" accept="image/*" @change="onUploadFile" />
           </div>
 
           <!-- ③ 我的生成 -->
@@ -286,7 +310,7 @@ watch(
               <div v-for="g in gallery" :key="g.id" class="apm-gitem">
                 <img :src="imgSrc(g.image)" alt="" />
                 <div class="apm-gitem__ops">
-                  <button class="apm-btn apm-btn--mini" @click="emit('bind', targetId, g.image)">选用</button>
+                  <button class="apm-btn apm-btn--mini" @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })">选用</button>
                   <button class="apm-btn apm-btn--mini apm-btn--del" @click="emit('delete', g.id)">删除</button>
                 </div>
                 <div v-if="g.prompt" class="apm-gitem__p" :title="g.prompt">{{ g.prompt }}</div>
@@ -466,6 +490,7 @@ watch(
 .apm-btn--ghost { border-color: rgba(255, 255, 255, 0.25); background: rgba(255, 255, 255, 0.06); color: #cfd8e3; }
 .apm-btn--go { min-width: 96px; }
 .apm-btn--mini { padding: 2px 6px; font-size: 11px; }
+.apm-btn--upload { padding: 2px 8px; font-size: 11px; border-color: #5a9bff; background: rgba(90, 155, 255, 0.15); color: #cfe2ff; }
 .apm-btn--del { border-color: #a4443f; background: #7d2f2b; }
 .apm-tip { font-size: 11px; color: #9fd0ff; }
 .apm-tip--err { color: #ff9c9c; }

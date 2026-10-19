@@ -1085,11 +1085,17 @@ function onOpenAppearance(c: any) {
 function onAppearancePickTarget(id: string) {
   if (id) appearanceTarget.value = id;
 }
-function onAppearanceBind(target: string, image: string) {
+function onAppearanceBind(target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number }) {
   if (!image) return;
   const key = appearanceTargets.value.find((t) => t.id === target) ? target : "PLAYER";
   sysNotice.value = "正在更换形象…";
-  runSysCmd("sys_sprite_bind", { target: key, image });
+  runSysCmd("sys_sprite_bind", { target: key, image, source: meta?.source, prompt: meta?.prompt, createdAt: meta?.createdAt });
+}
+function onAppearanceUploadBind(target: string, dataUrl: string) {
+  if (!dataUrl) return;
+  const key = appearanceTargets.value.find((t) => t.id === target) ? target : "PLAYER";
+  sysNotice.value = "正在上传并绑定…";
+  runSysCmd("sys_sprite_upload", { target: key, image: dataUrl });
 }
 function onAppearanceUnbind(target: string) {
   sysNotice.value = "正在恢复原始形象…";
@@ -2110,6 +2116,69 @@ function drawTile(
     ctx.restore();
   } else {
     ctx.drawImage(SHEET_TILESET.img, sx, sy, sw, sh, dx, dy, dw, dh);
+  }
+}
+
+/* ============================================================
+ * ★ 自定义立绘（系统→角色→实体形象 走这里）
+ *
+ * 复用 loadAvatar 缓存：data:URL / http / ./ 预选都已经在 cache 里，img 走
+ * drawImage（与原 walk 帧一致）。walk 2 帧靠帧索引：在 sprite 64×96（2×3 宫格）
+ * 上画一帧，靠 `frameIdx` 选 walk1 / walk2；预选内置图是 32×32 单图，
+ * 两帧都画同一张，行为是「微微晃动」。
+ * ============================================================ */
+const customSpriteAnimCache = new Map<string, { frames: HTMLImageElement[]; ready: boolean; single: boolean }>();
+function ensureCustomSprite(path: string): { frames: HTMLImageElement[]; ready: boolean; single: boolean } {
+  const cached = customSpriteAnimCache.get(path);
+  if (cached && cached.ready) return cached;
+  if (cached) return cached;
+  // ★ 走 resolveAssetPath：data: / http / ./ 都会被它正确处理（保留 data: 原样）
+  const url = resolveAssetPath(path);
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  const slot = { frames: [img], ready: false, single: true };
+  customSpriteAnimCache.set(path, slot);
+  img.onload = () => {
+    // 自定义立绘一律当单图，2 帧用同一张做 walk 动画（用户看到微微的呼吸晃动）
+    slot.ready = true;
+  };
+  img.onerror = () => {
+    // 失败也标 ready（调用方会画「?」占位）
+    slot.ready = true;
+  };
+  img.src = url;
+  return slot;
+}
+
+function drawAvatarCustomSprite(
+  ctx: CanvasRenderingContext2D,
+  avatarPath: string,
+  dx: number, dy: number, dw: number, dh: number,
+  flipX: boolean,
+  animTick: number,
+) {
+  const slot = ensureCustomSprite(avatarPath);
+  const img = slot.frames[0];
+  if (!img.complete || img.naturalWidth === 0) {
+    // 还在加载：画一个占位胶囊，避免 entity 突然消失
+    ctx.save();
+    ctx.fillStyle = "rgba(160, 200, 255, 0.5)";
+    ctx.fillRect(dx, dy, dw, dh);
+    ctx.restore();
+    return;
+  }
+  // 2 帧 walk 循环：偶数帧正常、奇数帧向下偏 1px（保持像素感的呼吸节奏）
+  const phase = Math.floor(animTick / 8) % 2;
+  const yJitter = phase === 0 ? 0 : 1;
+  // 整张图拉伸到 sprite 框（dw × dh），无圆形裁剪
+  if (flipX) {
+    ctx.save();
+    ctx.translate(dx + dw, dy);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, 0, yJitter, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, dx, dy + yJitter, dw, dh);
   }
 }
 
@@ -4026,8 +4095,12 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.fill();
   ctx.restore();
 
-  // 精灵本体（从 tileset 切片，按移动状态切换 walk 帧；facing 决定翻转）
-  if (SHEET_TILESET.ready) {
+  // ★ 自定义立绘：data:URL（用户 AI 生成/上传/预选内置）→ 优先于 tileset，整张图覆盖 sprite
+  //   内置预选走 assetUrl（http/./ 都会被 drawAvatarCustomSprite 解析成 loadAvatar 缓存）
+  const customSprite = (e as any).customSprite;
+  if (customSprite && customSprite.image) {
+    drawAvatarCustomSprite(ctx, customSprite.image, dx, dy, dw, dh, !facingLeft, _animTick);
+  } else if (SHEET_TILESET.ready) {
     drawTile(ctx, tileId, dx, dy, dw, dh, !facingLeft);
   } else {
     // 兜底彩色胶囊
@@ -7498,6 +7571,7 @@ watch(() => state.value?.phase, (p) => {
       @generate="onAppearanceGenerate"
       @delete="onAppearanceDelete"
       @clear="onAppearanceClear"
+      @upload-bind="onAppearanceUploadBind"
     />
   </div>
 </template>

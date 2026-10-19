@@ -297,6 +297,8 @@ interface Entity {
   /** ★ game.md 等级系统：防御（1 + 等级*10 + 道具/技能加成） */
   def?: number;
   avatarPath?: string;
+  /** ★ 自定义立绘：data:URL（角色面板→实体形象→AI生成/上传）。优先于 tileset 渲染 */
+  customSprite?: { image: string; prompt?: string; refCount?: number; source?: "ai" | "upload"; createdAt?: number } | null;
   facing: number;
   cooldown: number;
   alive: boolean;
@@ -401,12 +403,22 @@ const SPRITE_GEN_AGENT = "field-survival-sprite-gener";
 /** 生图 agent 超时：图片模型推理 30~90s，留足余量 */
 const SPRITE_AGENT_TIMEOUT_MS = 150000;
 
-/** 形象绑定查询：返回该角色的形象 override（无则空串） */
-function avatarOverrideFor(s: FieldSurvivalState, id: unknown): string {
+/** 形象绑定查询：返回该角色的形象 override（无则 null）。
+ *  返回整条 SpriteEntry（不仅是 image），让 entity.customSprite 拿到 prompt/source */
+function spriteOverrideFor(s: FieldSurvivalState, id: unknown): { image: string; prompt?: string; source?: string; createdAt?: number } | null {
   const k = String(id ?? "");
-  if (!k) return "";
-  const b = (s as any).avatarBinds as Record<string, string> | undefined;
-  return (b && typeof b[k] === "string" && b[k]) ? b[k] : "";
+  if (!k) return null;
+  const b = (s as any).spriteBinds as Record<string, any> | undefined;
+  const v = b ? b[k] : null;
+  if (!v || typeof v !== "object") return null;
+  const img = str((v as any).image, "");
+  if (!img) return null;
+  return {
+    image: img,
+    prompt: str((v as any).prompt, "") || undefined,
+    source: str((v as any).source, "preset") || undefined,
+    createdAt: Math.round(num((v as any).createdAt, 0)) || undefined,
+  };
 }
 
 export interface FieldSurvivalState {
@@ -518,9 +530,10 @@ export interface FieldSurvivalState {
   axeMode?: boolean;
   /** ★ 实体形象：AI 生成 / 上传的图库条目（随 sys_state 持久化，可删除） */
   spriteGallery?: SpriteEntry[];
-  /** ★ 实体形象：roleId → 形象图（data:URL / http(s) URL / 插件内相对路径）；
-   *   玩家与 NPC 通用，绑定后覆盖故事卡 avatarPath，刷新不丢 */
-  avatarBinds?: Record<string, string>;
+  /** ★ 实体形象：roleId → 形象图（整条 SpriteEntry；图库删除时被一并解绑）。
+   *   玩家与 NPC 通用，绑定后渲染走 entity.customSprite 通道（canvas 走 walk 2 帧），
+   *   刷新不丢；不在图库的「预选内置形象」临时绑定也走这里。 */
+  spriteBinds?: Record<string, { image: string; prompt?: string; source?: "ai" | "upload" | "preset"; createdAt?: number }>;
   /** ★ 实体形象：AI 生成状态（前端弹窗轮询显示） */
   spriteGen?: { status: "idle" | "running" | "done" | "error"; message?: string; at?: number };
   /** ★ 实体形象：面板数据版本号（生成/删除/绑定后自增，前端感知刷新） */
@@ -974,7 +987,7 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
     town: null,                  // ★ v4：由 ensureTown() 填充（建筑 + 中立角色）
     // ★ 实体形象：图库 / 角色绑定 / 生成状态（persistSys 持久化）
     spriteGallery: [],
-    avatarBinds: {},
+    spriteBinds: {},
     spriteGen: { status: "idle", message: "", at: 0 },
     spriteRevision: 0,
     result: null,
@@ -2179,6 +2192,8 @@ export interface NpcCard {
   /** ★ game.md 等级系统：蓝量 / 下级升级所需经验（= 等级*100） */
   mp?: number; maxMp?: number; next_level_exp?: number;
   mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string;
+  /** ★ 实体立绘（与 avatarPath 独立：data:URL 时 canvas 走自定义图） */
+  customSprite?: { image: string; prompt?: string; source?: "ai" | "upload" | "preset"; createdAt?: number } | null;
   /** ★ game.md 角色卡：动态参数卡（结构化字段由前端展开渲染，实时值已由宿主覆盖） */
   parameterCardJson?: Record<string, any> | null;
 }
@@ -3763,17 +3778,22 @@ async function generateSpriteByAI(
 }
 
 /** ★ 实体形象：把绑定应用到实体（含 parked）——绑定/解绑后立即生效，不用等下一次 ensureNpcCards */
-function applyAvatarBindToEntities(s: FieldSurvivalState, target: string): void {
-  const ov = avatarOverrideFor(s, target);
-  const role = (Array.isArray(s.roles) ? s.roles : []).find(
-    (r: any) => String(r?.id) === target || String(r?.name) === target,
-  ) as any;
-  const orig = str(role?.avatarPath, "");
+function applySpriteBindToEntities(s: FieldSurvivalState, target: string): void {
+  const ov = spriteOverrideFor(s, target);
   const setOn = (e: any) => {
     if (!e) return;
-    if (ov) e.avatarPath = ov;
-    else if (orig) e.avatarPath = orig;
-    else delete e.avatarPath;
+    if (ov) {
+      // ★ 写入 entity.customSprite 通道：渲染层优先于 tileset，画 canvas 上的整张图
+      (e as any).customSprite = {
+        image: ov.image,
+        prompt: ov.prompt,
+        source: ov.source,
+        createdAt: ov.createdAt,
+      };
+    } else {
+      // 解绑 → 清掉 customSprite，entity 回退到 tileset 渲染
+      delete (e as any).customSprite;
+    }
   };
   (s.entities || []).forEach((e) => { if (String(e.id) === target) setOn(e); });
   const parkedObj: any = (s as any).parked || {};
@@ -3791,11 +3811,11 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
   // ★ 优先按当前 binds 把 entity.avatarPath 同步到「应显示的图」
   //   （删除/解绑后 entity 还没被外部改，prev 里的 avatarPath 是上次的绑定值，
   //    直接用作 buildCard 兜底会回弹；先让 entity 与 binds 对齐再走 buildCard）
-  (s.entities || []).forEach((e) => { if (e) applyAvatarBindToEntities(s, String(e.id)); });
+  (s.entities || []).forEach((e) => { if (e) applySpriteBindToEntities(s, String(e.id)); });
   const parkedObjPre: any = (s as any).parked || {};
   Object.keys(parkedObjPre).forEach((k) => {
     (Array.isArray(parkedObjPre[k]) ? parkedObjPre[k] : []).forEach((pe: any) => {
-      if (pe) applyAvatarBindToEntities(s, String(pe.id));
+      if (pe) applySpriteBindToEntities(s, String(pe.id));
     });
   });
   const party = s.partyIds || [];
@@ -3868,8 +3888,18 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100)),
       y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100)),
       inParty: party.indexOf(String(role.id)) >= 0,
-      avatarPath: avatarOverrideFor(s, role.id)
-        || (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined,
+      avatarPath: (() => {
+        // 优先用 spriteBinds 里的形象图（data:URL），让角色面板小头像与 canvas 同步
+        const so = spriteOverrideFor(s, role.id);
+        if (so && so.image) return so.image;
+        return (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined;
+      })(),
+      /** ★ 实体立绘通道（独立于头像：data:URL 时 canvas 走 customSprite 渲染） */
+      customSprite: (() => {
+        const so = spriteOverrideFor(s, role.id);
+        if (so && so.image) return { image: so.image, prompt: so.prompt, source: so.source as any, createdAt: so.createdAt };
+        return e ? ((e as any).customSprite || null) : null;
+      })(),
       parameterCardJson: pc,
     } as NpcCard;
   };
@@ -3890,17 +3920,15 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
     (s.entities || []).forEach((e) => pushCard({ id: e.id, name: e.name, avatarPath: e.avatarPath }, e.side));
   }
   s.npcCards = cards;
-  // ★ 实体形象：绑定过形象的角色，实体也同步换图（canvas 每帧读 e.avatarPath）
-  //   放在这里是因为 ensureNpcCards 在 start / 各种动作后都会跑，天然成为同步点。
+  // ★ 实体形象：应用 binds → 写 entity.customSprite（applySpriteBindToEntities）
+  //   不再写 entity.avatarPath（那是头像小图通道，customSprite 走 canvas 立绘通道）
   (s.entities || []).forEach((e) => {
-    const ov = avatarOverrideFor(s, e.id);
-    if (ov) (e as any).avatarPath = ov;
+    if (e) applySpriteBindToEntities(s, String(e.id));
   });
   const parkedSprite: any = (s as any).parked || {};
   Object.keys(parkedSprite).forEach((k) => {
     (Array.isArray(parkedSprite[k]) ? parkedSprite[k] : []).forEach((pe: any) => {
-      const ov = pe && avatarOverrideFor(s, pe.id);
-      if (ov) pe.avatarPath = ov;
+      if (pe) applySpriteBindToEntities(s, String(pe.id));
     });
   });
 }
@@ -4163,7 +4191,7 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       parked: (s as any).parked || {},
       // ★ 实体形象：生成图库 + 角色绑定（刷新后形象不丢）
       spriteGallery: Array.isArray(s.spriteGallery) ? s.spriteGallery : [],
-      avatarBinds: (s as any).avatarBinds || {},
+      spriteBinds: (s as any).spriteBinds || {},
     });
     // ★ game.md 对话功能：AI 故事角色位置/地图信息单独持久化（dataKey=ai_story_roles → t_plugin_session_data），
     //   后续开新局时 AI 聊天窗口能直接读到「陈彦现在在 mulberry_forest 地图 (12.3, -5.6)」，不用再遍历 entities。
@@ -4289,12 +4317,25 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
           createdAt: Math.round(num(g.createdAt, Date.now())),
         }));
     }
-    if (d.avatarBinds && typeof d.avatarBinds === "object") {
-      const binds: Record<string, string> = {};
-      for (const [k, v] of Object.entries(d.avatarBinds as Record<string, any>)) {
-        if (k && typeof v === "string" && v) binds[String(k)] = v;
+    if (d.spriteBinds && typeof d.spriteBinds === "object") {
+      const binds: Record<string, any> = {};
+      for (const [k, v] of Object.entries(d.spriteBinds as Record<string, any>)) {
+        if (!k) continue;
+        // ★ 兼容老存档 {id: imageStr} 与新格式 {id: {image, prompt, source, createdAt}}
+        if (typeof v === "string" && v) {
+          binds[String(k)] = { image: v, source: /^data:/i.test(v) ? "upload" : "preset" };
+        } else if (v && typeof v === "object") {
+          const img = str((v as any).image, "");
+          if (!img) continue;
+          binds[String(k)] = {
+            image: img,
+            prompt: str((v as any).prompt, ""),
+            source: str((v as any).source, "preset") as any,
+            createdAt: Math.round(num((v as any).createdAt, Date.now())),
+          };
+        }
       }
-      (s as any).avatarBinds = binds;
+      (s as any).spriteBinds = binds;
     }
     // ★ 任务板：恢复任务定义与玩家进度（按 id 续上，不清零）
     if (Array.isArray(d.questBoard)) {
@@ -5162,7 +5203,7 @@ export async function handle_action(
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
       gal.unshift(entry);
       // 超上限：优先淘汰「最旧的、且没被任何角色使用」的条目；全在用则保留（宁可超也不删正在用的）
-      const boundImages = new Set(Object.values(s.avatarBinds || {}));
+      const boundImages = new Set(Object.values(s.spriteBinds || {}).map((v: any) => v && v.image).filter(Boolean));
       while (gal.length > SPRITE_GALLERY_MAX) {
         let dropAt = -1;
         for (let i = gal.length - 1; i >= 0; i--) {
@@ -5181,6 +5222,7 @@ export async function handle_action(
 
     case "sys_sprite_bind": {
       // 把某个形象绑定给目标角色（target = 角色 id；"PLAYER" 或空 = 用户自己）
+      // image 是 data:URL 或插件内相对路径；可选 prompt/source（preset 走 source="preset"）
       let target = str(params?.target).trim();
       const image = str(params?.image).trim();
       if (!image) return okResp("请选择要使用的形象");
@@ -5190,10 +5232,18 @@ export async function handle_action(
         ) as any;
         target = pr ? String(pr.id) : "PLAYER";
       }
-      const binds = { ...((s as any).avatarBinds as Record<string, string> || {}) };
-      binds[target] = image;
-      (s as any).avatarBinds = binds;
-      applyAvatarBindToEntities(s, target);
+      const src = str(params?.source, "") as "" | "preset" | "ai" | "upload";
+      const promptText = str(params?.prompt, "");
+      const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+      binds[target] = {
+        image,
+        prompt: promptText || undefined,
+        // ★ 默认 source：data:URL 走 upload；./ 或 / 开头走 preset；空时按 image 头猜
+        source: src || (/^data:/i.test(image) ? "upload" : (image.startsWith("./") || image.startsWith("/")) ? "preset" : "preset"),
+        createdAt: Math.round(num(params?.createdAt, Date.now())),
+      };
+      (s as any).spriteBinds = binds;
+      applySpriteBindToEntities(s, target);
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
@@ -5202,13 +5252,13 @@ export async function handle_action(
     }
 
     case "sys_sprite_unbind": {
-      // 取消形象绑定 → 回到故事卡原始形象
+      // 取消形象绑定 → 实体回退到 tileset 渲染
       const target = str(params?.target).trim();
       if (!target) return okResp("缺少目标角色");
-      const binds = { ...((s as any).avatarBinds as Record<string, string> || {}) };
+      const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
       delete binds[target];
-      (s as any).avatarBinds = binds;
-      applyAvatarBindToEntities(s, target);
+      (s as any).spriteBinds = binds;
+      applySpriteBindToEntities(s, target);
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
@@ -5216,7 +5266,7 @@ export async function handle_action(
     }
 
     case "sys_sprite_gallery_del": {
-      // 删除一张生成的形象；若正被使用，先解绑（实体回退原始形象）
+      // 删除一张生成的形象；若正被使用，先解绑（实体回退到 tileset）
       const id = str(params?.id).trim();
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
       const idx = gal.findIndex((g) => String(g.id) === id);
@@ -5224,16 +5274,17 @@ export async function handle_action(
       const img = gal[idx].image;
       gal.splice(idx, 1);
       s.spriteGallery = gal;
-      const binds = { ...((s as any).avatarBinds as Record<string, string> || {}) };
+      const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+      const toUnbind: string[] = [];
       Object.keys(binds).forEach((k) => {
-        if (binds[k] === img) delete binds[k];
+        if (binds[k] && binds[k].image === img) {
+          delete binds[k];
+          toUnbind.push(k);
+        }
       });
-      (s as any).avatarBinds = binds;
-      // ★ 写回后再 apply——否则 applyAvatarBindToEntities 仍能读到旧 binds
-      //   （avatarOverrideFor 读 s.avatarBinds，闭包引用没变），实体不会被恢复
-      Object.keys(binds).forEach((k) => {
-        if (!binds[k]) applyAvatarBindToEntities(s, k);
-      });
+      (s as any).spriteBinds = binds;
+      // ★ 写回后再 apply——否则 spriteOverrideFor 仍能读到旧 binds（闭包引用），实体不被恢复
+      toUnbind.forEach((k) => applySpriteBindToEntities(s, k));
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
@@ -5245,18 +5296,68 @@ export async function handle_action(
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery : [];
       const imgs = new Set(gal.map((g) => g.image));
       s.spriteGallery = [];
-      const binds = { ...((s as any).avatarBinds as Record<string, string> || {}) };
+      const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+      const toUnbind: string[] = [];
       Object.keys(binds).forEach((k) => {
-        if (imgs.has(binds[k])) delete binds[k];
+        if (binds[k] && imgs.has(binds[k].image)) {
+          delete binds[k];
+          toUnbind.push(k);
+        }
       });
-      (s as any).avatarBinds = binds;
-      Object.keys(binds).forEach((k) => {
-        if (!binds[k]) applyAvatarBindToEntities(s, k);
-      });
+      (s as any).spriteBinds = binds;
+      toUnbind.forEach((k) => applySpriteBindToEntities(s, k));
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
       return okResp("已清空生成的形象");
+    }
+
+    case "sys_sprite_upload": {
+      // 上传图片直接入图库（不走 AI）。data:URL 来自前端文件选择，体积已压到 ≤512px JPEG
+      const image = str(params?.image).trim();
+      if (!/^data:image\//i.test(image)) return okResp("上传数据不合法（需 data:URL）");
+      const target = str(params?.target).trim();
+      const entry: SpriteEntry = {
+        id: `up_${Math.round(num(s.tick, 0))}_${Math.random().toString(36).slice(2, 8)}`,
+        image,
+        prompt: str(params?.prompt, "").slice(0, 200),
+        refCount: 0,
+        source: "upload",
+        createdAt: Date.now(),
+      };
+      const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
+      gal.unshift(entry);
+      const boundImages = new Set(Object.values(s.spriteBinds || {}).map((v: any) => v && v.image).filter(Boolean));
+      while (gal.length > SPRITE_GALLERY_MAX) {
+        let dropAt = -1;
+        for (let i = gal.length - 1; i >= 0; i--) {
+          if (!boundImages.has(gal[i].image)) { dropAt = i; break; }
+        }
+        if (dropAt < 0) break;
+        gal.splice(dropAt, 1);
+      }
+      s.spriteGallery = gal;
+      s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
+      // 可选：上传后立即绑定
+      if (target && target !== "PLAYER") {
+        const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+        binds[target] = { image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
+        (s as any).spriteBinds = binds;
+        applySpriteBindToEntities(s, target);
+        ensureNpcCards(s, s.levelName || "");
+      } else if (target === "PLAYER") {
+        const pr = (Array.isArray(s.roles) ? s.roles : []).find(
+          (r: any) => String(r?.roleType) === "player",
+        ) as any;
+        const tid = pr ? String(pr.id) : "PLAYER";
+        const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+        binds[tid] = { image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
+        (s as any).spriteBinds = binds;
+        applySpriteBindToEntities(s, tid);
+        ensureNpcCards(s, s.levelName || "");
+      }
+      await persistSys(context, s);
+      return okResp(target ? "已上传并绑定" : "已上传至图库");
     }
 
     case "sys_sort": {

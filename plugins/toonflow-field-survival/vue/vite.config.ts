@@ -471,7 +471,7 @@ let entryMod = null;
 let entryCtx = null;
 let entryState = null;
 let entryBroken = false;
-window.__devHostPluginState = () => (entryState ? { phase: entryState.phase, tick: entryState.tick, card: entryState.playerCard, bag: (entryState.playerCard || {}).items, ring: entryState.ring } : null);
+window.__devHostPluginState = () => (entryState ? { phase: entryState.phase, tick: entryState.tick, card: entryState.playerCard, bag: (entryState.playerCard || {}).items, ring: entryState.ring, entities: (entryState.entities || []).map(e => ({ id: e.id, name: e.name, side: e.side, hasCS: !!(e as any).customSprite, customSprite: (e as any).customSprite || null })), spriteBinds: entryState.spriteBinds || {}, spriteGallery: entryState.spriteGallery || [] } : null);
 
 // 插件会话数据（模拟 t_plugin_session_data）：内存 Map + localStorage 双写，刷新不丢
 const __PD_PREFIX = "devhost_pd_v1_";
