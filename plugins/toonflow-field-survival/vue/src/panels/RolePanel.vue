@@ -115,7 +115,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
         <div class="rlc-meta">HP {{ player.hp }}/{{ player.maxHp }} · 经验 {{ expPct(player) }}% · {{ place(player) }}</div>
       </div>
       <div class="rlc-ops">
-        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', player)">形象</button>
+        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', player)">形象(Entity Sprite)</button>
         <button class="rlc-btn rlc-btn--ghost" @click="toggleCard('PLAYER')">{{ isOpen('PLAYER') ? '收起参数卡' : '参数卡' }}</button>
       </div>
       <!-- ★ 动态参数卡（用户）：结构化展开，可切回原文核对 -->
@@ -157,7 +157,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
         <div class="rlc-meta">HP {{ c.hp }}/{{ c.maxHp }} · {{ place(c) }}</div>
       </div>
       <div class="rlc-ops">
-        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', c)">形象</button>
+        <button class="rlc-btn rlc-btn--skin" title="更换该角色的实体形象（预选 / AI 生成）" @click="emit('open-appearance', c)">形象(Entity Sprite)</button>
         <button class="rlc-btn rlc-btn--ghost" @click="toggleCard(c.id)">{{ isOpen(c.id) ? '收起参数卡' : '参数卡' }}</button>
         <button class="rlc-btn" @click="emit('teleport', c)">传送到</button>
         <button class="rlc-btn rlc-btn--summon" :disabled="!canParty(c)" @click="emit('summon', c)" title="召唤到身边（不跟随、不入队）">召唤</button>

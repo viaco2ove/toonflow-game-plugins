@@ -1074,7 +1074,7 @@ const appearanceTargets = computed<any[]>(() => {
   return out;
 });
 const appearanceGallery = computed(() => Array.isArray((state.value as any)?.spriteGallery) ? (state.value as any).spriteGallery : []);
-const appearanceBinds = computed<Record<string, string>>(() => ((state.value as any)?.avatarBinds && typeof (state.value as any).avatarBinds === "object") ? (state.value as any).avatarBinds : {});
+const appearanceBinds = computed<Record<string, { image: string; prompt?: string; source?: string; createdAt?: number }>>(() => { const b = (state.value as any)?.spriteBinds; return (b && typeof b === "object") ? b : {}; });
 const appearanceGen = computed(() => (state.value as any)?.spriteGen || null);
 
 function onOpenAppearance(c: any) {
