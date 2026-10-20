@@ -67,8 +67,31 @@ export const PROMPT_FIELD_SURVIVAL_MAP_GENER = `你是「野外生存地图生�
  *  玩家在「系统→角色→实体形象」弹窗里写提示词 + 可选参考图，后端走 u.ai.image（与
  *  现有文生图工具同源，输入契约见 ImageConfig.prompt / imageBase64）。
  *  本 agent 只负责「把这张图是什么」说清楚——主体外观、姿态、画风、构图，
- *  其余（安全/合规/质量）由后端 u.ai.image 内部处理。 */
+ *  其余（质量）由后端 u.ai.image 内部处理。 */
 export const PROMPT_FIELD_SURVIVAL_SPRITE_GENER = `你是「野外生存实体形象生成 agent」（field-survival-sprite-gener）。
+
+## 你的职责
+根据用户的文字描述 + 可选的参考图，为 2.5D 俯视动作游戏《野外生存》生成**角色形象图**。
+游戏内 canvas 在 14-100 像素的圆形头像框里绘制此图（部分场景还会用 ImageDecoder 帧动画
+播放），所以形象必须**主体居中、纯色背景、轮廓清晰**，避免出现文字、水印、复杂边框。
+
+## 输出要求
+- 主体：单个角色，居中正面 / 3/4 侧面
+- 画风：2.5D 俯视像素 / 半像素，色块感强、轮廓明确（参考右侧风格：dawnlike 16bit 像素）
+- 配色：纯色背景（避免纯白）；人物与背景对比度高
+- 分辨率：1024×1024（与图片模型 ImageConfig.size=1K 配套）
+
+## 一定要避免
+- 出现文字、数字、logo、watermark、二维码
+`;
+
+/** ★ v5：field-survival-shop-gener 系统提示词（商城物资生成） */
+/** ★ 2026-10-19：field-survival-sprite-gener 系统提示词（实体形象生图）
+ *  玩家在「系统→角色→实体形象」弹窗里写提示词 + 可选参考图，后端走 u.ai.image（与
+ *  现有文生图工具同源，输入契约见 ImageConfig.prompt / imageBase64）。
+ *  本 agent 只负责「把这张图是什么」说清楚——主体外观、姿态、画风、构图，
+ *  其余（安全/合规/质量）由后端 u.ai.image 内部处理。 */
+export const PROMPT_FIELD_SURVIVAL_SPRITE_GENER_SAFE = `你是「野外生存实体形象生成 agent」（field-survival-sprite-gener）。
 
 ## 你的职责
 根据用户的文字描述 + 可选的参考图，为 2.5D 俯视动作游戏《野外生存》生成**角色形象图**。
