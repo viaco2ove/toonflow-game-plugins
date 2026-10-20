@@ -3742,6 +3742,174 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
   }
 }
 
+/* ============================================================
+   ★ 程序生成实体形象（2026-10-20）：不调图片模型，本地按提示词画一张像素小人。
+   · 纯 TS：手写 PNG 编码（zlib store + CRC32），零运行时依赖
+   · 关键词上色（发色/衣服/肤色）+ 提示词种子随机（同词同图，异词异图）
+   · 用于「程序生成」按钮；AI 生成失败不再有 mock 兜底 → 直接报错
+   ============================================================ */
+
+/** zlib store 格式（deflate BTYPE=00 不压缩）：zlib header + stored blocks + adler32。
+ *  PNG IDAT 允许 store deflate → 免去 node:zlib / CompressionStream 依赖，
+ *  后端 node 与 dev-host 浏览器两端都能同步出图。96px 图 store 后约 50KB，可接受。 */
+function adler32(buf: Buffer): number {
+  let a = 1, b = 0;
+  for (let i = 0; i < buf.length; i++) {
+    a = (a + buf[i]) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+function zlibStore(raw: Buffer): Buffer {
+  const chunks: Buffer[] = [Buffer.from([0x78, 0x01])];
+  // stored block 每块最多 65535 字节
+  for (let off = 0; off < raw.length; off += 65535) {
+    const slice = raw.subarray(off, Math.min(off + 65535, raw.length));
+    const final = off + 65535 >= raw.length ? 1 : 0;
+    const head = Buffer.alloc(5);
+    head[0] = final; // BFINAL + BTYPE=00
+    head.writeUInt16LE(slice.length, 1);
+    head.writeUInt16LE(~slice.length & 0xffff, 3);
+    chunks.push(head, slice);
+  }
+  const ad = Buffer.alloc(4);
+  ad.writeUInt32BE(adler32(raw), 0);
+  chunks.push(ad);
+  return Buffer.concat(chunks);
+}
+/** PNG 最小编码器：RGBA 像素数组 → PNG data:URL（filter 0 + zlib store） */
+function crc32(buf: Buffer): number {
+  let c = ~0;
+  for (let i = 0; i < buf.length; i++) {
+    c ^= buf[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+function encodePngDataUrl(width: number, height: number, rgba: Uint8Array): string {
+  // 每行前置 filter byte 0
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    raw[y * (stride + 1)] = 0;
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;  // bit depth
+  ihdr[9] = 6;  // color type RGBA
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", zlibStore(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+
+/** 提示词 → 种子（djb2）+ mulberry32 PRNG：同提示词稳定出同一张 */
+function spritePromptRng(prompt: string): () => number {
+  let h = 5381;
+  for (let i = 0; i < prompt.length; i++) h = ((h << 5) + h + prompt.charCodeAt(i)) | 0;
+  let a = (h ^ 0x9e3779b9) >>> 0;
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 提示词关键词 → 颜色（找不到关键词就随机取色板） */
+const SPRITE_PALETTES: Record<string, string[]> = {
+  hair: {
+    银发: ["#d8d8e8", "#c0c0d8"], 白发: ["#f0f0f0"], 金发: ["#e8c84a", "#d4a836"], 黄发: ["#e8c84a"],
+    黑发: ["#2a2a35"], 蓝发: ["#3a6ac8", "#2a55b0"], 红发: ["#c8402a"], 棕发: ["#8a5a32"], 褐发: ["#8a5a32"],
+    绿发: ["#3aa85a"], 紫发: ["#8a4ac8"], 粉发: ["#e88ab0"], 灰发: ["#9a9aa8"],
+  },
+  cloth: {
+    黑衣: ["#26262e", "#1c1c24"], 白衣: ["#e8e8e8"], 红衣: ["#b03028"], 蓝衣: ["#2a4aa0"],
+    绿衣: ["#2a7a42"], 法袍: ["#4a3a8a", "#3a2a7a"], 皮甲: ["#7a5230"], 布衣: ["#8a7a5a"],
+    铠甲: ["#8a8a96"], 重甲: ["#6a6a78"], 长袍: ["#4a4a6a"], 游侠: ["#3a5a3a"], 法师: ["#4a3a8a"],
+  },
+};
+function hexToRgb(hex: string): [number, number, number] {
+  const v = parseInt(hex.replace("#", ""), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+/**
+ * 按提示词程序化画 96×96 像素小人（4x chunky → 画布按 96 逻辑像素画，导出 96px）。
+ * 结构参考 Rotten-Soup 预选形象：正面站姿，头/身/腿分块 + 1px 描边感。
+ */
+function renderSpriteProgrammatically(prompt: string): string {
+  const W = 96, H = 96;
+  const rng = spritePromptRng(prompt);
+  const pick = (arr: string[]): string => arr[Math.floor(rng() * arr.length)] || arr[0];
+  let hair = "#5a4632", cloth = "#3a5a3a";
+  const lower = prompt;
+  for (const [k, v] of Object.entries(SPRITE_PALETTES.hair)) { if (lower.includes(k)) { hair = pick(v); break; } }
+  for (const [k, v] of Object.entries(SPRITE_PALETTES.cloth)) { if (lower.includes(k)) { cloth = pick(v); break; } }
+  const skinHex = ["#e8b88a", "#d8a878", "#c89868"][Math.floor(rng() * 3)];
+  const hairC = hexToRgb(hair), clothC = hexToRgb(cloth), skinC = hexToRgb(skinHex);
+  const edgeC: [number, number, number] = [24, 24, 30];
+  const px = new Uint8Array(W * H * 4);
+  const set = (x: number, y: number, c: [number, number, number]): void => {
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    const i = (y * W + x) * 4;
+    px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2]; px[i + 3] = 255;
+  };
+  const rect = (x0: number, y0: number, w: number, h: number, c: [number, number, number]): void => {
+    for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) set(x, y, c);
+  };
+  // —— 头（16,14 → 30x26）+ 描边
+  rect(16, 14, 30, 26, hairC);
+  // 脸（头发覆盖上半，露脸区）
+  rect(20, 26, 22, 12, skinC);
+  // 刘海：头顶 3-4 行全发色 + 两侧鬓角
+  rect(16, 14, 30, 8, hairC);
+  rect(16, 22, 5, 12, hairC);
+  rect(41, 22, 5, 12, hairC);
+  // 眼睛（2px 深色）+ 嘴
+  rect(25, 31, 3, 3, edgeC);
+  rect(34, 31, 3, 3, edgeC);
+  rect(29, 36, 4, 1, [122, 58, 58]);
+  // —— 身体（衣服，18,42 → 26x26），手臂两侧用衣色加深
+  rect(18, 42, 26, 26, clothC);
+  rect(14, 44, 5, 16, clothC);   // 左臂
+  rect(43, 44, 5, 16, clothC);   // 右臂
+  rect(14, 58, 5, 4, skinC);     // 左手
+  rect(43, 58, 5, 4, skinC);     // 右手
+  // 衣领高光
+  rect(26, 42, 10, 2, [Math.min(255, clothC[0] + 50), Math.min(255, clothC[1] + 50), Math.min(255, clothC[2] + 50)]);
+  // 腰带
+  rect(18, 54, 26, 3, edgeC);
+  // —— 腿（20,68 → 8x14 / 34,68 → 8x14）+ 鞋
+  rect(20, 68, 8, 14, edgeC);
+  rect(34, 68, 8, 14, edgeC);
+  rect(19, 82, 10, 5, [70, 50, 34]);
+  rect(33, 82, 10, 5, [70, 50, 34]);
+  // —— 噪点纹理（衣/发 8% 概率暗化，出布料颗粒感）
+  for (let y = 14; y < 84; y++) {
+    for (let x = 14; x < 48; x++) {
+      if (rng() < 0.08) {
+        const i = (y * W + x) * 4;
+        if (px[i + 3] === 255) { px[i] = Math.max(0, px[i] - 22); px[i + 1] = Math.max(0, px[i + 1] - 22); px[i + 2] = Math.max(0, px[i + 2] - 22); }
+      }
+    }
+  }
+  return encodePngDataUrl(W, H, px);
+}
+
 /** ★ 实体形象：调后端生图 agent 生成一张角色形象图
  *
  *  input 契约（与后端 PluginAgentRunner 的 sprite 分支对齐）：
@@ -5195,11 +5363,24 @@ export async function handle_action(
       const prompt = str(params?.prompt).trim();
       if (!prompt) return okResp("请先填写形象描述（例如：银发黑衣的游侠，背负长弓）");
       const refs = Array.isArray(params?.refImages) ? (params.refImages as unknown[]).map(String) : [];
+      const programmatic = params?.programmatic === true;
       // 防重入：上一次还在生成时直接拒绝（避免连点烧额度）
       if (s.spriteGen?.status === "running") return okResp("上一张形象还在生成中，请稍候…");
       s.spriteGen = { status: "running", message: "", at: Date.now() };
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
-      const r = await generateSpriteByAI(s, context, prompt, refs);
+
+      /* ★ 2026-10-20：programmatic=true → 本地程序生成（不调图片模型、不烧额度）。
+       *   AI 生成失败不再有 mock 兜底（用户明确要求去掉），失败直接报错。 */
+      let r: { ok: boolean; image?: string; error?: string; matting?: string };
+      if (programmatic) {
+        try {
+          r = { ok: true, image: renderSpriteProgrammatically(prompt), matting: "local" };
+        } catch (e: any) {
+          r = { ok: false, error: "程序生成失败：" + String(e?.message || e) };
+        }
+      } else {
+        r = await generateSpriteByAI(s, context, prompt, refs);
+      }
       if (!r.ok || !r.image) {
         s.spriteGen = { status: "error", message: r.error || "生成失败", at: Date.now() };
         s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
@@ -5227,11 +5408,11 @@ export async function handle_action(
         gal.splice(dropAt, 1);
       }
       s.spriteGallery = gal;
-      s.spriteGen = { status: "done", message: "生成成功", at: Date.now() };
+      s.spriteGen = { status: "done", message: programmatic ? "程序生成成功" : "生成成功", at: Date.now() };
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
-      pushEvent(s, `生成实体形象：${prompt.slice(0, 16)}`);
-      return okResp("形象已生成，可在「我的生成」里选用或删除");
+      pushEvent(s, `${programmatic ? "程序生成" : "生成"}实体形象：${prompt.slice(0, 16)}`);
+      return okResp(programmatic ? "程序形象已生成，可在「我的生成」里选用或删除" : "形象已生成，可在「我的生成」里选用或删除");
     }
 
     case "sys_sprite_bind": {

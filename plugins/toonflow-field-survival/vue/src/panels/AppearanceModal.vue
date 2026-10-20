@@ -37,7 +37,7 @@ const emit = defineEmits<{
   /** 绑定：image 是 data:URL 或插件内相对路径；source/prompt 透传给后端 */
   (e: "bind", target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number }): void;
   (e: "unbind", target: string): void;
-  (e: "generate", prompt: string, refs: string[]): void;
+  (e: "generate", prompt: string, refs: string[], opts?: { programmatic?: boolean }): void;
   (e: "delete", id: string): void;
   (e: "clear"): void;
   /** 上传图片并立即绑定（不走 AI） */
@@ -182,18 +182,21 @@ async function fetchAsDataUrl(url: string): Promise<string> {
   });
 }
 
-async function onGenerate(): Promise<void> {
+async function onGenerate(opts?: { programmatic?: boolean }): Promise<void> {
   const text = prompt.value.trim();
   if (!text || busy.value || preparing.value) return;
   preparing.value = true;
   try {
+    // 程序生成不走参考图（本地像素画法不消费参考图），AI 生成照常收集
     const list: string[] = [];
-    for (const r of refs.value) {
-      try {
-        list.push(await fetchAsDataUrl(imgSrc(r.url)));
-      } catch { /* 单张参考图失败 → 跳过 */ }
+    if (!(opts && opts.programmatic)) {
+      for (const r of refs.value) {
+        try {
+          list.push(await fetchAsDataUrl(imgSrc(r.url)));
+        } catch { /* 单张参考图失败 → 跳过 */ }
+      }
     }
-    emit("generate", text, list);
+    emit("generate", text, list, opts);
   } finally {
     preparing.value = false;
   }
@@ -306,10 +309,16 @@ watch(
               <button
                 class="apm-btn apm-btn--go"
                 :disabled="busy || preparing || !prompt.trim()"
-                @click="onGenerate"
+                @click="onGenerate()"
               >
-                {{ busy ? "生成中…" : (preparing ? "准备参考图…" : "生成形象") }}
+                {{ busy ? "生成中…" : (preparing ? "准备参考图…" : "AI 生成") }}
               </button>
+              <button
+                class="apm-btn apm-btn--ghost"
+                :disabled="busy || preparing || !prompt.trim()"
+                title="不调用图片模型，按提示词本地程序化画一张（免费、秒出、效果简单）"
+                @click="onGenerate({ programmatic: true })"
+              >程序生成</button>
             </div>
             <div v-if="busy" class="apm-tip">图片模型推理通常需要 30~90 秒，请勿关闭面板…</div>
             <div v-else-if="gen && gen.status === 'error'" class="apm-tip apm-tip--err">

@@ -1101,7 +1101,12 @@ function onAppearanceUnbind(target: string) {
   sysNotice.value = "正在恢复原始形象…";
   runSysCmd("sys_sprite_unbind", { target });
 }
-function onAppearanceGenerate(prompt: string, refs: string[]) {
+function onAppearanceGenerate(prompt: string, refs: string[], opts?: { programmatic?: boolean }) {
+  if (opts && opts.programmatic) {
+    sysNotice.value = "正在程序生成形象…";
+    runSysCmd("sys_sprite_generate", { prompt, refImages: refs, programmatic: true });
+    return;
+  }
   sysNotice.value = "正在生成形象…";
   runSysCmd("sys_sprite_generate", { prompt, refImages: refs });
 }
