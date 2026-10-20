@@ -47,7 +47,7 @@ const emit = defineEmits<{
 const MAX_REFS = 3;
 
 const tab = ref<"preset" | "ai" | "mine">("preset");
-const prompt = ref("银发黑衣的游侠，背负长弓，眼神冷峻，2.5D 俯视像素风");
+const prompt = ref("人物形象参考图1，2.5D 俯视像素风");
 /** 参考图：preset = 内置形象路径；upload = 已压成 data:URL 的上传图；avatar = 角色头像 */
 const refs = ref<Array<{ key: string; url: string; kind: "preset" | "upload" | "avatar" }>>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
@@ -273,7 +273,7 @@ watch(
               class="apm-ta"
               rows="3"
               maxlength="300"
-              placeholder="描述想要的形象，例如：银发黑衣的游侠，背负长弓，眼神冷峻，2.5D 俯视像素风"
+              placeholder="人物形象参考图1，2.5D 俯视像素风"
             ></textarea>
             <div class="apm-refs-head">参考图（最多 {{ MAX_REFS }} 张：可点内置形象、用角色头像、或上传）</div>
             <div class="apm-grid apm-grid--refs">
