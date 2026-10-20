@@ -2188,6 +2188,91 @@ function drawAvatarCustomSprite(
 }
 
 /* ============================================================
+ * ★ 面部朝向标识 + 小电筒光锥（2026-10-20）
+ * · 8 方向 snap（0/45/90/.../315），把 facingDeg 取最近 45°
+ * · 在 sprite 中心前 1/3 处画一个**半透明伞形光锥**（5 段扇形叠加）
+ *   + 中心**箭头** (》 形) 表方向，颜色按 side 区分：player=暖黄，
+ *   ally=青绿，enemy=冷红，neutral=灰蓝
+ * · 调用方：drawEntity / drawMonster 各自在 sprite 绘制完后调用一次
+ * ============================================================ */
+function snapFacing8(facingDeg: number): number {
+  const a = ((facingDeg % 360) + 360) % 360;
+  return Math.round(a / 45) * 45 % 360;
+}
+function facingColor(e: Entity): { cone: string; arrow: string; } {
+  switch (e.side) {
+    case "player": return { cone: "rgba(255, 220, 130, ", arrow: "rgba(255, 200, 80, " };
+    case "ally":   return { cone: "rgba(120, 220, 170, ", arrow: "rgba(80, 200, 140, " };
+    case "enemy":  return { cone: "rgba(255, 110, 110, ", arrow: "rgba(255, 80, 80, " };
+    case "neutral":return { cone: "rgba(180, 200, 230, ", arrow: "rgba(140, 170, 220, " };
+    default:       return { cone: "rgba(200, 200, 220, ", arrow: "rgba(160, 160, 180, " };
+  }
+}
+function drawFacingCone(
+  ctx: CanvasRenderingContext2D,
+  e: Entity,
+  px: number, py: number, dw: number, dh: number,
+): void {
+  if (!Number.isFinite(e.facing)) return;
+  const dir = snapFacing8(e.facing);
+  // 死亡渐隐阶段不画
+  if ((e as any).deathMs && (e as any).deathMs > 0) return;
+  const color = facingColor(e);
+  // 光锥长度 = 角色身高 × 0.9，半角 30°；呼吸动一点让伞形不死板
+  const reach = Math.max(20, dh * 0.9);
+  const half = Math.PI / 6;
+  // 锚点：sprite 中心略低（脚踝处），锥体朝 dir 延伸
+  const ax = px;
+  const ay = py - dh * 0.05;
+  const rad = dir * Math.PI / 180;
+  // 呼吸 alpha 5% 起伏（不动 facing）
+  const t = (typeof _animTick === "number" ? _animTick : 0) % 60;
+  const breath = 0.42 + 0.04 * Math.sin(t / 9.5);
+  ctx.save();
+  applyPixelPerfect(ctx);
+  // 半透明伞形扇形（5 段叠加，每段 12°，从中心高亮到边缘衰减）
+  const layers = 5;
+  for (let i = 0; i < layers; i++) {
+    const k = (i + 1) / layers;          // 1=中心 … 5=边缘
+    const a0 = rad - half * k;
+    const a1 = rad + half * k;
+    const r = reach * (0.65 + 0.35 * k);  // 边缘段延展略长
+    ctx.globalAlpha = breath * (0.55 - 0.08 * k);
+    ctx.fillStyle = color.cone + "0.55)";
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.arc(ax, ay, r, a0, a1, false);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.globalAlpha = breath;
+  // 中心箭头（与朝向同向，半透明）—— 用三角形绘制与 » 箭头同形态
+  const ar = reach * 0.42;       // 箭头起点到 tip 的距离
+  const aw = Math.max(6, dh * 0.18); // 箭头翼展
+  const tipX = ax + Math.cos(rad) * ar;
+  const tipY = ay + Math.sin(rad) * ar;
+  // 翼端（在垂直于朝向方向两侧偏移）
+  const nx = -Math.sin(rad);
+  const ny = Math.cos(rad);
+  const tailX = ax - Math.cos(rad) * (ar * 0.45);
+  const tailY = ay - Math.sin(rad) * (ar * 0.45);
+  ctx.fillStyle = color.arrow + "0.95)";
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);                        // 箭头尖
+  ctx.lineTo(tailX + nx * aw, tailY + ny * aw);  // 尾翼左
+  ctx.lineTo(tailX, tailY);                       // 尾中（V 字形凹陷）
+  ctx.lineTo(tailX - nx * aw, tailY - ny * aw);  // 尾翼右
+  ctx.closePath();
+  ctx.fill();
+  // 描边让箭头在浅色背景也看得清
+  ctx.globalAlpha = Math.min(1, breath + 0.15);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ============================================================
  * ★ 城镇建筑像素艺术绘制（与 Rotten-Soup mulberryTown.json 同构）
  *
  * 瓦片类型：
@@ -4122,6 +4207,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.restore();
   }
 
+  // ★ 朝向光锥 + 箭头（在 sprite 之后、头像/受击之前画，避免挡头顶名字）
+  drawFacingCone(ctx, e, px, py, dw, dh);
+
   // ★ 受击红闪：sprite 区域用半透明红覆盖（source-atop：只覆盖已有像素）
   if (e.hitFlashMs && e.hitFlashMs > 0) {
     const alpha = Math.min(0.85, (e.hitFlashMs / 250) * 0.85);
@@ -4285,6 +4373,9 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
     ctx.fill();
     ctx.restore();
   }
+
+  // ★ 朝向光锥 + 箭头（NPC 也画，统一观感）
+  drawFacingCone(ctx, e, px, py, dw, dh);
 
   // ★ 受击红闪（与角色一致）
   if (e.hitFlashMs && e.hitFlashMs > 0) {
