@@ -67,7 +67,7 @@ async function call(action, params, state, ctx) { return await mod.handle_action
   ok("§2.2 entity.customSprite 写入 data:URL", ent.customSprite && ent.customSprite.image === "data:image/png;base64,AV");
   ok("§2.3 entity.avatarPath 保留原故事卡", ent.avatarPath === "orig.png");
   ok("§2.4 npcCard.customSprite 写入（前端小头像/详情可用）", card && card.customSprite && card.customSprite.image === "data:image/png;base64,AV");
-  ok("§2.5 npcCard.avatarPath 同步换成 data:URL（系统面板小头像）", card && card.avatarPath === "data:image/png;base64,AV");
+  ok("§2.5 npcCard.avatarPath 保持原头像（换实体形象不得影响悬浮头像）", card && card.avatarPath === "orig.png");
   ok("§2.6 spriteBinds 是对象形态（不再是 string）", r.state.spriteBinds.r1 && typeof r.state.spriteBinds.r1 === "object" && r.state.spriteBinds.r1.image);
 }
 {

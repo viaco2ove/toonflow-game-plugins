@@ -120,9 +120,9 @@ function devHostPlugin(conn: string, story: string): Plugin {
           //   校验：只看 exit code 不够（main.js 就是 exit 0 不干活），必须确认
           //   entry.js 的 mtime 真的前进过，否则换下一个候选。
           const esbuildCands: Array<{ cmd: string; args: string[]; shell?: boolean }> = [
-            { cmd: process.execPath, args: [resolve(__dirname, "node_modules/esbuild/bin/esbuild"), repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"] },
-            { cmd: resolve(__dirname, "node_modules/.bin/esbuild.cmd"), args: [repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"], shell: true },
-            { cmd: "npx", args: ["--no-install", "esbuild", repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=false", "--format=esm", "--target=es2020"], shell: process.platform === "win32" },
+            { cmd: process.execPath, args: [resolve(__dirname, "node_modules/esbuild/bin/esbuild"), repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=true", "--format=esm", "--target=es2020", "--charset=utf8"] },
+            { cmd: resolve(__dirname, "node_modules/.bin/esbuild.cmd"), args: [repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=true", "--format=esm", "--target=es2020", "--charset=utf8"], shell: true },
+            { cmd: "npx", args: ["--no-install", "esbuild", repoEntryTs, "--outfile=" + repoEntryJs, "--bundle=true", "--format=esm", "--target=es2020", "--charset=utf8"], shell: process.platform === "win32" },
           ];
           const before = existsSync(repoEntryJs) ? statSync(repoEntryJs).mtimeMs : 0;
           let built = false;
@@ -471,7 +471,7 @@ let entryMod = null;
 let entryCtx = null;
 let entryState = null;
 let entryBroken = false;
-window.__devHostPluginState = () => (entryState ? { phase: entryState.phase, tick: entryState.tick, card: entryState.playerCard, bag: (entryState.playerCard || {}).items, ring: entryState.ring, entities: (entryState.entities || []).map(e => ({ id: e.id, name: e.name, side: e.side, hasCS: !!(e as any).customSprite, customSprite: (e as any).customSprite || null })), spriteBinds: entryState.spriteBinds || {}, spriteGallery: entryState.spriteGallery || [] } : null);
+window.__devHostPluginState = () => (entryState ? { phase: entryState.phase, tick: entryState.tick, card: entryState.playerCard, bag: (entryState.playerCard || {}).items, ring: entryState.ring, entities: (entryState.entities || []).map(e => ({ id: e.id, name: e.name, side: e.side, hasCS: !!e.customSprite, customSprite: e.customSprite || null })), spriteBinds: entryState.spriteBinds || {}, spriteGallery: entryState.spriteGallery || [] } : null);
 
 // 插件会话数据（模拟 t_plugin_session_data）：内存 Map + localStorage 双写，刷新不丢
 const __PD_PREFIX = "devhost_pd_v1_";
@@ -1829,9 +1829,6 @@ async function renderMockAvatar(args) {
   const hairCol = findKeyColor(prompt, HAIR_KEYS, HAIR_COLORS) || pickColor(rng, HAIR_COLORS);
   const clothCol = findKeyColor(prompt, CLOTH_KEYS, CLOTH_COLORS) || pickColor(rng, CLOTH_COLORS);
   const skinCol = pickColor(rng, SKIN_KEYS);
-  const bgHue = Math.floor(rng() * 360);
-  const bgL1 = 18 + Math.floor(rng() * 12);
-  const bgCol = "hsl(" + bgHue + ", 18%, " + bgL1 + "%)";
 
   // 用 node 端的 canvas 不行（dev-host 跑在浏览器）；改用纯像素数组自己编码 PNG。
   // 目标：256x256 像素艺术头像，1x1 像素重复 8 次做 chunky 块。
@@ -1841,8 +1838,7 @@ async function renderMockAvatar(args) {
   canvas.height = H;
   const ctx = canvas.getContext("2d");
   if (!ctx) return null;
-  ctx.fillStyle = bgCol;
-  ctx.fillRect(0, 0, W, H);
+  // ★ 2026-10-20：背景保持透明（与真链路「背景分离后」的形态一致），不铺底色
   // 衣服（底色梯形）
   ctx.fillStyle = clothCol;
   ctx.beginPath();
@@ -1898,10 +1894,6 @@ async function renderMockAvatar(args) {
     }
   }
   ctx.putImageData(data, 0, 0);
-  // 边框
-  ctx.strokeStyle = "rgba(0,0,0,0.5)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, W, H);
   return canvas.toDataURL("image/png");
 }
 
@@ -1914,7 +1906,7 @@ async function runMockSpriteGener(args) {
   try {
     const dataUrl = await renderMockAvatar(a);
     if (!dataUrl) return { ok: false, error: "mock 画布不可用" };
-    return { ok: true, output: { image: dataUrl, prompt, source: "mock" } };
+    return { ok: true, output: { image: dataUrl, prompt, source: "ai", matting: "mock" } };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }

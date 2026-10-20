@@ -4,7 +4,7 @@
  *
  * 三个来源：
  *   1) 预选：player_sprites 内置像素形象（点击即绑定）
- *   2) AI 生成：提示词 + 可选参考图（内置形象 / 上传图片，≤3 张）
+ *   2) AI 生成：提示词 + 可选参考图（内置形象 / 角色头像 / 上传图片，≤3 张）
  *   3) 我的生成：生成结果图库 —— 可选用为「用户」或任意角色，可删除
  *
  * 所有落库动作都走 App.vue → runSysCmd → entry.ts（sys_sprite_*），
@@ -47,23 +47,26 @@ const emit = defineEmits<{
 const MAX_REFS = 3;
 
 const tab = ref<"preset" | "ai" | "mine">("preset");
-const prompt = ref("");
-/** 参考图：preset = 内置形象路径；upload = 已压成 data:URL 的上传图 */
-const refs = ref<Array<{ key: string; url: string; kind: "preset" | "upload" }>>([]);
+const prompt = ref("银发黑衣的游侠，背负长弓，眼神冷峻，2.5D 俯视像素风，面向左边");
+/** 参考图：preset = 内置形象路径；upload = 已压成 data:URL 的上传图；avatar = 角色头像 */
+const refs = ref<Array<{ key: string; url: string; kind: "preset" | "upload" | "avatar" }>>([]);
 const fileInput = ref<HTMLInputElement | null>(null);
 const uploadFileInput = ref<HTMLInputElement | null>(null);
 const preparing = ref(false);
 
 const busy = computed(() => String(props.gen && props.gen.status || "") === "running");
 const current = computed<Target | null>(() => props.targets.find((t) => t.id === props.targetId) || null);
+const currentAvatar = computed(() => (current.value && current.value.avatarPath) || "");
+/** ★ 实体形象预览位只展示「已绑定的实体形象」；无绑定时显示占位（默认形象由 canvas tileset 渲染）。
+ *  禁止回落展示角色头像——实体形象与悬浮头像是两个独立通道（用户明确要求）。 */
 const currentImage = computed(() => {
   const b = (props.binds || {})[props.targetId];
   if (b && b.image) return b.image;
-  return (current.value && current.value.avatarPath) || "";
+  return "";
 });
 const hasBind = computed(() => !!(props.binds || {})[props.targetId]);
 const gallery = computed(() => (Array.isArray(props.gallery) ? props.gallery : []));
-const uploadRefs = computed(() => refs.value.filter((r) => r.kind === "upload"));
+const extraRefs = computed(() => refs.value.filter((r) => r.kind !== "preset"));
 
 function imgSrc(p: string): string {
   return p ? resolveAssetPath(p) : "";
@@ -81,6 +84,16 @@ function togglePresetRef(p: { id: string; path: string }): void {
 function removeRef(key: string): void {
   const i = refs.value.findIndex((r) => r.key === key);
   if (i >= 0) refs.value.splice(i, 1);
+}
+/** 直接把当前目标角色的头像作为参考图（用户要求：可上传，也可直接用角色头像） */
+function toggleAvatarRef(): void {
+  const key = "avatar:" + props.targetId;
+  const i = refs.value.findIndex((r) => r.key === key);
+  if (i >= 0) { refs.value.splice(i, 1); return; }
+  if (refs.value.length >= MAX_REFS) return;
+  const p = currentAvatar.value;
+  if (!p) return;
+  refs.value.push({ key, url: p, kind: "avatar" });
 }
 function onPickTarget(ev: Event): void {
   const v = (ev.target as HTMLSelectElement).value;
@@ -225,8 +238,8 @@ watch(
           <div v-else class="apm-cur apm-cur--ph">?</div>
           <div class="apm-prev-main">
             <div class="apm-prev-name">{{ current ? current.name : "未选择角色" }}</div>
-            <div class="apm-prev-tip">{{ hasBind ? "已使用自定义形象" : "当前为故事卡原始形象" }}</div>
-            <button v-if="hasBind" class="apm-btn apm-btn--ghost" @click="emit('unbind', targetId)">恢复原始形象</button>
+            <div class="apm-prev-tip">{{ hasBind ? "已使用自定义实体形象" : "当前为默认实体形象" }}</div>
+            <button v-if="hasBind" class="apm-btn apm-btn--ghost" @click="emit('unbind', targetId)">恢复默认实体形象</button>
           </div>
         </div>
 
@@ -260,9 +273,9 @@ watch(
               class="apm-ta"
               rows="3"
               maxlength="300"
-              placeholder="描述想要的形象，例如：银发黑衣的游侠，背负长弓，眼神冷峻，2.5D 俯视像素风"
+              placeholder="描述想要的形象，例如：银发黑衣的游侠，背负长弓，眼神冷峻，2.5D 俯视像素风，面向左边"
             ></textarea>
-            <div class="apm-refs-head">参考图（最多 {{ MAX_REFS }} 张，可点内置形象或上传）</div>
+            <div class="apm-refs-head">参考图（最多 {{ MAX_REFS }} 张：可点内置形象、用角色头像、或上传）</div>
             <div class="apm-grid apm-grid--refs">
               <button
                 v-for="p in SPRITE_PRESETS"
@@ -275,13 +288,19 @@ watch(
                 <img :src="imgSrc(p.path)" alt="" />
               </button>
             </div>
-            <div v-if="uploadRefs.length" class="apm-ups">
-              <div v-for="r in uploadRefs" :key="r.key" class="apm-up">
-                <img :src="r.url" alt="" />
+            <div v-if="extraRefs.length" class="apm-ups">
+              <div v-for="r in extraRefs" :key="r.key" class="apm-up">
+                <img :src="r.kind === 'avatar' ? imgSrc(r.url) : r.url" alt="" />
                 <button class="apm-up__x" title="移除" @click="removeRef(r.key)">×</button>
               </div>
             </div>
             <div class="apm-ai-ops">
+              <button
+                class="apm-btn apm-btn--ghost"
+                :disabled="!currentAvatar || isRefOn('avatar:' + targetId) || refs.length >= MAX_REFS"
+                title="把当前角色的头像作为外观参考发给图片模型"
+                @click="toggleAvatarRef"
+              >用角色头像作参考</button>
               <button class="apm-btn apm-btn--ghost" :disabled="refs.length >= MAX_REFS" @click="pickFile">上传参考图</button>
               <span class="apm-count">{{ refs.length }}/{{ MAX_REFS }}</span>
               <button
@@ -313,7 +332,10 @@ watch(
                   <button class="apm-btn apm-btn--mini" @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })">选用</button>
                   <button class="apm-btn apm-btn--mini apm-btn--del" @click="emit('delete', g.id)">删除</button>
                 </div>
-                <div v-if="g.prompt" class="apm-gitem__p" :title="g.prompt">{{ g.prompt }}</div>
+                <div class="apm-gitem__p" :title="g.prompt">
+                  <span v-if="g.matting && g.matting !== 'skipped'" class="apm-gitem__m" :title="'背景已透明化（' + g.matting + '）'">透明底</span>
+                  {{ g.prompt }}
+                </div>
               </div>
             </div>
             <div v-if="gallery.length" class="apm-mine-foot">
@@ -521,6 +543,16 @@ watch(
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.apm-gitem__m {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(63, 176, 122, 0.22);
+  border: 1px solid rgba(63, 176, 122, 0.45);
+  color: #8fe0b8;
+  font-size: 9px;
 }
 .apm-mine-foot { margin-top: 8px; display: flex; justify-content: flex-end; }
 .apm-foot {

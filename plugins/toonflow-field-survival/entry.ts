@@ -20,6 +20,16 @@
  *   exit    -> 主动退出，产出 result（奖励汇总）
  */
 
+/** ★ 插件自带 agent 提示词（2026-10-20：宿主 src/agents/plugins.prompts.ts 已删除，
+ *  插件自己的 agent 提示词写在插件里，不污染宿主）。编译走 esbuild --bundle 模式，
+ *  这些 import 会被内联进单文件 entry.js，不产生运行时外部依赖。 */
+import {
+  PROMPT_FIELD_SURVIVAL_MAP_GENER,
+  PROMPT_FIELD_SURVIVAL_QUEST_GENER,
+  PROMPT_FIELD_SURVIVAL_SHOP_GENER,
+  PROMPT_FIELD_SURVIVAL_SPRITE_GENER,
+} from "./src/agents/plugins.prompts";
+
 interface PluginGameContext {
   pluginId: string;
   pluginDir: string;
@@ -179,6 +189,7 @@ async function ensureMapData(ctx?: PluginGameContext): Promise<MapData> {
     const r = await withTimeout(
       tsApi.agent.run("field-survival-map-gener", {
         storyDigest: buildStoryDigest(ctx),
+        systemPrompt: PROMPT_FIELD_SURVIVAL_MAP_GENER,
       }),
       MAP_AGENT_TIMEOUT_MS,
       `map agent 超时（>${MAP_AGENT_TIMEOUT_MS}ms）`,
@@ -395,6 +406,8 @@ interface SpriteEntry {
   /** 来源：ai=agent 生成；upload=直接上传采用 */
   source: "ai" | "upload";
   createdAt: number;
+  /** 背景分离结果（仅 ai）：厂商名 = 已透明化；skipped = 未配置/未分离；空 = 旧数据 */
+  matting?: string;
 }
 /** 形象图库上限：pluginData.set 整体上传 sys_state，base64 体积要控 */
 const SPRITE_GALLERY_MAX = 16;
@@ -3379,6 +3392,7 @@ async function generateQuestsByAI(s: FieldSurvivalState, ctx: PluginGameContext 
           mapName: str(s.levelName),
           playerLevel: lv,
           count,
+          systemPrompt: PROMPT_FIELD_SURVIVAL_QUEST_GENER,
           /** 已发布任务标题，agent 据此避免重复 */
           existingTitles: questList(s).map((q) => str(q.title)).filter(Boolean).slice(0, 40),
         }),
@@ -3742,7 +3756,7 @@ async function generateSpriteByAI(
   context: PluginGameContext | undefined,
   prompt: string,
   refImages: string[],
-): Promise<{ ok: boolean; image?: string; error?: string }> {
+): Promise<{ ok: boolean; image?: string; error?: string; matting?: string }> {
   const run = context?.tsApi?.agent?.run;
   if (!run) return { ok: false, error: "宿主未接入 AI（agent 通道不可用）" };
   // 参考图必须是后端可读的形态（data:URL / http(s)）；插件内相对路径后端读不到
@@ -3759,6 +3773,8 @@ async function generateSpriteByAI(
     aspectRatio: "1:1",
     playerName: str(card.name, ""),
     level: Math.round(num(card.level, 1)),
+    /** 系统提示词由插件自带传入（宿主不再持有插件提示词） */
+    systemPrompt: PROMPT_FIELD_SURVIVAL_SPRITE_GENER,
   };
   try {
     const r = await withTimeout(
@@ -3771,7 +3787,7 @@ async function generateSpriteByAI(
     const img = str(out.url || out.image || out.dataUrl || out.base64 || out.path, "");
     if (!img) return { ok: false, error: "生图 agent 未返回图片" };
     const image = /^(data:|https?:|\/)/i.test(img) ? img : `data:image/png;base64,${img}`;
-    return { ok: true, image };
+    return { ok: true, image, matting: str(out.matting, "") || undefined };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -3888,12 +3904,8 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100)),
       y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100)),
       inParty: party.indexOf(String(role.id)) >= 0,
-      avatarPath: (() => {
-        // 优先用 spriteBinds 里的形象图（data:URL），让角色面板小头像与 canvas 同步
-        const so = spriteOverrideFor(s, role.id);
-        if (so && so.image) return so.image;
-        return (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined;
-      })(),
+      /** ★ 头像通道与实体形象（customSprite）严格分离：更换实体形象不得影响悬浮头像 */
+      avatarPath: (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined,
       /** ★ 实体立绘通道（独立于头像：data:URL 时 canvas 走 customSprite 渲染） */
       customSprite: (() => {
         const so = spriteOverrideFor(s, role.id);
@@ -4413,6 +4425,7 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
           storyDigest: buildStoryDigest(context),
           worldBookDigest: str((context as any)?.worldBookDigest, ""),
           playerCard: s.playerCard || {},
+          systemPrompt: PROMPT_FIELD_SURVIVAL_SHOP_GENER,
         }),
         20000,
         "shop agent timeout",
@@ -5199,6 +5212,7 @@ export async function handle_action(
         refCount: refs.length,
         source: "ai",
         createdAt: Date.now(),
+        matting: r.matting,
       };
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
       gal.unshift(entry);
