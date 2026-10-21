@@ -103,20 +103,27 @@ def ensure_entry_js(plugin_dir, label=""):
         click.secho("  [ERR] " + tag + "既无 entry.js 也无 entry.ts，无法打包", fg="red")
         return False
 
+    # ★ 必须 bundle 成自包含单文件（无 import / import.meta）：宿主持
+    #   PluginExecutor 对含 import 的 entry 会跳过影子模块、直接 import，
+    #   Node ESM 解析相对路径失败 → "entry 模块加载失败" → tick 恒返回空 state。
+    #   ★ 2026-10-21 踩坑：早期这里漏了 --bundle，esbuild 只做单文件转译，
+    #   entry.js 残留 `import ... from "./src/agents/plugins.prompts"`，
+    #   安装到安卓部署机后小游戏永远开局超时。--bundle 一个都不能少。
+    esbuild_args = ["entry.ts", "--bundle", "--format=esm", "--platform=node",
+                    "--target=node18", "--outfile=entry.js"]
+
     # 优先用插件本地 node_modules 的 esbuild，回退到 npx / PATH 上的 esbuild
     esbuild_bin = os.path.join(plugin_dir, "node_modules", ".bin",
                                "esbuild.cmd" if sys.platform == "win32" else "esbuild")
     if os.path.isfile(esbuild_bin):
-        cmd = [esbuild_bin, "entry.ts", "--outfile=entry.js"]
+        cmd = [esbuild_bin] + esbuild_args
     else:
         # Windows 上 npx / esbuild 是 .cmd 包装器，CreateProcess 不走 PATHEXT，
         # 必须显式补 .cmd 后缀，否则报 [WinError 2] 系统找不到指定的文件
         if sys.platform == "win32":
-            cmd = ["npx.cmd", "--no-install", "esbuild",
-                   "entry.ts", "--outfile=entry.js"]
+            cmd = ["npx.cmd", "--no-install", "esbuild"] + esbuild_args
         else:
-            cmd = ["npx", "--no-install", "esbuild",
-                   "entry.ts", "--outfile=entry.js"]
+            cmd = ["npx", "--no-install", "esbuild"] + esbuild_args
 
     click.echo("  [BUILD] " + tag + "重编 entry.js (entry.ts → entry.js) ...")
     try:

@@ -1446,6 +1446,28 @@ const selectableRoles = computed<RoleOption[]>(() =>
   roles.value.filter((r) => String(r?.roleType) !== "player"),
 );
 
+/** ★ 2026-10-21：选人角色来源排查日志（宿主注入 state.roles → 选人面板三组 chips）。
+ *  tick 每帧都会推 state，按「id:name:roleType」签名去重，只在角色表变化时打一条。
+ *  为空 = 宿主没注入角色（storyInfo 侧 world.settings.roles 为空或运行时 state.npcs 为空），
+ *  此时去看后端 [minigame roles] / [worldRoles] 日志定位是哪一级丢的。 */
+let __rolesLogSig = "__init__";
+watch(
+  roles,
+  (list) => {
+    const arr = Array.isArray(list) ? list : [];
+    const sig = arr.map((r) => `${String(r?.id ?? "")}:${String(r?.name ?? "")}:${String(r?.roleType ?? "")}`).join(",");
+    if (sig === __rolesLogSig) return;
+    __rolesLogSig = sig;
+    const brief = arr.map((r) => `${String(r?.name ?? "?")}[${String(r?.roleType ?? "?")}]`).join("、");
+    if (arr.length) {
+      console.info(`[field-survival] 选人角色列表(宿主 state.roles)：${arr.length} 个 → ${brief}`);
+    } else {
+      console.warn("[field-survival] 选人角色列表为空❗宿主未注入角色（storyInfo 角色为空或运行时 state.npcs 为空，查后端 [minigame roles] / [worldRoles] 日志）");
+    }
+  },
+  { immediate: true },
+);
+
 /** ★ 当前玩家实体（HUD 模板用）；undefined 时让模板 fallback 走 ?? 默认值 */
 const me = computed<Entity | undefined>(() => (state.value?.entities ?? []).find((e) => e.side === "player"));
 

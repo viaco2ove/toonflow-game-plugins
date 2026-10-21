@@ -42,14 +42,28 @@ esbuild 只做转译不打包，import 原样保留）。正确命令：
 npx esbuild entry.ts --bundle --format=esm --platform=node --target=node18 --outfile=entry.js
 ```
 
-重建后验证：
-- 0 处 import / 无 import.meta，导出 `handle_action`
-- Node 直接 import 成功；`handle_action('init', ...)` 返回 `code:0 phase=select 37 字段`
-- 新 MD5：`6017e45e179d3338d526a205fa35c7ad`，已同步 run-db installed 副本
+**真凶是 CLI（commit 52ca722）**：用户安装走 `python -m toon_plugins plugins --install-all`，
+而 `src/toon_plugins/cli.py` 的 `ensure_entry_js()` 每次打包都用**漏 --bundle 的命令**重编
+entry.js 再上传——所以不管把修好的 entry.js 拷到哪里，一次 install-all 就被覆盖回坏版。
+（宿主持 `pluginEntryConsistency.ts` 即 /plugin/rebuild 的 esbuild 早在 2026-10-20 就带了
+`--bundle=true`，但 CLI 打包通道这一处一直没同步修。）
+CLI 现已补 `--bundle --format=esm --platform=node --target=node18`，
+函数级验证：产物 0 import、导出 handle_action、Node import 通过。
+
+**部署机已就地修复（无需拷贝文件）**：用有效 token 调
+`POST /plugin/rebuild {"pluginId":"com.toonflow.minigame-field-survival"}` → 宿主持自己
+重编 entry.js（返回 `rebuilt:true, cacheCleared:true`），远端 entry.js 复测 0 import，
+`POST /plugin/tick(start)` 返回 `phase:"playing"` 真实 state（player_0 / mob_wood_0…）。
+宿主持按 mtime 热重载，修复立即生效；下次 install-all 会重新上传——CLI 修复后上传的即正确版本。
+
+**附带发现**：日志里 iframe URL 的 token `iat` 比当前时间快 ~81 天（设备时钟快），该 token
+调后端 API 全部 401「无效的token」——安卓设备时钟需校正（潜在独立问题）。
 
 ## 待办
 
-- [ ] 把新 entry.js 拷到安卓 ubuntu 部署机插件目录
-      （`plugins/1/com.toonflow.field-survival/entry.js`，宿主持按 mtime 热重载，无需重启后端）
-- [ ] 拷完后复测：点开始游戏应直接进入游戏，console 不再有
-      「state 字段体检❗补齐[全部字段]」，tick 返回真实 state
+- [x] 修复 CLI ensure_entry_js 的 esbuild 命令（52ca722）
+- [x] 部署机 /plugin/rebuild 就地修复（已验证 tick 返回真实 state）
+- [ ] 用户下次 install-all 后确认部署机 entry.js 仍是 0 import 版
+- [ ] 复测「开始游戏」应直接进入游戏；前端新日志
+      `[field-survival] 选人角色列表(宿主 state.roles)` 会打印注入的角色
+      （为空则查后端 `[minigame roles]` / `[worldRoles]` 日志定位哪一级丢的）
