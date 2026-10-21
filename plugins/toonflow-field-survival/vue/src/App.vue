@@ -3099,7 +3099,10 @@ function spawnZoneMobs(zoneData: any, cx: number, cy: number): void {
  */
 function spawnLocalMobsIfNeeded(): void {
   if (!state.value || state.value.phase !== "playing") return;
-  const me = state.value.entities.find((e) => e.side === "player");
+  // ★ 2026-10-21：宿主下发的 state 可能缺 entities（编排路径/旧存档），
+  //   裸 .find 会抛 "Cannot read properties of undefined (reading 'find')"。
+  //   bridge.onHostState 已统一 normalize 兜底，这里再显式 ?? [] 双保险。
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me) return;
 
   // ★ 修复②（兜底补怪受地图校验约束）：兜底补怪只允许在"当前地图本身有野怪数据源"
@@ -3120,7 +3123,7 @@ function spawnLocalMobsIfNeeded(): void {
   //   于是兜底刷怪永不产出（森林里也一只不刷）。
   //   现改为按"视野半径内是否已有活着的敌怪"判定：安全区只保护玩家，不冻结世界刷新。
   const SPAWN_CLEAR_RADIUS_M = 45;
-  const enemyInSight = state.value.entities.some(
+  const enemyInSight = (state.value?.entities ?? []).some(
     (e) => e.side === "enemy" && e.alive && Math.hypot(e.x - me.x, e.y - me.y) <= SPAWN_CLEAR_RADIUS_M,
   );
   if (enemyInSight) return;
@@ -3128,7 +3131,7 @@ function spawnLocalMobsIfNeeded(): void {
   const zoneBlocksSpawn = !!currentZone && (currentZone.kind === "safe" || currentZone.refresh_rate === 0);
 
   // 检查该区域野怪是否已全死
-  const zoneEnemies = state.value.entities.filter((e) => {
+  const zoneEnemies = (state.value?.entities ?? []).filter((e) => {
     if (e.side !== "enemy") return false;
     const zoneName = (e as any).zoneName;
     return zoneName === currentZone?.name;

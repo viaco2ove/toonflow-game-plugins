@@ -9,6 +9,7 @@
  *       走本地模拟模式，游戏仍可玩（演示用随机数推进）。
  */
 import type { GameState, HandleResult } from "./types";
+import { normalizeHostState, logStateHealth } from "./normalizeState";
 
 export type SendAction = (action: string, params?: Record<string, unknown>) => void;
 
@@ -145,14 +146,20 @@ export function onHostState(handler: (data: HostState) => void): () => void {
     if (!d || typeof d !== "object") return;
     if (d.type === "tf_plugin_state" && d.state) {
       hostReady = true;
+      // ★ 字段补齐（2026-10-21）：宿主下发的 state 可能缺 entities 等数组字段
+      //   （编排路径 / 旧存档 / phase=select 精简态），App.vue 裸数组访问会抛
+      //   "Cannot read properties of undefined (reading 'find')"。
+      //   在 state 唯一入口统一补齐，并打字段体检日志（patched 非空=宿主缺字段）。
+      const norm = normalizeHostState(d.state);
+      logStateHealth(norm.state, norm.patched);
       // ★ 响应修复：宿主 postMessage 把 response 放在顶层 message 上（toonflow-game-web ScenePlay.vue:1647
       //   / vite.config.ts:311），state.value 收不到 → App.vue 行 501 的 watch(() => state.value?.response)
       //   永远拿不到值 → sysNotice 永远显示前端自己设的"正在刷新货源…"而看不到插件 response。
       //   把顶层 response 镜像到 state.response 上，watch 即能命中。
       const data: HostState = {
         state: typeof d.response === "string" && d.response
-          ? { ...(d.state as any), response: d.response }
-          : (d.state as GameState),
+          ? { ...(norm.state as any), response: d.response }
+          : norm.state,
         actions: d.actions,
         response: d.response,
       };
