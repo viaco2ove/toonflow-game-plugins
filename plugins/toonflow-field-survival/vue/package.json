@@ -9,7 +9,8 @@
     "debug": "node scripts/debug.cjs",
     "debug:story": "cross-env STORY=xxx vite --mode debug",
     "debug:conn": "cross-env STORY=xxx CONN=1 vite --mode debug",
-    "build": "vite build && node -e \"const fs=require('fs');fs.renameSync('../ui/index.html','../ui/game.html');console.log('renamed to ui/game.html')\"",
+    "build": "cross-env CONN=1 vite build && node -e \"const fs=require('fs');fs.renameSync('../ui/index.html','../ui/game.html');console.log('renamed to ui/game.html')\"",
+    "build:standalone": "vite build && node -e \"const fs=require('fs');fs.renameSync('../ui/index.html','../ui/game.html');console.log('renamed to ui/game.html standalone/mock')\"",
     "preview": "vite preview"
   },
   "dependencies": {
