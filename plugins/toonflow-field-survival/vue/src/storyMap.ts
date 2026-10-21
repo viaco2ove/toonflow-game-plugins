@@ -229,6 +229,8 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   );
   // 调试日志加会话id（便于排插桩/查数据落库归属）
   const _sessionId = String(_stateSessionId || _ctx.sessionId || _urlSessionId || "未知");
+  // [field-survival] version,暂时手动编写版本日志
+  console.info(`[field-survival] version:1.0.20`);
   console.info(`[field-survival] 故事名: ${_storyName}`);
   console.info(`[field-survival] 故事id: ${_storyId}`);
    console.info(`[field-survival] sessionid: ${_sessionId}`);
