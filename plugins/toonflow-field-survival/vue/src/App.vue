@@ -2268,7 +2268,8 @@ function drawFacingCone(
     ctx.fill();
   }
   ctx.globalAlpha = breath;
-  // 中心箭头（与朝向同向，半透明）—— 用三角形绘制与 » 箭头同形态
+  // 中心箭头（与朝向同向）—— 用三角形绘制与 » 箭头同形态
+  // ★ 2026-10-21 用户反馈箭头太显眼：填充 alpha 0.95→0.32，描边一并淡化
   const ar = reach * 0.42;       // 箭头起点到 tip 的距离
   const aw = Math.max(6, dh * 0.18); // 箭头翼展
   const tipX = ax + Math.cos(rad) * ar;
@@ -2278,7 +2279,7 @@ function drawFacingCone(
   const ny = Math.cos(rad);
   const tailX = ax - Math.cos(rad) * (ar * 0.45);
   const tailY = ay - Math.sin(rad) * (ar * 0.45);
-  ctx.fillStyle = color.arrow + "0.95)";
+  ctx.fillStyle = color.arrow + "0.32)";
   ctx.beginPath();
   ctx.moveTo(tipX, tipY);                        // 箭头尖
   ctx.lineTo(tailX + nx * aw, tailY + ny * aw);  // 尾翼左
@@ -2286,9 +2287,9 @@ function drawFacingCone(
   ctx.lineTo(tailX - nx * aw, tailY - ny * aw);  // 尾翼右
   ctx.closePath();
   ctx.fill();
-  // 描边让箭头在浅色背景也看得清
-  ctx.globalAlpha = Math.min(1, breath + 0.15);
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+  // 描边让箭头在浅色背景也看得清（同步淡化，避免抢眼）
+  ctx.globalAlpha = Math.min(1, breath * 0.6);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.18)";
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.restore();
