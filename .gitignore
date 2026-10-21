@@ -101,3 +101,4 @@ null
 /plugins/toonflow-field-survival/ui/
 /plugins/toonflow-field-survival/entry.js
 /.workbuddy-ai/
+/src/tools/toonflow-field-survival/map-editor/backend/ai_models.db
