@@ -1,6 +1,10 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { api } from './api.js'
+import TileStylePanel from './tile-style-change/TileStylePanel.vue'
+import ModelSettingsModal from './tile-style-change/ModelSettingsModal.vue'
+import MaterialPicker from './tile-style-change/MaterialPicker.vue'
+import TilesetWorkspace from './tile-style-change/TilesetWorkspace.vue'
 
 // ─── 常量 ───
 const TILE_SIZE = 32
@@ -105,6 +109,160 @@ function toast(msg) {
   toastMsg.value = msg
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => (toastMsg.value = ''), 2200)
+}
+
+// ─── Tile Style Change ───
+const showTileStylePanel = ref(false)
+const showModelSettings = ref(false)
+const selectedTileId = ref(null)
+const selectedTileIds = ref([])     // 当前选区（单选长度1，框选为多格）
+const selectedTileImage = ref('')   // 当前选中格的精灵图（dataURL）
+
+// 贴图替换工作区（图集视图）状态
+const showMaterialPicker = ref(false)
+const tileStyleMode = ref(false)        // true = 中间区切换为图集工作区
+const currentMaterial = ref(null)       // 素材集名（如 compiled_tileset_32x32）
+const materialMeta = ref(null)          // compiled_tileset_32x32.json
+const materialTilesetUrl = ref('')      // 当前工作区图集图（初始为后端 png，替换后为 canvas dataURL）
+const styleDirty = ref(false)
+let workCanvas = null                   // 离屏画布：原生分辨率图集，用于写回 32×32
+let workImage = null                    // 图集 Image（用于从工作区提取单格）
+
+async function openTileStyle() {
+  showMaterialPicker.value = true
+}
+
+async function onMaterialSelected(name) {
+  showMaterialPicker.value = false
+  currentMaterial.value = name
+  showTileStylePanel.value = true
+  tileStyleMode.value = true
+  selectedTileId.value = null
+  selectedTileImage.value = ''
+  try {
+    const [meta, url] = await Promise.all([
+      api.getMaterialMeta(name),
+      Promise.resolve(api.getMaterialTilesetUrl(name)),
+    ])
+    materialMeta.value = meta
+    materialTilesetUrl.value = url
+    // 载入图集到离屏画布（用于写回 + 提取单格）
+    await loadWorkCanvas(url)
+  } catch (e) {
+    toast('加载素材集失败：' + e.message)
+  }
+}
+
+async function loadWorkCanvas(url) {
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  await new Promise((res, rej) => {
+    img.onload = res
+    img.onerror = rej
+    img.src = url
+  })
+  workImage = img
+  workCanvas = document.createElement('canvas')
+  workCanvas.width = img.naturalWidth
+  workCanvas.height = img.naturalHeight
+  const ctx = workCanvas.getContext('2d')
+  ctx.drawImage(img, 0, 0)
+}
+
+function extractFromMaterial(tileId) {
+  if (!workCanvas) return ''
+  const cols = materialMeta.value?.columns
+    ?? Math.floor(workCanvas.width / (materialMeta.value?.tilewidth || 32))
+  const col = tileId % cols
+  const row = Math.floor(tileId / cols)
+  const tw = materialMeta.value?.tilewidth || 32
+  const th = materialMeta.value?.tileheight || 32
+  const c = document.createElement('canvas')
+  c.width = tw; c.height = th
+  c.getContext('2d').drawImage(workCanvas, col * tw, row * th, tw, th, 0, 0, tw, th)
+  return c.toDataURL('image/png')
+}
+
+function onTileSelected(sel) {
+  selectedTileId.value = sel.tileId
+  selectedTileIds.value = (sel.tileIds && sel.tileIds.length) ? sel.tileIds : [sel.tileId]
+  selectedTileImage.value = extractFromMaterial(sel.tileId)
+}
+
+// 把一张 32×32 贴回工作区画布并落盘（支持多格批量）
+async function writeTile(tileId, imageBase64) {
+  const cols = materialMeta.value?.columns
+    ?? Math.floor(workCanvas.width / (materialMeta.value?.tilewidth || 32))
+  const col = tileId % cols
+  const row = Math.floor(tileId / cols)
+  const tw = materialMeta.value?.tilewidth || 32
+  const th = materialMeta.value?.tileheight || 32
+  const img = new Image()
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = imageBase64 })
+  workCanvas.getContext('2d').drawImage(img, col * tw, row * th, tw, th)
+}
+
+async function onReplaceTile({ tileId, imageBase64, tileIds }) {
+  if (!workCanvas) {
+    toast('工作区未初始化')
+    return
+  }
+  const ids = (tileIds && tileIds.length) ? tileIds : [tileId]
+  try {
+    for (const id of ids) {
+      await writeTile(id, imageBase64)
+      await api.saveOverride({
+        material: currentMaterial.value,
+        tileId: id,
+        image_base64: imageBase64,
+        prompt: '',
+        model: '',
+      })
+    }
+    // 实时刷新工作区预览
+    materialTilesetUrl.value = workCanvas.toDataURL('image/png')
+    styleDirty.value = true
+    toast(`已替换并保存 ${ids.length} 格`)
+  } catch (e) {
+    toast('保存失败：' + e.message)
+  }
+}
+
+async function onResetTile(payload) {
+  if (!workCanvas || !workImage) return
+  const ids = Array.isArray(payload) ? payload
+    : (payload?.tileIds && payload.tileIds.length) ? payload.tileIds
+    : [payload]
+  const cols = materialMeta.value?.columns
+    ?? Math.floor(workCanvas.width / (materialMeta.value?.tilewidth || 32))
+  const tw = materialMeta.value?.tilewidth || 32
+  const th = materialMeta.value?.tileheight || 32
+  for (const tileId of ids) {
+    const col = tileId % cols
+    const row = Math.floor(tileId / cols)
+    workCanvas.getContext('2d').drawImage(workImage, col * tw, row * th, tw, th, col * tw, row * th, tw, th)
+  }
+  materialTilesetUrl.value = workCanvas.toDataURL('image/png')
+  styleDirty.value = true
+  toast(`已重置 ${ids.length} 格（需重新保存生效）`)
+}
+
+function exitTileStyle() {
+  tileStyleMode.value = false
+  showTileStylePanel.value = false      // 关掉右侧贴图替换面板
+  currentMaterial.value = null
+  workCanvas = null
+  workImage = null
+  // 清空选区，避免下次进入时残留上一批 id
+  selectedTileId.value = null
+  selectedTileIds.value = []
+  selectedTileImage.value = ''
+  materialTilesetUrl.value = ''
+  // canvas 用 v-show 常驻，这里只需在显示恢复后重绘一次（双保险）
+  nextTick(() => {
+    ctx = null
+    resizeCanvas()
+  })
 }
 
 // ─── 加载地图集列表 ───
@@ -413,7 +571,30 @@ const visiblePaletteTiles = computed(() => {
   return (tilesByCat.value[activeCat.value] || []).slice(0, 80)
 })
 
-function selectTile(id) { brushTileId.value = id }
+function selectTile(id) {
+  brushTileId.value = id
+  // 同步到 TileStylePanel
+  selectedTileId.value = id
+  extractTileToDataUrl(id)
+}
+
+function extractTileToDataUrl(tileId) {
+  if (!tileset.value.loaded) return
+  const cols = Math.floor(tileset.value.img.width / TILE_SIZE)
+  const col = tileId % cols
+  const row = Math.floor(tileId / cols)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = TILE_SIZE
+  canvas.height = TILE_SIZE
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(
+    tileset.value.img,
+    col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE,
+    0, 0, TILE_SIZE, TILE_SIZE
+  )
+  selectedTileImage.value = canvas.toDataURL('image/png')
+}
 
 // 调色板缩略图：使用 backgroundPosition 切出单瓦片
 const paletteBgUrl = computed(() =>
@@ -926,6 +1107,19 @@ function onKeyDown(e) {
   if (e.key === 'Control') { ctrlHeld = true; updateCursor() }
   if (e.key === 'Alt') { altHeld = true; updateCursor() }
   if (e.key === 't' || e.key === 'T') { tHeld = true }
+
+  // ─── 贴图替换模式下的快捷键策略 ───
+  // 鼠标交互（Ctrl+左键平移 / 中键·滚轮缩放 / Shift+左键框选 / T 坐标）由 TilesetWorkspace 自行处理，
+  // 沿用地图编辑器语义；此处仅保留 Ctrl+S（保存）与 Esc（退出，弹窗约定）。
+  // 画布工具键 (V/B/E/P/D/G/C/T)、撤销/重做、删除对象等改图快捷键在此模式下全部抑制，避免误触。
+  if (tileStyleMode.value) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+      e.preventDefault(); saveCurrentMap(); return
+    }
+    if (e.key === 'Escape') { e.preventDefault(); exitTileStyle(); return }
+    return
+  }
+
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return
   switch (e.key.toLowerCase()) {
     case 'v': setTool('select'); break
@@ -1088,6 +1282,10 @@ function onPropApply() {
       <button class="btn" :disabled="histIdx <= 0" @click="undo" title="撤销 (Ctrl+Z)">↩</button>
       <button class="btn" :disabled="histIdx >= history.length - 1" @click="redo" title="重做 (Ctrl+Y)">↪</button>
     </div>
+    <div class="toolbar-group">
+      <button class="btn" :class="{active: tileStyleMode}" @click="openTileStyle" title="贴图替换">🎨</button>
+      <button class="btn" @click="showModelSettings=true" title="AI 模型设置">⚙️</button>
+    </div>
     <div class="sep"></div>
     <div class="toolbar-group">
       <button class="btn" :disabled="!currentMapName || saving" @click="saveCurrentMap" title="保存 (Ctrl+S)">
@@ -1156,9 +1354,21 @@ function onPropApply() {
       </div>
     </div>
 
-    <!-- 中间：画布 -->
+    <!-- 中间：画布 / 贴图替换图集工作区 -->
+    <!-- 注意：canvas 用 v-show 常驻 DOM，不能用 v-if 销毁重建 ——
+         模块级缓存的 ctx 会指向已销毁的旧 canvas，导致退出后黑屏、点击无反应 -->
     <div class="canvas-wrap" ref="canvasWrapRef">
+      <TilesetWorkspace
+        v-if="tileStyleMode && currentMaterial"
+        :material-name="currentMaterial"
+        :tileset-url="materialTilesetUrl"
+        :meta="materialMeta"
+        @select="onTileSelected"
+        @close="exitTileStyle"
+        @reset="onResetTile"
+      />
       <canvas
+        v-show="!(tileStyleMode && currentMaterial)"
         ref="canvasRef"
         id="canvas"
         @pointerdown="onPointerDown"
@@ -1224,6 +1434,17 @@ function onPropApply() {
           <button class="btn" @click="onPropApply" style="flex:1">应用</button>
           <button class="btn btn-danger" @click="deleteSelectedObj" style="flex:1">删除</button>
         </div>
+      </div>
+
+      <!-- 贴图替换面板 -->
+      <div class="panel-section" v-if="showTileStylePanel">
+        <TileStylePanel
+          :selected-tile-id="selectedTileId"
+          :selected-tile-ids="selectedTileIds"
+          :selected-tile-image="selectedTileImage"
+          @replace-tile="onReplaceTile"
+          @reset-tile="onResetTile"
+        />
       </div>
 
       <!-- 调色板 -->
@@ -1310,11 +1531,18 @@ function onPropApply() {
         <div class="panel-title">快捷键</div>
         <div style="font-size:10px;color:#555;line-height:1.9">
           V/B/E/P/D = 工具切换<br>
-          G = 网格 &nbsp; C = 碰撞<br>
+          G = 网格 &nbsp; C = 碰撞 &nbsp; T = 坐标<br>
           Ctrl+Z/Y = 撤销/重做<br>
           Ctrl+S = 保存<br>
           Del = 删除对象<br>
           滚轮 = 缩放 &nbsp; 中键拖拽 = 平移
+        </div>
+        <div style="font-size:10px;color:#1976d2;line-height:1.9;margin-top:6px">
+          <b>贴图替换模式（与地图编辑器一致）</b><br>
+          左键 = 选一格 &nbsp; Shift+左键拖动 = 框选多格<br>
+          Ctrl+左键拖动 = 平移 &nbsp; 中键拖动 / 滚轮 = 缩放<br>
+          T = 切换坐标（左键查看格行列）<br>
+          R = 重置选中格 &nbsp; Esc = 退出
         </div>
       </div>
     </div>
@@ -1398,6 +1626,12 @@ function onPropApply() {
       </div>
     </div>
   </div>
+
+  <!-- 模型设置弹窗 -->
+  <ModelSettingsModal v-if="showModelSettings" @close="showModelSettings = false" @saved="showModelSettings = false" />
+
+  <!-- 贴图替换：素材集选择 -->
+  <MaterialPicker v-if="showMaterialPicker" @select="onMaterialSelected" @close="showMaterialPicker = false" />
 
   <!-- 提示 -->
   <div class="toast" :class="{visible: !!toastMsg}">{{ toastMsg }}</div>

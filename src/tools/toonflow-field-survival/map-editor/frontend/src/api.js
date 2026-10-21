@@ -48,4 +48,32 @@ export const api = {
   devhostStart: (coll) => req(`/devhost/start?name=${encodeURIComponent(coll)}`, { method: 'POST' }),
   devhostStatus: () => req('/devhost/status'),
   devhostStop: () => req('/devhost/stop', { method: 'POST' }),
+
+  // Tile Style Change
+  generateTile: (data) => req('/tile-style/generate', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // 素材集（compiled_tileset_32x32）
+  listMaterials: () => req('/tile-style/materials'),
+  getMaterialMeta: (name) => req(`/tile-style/materials/${encodeURIComponent(name)}/meta`),
+  getMaterialTilesetUrl: (name) => `${BASE}/tile-style/materials/${encodeURIComponent(name)}/tileset`,
+
+  // 覆盖落盘
+  saveOverride: (data) => req('/tile-style/override', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // ── AI 模型配置（复刻 app t_config + 槽位绑定）──
+  listModels: (type) => req(`/ai/models${type ? `?type=${encodeURIComponent(type)}` : ''}`),
+  addModel: (data) => req('/ai/models', { method: 'POST', body: JSON.stringify(data) }),
+  updateModel: (id, data) => req(`/ai/models/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteModel: (id) => req(`/ai/models/${id}`, { method: 'DELETE' }),
+  getBindings: () => req('/ai/bindings'),
+  bindSlot: (slot, configId) => req('/ai/bindings', {
+    method: 'POST', body: JSON.stringify({ slot, configId }),
+  }),
+  testModel: (data) => req('/ai/test', { method: 'POST', body: JSON.stringify(data) }),
 }

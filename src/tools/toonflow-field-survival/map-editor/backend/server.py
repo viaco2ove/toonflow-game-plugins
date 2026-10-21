@@ -19,6 +19,9 @@
 （可通过环境变量 TFS_MAP_ROOT 覆盖）
 """
 
+import base64
+import datetime
+import io
 import json
 import os
 import shutil
@@ -29,6 +32,7 @@ from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
+from PIL import Image
 
 # ───────────────────────── 路径常量 ─────────────────────────
 DEFAULT_ROOT = Path(
@@ -36,6 +40,9 @@ DEFAULT_ROOT = Path(
     "workshops/toonflow-field-survival/map_design"
 )
 MAP_ROOT = Path(os.environ.get("TFS_MAP_ROOT", str(DEFAULT_ROOT)))
+
+# 素材库根目录（compiled_tileset_32x32 等）：与 map_design 平级
+RESOURCE_ROOT = MAP_ROOT.parent / "resource_library" / "toonflow-field-survival" / "base"
 
 # 插件 ui/ 目录（预览用：挂载静态文件 + deploy 目标）
 PLUGIN_UI_DIR = Path(
@@ -643,6 +650,240 @@ def serve_plugin_ui(file_path: str):
     }
     ext = target.suffix.lower()
     return FileResponse(target, media_type=MIME.get(ext, "application/octet-stream"))
+
+
+# ───────────────────────── Tile Style Change（贴图替换） ─────────────────────────
+# 素材集目录约定：RESOURCE_ROOT/<material_name>/compiled_tileset_32x32.{png,json}
+
+@app.get("/api/tile-style/materials")
+def list_materials() -> List[dict]:
+    """列出素材库下所有素材集（含 compiled_tileset_32x32.png + .json 的目录）"""
+    if not RESOURCE_ROOT.exists():
+        return []
+    out = []
+    for entry in sorted(RESOURCE_ROOT.iterdir()):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        png = entry / "compiled_tileset_32x32.png"
+        js = entry / "compiled_tileset_32x32.json"
+        if png.exists() and js.exists():
+            out.append({
+                "name": entry.name,
+                "tileset": "compiled_tileset_32x32",
+                "png": f"{entry.name}/compiled_tileset_32x32.png",
+                "json": f"{entry.name}/compiled_tileset_32x32.json",
+            })
+    return out
+
+
+@app.get("/api/tile-style/materials/{name}/meta")
+def get_material_meta(name: str):
+    """返回素材集的 compiled_tileset_32x32.json（含 columns / tilewidth / tiles[]）"""
+    p = safe_path(RESOURCE_ROOT, name)
+    js = p / "compiled_tileset_32x32.json"
+    if not js.exists():
+        raise HTTPException(404, f"material json not found: {name}")
+    with open(js, "r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+@app.get("/api/tile-style/materials/{name}/tileset")
+def get_material_tileset(name: str):
+    """返回素材集的 compiled_tileset_32x32.png"""
+    p = safe_path(RESOURCE_ROOT, name)
+    png = p / "compiled_tileset_32x32.png"
+    if not png.exists():
+        raise HTTPException(404, f"material png not found: {name}")
+    return FileResponse(png, media_type="image/png")
+
+
+class OverrideReq(BaseModel):
+    material: str
+    tileId: int
+    image_base64: str          # data URL 或裸 base64（32×32 透明 PNG）
+    prompt: str = ""
+    model: str = ""
+
+
+@app.post("/api/tile-style/override")
+def save_override(req: OverrideReq) -> dict:
+    """
+    把新生成的 32×32 透明 PNG 贴回 compiled_tileset_32x32.png 对应坐标，
+    并写 styleOverrides 到 json（只存引用路径，不塞 base64）。
+    """
+    p = safe_path(RESOURCE_ROOT, req.material)
+    png = p / "compiled_tileset_32x32.png"
+    js = p / "compiled_tileset_32x32.json"
+    if not png.exists() or not js.exists():
+        raise HTTPException(404, "material not found")
+
+    # 解析 base64
+    b64 = req.image_base64
+    if "," in b64:
+        b64 = b64.split(",", 1)[1]
+    try:
+        img_bytes = base64.b64decode(b64)
+        new_tile = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    except Exception as e:
+        raise HTTPException(400, f"图片解析失败: {e}")
+
+    with open(js, "r", encoding="utf-8") as fp:
+        meta = json.load(fp)
+    cols = int(meta.get("columns", meta.get("imagewidth", 3840) // 32))
+    tw = int(meta.get("tilewidth", 32))
+    th = int(meta.get("tileheight", 32))
+
+    col = req.tileId % cols
+    row = req.tileId // cols
+
+    # 备份原 png（首次覆盖时）
+    bak_dir = p / "bak"
+    if not (bak_dir / "compiled_tileset_32x32.png.bak").exists():
+        bak_dir.mkdir(exist_ok=True)
+        shutil.copy2(png, bak_dir / "compiled_tileset_32x32.png.bak")
+
+    # 贴回图集
+    base = Image.open(png).convert("RGBA")
+    resized = new_tile.resize((tw, th), Image.LANCZOS)
+    base.paste(resized, (col * tw, row * th), resized)
+    base.save(png)
+
+    # 落盘单格覆盖图 + 更新 json
+    overrides_dir = p / "overrides"
+    overrides_dir.mkdir(exist_ok=True)
+    tile_path = overrides_dir / f"{req.tileId}.png"
+    new_tile.save(tile_path)
+
+    meta.setdefault("styleOverrides", {})[str(req.tileId)] = {
+        "overridePng": f"overrides/{req.tileId}.png",
+        "prompt": req.prompt,
+        "model": req.model,
+        "createdAt": datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    with open(js, "w", encoding="utf-8") as fp:
+        json.dump(meta, fp, ensure_ascii=False, indent=2)
+
+    return {
+        "ok": True,
+        "tileId": req.tileId,
+        "col": col,
+        "row": row,
+        "overridePng": str(tile_path),
+    }
+
+
+# ───────────────────────── AI 模型配置（复刻 app t_config + 槽位绑定） ─────────────────────────
+# 配置存本地 SQLite（ai_store.py），接口契约对齐 app 的 /setting/* 与 /other/testImage。
+import ai_store
+import ai_clients
+
+# 厂商可选项（镜像 app getAiModelList）
+MANUFACTURERS = ["openai", "other", "volcengine", "doubao", "gemini", "siliconflow",
+                 "deepseek", "qwen", "zhipu", "anthropic", "lmstudio", "minimax"]
+MODEL_TYPES = ["text", "image", "voice", "video"]
+
+
+class AiModelReq(BaseModel):
+    type: str                                   # text | image | voice | video
+    manufacturer: str
+    model: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
+    modelType: str = ""
+    inputPricePer1M: Optional[float] = None
+    outputPricePer1M: Optional[float] = None
+    cacheReadPricePer1M: Optional[float] = None
+    currency: str = "CNY"
+    reasoningEffort: Optional[str] = None
+    temperature: Optional[float] = None
+    topP: Optional[float] = None
+    remark: str = ""
+
+
+class AiBindingReq(BaseModel):
+    slot: str
+    configId: int = None
+
+
+class AiTestReq(BaseModel):
+    type: str = "image"
+    manufacturer: str = "openai"
+    model: str = ""
+    baseUrl: str = ""
+    apiKey: str = ""
+    prompt: str = "a red apple on white background"
+    size: str = "1K"
+    ref_images: List[str] = []
+
+
+@app.get("/api/ai/models")
+def api_list_models(type: str = None):
+    return ai_store.list_models(type)
+
+
+@app.post("/api/ai/models")
+def api_add_model(req: AiModelReq):
+    if req.type not in MODEL_TYPES:
+        raise HTTPException(400, f"type 必须为 {MODEL_TYPES}")
+    if not req.manufacturer:
+        raise HTTPException(400, "manufacturer 必填")
+    data = req.model_dump()
+    new_id = ai_store.add_model(data)
+    return {"id": new_id, **ai_store.get_model(new_id)}
+
+
+@app.put("/api/ai/models/{model_id}")
+def api_update_model(model_id: int, req: AiModelReq):
+    if not ai_store.get_model(model_id):
+        raise HTTPException(404, "model not found")
+    ai_store.update_model(model_id, req.model_dump())
+    return ai_store.get_model(model_id)
+
+
+@app.delete("/api/ai/models/{model_id}")
+def api_delete_model(model_id: int):
+    if not ai_store.get_model(model_id):
+        raise HTTPException(404, "model not found")
+    ai_store.delete_model(model_id)
+    return {"ok": True}
+
+
+@app.get("/api/ai/bindings")
+def api_get_bindings():
+    return {"bindings": ai_store.get_bindings(), "slots": ai_store.KNOWN_SLOTS}
+
+
+@app.post("/api/ai/bindings")
+def api_bind_slot(req: AiBindingReq):
+    bindings = ai_store.bind_slot(req.slot, req.configId)
+    return {"bindings": bindings}
+
+
+@app.post("/api/ai/test")
+def api_test_model(req: AiTestReq):
+    """免鉴权连通性测试（镜像 app /other/testImage、/other/testAI）。"""
+    cfg = req.model_dump()
+    try:
+        if req.type == "text":
+            out = ai_clients.call_text(
+                cfg, messages=[{"role": "user", "content": req.prompt}],
+                reasoning_effort=req.reasoning_effort,
+            )
+            return {"ok": True, "type": "text", "sample": out[:200]}
+        else:
+            b64uri = ai_clients.call_image(
+                cfg, prompt=req.prompt, ref_images=req.ref_images, size=req.size,
+            )
+            return {"ok": True, "type": "image", "dataUri": b64uri[:80] + "…"}
+    except Exception as e:
+        raise HTTPException(502, f"调用失败: {e}")
+
+
+# ───────────────────────── Tile Style Change（贴图替换） ─────────────────────────
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from tile_style_change.routes import router as tile_style_router
+app.include_router(tile_style_router)
 
 
 # ───────────────────────── 健康检查 ─────────────────────────
