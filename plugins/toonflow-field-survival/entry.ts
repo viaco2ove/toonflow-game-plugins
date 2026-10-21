@@ -4685,6 +4685,16 @@ export async function handle_action(
       ? (state as unknown as FieldSurvivalState)
       : emptyState(context);
 
+  /* ★ 2026-10-21 崩溃修复：旧版本存档 version 对得上但缺数组字段时，
+   *   会把残缺 state 当完整 state 复用 → 前端 state.entities 为 undefined
+   *   → state.value?.entities.find() 直接 NPE（安卓端 ui/game.html 崩）。
+   *   这里统一补齐所有数组字段（缺才补，不动已有数据）。 */
+  if (!Array.isArray((s as any).entities)) (s as any).entities = [];
+  if (!Array.isArray((s as any).roles)) (s as any).roles = [];
+  if (!Array.isArray((s as any).items)) (s as any).items = [];
+  if (!Array.isArray((s as any).skills)) (s as any).skills = [];
+  if (!Array.isArray((s as any).spriteGallery)) (s as any).spriteGallery = [];
+
   const okResp = (msg: string) => ({ code: 0, message: "ok", state: s, response: msg });
 
   // ★ 旧存档里的「备用物N / 暗核共鸣2」等假格子：进任何 action 时顺手重建一次

@@ -507,7 +507,7 @@ const sysPlayerRole = computed<SysRole | null>(() => {
   const cards = (((state.value as any)?.npcCards || []) as any[]);
   const idx = cards.findIndex(c => String(c?.side) === "player");
   if (idx >= 0) return cardToRole(cards[idx], idx);
-  const me = state.value?.entities.find(e => e.side === "player");
+  const me = (state.value?.entities ?? []).find(e => e.side === "player");
   if (!me) return null;
   return {
     id: me.id,
@@ -563,10 +563,10 @@ function startSysEventSync(): void {
   tick();
 }
 
-const sysCurrentMp = computed(() => state.value?.entities.find(e => e.side === "player")?.mp ?? 0);
-const sysCurrentMaxMp = computed(() => state.value?.entities.find(e => e.side === "player")?.maxMp ?? 0);
-const sysPlayerX = computed(() => state.value?.entities.find(e => e.side === "player")?.x ?? 0);
-const sysPlayerY = computed(() => state.value?.entities.find(e => e.side === "player")?.y ?? 0);
+const sysCurrentMp = computed(() => (state.value?.entities ?? []).find(e => e.side === "player")?.mp ?? 0);
+const sysCurrentMaxMp = computed(() => (state.value?.entities ?? []).find(e => e.side === "player")?.maxMp ?? 0);
+const sysPlayerX = computed(() => (state.value?.entities ?? []).find(e => e.side === "player")?.x ?? 0);
+const sysPlayerY = computed(() => (state.value?.entities ?? []).find(e => e.side === "player")?.y ?? 0);
 
 /* ----------------- 系统面板命令通道（前端 → 插件 → state 回推） ----------------- */
 /** 已上报过的关卡名列表（避免重复上报） */
@@ -658,7 +658,7 @@ const questDestinations = computed<any[]>(() => {
 
   // ── gather 类（新增）──────────────────────────────────────────────
   const zones = getEventZones() || [];
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
 
   for (const q of (questView.value.active || [])) {
     if (q.status !== "active" || q.type !== "gather") continue;
@@ -719,7 +719,7 @@ const questDestinations = computed<any[]>(() => {
 
 /** 玩家与某个目的地的距离（米） */
 function questDestDist(d: { x: number; y: number }): number {
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me) return Infinity;
   return Math.hypot(d.x - me.x, d.y - me.y);
 }
@@ -729,7 +729,7 @@ let pendingQuestWalk: { x: number; y: number; map: string; title: string } | nul
 
 /** ★ 寻路：点击后玩家自动走向任务目的地（复用已有 A* moveTo；跨图先传送再走） */
 function questGoToDest(id: string): void {
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me) { showToast("玩家还没进场"); return; }
   const local = questDestinations.value.find((x) => x.id === id);
   if (local) {
@@ -851,7 +851,7 @@ const questArriveBtnEl = ref<HTMLDivElement | null>(null);
 
 /** 10Hz 刷新「到达」按钮的显隐与目标（render() 只负责摆位置） */
 function updateQuestArriveBtn(): void {
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me || state.value?.phase !== "playing") {
     if (questArriveBtn.value) questArriveBtn.value = null;
     return;
@@ -958,7 +958,7 @@ async function applyTeleport(tp: any): Promise<void> {
     const ok = await switchLevel(levelKeyOf(target) || target);
     if (!ok) return;
   }
-  const me = state.value?.entities.find(e => e.side === "player");
+  const me = (state.value?.entities ?? []).find(e => e.side === "player");
   if (me) {
     // ★ 落点安全化：夹进地图边界 + 吸附出墙/障碍（修复传送落进地图外暗区/墙里）
     const spot = freeEnemySpot(Number(tp?.x) || 0, Number(tp?.y) || 0);
@@ -1447,7 +1447,7 @@ const selectableRoles = computed<RoleOption[]>(() =>
 );
 
 /** ★ 当前玩家实体（HUD 模板用）；undefined 时让模板 fallback 走 ?? 默认值 */
-const me = computed<Entity | undefined>(() => state.value?.entities.find((e) => e.side === "player"));
+const me = computed<Entity | undefined>(() => (state.value?.entities ?? []).find((e) => e.side === "player"));
 
 /* ★ game.md 等级系统：HUD 满值兜底
    满血HP = 100 + 等级*10 + 加成 / 满蓝MP = 100 + 等级*10 + 加成 / next_level_exp = 等级*100
@@ -1534,7 +1534,7 @@ function onPixelModeChange() {
 function onFogToggle() {
   try { localStorage.setItem("fs_fog", fogEnabled.value ? "1" : "0"); } catch { /* ignore */ }
   lastFovCell = { gx: -999, gz: -999 };
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (me) refreshFov(me.x, me.y);
 }
 const fogEnabled = ref(localStorage.getItem("fs_fog") !== "0");
@@ -1964,7 +1964,7 @@ function onCanvasClick(e: MouseEvent) {
   const dx = (px / kInv - Wl / 2) / sxInv;
   const dy = (py / kInv - Hl / 2) / (sxInv * DEPTH);
   // dx, dy 是相对玩家的偏移，加 playerPos 即世界米
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   const ppx = me?.x ?? 0;
   const ppy = me?.y ?? 0;
   const tx = ppx + dx;
@@ -2782,7 +2782,7 @@ async function switchLevel(levelName: string): Promise<boolean> {
     //   settleSpawn 在位置合法（主连通域 + 离 portal ≥3 米）时原样返回 (0,0)；
     //   否则挪到主连通域内最近的合规格。挪完立刻武装切图闸门，防止落点仍在圈内时反复切图。
     const s = state.value;
-    const me = s?.entities.find((e) => e.side === "player");
+    const me = (s?.entities ?? []).find((e) => e.side === "player");
     if (me) {
       const spawn = settleSpawn(0, 0);
       me.x = spawn.x;
@@ -3298,7 +3298,7 @@ function recomputeMoveToPath(tx: number, ty: number): boolean {
     moveToUnreachable = false;
     return true;
   }
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me) return false;
   const p = findPath(walkGrid, walkIndex, me.x, me.y, tx, ty);
   if (!p) {
@@ -4499,7 +4499,7 @@ function drawQuestDestLayer(
 ): void {
   const dests = questDestinations.value;
   if (!dests.length) return;
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   const bob = Math.sin(_animTick * 0.08) * 3;   // 旗帜上下浮动
   for (const d of dests) {
     const px = wx2px(d.x);
@@ -4614,7 +4614,7 @@ function drawClickFxLayer(
   }
 
   // —— 2) A* 路径虚线（只在本次 moveTo 有效时画；有路径才画）——
-  const me = state.value?.entities.find((e) => e.side === "player");
+  const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (me && input.value.moveTo && moveToPath.length) {
     ctx.save();
     ctx.setLineDash([Math.max(3, sx * 0.18), Math.max(3, sx * 0.18)]);
@@ -6687,11 +6687,11 @@ onMounted(async () => {
   initEventEngine({
     currentMapFile: () => levelNameToFileSafe(currentLevelName.value),
     player: () => {
-      const me = state.value?.entities.find(e => e.side === "player");
+      const me = (state.value?.entities ?? []).find(e => e.side === "player");
       return me ? { id: me.id, x: me.x, y: me.y } : null;
     },
     entityByTiledId: (tiledId: string) => {
-      const e = state.value?.entities.find(en => String(en.id).startsWith(`mapnpc_${tiledId}_`));
+      const e = (state.value?.entities ?? []).find(en => String(en.id).startsWith(`mapnpc_${tiledId}_`));
       return e ? { id: e.id, x: e.x, y: e.y, name: e.name } : null;
     },
     toast: (text: string, color?: string) => showToast(text),
@@ -6812,7 +6812,7 @@ onMounted(async () => {
     // 初始落点安全化：复用 settleSpawn（与切图同一套规则），避免两处规则漂移。
     // 宿主导出的出生坐标只做格中心吸附；不满足"主连通域 + portal 净空"才挪。
     if (walkGrid && walkIndex) {
-      const me0 = state.value?.entities.find((e) => e.side === "player");
+      const me0 = (state.value?.entities ?? []).find((e) => e.side === "player");
       if (me0) {
         const sp = settleSpawn(me0.x, me0.y);
         if (sp.x !== me0.x || sp.z !== me0.y) {
@@ -7164,7 +7164,7 @@ watch(() => state.value?.phase, (p) => {
     //   宿主 start 回包之前，那时玩家可能还是 (0,0) 兜底位，吸附结果会被宿主回包覆盖。
     if (!spawnSafetyDone && walkGrid && walkIndex) {
       spawnSafetyDone = true;
-      const me0 = state.value?.entities.find((e) => e.side === "player");
+      const me0 = (state.value?.entities ?? []).find((e) => e.side === "player");
       if (me0) {
         const sp = settleSpawn(me0.x, me0.y);
         if (sp.x !== me0.x || sp.z !== me0.y) {
