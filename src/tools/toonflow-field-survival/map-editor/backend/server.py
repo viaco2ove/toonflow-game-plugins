@@ -806,12 +806,13 @@ def save_override(req: OverrideReq) -> dict:
         orig_tile = base_img.crop((col * tw, row * th, (col + 1) * tw, (row + 1) * th))
         orig_tile.save(original_tile_path)
 
-    # 贴回图集：先清空该格（透明），再贴新图 —— 替换而不是叠加
+    # 贴回图集：该格整体替换为新图（alpha_composite 到透明底，
+    # 不用 paste+mask —— 那是 alpha 混合，会让旧像素透出形成叠加）
     base = Image.open(png).convert("RGBA")
     resized = new_tile.resize((tw, th), Image.LANCZOS)
-    clear = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    base.paste(clear, (col * tw, row * th))
-    base.paste(resized, (col * tw, row * th), resized)
+    region = base.crop((col * tw, row * th, (col + 1) * tw, (row + 1) * th))
+    composited = Image.alpha_composite(region, resized)
+    base.paste(composited, (col * tw, row * th))
     base.save(png)
 
     # 落盘单格覆盖图 + 更新 json
@@ -877,8 +878,7 @@ def reset_tile(req: ResetReq) -> dict:
     original_tile = Image.open(original_tile_path).convert("RGBA").resize((tw, th), Image.LANCZOS)
 
     base = Image.open(png).convert("RGBA")
-    clear = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-    base.paste(clear, (col * tw, row * th))
+    # 该格整体替换为存档的原始像素（paste 不带 mask，不混合）
     base.paste(original_tile, (col * tw, row * th))
     base.save(png)
 
@@ -1023,6 +1023,10 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 from tile_style_change.routes import router as tile_style_router
 app.include_router(tile_style_router)
+
+# ───────────────────────── 系列换皮（tile-style-change v2：对象/系列为单位） ─────────────────────────
+from tile_style_change.series import router as series_router
+app.include_router(series_router)
 
 
 # ───────────────────────── 背景分离模型（本地抠图） ─────────────────────────

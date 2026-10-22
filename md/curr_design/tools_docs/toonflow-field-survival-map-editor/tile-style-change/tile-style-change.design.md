@@ -46,7 +46,7 @@
 | G7 | **抠图算法太弱** | 四角采样色键法（`routes.py:73-111`），AI 生成图背景非纯色会误抠主体 | 透明背景质量差 |
 | G8 | **没有落盘 / 导出** | 改完 tileset 内存变化无保存路径，json 也不记录 | 工作成果丢失 |
 | G9 | **32×32 缩放与像素风保持缺失** | 出图 1024×1024 直接丢回，无缩小 + 像素化策略 | tile 尺寸/风格不对 |
-| G10 | **无提示词预设** | `.doubao/skills/tile-style-change/references/style-prompts.md` 现成分类 prompt 库未接入 | 每次手敲提示词 |
+| G10 | **无提示词预设** | `../../../../../.doubao/skills/bak/tile-style-change/references/style-prompts.md` 现成分类 prompt 库未接入 | 每次手敲提示词 |
 
 ---
 
@@ -341,7 +341,7 @@ gen = gen.resize((32, 32), Image.LANCZOS)   # 先高质量缩小
 
 ## 8. 提示词工程（解决 G10）
 
-复用 `.doubao/skills/tile-style-change/references/style-prompts.md` 的**分类 prompt 库**，
+复用 `../../../../../.doubao/skills/bak/tile-style-change/references/style-prompts.md` 的**分类 prompt 库**，
 在「风格预设」下拉提供：现代都市 / 像素奇幻 / 手绘卡通 等；选择后自动按 `tile.category` 填好 prompt 模板，
 用户可微改。通用约束（每条都追加）：
 
@@ -413,4 +413,4 @@ gen = gen.resize((32, 32), Image.LANCZOS)   # 先高质量缩小
 3. **tileset 太大**：3840×3488 必须分页/缩放浏览，一次性渲染 13080 格会卡死（见 4.3）。
 4. **配置明文**：apiKey 同 app 做法明文存储，工具为本地使用可接受，但需提示用户。
 5. **多参考图兼容性**：各厂商参考图传参不同（volcengine `image[]`、openai edits、`gemini` 多模态），适配器要分别处理（见 6.3），这是 G4 真正的工作量所在。
-6. **复用既有资产**：`resource_library/.../compiled_tileset_32x32/` 已含 png+json+分类；`.doubao/skills/tile-style-change/` 的 `extract_tiles.py`/`compose_tiles.py` 可作批量与单格提取的参考实现。
+6. **复用既有资产**：`resource_library/.../compiled_tileset_32x32/` 已含 png+json+分类；`../../../../../.doubao/skills/bak/tile-style-change/` 的 `extract_tiles.py`/`compose_tiles.py` 可作批量与单格提取的参考实现。

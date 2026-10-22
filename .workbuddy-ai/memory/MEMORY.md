@@ -70,6 +70,13 @@ entry.js 侧 `ensureStoryVisualMap()` 依赖 3 个前提，缺一个就静默退
   `segment_hdbody_advance`。**阿里云响应的图片 URL 字段有 camelCase 小写开头形态**（`imageURL`/`imageUrl`），提取要大小写都试。
 - 错误分级：MattingConfigError→400（配置错）、MattingProviderError→502（云端失败）；云端没 key 时 400 提示去模型管理配置。
 
+## PIL paste(img, box, mask) 是 alpha 混合，不是替换！
+半透明图 paste 到有内容的区域，结果 = 两者混合（实测 α128 纯红贴出 (128,0,0,64)，旧像素透过）。
+「先 paste 透明块清场再 paste 新图」也救不了——第二次 paste 带 mask 仍然混合。
+**要整格替换必须：`region = base.crop(格子)` → `Image.alpha_composite(region, 新图)` → `base.paste(合成结果, box)`（不带 mask）**。
+前端 canvas 等价做法：`clearRect(格子)` + `drawImage`（clear 后 draw 是纯替换）。
+同理重置类操作：恢复像素用不带 mask 的 paste 或 composite 后回贴，别用带 mask 的 paste。
+
 ## compiled_tileset 是「每地图集一份副本」，不是全局唯一
 - 实际使用的图集：`workshops/toonflow-field-survival/map_design/<地图集>/images/compiled_tileset_32x32.png`
 - **描述文件叫 `compiled_dawnlike.json`**（不是 `compiled_tileset_32x32.json`），
@@ -79,6 +86,38 @@ entry.js 侧 `ensureStoryVisualMap()` 依赖 3 个前提，缺一个就静默退
 - 所以贴图替换等写操作必须按当前地图集定位；map-editor 已抽出 `resolve_tileset_target(collection)`
   （`server.py`），复用既有 `/api/collections/{name}/tileset` 的路径解析约定（先 `images/` 再退回集合根）。
   `bak/` `overrides/` 也放在**地图集目录**下。
+
+### 图集运行时来源（2026-10-22，三级）
+- dev（`npm run debug -- --story <故事> --conn`）→ **workshops 本地最新**
+  `workshops/<故事>/map_design/<故事>/images/compiled_tileset_32x32.png`
+  （经 vite `/story-data` 中间件实时读盘；改完重跑 debug + 刷新浏览器即生效，**不需要复制/构建**）。
+- 安装插件后 → **数据库** `map_visual:<故事>` 包内 `images/compiled_tileset_32x32.png`
+  （`storyMap.getStoryTilesetObjectUrl()` 取 Uint8Array→Blob→blobURL，`App.vue applyTilesetImage()` 替换）。
+- 兜底 → `plugins/toonflow-field-survival/vue/public/images/compiled_tileset_32x32.png`（随 ui/ 部署，走 `/images/...` 外部路径，不内联）。
+- **禁放** `vue/src/assets/images/`（该目录 readme.md 明令禁止；git 里该 png 状态是 `D`，
+  `assets.ts` 的 png import 早已失效报 "Failed to resolve import"）。
+
+### 半兽人（ORC）占用的图集格子（2026-10-22 实测）
+- **全部 16 格在 row 44，col 12–27 连续**（120 列 × 32px 图集，tileId = row*120 + col）：
+  第 1 行 `5292 5293 5294 5295 5296 5297 5298 5299`
+  第 2 行 `5300 5301 5302 5303 5304 5305 5306 5307`
+- **动画配对（compiled_dawnlike.json 的 animated/animated_id 属性）**：
+  5292→5300、5293→5301、5294→5302、5295→5303、5296→5304、5297→5305、5299→5307。
+  即每个半兽人外观格子都有自己的第二帧，不能只改一个。
+- `entity_types.json` 的 ORC 定义里 `textures: [5292,5293,5294,5295,5296,5297,5299]`（7 格，不含 5298）；
+  `assets.ts` 的 `SPRITE_ANIM.orc = { idle: 5292, walk: [5292, 5300] }` 只覆盖 2 格。
+- 地图 JSON 的 `firstgid = 1`，所以 gid 5300 → tileId 5299；mulberryForest.json 里实际摆的半兽人用的是 **tile 5299**（+ 帧 5307）。
+- ⚠️ 换半兽人贴图必须**整套 16 格一起换**，只换 5292/5300 会导致其他帧还是旧造型（动画跳变）。
+
+### 32×32 像素贴图不能用 AI 生图（2026-10-22 实测结论）
+- **32×32 像素贴图每格只有 12~16 色**（原版半兽人实测 12-16 色）；硬边像素、有限调色板。
+- AI 生图（Qwen/Qwen-Image-Edit-2509 等）产出 1024×1024 高细节插画，缩到 32×32 后变成 **400~650 色**，
+  缩略图上完全糊掉；且图生图会把参考图当"内容参考"而非"构图约束"，产出狼脸特写而非立绘。
+  → **这类贴图必须程序化生成**（手写像素模板 + 调色板），不要浪费额度试 AI。
+- **落盘必须整格替换**：`base.paste(new_tile, pos)`，**不能** `alpha_composite` ——
+  原格残留的 alpha=1 幽灵像素（历史 paste+mask 留下的）会在叠加时透出，放大看是彩色残影（实测 430 个残留像素）。
+- 本次产出：`.cache/pixel_orc.py`（精灵绘制）+ `.cache/apply_orc_wolf.py`（落盘），共 16 格暗黑疾风狼，
+  每格 14~19 色，8 组姿势与原版逐格对应（站立/盾锤/双剑/双匕首/法杖书/法师袍/骑士/发光盾）。
 
 ## AI 厂商目录的权威源在 Toonflow-game-web，不在 app
 厂商表（含默认 baseUrl / 默认模型）唯一可读源码是

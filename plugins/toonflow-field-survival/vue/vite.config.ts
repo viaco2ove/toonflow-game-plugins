@@ -60,8 +60,23 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
         if (/\.(tbg|zip|png|jpg|jpeg|webp|tmx|tsx|bin)$/i.test(filePath)) {
           try {
             const buf = readFileSync(filePath);
-            res.setHeader("Content-Type", "application/octet-stream");
+            // ★ 图片必须给正确的 Content-Type，否则浏览器 <img> 解码失败，
+            //   canvas 画不出图集（表现为「游戏里没图」而非报错）。
+            //   2026-10-22：dev 图集走 /story-data 实时读本地最新，必须 image/png。
+            const ext = filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase();
+            const mime: Record<string, string> = {
+              png: "image/png",
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              webp: "image/webp",
+              gif: "image/gif",
+              tmx: "application/xml",
+              tsx: "application/xml",
+            };
+            res.setHeader("Content-Type", mime[ext] || "application/octet-stream");
             res.setHeader("Content-Length", String(buf.length));
+            // ★ 不缓存：编辑器改完图集后刷新页面必须拿到最新字节
+            res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
             res.end(buf);
           } catch (e) {
             res.statusCode = 500;
@@ -317,6 +332,10 @@ window.__SERVICE_URL__ = SERVICE_URL;
 // ★ 让 iframe 里能读到 window.__CONN__ / window.__STORY__（define 注入的是局部 const，运行时读不到）
 window.__CONN__ = ${JSON.stringify(conn)};
 window.__STORY__ = ${JSON.stringify(story)};
+// ★ dev 模式：让游戏用「本地最新图集」（workshops/<故事>/images/compiled_tileset_32x32.png，
+//   经 /story-data 中间件实时读盘）。地图编辑器改完贴图，重跑 npm run debug 立即可见，
+//   无需任何复制/构建步骤。iframe 的 window 与 top 不同 → 下面还要往 iframe 注入一份。
+window.__DEV_TILESET__ = "1";
 let lastState = null;
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
@@ -1863,6 +1882,11 @@ export default defineConfig(({ mode }) => {
       // Vite 默认不注入非 VITE_ 前缀的变量到客户端，这里显式暴露
       __STORY__: JSON.stringify(STORY),
       __CONN__: JSON.stringify(CONN),
+      // ★ dev 模式（mode !== production）下让 assets.ts 把图集指向
+      //   workshops/<故事>/images/compiled_tileset_32x32.png（本地最新，经 /story-data 实时读盘），
+      //   这样地图编辑器改完贴图，`npm run debug` 立即生效，无需复制/构建。
+      //   production 保持 false —— 单文件 game.html 必须自包含，不能依赖 /story-data 中间件。
+      __DEV_TILESET__: JSON.stringify(mode !== "production"),
     },
     base: "./",
     build: {

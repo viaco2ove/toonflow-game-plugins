@@ -7,14 +7,99 @@
 //   注意：tileset 图片很大（1.9MB），data URL 约 2.5MB；
 //   初次加载会慢，但在单机/插件场景可接受，且完全离线可用。
 
-import tilesetUrl from "./assets/images/compiled_tileset_32x32.png?url";
+// ★ 图集不放在 src/assets/（见 src/assets/images/readme.md 的警告），放 public/images/。
+//   vite 会把 public/ 原样拷到输出根，dev 下以 /images/xxx.png 提供（不经 import 解析）。
 import playerUrl from "./assets/images/player_sprites/4334.png?url";
 import allyUrl from "./assets/images/player_sprites/3858.png?url";
 import enemyUrl from "./assets/images/player_sprites/4213.png?url";
 import { TILE_ANIM_ID } from "./assets/tilesetAnim";
 
-// import.meta.url 版本（Vite 构建时内联为 data URL）
-export const TILESET_URL = tilesetUrl;
+/**
+ * ★★★ 图集来源三级策略（2026-10-22）★★★
+ *
+ * 图集（compiled_tileset_32x32.png）在系统里有三份副本，各司其职：
+ *
+ *   ① workshops/<故事>/map_design/<故事>/images/compiled_tileset_32x32.png
+ *      「本地地图集」——地图编辑器（tile-style 替换贴图）落盘的目标。
+ *      ★ `npm run debug -- --story <故事> --conn` 必须直接用它，
+ *        这样编辑器改完贴图，重跑 debug 立即可见，**不需要任何复制/构建步骤**。
+ *
+ *   ② 数据库 t_plugin_session_data 的 map_visual:<故事> 包内 images/compiled_tileset_32x32.png
+ *      「安装插件后」的正式数据源（CLI `-u` 打包上传）。运行时从故事视觉包里取。
+ *
+ *   ③ vue/public/images/compiled_tileset_32x32.png
+ *      「兜底」——上面两者都拿不到时用（比如没装插件、没上传地图包的裸跑场景）。
+ *
+ * 对应关系：dev → ① ；生产(已安装) → ② ；缺失 → ③。
+ */
+
+/** ① 本地地图集 URL（dev 模式经 vite 的 /story-data 中间件实时读盘） */
+export function resolveLocalTilesetUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const sp = new URLSearchParams(location.search);
+    const story = sp.get("story") || (window as any).__STORY__ || "";
+    if (!story) return null;
+    return (
+      `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(story)}` +
+      `/images/compiled_tileset_32x32.png`
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ★ dev 模式下用「本地最新图集」。
+ *   dev-host 页面（top）注入 window.__DEV_TILESET__="1"；游戏跑在 iframe 里，
+ *   iframe 的 window 与 top 不同 → 读 window.top（与 App.vue 读 window.top.__agentRun_impl 同套路）。
+ *   vite dev 的 define 不会替换标识符字面量，只能走 window 全局。
+ */
+function devTilesetEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const top = (window as any).top;
+    if (top && top.__DEV_TILESET__ === "1") return true;
+    return (window as any).__DEV_TILESET__ === "1";
+  } catch {
+    // 跨域时 top 访问会抛错 → 退回自身 window
+    try {
+      return (window as any).__DEV_TILESET__ === "1";
+    } catch {
+      return false;
+    }
+  }
+}
+
+const _devTilesetUrl = devTilesetEnabled() ? resolveLocalTilesetUrl() : null;
+
+if (_devTilesetUrl) {
+  console.info(`[field-survival] 图集来源：本地地图集（dev 最新） ${_devTilesetUrl}`);
+}
+
+/**
+ * ★ 图集 URL（运行时可变）。
+ *
+ * 初值：dev → 本地地图集 URL（/story-data 实时读盘）；否则 → public 兜底。
+ * 生产环境在故事视觉包（数据库 map_visual）加载完成后，会调 setTilesetUrl()
+ * 把 URL 换成包内 blob URL → 实现「安装插件后用数据库图集」。
+ */
+let _tilesetUrl: string = _devTilesetUrl || "/images/compiled_tileset_32x32.png";
+
+/** 替换图集 URL（生产：从数据库故事视觉包取到图集后调用） */
+export function setTilesetUrl(url: string | null): void {
+  if (!url) return;
+  if (url === _tilesetUrl) return;
+  _tilesetUrl = url;
+  console.info(`[field-survival] 图集来源已切换 → ${url.slice(0, 80)}`);
+}
+
+export function getTilesetUrl(): string {
+  return _tilesetUrl;
+}
+
+/** 兼容旧引用（App.vue 用它建 SHEET_TILESET） */
+export const TILESET_URL: string = _tilesetUrl;
 
 // 角色 / 野怪均改用 tileset 切片渲染（与 Rotten-Soup 动画帧一致）
 // 兼容：保留单文件 URL 用于 chip 头像

@@ -66,6 +66,30 @@ export const api = {
     body: JSON.stringify(data),
   }),
 
+  // 重置某格到覆盖前（后端从 overrides/originals 存档恢复 + 删 styleOverrides 条目）
+  resetTile: (data) => req('/tile-style/reset', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+
+  // ── 系列换皮（tile-style-change v2：以对象/系列为单位）──
+  listSeries: (material) => req(`/tile-style/series?material=${encodeURIComponent(material)}`),
+  suggestSeries: (material, message) => req('/tile-style/series/suggest', {
+    method: 'POST', body: JSON.stringify({ material, message }),
+  }),
+  recolorSeries: (material, group, palettes) => req('/tile-style/series/recolor', {
+    method: 'POST', body: JSON.stringify({ material, group, palettes }),
+  }),
+  applySeries: (material, group, tiles) => req('/tile-style/series/apply', {
+    method: 'POST', body: JSON.stringify({ material, group, tiles }),
+  }),
+  revertSeries: (material, group) => req('/tile-style/series/revert', {
+    method: 'POST', body: JSON.stringify({ material, group }),
+  }),
+  seriesPreview: (material, group) => req('/tile-style/series/preview', {
+    method: 'POST', body: JSON.stringify({ material, group }),
+  }),
+
   // ── AI 模型配置（复刻 app t_config + 槽位绑定）──
   listModels: (type) => req(`/ai/models${type ? `?type=${encodeURIComponent(type)}` : ''}`),
   addModel: (data) => req('/ai/models', { method: 'POST', body: JSON.stringify(data) }),

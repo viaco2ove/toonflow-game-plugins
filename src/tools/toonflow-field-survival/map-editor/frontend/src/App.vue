@@ -117,6 +117,7 @@ const showModelSettings = ref(false)
 const selectedTileId = ref(null)
 const selectedTileIds = ref([])     // 当前选区（单选长度1，框选为多格）
 const selectedTileImage = ref('')   // 当前选中格的精灵图（dataURL）
+const tileStylePanelRef = ref(null) // TileStylePanel 组件引用（切格时清候选）
 
 // 贴图替换工作区（图集视图）状态
 const showMaterialPicker = ref(false)
@@ -139,6 +140,7 @@ async function onMaterialSelected(name) {
     toast(`⚠️ 已切换到地图集「${name}」，与当前打开的「${currentColl.value.name}」不同`)
   }
   currentMaterial.value = name
+  window.__tileStyleMaterial = name   // ★ 系列换皮面板从这里读地图集名
   showTileStylePanel.value = true
   tileStyleMode.value = true
   selectedTileId.value = null
@@ -156,6 +158,18 @@ async function onMaterialSelected(name) {
     toast('加载素材集失败：' + e.message)
   }
 }
+
+// ★ 系列换皮（TileStylePanel 的 series 模式）落盘后刷新工作区预览：
+//   加 cache-bust 重新拉后端图集 + 重载离屏画布（否则画布里还是旧像素，单格提取会错）
+window.addEventListener('tileset-updated', async () => {
+  if (!currentMaterial.value) return
+  try {
+    const url = api.getMaterialTilesetUrl(currentMaterial.value) + '&t=' + Date.now()
+    materialTilesetUrl.value = url
+    await loadWorkCanvas(url)
+    styleDirty.value = true
+  } catch (e) { /* 静默 */ }
+})
 
 async function loadWorkCanvas(url) {
   const img = new Image()
@@ -191,9 +205,11 @@ function onTileSelected(sel) {
   selectedTileId.value = sel.tileId
   selectedTileIds.value = (sel.tileIds && sel.tileIds.length) ? sel.tileIds : [sel.tileId]
   selectedTileImage.value = extractFromMaterial(sel.tileId)
+  // 通知面板：选区变了，清空上一格的生成候选
+  tileStylePanelRef.value?.onSelectionChanged?.()
 }
 
-// 把一张 32×32 贴回工作区画布并落盘（支持多格批量）
+// 把一张 32×32 贴回工作区画布（支持多格批量）。先清空该格再贴 —— 替换而不是叠加
 async function writeTile(tileId, imageBase64) {
   const cols = materialMeta.value?.columns
     ?? Math.floor(workCanvas.width / (materialMeta.value?.tilewidth || 32))
@@ -201,9 +217,12 @@ async function writeTile(tileId, imageBase64) {
   const row = Math.floor(tileId / cols)
   const tw = materialMeta.value?.tilewidth || 32
   const th = materialMeta.value?.tileheight || 32
+  const ctx2d = workCanvas.getContext('2d')
+  // 清空该格（含透明像素），避免旧图透过新图的透明区域形成叠加
+  ctx2d.clearRect(col * tw, row * th, tw, th)
   const img = new Image()
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = imageBase64 })
-  workCanvas.getContext('2d').drawImage(img, col * tw, row * th, tw, th)
+  ctx2d.drawImage(img, col * tw, row * th, tw, th)
 }
 
 async function onReplaceTile({ tileId, imageBase64, tileIds }) {
@@ -232,8 +251,12 @@ async function onReplaceTile({ tileId, imageBase64, tileIds }) {
   }
 }
 
+// 重置格子：以后端 overrides/originals 存档为准（真实落盘恢复 + 删 styleOverrides 条目）
 async function onResetTile(payload) {
-  if (!workCanvas || !workImage) return
+  if (!workCanvas) {
+    toast('工作区未初始化')
+    return
+  }
   const ids = Array.isArray(payload) ? payload
     : (payload?.tileIds && payload.tileIds.length) ? payload.tileIds
     : [payload]
@@ -241,14 +264,28 @@ async function onResetTile(payload) {
     ?? Math.floor(workCanvas.width / (materialMeta.value?.tilewidth || 32))
   const tw = materialMeta.value?.tilewidth || 32
   const th = materialMeta.value?.tileheight || 32
+  const ctx2d = workCanvas.getContext('2d')
+  let ok = 0, failed = 0
   for (const tileId of ids) {
-    const col = tileId % cols
-    const row = Math.floor(tileId / cols)
-    workCanvas.getContext('2d').drawImage(workImage, col * tw, row * th, tw, th, col * tw, row * th, tw, th)
+    try {
+      // 后端：从 originals 存档恢复 png 像素 + 删 styleOverrides 条目
+      await api.resetTile({ material: currentMaterial.value, tileId })
+      // 前端：从原始图集图（workImage 是进入工作区时加载的原图）回写该格
+      const col = tileId % cols
+      const row = Math.floor(tileId / cols)
+      ctx2d.clearRect(col * tw, row * th, tw, th)
+      ctx2d.drawImage(workImage, col * tw, row * th, tw, th, col * tw, row * th, tw, th)
+      ok++
+    } catch (e) {
+      failed++
+      console.warn('重置失败', tileId, e)
+    }
   }
   materialTilesetUrl.value = workCanvas.toDataURL('image/png')
-  styleDirty.value = true
-  toast(`已重置 ${ids.length} 格（需重新保存生效）`)
+  styleDirty.value = ok > 0
+  if (ok && !failed) toast(`已重置 ${ok} 格（已落盘）`)
+  else if (ok && failed) toast(`重置 ${ok} 格成功，${failed} 格失败（可能本来没有覆盖记录）`)
+  else toast('重置失败：所选格子没有覆盖记录')
 }
 
 function exitTileStyle() {
@@ -1443,6 +1480,7 @@ function onPropApply() {
       <!-- 贴图替换面板 -->
       <div class="panel-section" v-if="showTileStylePanel">
         <TileStylePanel
+          ref="tileStylePanelRef"
           :selected-tile-id="selectedTileId"
           :selected-tile-ids="selectedTileIds"
           :selected-tile-image="selectedTileImage"

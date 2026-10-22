@@ -95952,12 +95952,5 @@
   "tilewidth": 32,
   "type": "tileset",
   "version": 1.2,
-  "styleOverrides": {
-    "5292": {
-      "overridePng": "overrides/5292.png",
-      "prompt": "",
-      "model": "",
-      "createdAt": "2026-10-22T04:47:48.217487Z"
-    }
-  }
+  "styleOverrides": {}
 }

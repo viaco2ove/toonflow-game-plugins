@@ -347,6 +347,43 @@ export function getStoryTileset(): any | null {
   return bundle?.tileset ?? getStoryMapEntry("compiled_dawnlike.json");
 }
 
+/**
+ * ★ 取故事视觉包内的图集（数据库 map_visual 里的 images/compiled_tileset_32x32.png）
+ *   → 转成可绘制的 blob URL。
+ *
+ * 「安装插件后」的正式数据源就是数据库里这份包（CLI `-u` 打包上传）；
+ * dev 模式不走这条（直接读 workshops 本地最新），public/ 只是兜底。
+ *
+ * @returns blob URL；包内无图集时返回 null（调用方保留当前图集）。
+ */
+export function getStoryTilesetObjectUrl(): string | null {
+  const entry = getStoryMapEntry("images/compiled_tileset_32x32.png");
+  if (!entry) return null;
+  try {
+    // 包内 entry 可能是 Uint8Array / ArrayBuffer / base64 字符串 / Blob
+    let blob: Blob | null = null;
+    if (entry instanceof Uint8Array) {
+      blob = new Blob([entry], { type: "image/png" });
+    } else if (entry instanceof ArrayBuffer) {
+      blob = new Blob([entry], { type: "image/png" });
+    } else if (entry instanceof Blob) {
+      blob = entry;
+    } else if (typeof entry === "string") {
+      // base64（可能带 data: 前缀）
+      const b64 = entry.includes(",") ? entry.slice(entry.indexOf(",") + 1) : entry;
+      const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      blob = new Blob([u8], { type: "image/png" });
+    }
+    if (!blob) return null;
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    console.warn("[field-survival] 包内图集转 blob 失败:", e);
+    return null;
+  }
+}
+
 /** 便利：取 story.json */
 export function getStoryMeta(): any | null {
   return bundle?.story ?? getStoryMapEntry("story.json");

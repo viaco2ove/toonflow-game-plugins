@@ -20,7 +20,7 @@ declare global {
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
-import { loadStoryMapBundle, getStoryFirstMap, setStoryContext } from "./storyMap";
+import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
@@ -54,7 +54,7 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
-import { bakeTiledMap, eraseBakedObstacle } from "./mapBake";
+import { bakeTiledMap, eraseBakedObstacle, invalidateBake } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 采集任务寻路：物品 → 采集区 zone 名静态映射（含跨图 mapKey）
 import { GATHER_ZONES_BY_ITEM } from "./questGatherMap";
@@ -2123,7 +2123,37 @@ const SHEET_ALLY        = loadSheet(IMG_ALLY, 32, 32);
 const SHEET_ENEMY_CHAR  = loadSheet(IMG_ENEMY_CHAR, 32, 32);
 
 // ★ tileset 大图只加载一次，所有 tile id 共用（同 Rotten-Soup 的 GameDisplay 方案）
-const SHEET_TILESET    = loadSheet(TILESET_URL, TILE_SIZE, TILE_SIZE, TILESET_COLS);
+//
+// ★ 2026-10-22：改为 let + 可替换。生产环境（已安装插件）拿到数据库 map_visual 包后，
+//   包内 images/compiled_tileset_32x32.png 才是权威图集 → 用 applyTilesetImage() 换掉。
+//   dev 模式初值已是本地地图集 URL（/story-data 实时读盘），无需替换。
+let SHEET_TILESET    = loadSheet(TILESET_URL, TILE_SIZE, TILE_SIZE, TILESET_COLS);
+
+/**
+ * ★ 替换图集（生产：从数据库故事视觉包取到图集字节后调用）。
+ *
+ * @param src  可绘制的 URL（blob: / data: / http: 均可）
+ * @returns    替换是否成功（图片解码完成 → true）
+ */
+function applyTilesetImage(src: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      SHEET_TILESET = { img, fw: TILE_SIZE, fh: TILE_SIZE, cols: TILESET_COLS, ready: true };
+      // ★ 地图烘焙缓存里存了旧的 tilesetImg，必须一起清，否则地面层仍是旧图
+      invalidateBake();
+      console.info(
+        `[field-survival] 图集已替换：${img.naturalWidth}×${img.naturalHeight}（来源 ${src.slice(0, 60)}）`,
+      );
+      resolve(true);
+    };
+    img.onerror = () => {
+      console.warn("[field-survival] 图集替换失败（保留当前图集）:", src.slice(0, 60));
+      resolve(false);
+    };
+    img.src = src;
+  });
+}
 
 /** 从 tileset 绘制指定 tile id */
 function drawTile(
@@ -6605,6 +6635,13 @@ async function onUploadMap(ev: Event) {
       try {
         await toonflowJsApi.pluginData.set("map_visual", { files: visFiles, first: visFirst });
         await loadStoryMapBundle(true);
+        // ★ 新包里可能带了新图集 → 一并替换（否则地面/精灵仍是旧图集）
+        try {
+          const objUrl = getStoryTilesetObjectUrl();
+          if (objUrl) await applyTilesetImage(objUrl);
+        } catch (e) {
+          console.warn("[field-survival] 替换包内图集失败（沿用当前图集）:", e);
+        }
         console.info("[field-survival] 视觉地图包已写入 map_visual：", Object.keys(visFiles));
       } catch (e) {
         console.warn("[field-survival] 写 map_visual 失败（不影响元数据）：", e);
@@ -6818,6 +6855,22 @@ onMounted(async () => {
     void loadStoryMapBundle();
   } else {
     await loadStoryMapBundle();
+  }
+  // ★ 图集来源（2026-10-22）：
+  //   dev → 已在 assets.ts 里指向本地地图集 URL（workshops 最新），这里不动；
+  //   生产（已安装插件）→ 数据库 map_visual 包内的 images/compiled_tileset_32x32.png 是权威图集，
+  //     取出后替换当前图集；包内没有则保留 public/ 兜底。
+  if (!import.meta.env.DEV) {
+    try {
+      const objUrl = getStoryTilesetObjectUrl();
+      if (objUrl) {
+        await applyTilesetImage(objUrl);
+      } else {
+        console.info("[field-survival] 故事视觉包内无图集，沿用 public 兜底图集");
+      }
+    } catch (e) {
+      console.warn("[field-survival] 应用包内图集失败（沿用兜底）:", e);
+    }
   }
   let startLevel = await loadStartLevelName();
   // ★ 独立预览模式（地图编辑器 window.open ?__standalone=1&map=<文件名>）：
