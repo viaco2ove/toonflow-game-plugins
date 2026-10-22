@@ -1,0 +1,2 @@
+不要再把compiled_tileset_32x32.png
+放这个文件夹，你个傻逼！
