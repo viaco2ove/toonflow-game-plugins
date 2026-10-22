@@ -790,16 +790,27 @@ def save_override(req: OverrideReq) -> dict:
     col = req.tileId % cols
     row = req.tileId // cols
 
-    # 备份原图集（首次覆盖时）：放在地图集目录下的 bak/，随地图集一起走
+    # 备份：原图集整体备份（首次覆盖时）+ 该格原始像素（首次覆盖该格时，用于单格重置）
     bak_dir = coll_dir / "bak"
     bak_png = bak_dir / f"{TILESET_BASENAME}.png.bak"
     if not bak_png.exists():
         bak_dir.mkdir(exist_ok=True)
         shutil.copy2(png, bak_png)
 
-    # 贴回图集
+    originals_dir = coll_dir / "overrides" / "originals"
+    originals_dir.mkdir(parents=True, exist_ok=True)
+    original_tile_path = originals_dir / f"{req.tileId}.png"
+    if not original_tile_path.exists():
+        # 首次覆盖该格：把当前（原始）像素存下来，供「重置」恢复
+        base_img = Image.open(png).convert("RGBA")
+        orig_tile = base_img.crop((col * tw, row * th, (col + 1) * tw, (row + 1) * th))
+        orig_tile.save(original_tile_path)
+
+    # 贴回图集：先清空该格（透明），再贴新图 —— 替换而不是叠加
     base = Image.open(png).convert("RGBA")
     resized = new_tile.resize((tw, th), Image.LANCZOS)
+    clear = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    base.paste(clear, (col * tw, row * th))
     base.paste(resized, (col * tw, row * th), resized)
     base.save(png)
 
@@ -831,6 +842,70 @@ def save_override(req: OverrideReq) -> dict:
         "png": str(png),
         "json": str(js),
         "overridePng": str(tile_path),
+    }
+
+
+class ResetReq(BaseModel):
+    material: str                # 地图集名
+    tileId: int
+
+
+@app.post("/api/tile-style/reset")
+def reset_tile(req: ResetReq) -> dict:
+    """
+    重置某格到覆盖前的原始像素：
+      1. 从 overrides/originals/<tileId>.png 读回原始 32×32（首次覆盖时已存档）
+      2. 清空该格并贴回原始像素（替换而非叠加）
+      3. 从 json.styleOverrides 删除该条
+      4. 删除 overrides/<tileId>.png 覆盖图（originals 保留，供重复重置）
+    """
+    coll_dir, png, js = resolve_tileset_target(req.material)
+
+    with open(js, "r", encoding="utf-8") as fp:
+        meta = json.load(fp)
+    cols = int(meta.get("columns", meta.get("imagewidth", 3840) // 32))
+    tw = int(meta.get("tilewidth", 32))
+    th = int(meta.get("tileheight", 32))
+
+    original_tile_path = coll_dir / "overrides" / "originals" / f"{req.tileId}.png"
+    if not original_tile_path.exists():
+        raise HTTPException(404, f"tile #{req.tileId} 没有覆盖记录（originals 未存档），无需重置")
+
+    col = req.tileId % cols
+    row = req.tileId // cols
+
+    original_tile = Image.open(original_tile_path).convert("RGBA").resize((tw, th), Image.LANCZOS)
+
+    base = Image.open(png).convert("RGBA")
+    clear = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+    base.paste(clear, (col * tw, row * th))
+    base.paste(original_tile, (col * tw, row * th))
+    base.save(png)
+
+    # 从 json 删除该条覆盖记录
+    overrides = meta.get("styleOverrides") or {}
+    removed = overrides.pop(str(req.tileId), None)
+    if removed is not None:
+        meta["styleOverrides"] = overrides
+        with open(js, "w", encoding="utf-8") as fp:
+            json.dump(meta, fp, ensure_ascii=False, indent=2)
+
+    # 删除覆盖图（原始像素存档保留，重复「替换→重置」仍有据可依）
+    override_png = coll_dir / "overrides" / f"{req.tileId}.png"
+    try:
+        override_png.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+    logger.info(f"[tile-style] 地图集「{req.material}」tile #{req.tileId} (col={col},row={row}) 已重置")
+    return {
+        "ok": True,
+        "collection": req.material,
+        "tileId": req.tileId,
+        "col": col,
+        "row": row,
+        "hadOverride": removed is not None,
+        "png": str(png),
     }
 
 
