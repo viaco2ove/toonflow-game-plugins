@@ -18,6 +18,8 @@ import base64
 
 import requests
 
+import logger
+
 SIZE_MAP = {"1K": "1024x1024", "2K": "2048x2048", "4K": "4096x4096"}
 
 # 火山 Seedream 对 1K 下限敏感，按 app 方案升到 2K 像素映射
@@ -30,6 +32,28 @@ VOLCENGINE_SIZE = {
 # ─── 通用工具 ───
 def _to_data_uri(b64: str, mime: str = "image/png") -> str:
     return f"data:{mime};base64,{b64}"
+
+
+def _dump_request(label: str, method: str, url: str, headers: dict, body) -> None:
+    """
+    把 HTTP 请求体落盘（AI_TEXT_DEBUG_HTTP_REQ=1 时生效）。
+
+    对齐 app 的 dumpAiHttpRequest：一个请求一个 JSON 文件。
+    """
+    if not logger.req_dump_enabled():
+        return
+    logger.dump_http_request(
+        label,
+        {"method": method, "url": url, "headers": headers or {}, "body": body},
+    )
+
+
+def _post_json(label: str, url: str, headers: dict, body: dict, timeout: int = 180):
+    """统一的 JSON POST：先落盘请求体，再发起请求。"""
+    _dump_request(label, "POST", url, headers, body)
+    resp = requests.post(url, json=body, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    return resp
 
 
 def _url_to_b64(url: str) -> str:
@@ -106,6 +130,7 @@ def _call_openai_image(config, prompt, ref_images, size):
         if not files:
             raise RuntimeError("参考图解码失败")
         data = {"model": model, "prompt": prompt, "n": "1", "size": px}
+        _dump_request("image_openai_edits", "POST", url, auth, data)
         resp = requests.post(url, headers=auth, data=data, files=files, timeout=180)
         resp.raise_for_status()
         b64 = resp.json()["data"][0]["b64_json"]
@@ -123,11 +148,10 @@ def _call_openai_image(config, prompt, ref_images, size):
         "size": px,
         "response_format": "b64_json",
     }
-    resp = requests.post(
-        url, json=body,
-        headers={**auth, "Content-Type": "application/json"}, timeout=180,
+    resp = _post_json(
+        "image_openai_generations", url,
+        {**auth, "Content-Type": "application/json"}, body,
     )
-    resp.raise_for_status()
     b64 = resp.json()["data"][0]["b64_json"]
     return _to_data_uri(b64)
 
@@ -154,8 +178,7 @@ def _call_volcengine(config, prompt, ref_images, size, aspect_ratio):
     if ref_images:
         body["image"] = [_as_dataurl(r) for r in ref_images]
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    resp = requests.post(url, json=body, headers=headers, timeout=180)
-    resp.raise_for_status()
+    resp = _post_json("image_volcengine", url, headers, body)
     u = resp.json()["data"][0]["url"]
     return _to_data_uri(_url_to_b64(u))
 
@@ -179,8 +202,7 @@ def _call_gemini(config, prompt, ref_images, size, aspect_ratio):
             "imageConfig": image_config,
         },
     }
-    resp = requests.post(url, json=body, timeout=180)
-    resp.raise_for_status()
+    resp = _post_json("image_gemini", url, {}, body)
     data = resp.json()
     for cand in data.get("candidates", []):
         for p in cand.get("content", {}).get("parts", []):
@@ -202,8 +224,7 @@ def _call_siliconflow(config, prompt, ref_images, size):
     if ref_images:
         body["image"] = _as_dataurl(ref_images[0])
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    resp = requests.post(url, json=body, headers=headers, timeout=180)
-    resp.raise_for_status()
+    resp = _post_json("image_siliconflow", url, headers, body)
     data = resp.json()
     u = (data.get("images") or [{}])[0].get("url") or (data.get("data") or [{}])[0].get("url")
     return _to_data_uri(_url_to_b64(u))
@@ -243,6 +264,5 @@ def call_text(
         body["reasoning_effort"] = reasoning_effort
 
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    resp = requests.post(url, json=body, headers=headers, timeout=180)
-    resp.raise_for_status()
+    resp = _post_json("text_chat_completions", url, headers, body)
     return resp.json()["choices"][0]["message"]["content"]

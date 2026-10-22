@@ -76,4 +76,16 @@ export const api = {
     method: 'POST', body: JSON.stringify({ slot, configId }),
   }),
   testModel: (data) => req('/ai/test', { method: 'POST', body: JSON.stringify(data) }),
+
+  // ── 背景分离模型（复刻 app localAvatarMatting）──
+  listMattingModels: () => req('/matting/models'),
+  getMattingStatus: (data) => req('/matting/status', {
+    method: 'POST', body: JSON.stringify(data || {}),
+  }),
+  installMatting: (data) => req('/matting/install', {
+    method: 'POST', body: JSON.stringify(data || {}),
+  }),
+  runMatting: (data) => req('/matting/run', {
+    method: 'POST', body: JSON.stringify(data),
+  }),
 }

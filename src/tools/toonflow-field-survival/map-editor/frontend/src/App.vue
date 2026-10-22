@@ -134,6 +134,10 @@ async function openTileStyle() {
 
 async function onMaterialSelected(name) {
   showMaterialPicker.value = false
+  // 贴图替换必须作用于「当前打开的地图集」——每个地图集持有自己的图集副本
+  if (currentColl.value && name !== currentColl.value.name) {
+    toast(`⚠️ 已切换到地图集「${name}」，与当前打开的「${currentColl.value.name}」不同`)
+  }
   currentMaterial.value = name
   showTileStylePanel.value = true
   tileStyleMode.value = true
@@ -1630,8 +1634,13 @@ function onPropApply() {
   <!-- 模型设置弹窗 -->
   <ModelSettingsModal v-if="showModelSettings" @close="showModelSettings = false" @saved="showModelSettings = false" />
 
-  <!-- 贴图替换：素材集选择 -->
-  <MaterialPicker v-if="showMaterialPicker" @select="onMaterialSelected" @close="showMaterialPicker = false" />
+  <!-- 贴图替换：地图集选择（作用于当前地图集自己的 compiled_tileset_32x32.png） -->
+  <MaterialPicker
+    v-if="showMaterialPicker"
+    :current-collection="currentColl?.name || ''"
+    @select="onMaterialSelected"
+    @close="showMaterialPicker = false"
+  />
 
   <!-- 提示 -->
   <div class="toast" :class="{visible: !!toastMsg}">{{ toastMsg }}</div>

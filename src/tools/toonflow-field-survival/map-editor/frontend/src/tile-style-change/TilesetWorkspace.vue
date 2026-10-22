@@ -1,7 +1,7 @@
 <template>
   <div class="tileset-workspace">
     <div class="ws-toolbar">
-      <span class="ws-title">图集工作区 · {{ materialName }}</span>
+      <span class="ws-title">图集工作区 · 地图集 {{ materialName }}</span>
       <span class="ws-meta">{{ cols }}×{{ rows }} 格 · {{ tilewidth }}px</span>
       <div class="ws-zoom">
         <label>缩放</label>

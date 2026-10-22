@@ -4,3 +4,13 @@ uvicorn[standard]==0.32.0
 pydantic==2.9.0
 requests>=2.31.0
 Pillow>=10.0.0
+
+# 云端背景分离（Bria / 阿里云视觉 / 腾讯云数据万象）
+alibabacloud_imageseg20191230>=4.0.0
+cos-python-sdk-v5>=1.9.0
+
+# 背景分离模型运行依赖（首次使用可在界面「设置 > 背景分离」里自动安装到独立 venv，
+# 此处列出便于手动预装/排查；rembg + onnxruntime 体积较大，非必需）
+# rembg==2.0.67
+# onnxruntime==1.22.1
+# numpy

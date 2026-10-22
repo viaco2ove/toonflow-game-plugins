@@ -22,9 +22,12 @@ CONFIG_COLUMNS = [
 
 # 贴图替换功能使用的槽位 key（对应 app 的 t_aiModelMap）
 SLOT_TEXTURE_REPLACE = "textureReplaceModel"
+# 背景分离（头像抠图）模型槽位（对应 app 的 storyAvatarMattingModel）
+SLOT_AVATAR_MATTING = "storyAvatarMattingModel"
 # 所有已知槽位（供前端下拉展示）
 KNOWN_SLOTS = [
     {"key": SLOT_TEXTURE_REPLACE, "name": "贴图替换模型", "type": "image"},
+    {"key": SLOT_AVATAR_MATTING, "name": "背景分离模型", "type": "image"},
 ]
 
 DB_PATH = Path(__file__).parent / "ai_models.db"

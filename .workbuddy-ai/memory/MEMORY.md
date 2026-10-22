@@ -62,6 +62,51 @@ entry.js 侧 `ensureStoryVisualMap()` 依赖 3 个前提，缺一个就静默退
 森林 60×40 → x∈[-30,30] / y∈[-20,20]；冥夜走廊一层 31×23 → ±15.5 / ±11.5。
 任务坐标写超了不会报错，只会「寻路后原地不动」——查任务数据时先按这个范围卡一遍。
 
+## 云端背景分离（map-editor cloud_matting.py）
+- 三家适配器复刻 app `separateRoleAvatar.ts`：Bria（`api_token` header + remove_background，回 URL 要下载）、
+  阿里云视觉（Python SDK `alibabacloud_imageseg20191230`）、腾讯云数据万象（`cos-python-sdk-v5`，上传→`?ci-process=`→删源图）。
+- **Python SDK 与 Node SDK 差异大**：openapi Config 在 `alibabacloud_tea_openapi.models`；AdvanceRequest 字段全小写
+  `image_urlobject`（Node 是 `imageURLObject`，hdcommon 特例 `imageUrlObject`——Python 无此特例）；方法名 snake_case
+  `segment_hdbody_advance`。**阿里云响应的图片 URL 字段有 camelCase 小写开头形态**（`imageURL`/`imageUrl`），提取要大小写都试。
+- 错误分级：MattingConfigError→400（配置错）、MattingProviderError→502（云端失败）；云端没 key 时 400 提示去模型管理配置。
+
+## compiled_tileset 是「每地图集一份副本」，不是全局唯一
+- 实际使用的图集：`workshops/toonflow-field-survival/map_design/<地图集>/images/compiled_tileset_32x32.png`
+- **描述文件叫 `compiled_dawnlike.json`**（不是 `compiled_tileset_32x32.json`），
+  内含 `columns=120 / tilewidth=tileheight=32 / tilecount=13080 / imagewidth=3840 / imageheight=3488 / tiles[]`。
+- `resource_library/toonflow-field-survival/base/<name>/compiled_tileset_32x32.{png,json}` 是**素材母版**，
+  只当只读预览/兜底，**任何写操作都不该落到这里**（会污染母版且当前地图看不到变化）。
+- 所以贴图替换等写操作必须按当前地图集定位；map-editor 已抽出 `resolve_tileset_target(collection)`
+  （`server.py`），复用既有 `/api/collections/{name}/tileset` 的路径解析约定（先 `images/` 再退回集合根）。
+  `bak/` `overrides/` 也放在**地图集目录**下。
+
+## AI 厂商目录的权威源在 Toonflow-game-web，不在 app
+厂商表（含默认 baseUrl / 默认模型）唯一可读源码是
+`Toonflow-game-web/src/utils/modelConfigCatalog.ts` → `MODEL_MANUFACTURERS`（22 家）+ `defaultBaseUrlFor()` /
+`defaultModelNameFor()` / `defaultManufacturerFor()` / `MODEL_TYPE_OPTIONS`。
+`toonflow-game-app/src` 里**没有任何 .vue**，厂商表只存在于已构建 bundle `app/scripts/web/assets/index-*.js`
+（且是 2025-07 的旧版，比 web 少一个 `moka_m3e_small`）—— 要改/抄厂商数据一律去 web 仓库。
+map-editor 侧已移植到 `map-editor/frontend/src/tile-style-change/modelConfigCatalog.js`。
+
+三个坑：① `defaultBaseUrlFor` 有 defaults 表**之外**的硬编码分支（voice+asr → `dashscope.aliyuncs.com/compatible-mode`）；
+② `tencent_ci` 与 local_* 的 defaults 为空，腾讯云 baseUrl 必须手填 COS 桶域名；
+③ `defaultModelNameFor` 里 `manufacturer==="aliyun"`（无 `_direct`）是**死分支**，注册表只有 `aliyun_direct`。
+
+抠图专用厂商集合 = `{bria, aliyun_imageseg, tencent_ci, local_birefnet, local_modnet}`（+ map-editor 自增 `local_u2net`），
+**只能绑背景分离槽位**，不能绑普通 image/text 槽位（app 的 `configurationModel.ts` SLOT_CONFIG_RULES 互斥矩阵）。
+注意 app 前端 `SettingsModelManagerDialog.vue:72-80` 误把 `moss_tts_nano` 也算进去了，与后端不一致，别照抄。
+
+## 本地抠图模型（map-editor 背景分离）复用 app 的权重，不重复下载
+- `map-editor/backend/avatar_matting.py` 复刻 app 的 localAvatarMatting；`tool_root_dir()` 会**自动探测**
+  `D:\Users\viaco\tools\Toonflow-game\toonflow-game-app\Toonflow-game\tools`（与 toonflow-game-plugins 是兄弟目录），
+  共用 `avatar-matting/birefnet/{venv,model-cache}`。`model-cache` 里已预置
+  birefnet-portrait/birefnet/modnet/u2net/u2netp 五个权重。
+- 厂商 key：`local_birefnet` / `local_modnet` / `local_u2net`（各自独立字符串，不存在统一 `local`）。
+- **u2net = 非生物通用显著对象分割**（道具/建筑/纹理/布料），走 rembg 同一条路（`U2NET_HOME` 指向 model-cache），
+  无独立 runner；rembg 内置 session：u2net / u2netp / u2net-general / u2net_cloth_seg / u2net_human_seg。
+- 注意：`backend/env/.env.*` 里的 `MODEL_path` 曾是占位目录 `D:\Users\xxx\...`，导致所有本地抠图模型静默 not_installed；
+  现在靠 autodetect 兜底，但**新增 env 文件时别再写占位路径**。
+
 ## canvas 切换显示必须用 v-show，不能用 v-if（2026-10-22 踩过）
 map-editor `App.vue` 里 canvas 的 2d context 是**模块级缓存**（`let ctx=null`，`render()` 里
 `if(!ctx) ctx=canvasRef.getContext('2d')`）。中间区 canvas 与 TilesetWorkspace 切换时若用 `v-if`

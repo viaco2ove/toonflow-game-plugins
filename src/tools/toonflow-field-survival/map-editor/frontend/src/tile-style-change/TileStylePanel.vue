@@ -84,7 +84,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['replace-tile', 'reset-tile'])
 
-const prompt = ref('')
+const prompt = ref('参考图1【原图】生成新的贴图，改成暗黑 疾风狼(图片格式要求用于RPG游戏实体也就是精灵方块游戏贴图)')
 const refImages = ref([])
 const genSize = ref('1K')
 const generating = ref(false)

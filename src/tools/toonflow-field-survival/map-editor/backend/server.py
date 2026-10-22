@@ -25,8 +25,20 @@ import io
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import List, Optional
+
+# ───────────────────────── 环境配置（必须先于其它模块加载） ─────────────────────────
+# 支持 `python server.py local` / `dev` / `prod`，加载 env/.env.<环境名>
+sys.path.insert(0, str(Path(__file__).parent))
+import env_loader
+
+# force=True：env_loader 在导入时已按 NODE_ENV 兜底加载过一次，
+# 这里用命令行参数重新明确指定环境，保证 `python server.py local` 生效。
+env_loader.load_env(force=True)
+
+import logger
 
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -653,52 +665,98 @@ def serve_plugin_ui(file_path: str):
 
 
 # ───────────────────────── Tile Style Change（贴图替换） ─────────────────────────
-# 素材集目录约定：RESOURCE_ROOT/<material_name>/compiled_tileset_32x32.{png,json}
+# 作用域：**当前地图集**（MAP_ROOT/<地图集名>/），而不是全局素材库。
+#
+# 目录约定（与 /api/collections/{name}/tileset 完全一致）：
+#   MAP_ROOT/<coll>/images/compiled_tileset_32x32.png   ← 实际被地图使用的图集
+#   MAP_ROOT/<coll>/compiled_dawnlike.json              ← 图集描述（columns/tilewidth/tiles[]）
+# 每个地图集都持有自己的一份副本，所以「贴图替换」必须按地图集定位，
+# 写错库会污染 resource_library 下的母版，且当前地图看不到任何变化。
+#
+# 历史包袱：早期版本把 material 解析到 RESOURCE_ROOT（resource_library/.../base/<name>/），
+# 那是素材母版目录，与「当前选择的地图集」无关 —— 已废弃，保留常量仅供迁移期参考。
+RESOURCE_ROOT = MAP_ROOT.parent / "resource_library" / "toonflow-field-survival" / "base"
+
+TILESET_BASENAME = "compiled_tileset_32x32"
+DAWNLIKE_JSON = "compiled_dawnlike.json"
+
+
+def resolve_tileset_target(collection: str) -> tuple[Path, Path, Path]:
+    """
+    定位某个地图集的图集文件。
+
+    返回 (collection_dir, tileset_png, dawnlike_json)。
+    png 优先 images/ 子目录（与 GET /api/collections/{name}/tileset 同源），
+    再退回集合根目录，兼容早期扁平结构。
+    """
+    if not collection or not collection.strip():
+        raise HTTPException(400, "缺少地图集名称")
+    p = safe_path(MAP_ROOT, collection)
+    if not p.is_dir():
+        raise HTTPException(404, f"地图集不存在: {collection}")
+
+    png = None
+    for candidate in (p / "images" / f"{TILESET_BASENAME}.png", p / f"{TILESET_BASENAME}.png"):
+        if candidate.exists():
+            png = candidate
+            break
+    js = p / DAWNLIKE_JSON
+    if png is None:
+        # 没有图集 png 时退回素材库母版（只读预览，不落盘）
+        master = RESOURCE_ROOT / collection / f"{TILESET_BASENAME}.png"
+        if not master.exists():
+            raise HTTPException(404, f"地图集 {collection} 下未找到 {TILESET_BASENAME}.png")
+        png = master
+    if not js.exists():
+        raise HTTPException(404, f"地图集 {collection} 下未找到 {DAWNLIKE_JSON}")
+    return p, png, js
+
 
 @app.get("/api/tile-style/materials")
 def list_materials() -> List[dict]:
-    """列出素材库下所有素材集（含 compiled_tileset_32x32.png + .json 的目录）"""
-    if not RESOURCE_ROOT.exists():
+    """
+    列出**地图集**（而非素材库）。贴图替换的作用域就是当前选择的地图集，
+    每个地图集持有自己的 compiled_tileset_32x32.png + compiled_dawnlike.json。
+    """
+    if not MAP_ROOT.exists():
         return []
     out = []
-    for entry in sorted(RESOURCE_ROOT.iterdir()):
+    for entry in sorted(MAP_ROOT.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
-        png = entry / "compiled_tileset_32x32.png"
-        js = entry / "compiled_tileset_32x32.json"
-        if png.exists() and js.exists():
-            out.append({
-                "name": entry.name,
-                "tileset": "compiled_tileset_32x32",
-                "png": f"{entry.name}/compiled_tileset_32x32.png",
-                "json": f"{entry.name}/compiled_tileset_32x32.json",
-            })
+        has_png = any(
+            (entry / sub / f"{TILESET_BASENAME}.png").exists()
+            for sub in ("images", ".")
+        )
+        if not has_png or not (entry / DAWNLIKE_JSON).exists():
+            continue
+        out.append({
+            "name": entry.name,
+            "tileset": TILESET_BASENAME,
+            "png": f"{entry.name}/images/{TILESET_BASENAME}.png",
+            "json": f"{entry.name}/{DAWNLIKE_JSON}",
+            "source": "collection",
+        })
     return out
 
 
 @app.get("/api/tile-style/materials/{name}/meta")
 def get_material_meta(name: str):
-    """返回素材集的 compiled_tileset_32x32.json（含 columns / tilewidth / tiles[]）"""
-    p = safe_path(RESOURCE_ROOT, name)
-    js = p / "compiled_tileset_32x32.json"
-    if not js.exists():
-        raise HTTPException(404, f"material json not found: {name}")
+    """返回该地图集的 compiled_dawnlike.json（含 columns / tilewidth / tiles[]）"""
+    _, _, js = resolve_tileset_target(name)
     with open(js, "r", encoding="utf-8") as fp:
         return json.load(fp)
 
 
 @app.get("/api/tile-style/materials/{name}/tileset")
 def get_material_tileset(name: str):
-    """返回素材集的 compiled_tileset_32x32.png"""
-    p = safe_path(RESOURCE_ROOT, name)
-    png = p / "compiled_tileset_32x32.png"
-    if not png.exists():
-        raise HTTPException(404, f"material png not found: {name}")
+    """返回该地图集实际使用的 compiled_tileset_32x32.png"""
+    _, png, _ = resolve_tileset_target(name)
     return FileResponse(png, media_type="image/png")
 
 
 class OverrideReq(BaseModel):
-    material: str
+    material: str                # 地图集名（collection name）
     tileId: int
     image_base64: str          # data URL 或裸 base64（32×32 透明 PNG）
     prompt: str = ""
@@ -708,14 +766,10 @@ class OverrideReq(BaseModel):
 @app.post("/api/tile-style/override")
 def save_override(req: OverrideReq) -> dict:
     """
-    把新生成的 32×32 透明 PNG 贴回 compiled_tileset_32x32.png 对应坐标，
-    并写 styleOverrides 到 json（只存引用路径，不塞 base64）。
+    把新生成的 32×32 透明 PNG 贴回**当前地图集**的 compiled_tileset_32x32.png 对应坐标，
+    并写 styleOverrides 到该地图集的 compiled_dawnlike.json（只存引用路径，不塞 base64）。
     """
-    p = safe_path(RESOURCE_ROOT, req.material)
-    png = p / "compiled_tileset_32x32.png"
-    js = p / "compiled_tileset_32x32.json"
-    if not png.exists() or not js.exists():
-        raise HTTPException(404, "material not found")
+    coll_dir, png, js = resolve_tileset_target(req.material)
 
     # 解析 base64
     b64 = req.image_base64
@@ -736,11 +790,12 @@ def save_override(req: OverrideReq) -> dict:
     col = req.tileId % cols
     row = req.tileId // cols
 
-    # 备份原 png（首次覆盖时）
-    bak_dir = p / "bak"
-    if not (bak_dir / "compiled_tileset_32x32.png.bak").exists():
+    # 备份原图集（首次覆盖时）：放在地图集目录下的 bak/，随地图集一起走
+    bak_dir = coll_dir / "bak"
+    bak_png = bak_dir / f"{TILESET_BASENAME}.png.bak"
+    if not bak_png.exists():
         bak_dir.mkdir(exist_ok=True)
-        shutil.copy2(png, bak_dir / "compiled_tileset_32x32.png.bak")
+        shutil.copy2(png, bak_png)
 
     # 贴回图集
     base = Image.open(png).convert("RGBA")
@@ -749,7 +804,7 @@ def save_override(req: OverrideReq) -> dict:
     base.save(png)
 
     # 落盘单格覆盖图 + 更新 json
-    overrides_dir = p / "overrides"
+    overrides_dir = coll_dir / "overrides"
     overrides_dir.mkdir(exist_ok=True)
     tile_path = overrides_dir / f"{req.tileId}.png"
     new_tile.save(tile_path)
@@ -763,11 +818,18 @@ def save_override(req: OverrideReq) -> dict:
     with open(js, "w", encoding="utf-8") as fp:
         json.dump(meta, fp, ensure_ascii=False, indent=2)
 
+    logger.info(
+        f"[tile-style] 地图集「{req.material}」tile #{req.tileId} "
+        f"(col={col},row={row}) 已落盘 → {png}"
+    )
     return {
         "ok": True,
+        "collection": req.material,
         "tileId": req.tileId,
         "col": col,
         "row": row,
+        "png": str(png),
+        "json": str(js),
         "overridePng": str(tile_path),
     }
 
@@ -779,7 +841,9 @@ import ai_clients
 
 # 厂商可选项（镜像 app getAiModelList）
 MANUFACTURERS = ["openai", "other", "volcengine", "doubao", "gemini", "siliconflow",
-                 "deepseek", "qwen", "zhipu", "anthropic", "lmstudio", "minimax"]
+                 "deepseek", "qwen", "zhipu", "anthropic", "lmstudio", "minimax",
+                 # 本地背景分离模型（镜像 app 的 local_birefnet / local_modnet）
+                 "local_birefnet", "local_modnet"]
 MODEL_TYPES = ["text", "image", "voice", "video"]
 
 
@@ -886,11 +950,20 @@ from tile_style_change.routes import router as tile_style_router
 app.include_router(tile_style_router)
 
 
+# ───────────────────────── 背景分离模型（本地抠图） ─────────────────────────
+from avatar_matting_routes import router as matting_router
+app.include_router(matting_router)
+
+
 # ───────────────────────── 健康检查 ─────────────────────────
 @app.get("/api/health")
 def health() -> dict:
     return {
         "ok": True,
+        "node_env": env_loader.get_env("NODE_ENV"),
+        "log_path": str(logger.log_dir()),
+        "req_dump_enabled": logger.req_dump_enabled(),
+        "temp_oss": env_loader.get_env("TEMP_OSS"),
         "map_root": str(MAP_ROOT),
         "map_root_exists": MAP_ROOT.exists(),
     }
@@ -898,6 +971,12 @@ def health() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"[map-editor] TFS_MAP_ROOT = {MAP_ROOT}")
-    print(f"[map-editor] exists: {MAP_ROOT.exists()}")
-    uvicorn.run(app, host="127.0.0.1", port=8000, reload=False)
+
+    # 端口优先取 env 的 PORT，默认 8000
+    port = env_loader.get_env_int("PORT", 8000) or 8000
+    logger.info(f"[map-editor] TFS_MAP_ROOT = {MAP_ROOT}")
+    logger.info(f"[map-editor] exists: {MAP_ROOT.exists()}")
+    logger.info(f"[map-editor] NODE_ENV = {env_loader.get_env('NODE_ENV')}")
+    logger.info(f"[map-editor] LOG_PATH = {logger.log_dir()}")
+    logger.info(f"[map-editor] listening on http://127.0.0.1:{port}")
+    uvicorn.run(app, host="127.0.0.1", port=port, reload=False)

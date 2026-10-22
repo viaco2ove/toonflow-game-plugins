@@ -6,6 +6,9 @@ set "ROOT=%~dp0"
 set "BACKEND=%ROOT%backend"
 set "FRONTEND=%ROOT%frontend"
 
+rem 后端运行环境：local / dev / prod，可用 `start.bat dev` 覆盖
+if "%~1"=="" (set "TFS_ENV=local") else (set "TFS_ENV=%~1")
+
 echo ============================================
 echo   Toonflow Map Editor v0.3
 echo ============================================
@@ -37,7 +40,7 @@ if not exist "node_modules" (
 )
 
 echo [3/3] Starting services...
-start "TFS-MapEditor-Backend" cmd /k "cd /d %BACKEND% && python server.py"
+start "TFS-MapEditor-Backend" cmd /k "cd /d %BACKEND% && python server.py %TFS_ENV%"
 start "TFS-MapEditor-Frontend" cmd /k "cd /d %FRONTEND% && npm run dev"
 
 timeout /t 4 /nobreak >nul
