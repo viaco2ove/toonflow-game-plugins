@@ -1,2 +1,2 @@
-pip install
-python server.py
+pip install -r requirements.txt
+python server.py local
