@@ -62,8 +62,13 @@ function request(op: string, dataKey?: string, value?: unknown, timeoutMs = 1000
 export const toonflowJsApi = {
   /** 插件会话数据（t_plugin_session_data，维度 userId×sessionId×pluginId×dataKey） */
   pluginData: {
-    get(dataKey: string): Promise<any> {
-      return request("get", dataKey).then((r) => r.value);
+    /**
+     * 读插件会话数据。
+     * @param scope sessionId 维度；"all" = 跨会话共享（用户偏好类数据用这个）。
+     *   缺省 = 由宿主按当前故事会话决定（真实宿主注入 entry.js 的 ctx.sessionId）。
+     */
+    get(dataKey: string, scope?: string): Promise<any> {
+      return request("get", dataKey, undefined, 10000, scope).then((r) => r.value);
     },
     /**
      * ★ 读模板（sessionId="all" 跨会话共享）
@@ -72,8 +77,12 @@ export const toonflowJsApi = {
     getTemplate(dataKey: string): Promise<any> {
       return request("get", dataKey, undefined, 10000, "all").then((r) => r.value);
     },
-    set(dataKey: string, value: unknown): Promise<void> {
-      return request("set", dataKey, value).then(() => undefined);
+    /**
+     * 写插件会话数据。
+     * @param scope sessionId 维度；"all" = 跨会话共享（用户偏好类数据用这个）。
+     */
+    set(dataKey: string, value: unknown, scope?: string): Promise<void> {
+      return request("set", dataKey, value, 10000, scope).then(() => undefined);
     },
     list(): Promise<string[]> {
       return request("list").then((r) => r.keys || []);
