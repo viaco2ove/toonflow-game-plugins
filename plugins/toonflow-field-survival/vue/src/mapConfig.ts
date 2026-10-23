@@ -150,6 +150,13 @@ export interface MapNpc {
  * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
  */
 export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number; level: number }> = {
+  // ★ 黑塔伪人系（map_design/黑塔：从超忆症开始成神）
+  HT_FAKE_STUDENT: { name: "伪人·学生", hp: 45,  atk: 9,  level: 1 },
+  HT_FAKE_PAW:     { name: "伪人·爪牙", hp: 75,  atk: 14, level: 3 },
+  HT_FAKE_ELITE:   { name: "伪人·精英", hp: 150, atk: 20, level: 5 },
+  HT_FAKE_TEACHER: { name: "伪人·教师", hp: 110, atk: 16, level: 4 },
+  HT_FAKE_HOST:    { name: "伪人·宿主", hp: 260, atk: 26, level: 7 },
+  HT_FAKE_MR:      { name: "先生",     hp: 420, atk: 34, level: 9 },
   RAT:         { name: "老鼠",       hp: 12,  atk: 4,  level: 1 },
   GOBLIN:      { name: "哥布林",     hp: 30,  atk: 6,  level: 1 },
   LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8,  level: 2 },
@@ -173,6 +180,13 @@ export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: num
  *   表里没有的类型回退 MOB_ARCHETYPES[].name。
  */
 export const ENTITY_TYPE_ZH: Record<string, string> = {
+  // ★ 黑塔伪人系
+  HT_FAKE_STUDENT: "伪人·学生",
+  HT_FAKE_PAW: "伪人·爪牙",
+  HT_FAKE_ELITE: "伪人·精英",
+  HT_FAKE_TEACHER: "伪人·教师",
+  HT_FAKE_HOST: "伪人·宿主",
+  HT_FAKE_MR: "先生",
   RAT: "老鼠",
   BAT: "暗夜生物",
   SNAKE: "爬虫",
@@ -215,6 +229,18 @@ export const NPC_DIALOG_ZH: Record<string, string> = {
   // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
   NANI_AND_BILI_RESCUE: "娜妮",
   // ★ ：大罗宗人物（map_design/ 地图集）
+  // ★ 黑塔：从超忆症开始成神（map_design/黑塔：从超忆症开始成神）
+  SU_XIAO_CLASS_PRESIDENT: "苏晓",
+  XIAO_MAN_GUIDE: "小满",
+  WEI_SHU_COACH: "魏叔",
+  ZHANG_WANYI_GUIDE: "张晚意",
+  OLD_ZHOU_HINT: "老周",
+  BAI_XIAOSHENG_INFO: "百晓生",
+  BAI_ZIXUAN: "白子轩",
+  MOM_BREAKFAST: "妈妈",
+  CLASS_TEACHER: "班主任",
+  PE_COMMITTEE: "体育委员",
+  MR_XIANSHENG: "先生",
   XUANCHEN: "玄尘长老",
   MO_LAO: "墨老",
   SU_MO: "苏沫",
@@ -234,6 +260,13 @@ export function normalizeCamp(v: any): "neutral" | "hostile" | "friendly" | null
  *   表外类型回退 mobKeyFor(名字)。
  */
 export const ENTITY_SPRITE_KEY: Record<string, string> = {
+  // ★ 黑塔伪人系：复用已验证的人物动画帧（TILE_ANIM_ID 有映射的优先）
+  HT_FAKE_STUDENT: "ht_student",
+  HT_FAKE_PAW: "ht_paw",
+  HT_FAKE_ELITE: "ht_elite",
+  HT_FAKE_TEACHER: "ht_teacher",
+  HT_FAKE_HOST: "ht_host",
+  HT_FAKE_MR: "ht_mr",
   RAT: "rat", BAT: "bat", SNAKE: "snake", WILD_GOAT: "goat",
   GOBLIN: "goblin", LOOT_GOBLIN: "goblin", IMP: "goblin", KOBOLD: "goblin",
   SKELETON: "skeleton", ZOMBIE: "skeleton", BONEMAN: "skeleton",
@@ -754,6 +787,54 @@ export const DEFAULT_START_LEVEL = "Mulberry Town";
    城镇 / 王国映射为 null → 不刷怪（保留 safe zone 行为）
    ============================================================ */
 export const THEME_BY_MAPNAME: Record<string, "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null> = {
+  // ★ 黑塔：从超忆症开始成神（map_design/黑塔：从超忆症开始成神）
+  //   运行期传入的是关卡 key（slug，来自 App.vue currentLevelName），
+  //   中文显示名一并登记，两种写法都能命中。
+  lichLair:              null,
+  mulberryTown:          null,
+  mulberryForest:        "RUINS",
+  mulberryGraveyard:     "CATACOMBS",
+  forestDungeon1:        "RUINS",
+  forestDungeon2:        "RUINS",
+  forestDungeon3:        "CATACOMBS",
+  forestDungeon4:        "MINE",
+  forestDungeon5:        "MINE",
+  mulberryDungeon1:      "MINE",
+  mulberryDungeon2:      "MINE",
+  mulberryDungeon3:      "ICE",
+  mulberryDungeon4:      "ICE",
+  mulberryDungeon5:      "ICE",
+  lootGoblinLair:        "RUINS",
+  oldForest:             null,
+  taintedForest:         "CATACOMBS",
+  oldGraveyard:          null,
+  lichBoss:              "ICE",
+  oldlichBoss:           "ICE",
+  orcCastle:             null,
+  overworld:             null,
+  "陈曦的卧室":             null,
+  "延城一中":               null,
+  "网球场·黄昏":            "RUINS",
+  "旧教学楼·天台":          "CATACOMBS",
+  "记忆回廊·一层·早自习":    "RUINS",
+  "记忆回廊·二层·课间十分钟": "RUINS",
+  "记忆回廊·三层·运动会":    "CATACOMBS",
+  "记忆回廊·四层·那天下午":  "MINE",
+  "记忆回廊·五层·被改写的放学": "MINE",
+  "黑塔·一层·门厅":          "MINE",
+  "黑塔·二层·名册室":        "MINE",
+  "黑塔·三层·咀嚼室":        "ICE",
+  "黑塔·四层·剥忆室":        "ICE",
+  "黑塔·五层·塔心":          "ICE",
+  "旧货市场":               "RUINS",
+  "旧书店":                 null,
+  "认知污染带":             "CATACOMBS",
+  "被遗忘者名录":            null,
+  "伪人总部·收容课教室":     "ICE",
+  "伪人总部·拟态间":         "ICE",
+  "黑塔·降临旧址":           null,
+  "超凡界·界域":             null,
+  "延城·地表":              null,
   "Mulberry Town":          null,
   "Mulberry Forest":        "RUINS",
   "Mulberry Graveyard":     "CATACOMBS",
@@ -909,11 +990,12 @@ export function getLevelDisplayName(levelName: string): string {
  * 返回空字符串，不显示标签。
  */
 export const MAP_MOB_LEVEL_RANGE: Record<string, [number, number]> = {
+  // ★ 黑塔：从超忆症开始成神 —— 旧货市场只有一只宿主（见 map_design/黑塔：…/lootGoblinLair.json）
+  lootGoblinLair: [25, 25],
   mulberryForest: [1, 10],
   mulberryGraveyard: [10, 20],
   forestDungeon1: [10, 20],
   forestDungeon2: [20, 30],
-  lootGoblinLair: [20, 30],
   forestDungeon3: [30, 40],
   forestDungeon4: [40, 50],
   forestDungeon5: [50, 60],

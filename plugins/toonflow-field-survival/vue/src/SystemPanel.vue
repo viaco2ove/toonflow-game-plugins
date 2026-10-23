@@ -8,9 +8,12 @@ import MapPanel from "./panels/MapPanel.vue";
 import RolePanel from "./panels/RolePanel.vue";
 import EventPanel from "./panels/EventPanel.vue";
 import QuestLogPanel from "./panels/QuestLogPanel.vue";
+import AIPanel from "./panels/AIPanel.vue";
 import { getLevelDisplayName } from "./mapConfig";
+import type { AISettings } from "./ai/aiConfig";
+import { DEFAULT_AI_SETTINGS } from "./ai/aiConfig";
 
-type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest";
+type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest" | "ai";
 
 const props = defineProps<{
   player: any;
@@ -37,6 +40,10 @@ const props = defineProps<{
   eventRepeatHits?: Record<string, number>;
   /** 任务板：进度视图（宿主 state.questView 权威，本页签只读） */
   questView?: any;
+  /** AI 托管配置（系统 → AI 页签） */
+  aiSettings?: AISettings;
+  /** 当前托管角色数（用于估算请求频率） */
+  aiManagedCount?: number;
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
@@ -50,9 +57,13 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: "role", label: "角色", icon: "👥" },
   { id: "event", label: "事件", icon: "⚡" },
   { id: "quest", label: "任务", icon: "📜" },
+  { id: "ai", label: "AI", icon: "🤖" },
 ];
 
 const activeTab = ref<TabId>("bag");
+
+/** AI 配置缺省值（父组件未就绪时用默认值兜底） */
+const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
 </script>
 
 <template>
@@ -160,6 +171,13 @@ const activeTab = ref<TabId>("bag");
         @recover="(id: string) => emit('quest-recover', id)"
         @arrive="(id: string) => emit('quest-arrive', id)"
         @abandon="(id: string) => emit('quest-abandon', id)"
+      />
+      <AIPanel
+        v-else-if="activeTab === 'ai'"
+        :settings="aiSettings || defaultSettings"
+        :managed-count="aiManagedCount || 0"
+        @save="(s: AISettings) => emit('ai-settings-save', s)"
+        @reset="() => emit('ai-settings-reset')"
       />
     </div>
 

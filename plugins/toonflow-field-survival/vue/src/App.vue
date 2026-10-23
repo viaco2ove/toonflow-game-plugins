@@ -54,6 +54,15 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
+// ★ AI 托管运行时配置（系统 → AI 页签可调，落库 t_plugin_session_data）
+import {
+  getAISettings,
+  loadAISettings,
+  saveAISettings,
+  resetAISettings,
+  DEFAULT_AI_SETTINGS,
+} from "./ai/aiConfig";
+import type { AISettings } from "./ai/aiConfig";
 import { bakeTiledMap, eraseBakedObstacle, invalidateBake } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 采集任务寻路：物品 → 采集区 zone 名静态映射（含跨图 mapKey）
@@ -544,6 +553,19 @@ const sysEventDefs = computed<any[]>(() => getLoadedEvents());
 const sysEventZones = computed<any[]>(() => getEventZones());
 const sysEventRepeatHits = ref<Record<string, number>>({});
 const sysEventFlags = ref<Record<string, unknown>>({});
+
+/** ★ AI 托管配置（系统 → AI 页签）：与 ai/aiConfig.ts 的运行时配置同源 */
+const sysAISettings = ref<AISettings>({ ...DEFAULT_AI_SETTINGS });
+/** 当前托管角色数（面板估算请求频率用） */
+const sysAIManagedCount = computed(() => {
+  const s = state.value as any;
+  const entities = (s?.entities || []) as any[];
+  let n = 0;
+  for (const e of entities) {
+    if (e?.side === "ally" && isAIEnabled(e.id)) n += 1;
+  }
+  return n;
+});
 
 /** 定时轮询 player_flags + 同步 repeat 计数（事件系统面板显示用） */
 let sysEventSyncTimer = 0;
@@ -1195,6 +1217,66 @@ function onSysSummon(card: any) {
   sysNotice.value = `正在召唤 ${card.name} 到身边…`;
   runSysCmd("sys_party", { roleId: card.id, follow: false, summon: true });
   scheduleAllyPositionsSave();
+}
+
+/* ★ AI 托管配置：落库到 t_plugin_session_data（key = "ai_settings"）
+ *   保存即生效 —— aiConfig.saveAISettings 内部会 applyAISettings，
+ *   运行时配置立刻改变，下一次 tick 的间隔计算就用新值了。 */
+async function onSysAISettingsSave(s: AISettings): Promise<void> {
+  try {
+    const saved = await saveAISettings(makeAIConfigStore(), s);
+    sysAISettings.value = { ...saved };
+    sysNotice.value = `AI 配置已保存（非战斗 ${Math.round(saved.idle / 1000)}s / 交战 ${Math.round(saved.engaged / 1000)}s）`;
+  } catch (e: any) {
+    sysNotice.value = `AI 配置保存失败：${e?.message || e}`;
+  }
+}
+
+async function onSysAISettingsReset(): Promise<void> {
+  const saved = await saveAISettings(makeAIConfigStore(), { ...DEFAULT_AI_SETTINGS });
+  sysAISettings.value = { ...saved };
+  sysNotice.value = "AI 配置已恢复默认";
+}
+
+/** ★ AI 配置的 pluginData 适配器
+ *   scope 语义：t_plugin_session_data 的 sessionId 维度。
+ *   "all" = 跨会话共享（AI 配置是用户偏好，应该跨会话存活）。
+ *   不传 scope 时由宿主决定（dev-host 会用当前故事会话 ID）。
+ *
+ *   ★ 为什么 AI 配置必须用 "all"：
+ *     __STORY_SESSION_ID__ 是在 iframe 加载**之后**才赋值的，
+ *     所以 onMounted 阶段读到的 scope 与稍后写入的 scope 可能不同（读写分家），
+ *     表现为「保存成功但刷新后丢」。锁死 "all" 就没这个问题。
+ */
+function makeAIConfigStore() {
+  const api = (window as any).__TFAPI__ || toonflowJsApi;
+  return {
+    get: async (key: string, scope?: string) => {
+      try {
+        return await api?.pluginData?.get(key, scope);
+      } catch {
+        return null;
+      }
+    },
+    set: async (key: string, value: unknown, scope?: string) => {
+      try {
+        await api?.pluginData?.set(key, value, scope);
+      } catch (e) {
+        console.warn("[ai-config] pluginData.set 失败:", e);
+      }
+    },
+  };
+}
+
+/** ★ 启动时加载用户配置（在 AI 开始工作前必须先读，否则用默认间隔跑几轮） */
+async function loadUserAISettings(): Promise<void> {
+  try {
+    const loaded = await loadAISettings(makeAIConfigStore());
+    sysAISettings.value = { ...loaded };
+    console.info("[ai-config] 启动加载用户配置:", loaded);
+  } catch (e) {
+    console.warn("[ai-config] 启动加载配置失败:", e);
+  }
 }
 
 /* ★ 事件系统面板 handlers：走事件引擎自身的 setFlag/delFlag 通道
@@ -6815,6 +6897,9 @@ onMounted(async () => {
   });
   // ★ AI 托管系统 LLM 调用器（v0.2：走宿主 agent 通道）
   registerAILLM(callBrainLLM);
+  // ★ AI 托管运行时配置（用户可调，落库 t_plugin_session_data）
+  //   必须在 AI 开始工作前加载，否则开局头几轮用默认间隔跑。
+  await loadUserAISettings();
   // ★ 只读调试钩子：bsk/E2E 自动化巡检用（evaluate 里摸不到 Vue 内部实例，
   //   生产构建下 __vue_app__._instance 在隔离世界不可读）。只读 getter，无副作用。
   (window as any).__FS_DEBUG__ = {
@@ -7724,6 +7809,8 @@ watch(() => state.value?.phase, (p) => {
         :event-zones="sysEventZones"
         :event-repeat-hits="sysEventRepeatHits"
         :quest-view="questView"
+        :ai-settings="sysAISettings"
+        :ai-managed-count="sysAIManagedCount"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"
@@ -7753,6 +7840,8 @@ watch(() => state.value?.phase, (p) => {
         @quest-recover="questRecoverCargo"
         @quest-arrive="onQuestArriveAtDest"
         @quest-abandon="onQuestAbandon"
+        @ai-settings-save="onSysAISettingsSave"
+        @ai-settings-reset="onSysAISettingsReset"
         @open-appearance="onOpenAppearance"
         @close="showSystemPanel = false"
       />

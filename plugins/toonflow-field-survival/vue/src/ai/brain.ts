@@ -16,24 +16,17 @@ import type {
   AIGameEvent,
   AIPerception,
   AIState,
-  BrainConfig,
   LLMDecision,
 } from "./types";
-import {
-  COMBAT_INTERVAL_ENGAGED,
-  COMBAT_INTERVAL_SKIRMISH,
-  DEFAULT_BRAIN_CONFIG,
-  IDLE_INTERVAL_BASE,
-  IDLE_INTERVAL_WITH_RESOURCES,
-} from "./types";
+import { IDLE_INTERVAL_WITH_RESOURCES } from "./types";
 import { checkEmergency, updatePerception } from "./sensor";
 import { readMapKnowledge } from "./mapKnowledge";
 import { readMapIntervalOverride } from "./mapInterval";
+import { getRuntimeBrainConfig, getRuntimeIntervals } from "./aiConfig";
 import type { Entity, GameState } from "../types";
 
 /** AI 大脑状态 */
 const aiStates: Map<string, AIState> = new Map();
-const brainConfig: BrainConfig = { ...DEFAULT_BRAIN_CONFIG };
 const pendingEvents: Map<string, AIGameEvent[]> = new Map();
 let lastTick = 0;
 
@@ -100,34 +93,38 @@ export function pushAIEvent(entityId: string, event: AIGameEvent): void {
 
 /** 计算自适应间隔
  *  ★ v6 重写：判据从「AI 自己身边有敌人」改为「玩家战斗状态」+「地图集覆盖」。
+ *  ★ v7：三档基线与 min/max 全部读**运行时配置**（系统面板 → AI 可调，落库 t_plugin_session_data）。
  *  详见 md/curr_design/toonflow-field-survival/ai/ai托管/ai托管.agent.触发频率.md
  */
 function calculateInterval(state: AIState, perception: AIPerception): number {
-  if (!brainConfig.adaptiveEnabled) return brainConfig.minInterval;
+  // ★ 每次都从 aiConfig 取最新值（面板改了立即生效，不需要重启）
+  const cfg = getRuntimeBrainConfig();
+  if (!cfg.adaptiveEnabled) return cfg.minInterval;
 
   // ① 地图集覆盖优先（最高优先级，见 mapKnowledge.readMapIntervalOverride）
   const override = readMapIntervalOverride(state.mapName);
   if (override != null) return override;
 
-  // ② 玩家战斗等级（主判据）
+  // ② 玩家战斗等级（主判据）→ 取对应档位的基线
   const level = perception.world?.playerCombatLevel || "none";
+  const bands = getRuntimeIntervals();
   let base: number;
   switch (level) {
     case "engaged":
-      base = COMBAT_INTERVAL_ENGAGED;    // 5000
+      base = bands.engaged;
       break;
     case "skirmish":
-      base = COMBAT_INTERVAL_SKIRMISH;   // 10000
+      base = bands.skirmish;
       break;
     default:
-      base = IDLE_INTERVAL_BASE;         // 20000
+      base = bands.idle;
       break;
   }
 
   // ③ AI 自身的次级修正：AI 自己身边有危险 → 缩短一档
   //   （玩家在战斗但 AI 落单时，AI 也要快点反应）
   if (perception.nearby.enemies.length > 0) {
-    base = Math.max(brainConfig.minInterval, Math.round(base * 0.7));
+    base = Math.max(cfg.minInterval, Math.round(base * 0.7));
   }
 
   // ④ 资源点在附近 → 略快（只在完全非战斗时生效，避免拉长战斗节奏）
@@ -135,7 +132,7 @@ function calculateInterval(state: AIState, perception: AIPerception): number {
     base = Math.min(base, IDLE_INTERVAL_WITH_RESOURCES);
   }
 
-  return Math.min(Math.max(base, brainConfig.minInterval), brainConfig.maxInterval);
+  return Math.min(Math.max(base, cfg.minInterval), cfg.maxInterval);
 }
 
 /** 检查事件是否应该立即触发 */

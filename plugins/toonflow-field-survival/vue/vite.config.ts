@@ -689,7 +689,7 @@ async function runMockShopAgent(args) {
   const pool = mats.slice().sort(() => Math.random() - 0.5);
   const goods = pool.slice(0, 12).map((m) => {
     // 物品名归一：剥离「×N」与括号尾注（服务端 inventory 是自由文本，如「银鲤×4（…）」）
-    let rawName = String(m.name || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim();
+    let rawName = String(m.name || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\\s*\\d+/g, " ").trim();
     if (!rawName) rawName = String(m.name || "物资");
     const kind = KIND_OF[String(m.type || "")] || "material";
     const price = Math.max(1, Math.round(Number(m.priceOfficial ?? m.priceBlack ?? 0) || 50));
@@ -697,7 +697,7 @@ async function runMockShopAgent(args) {
     let heal = 0;
     if (kind === "consumable") {
       heal = Number(stats.heal ?? stats.hp ?? 0);
-      if (!heal) heal = /8\d|强效|大补/.test(String(m.effect || m.name || "")) ? 60 : 30;
+      if (!heal) heal = /8\\d|强效|大补/.test(String(m.effect || m.name || "")) ? 60 : 30;
       heal = Math.max(0, Math.round(heal));
     }
     return {
@@ -1789,19 +1789,21 @@ async function runMockAiBrain(args) {
   const num = (re) => { const m = up.match(re); return m ? m[1] : ""; };
 
   // ① 周围敌人：哥布林 HP:14/30 距2.8米
-  const enemyRe = /([^\s（(,，]+)\s+HP:(\d+)\/(\d+)\s+距([\d.]+)米/g;
+  // ★ 本函数位于 PAGE 模板字符串内：正则里的反斜杠会被模板吞成裸字符
+  //   （s→s、d→d、斜杠→斜杠），必须改用 new RegExp 字符串形式。
+  const enemyRe = new RegExp("([^\\\\s（(,，]+)\\\\s+HP:(\\\\d+)/(\\\\d+)\\\\s+距([\\\\d.]+)米", "g");
   let best = null;
   for (let m; (m = enemyRe.exec(up)) !== null;) {
     const d = parseFloat(m[4]);
     if (!best || d < best.dist) best = { name: m[1], hp: +m[2], maxHp: +m[3], dist: d };
   }
   // ② 背包物品数
-  const bagN = parseInt(num(/背包物品数（队伍\+私藏）:\s*(\d+)/) || "0", 10);
+  const bagN = parseInt(num(new RegExp("背包物品数（队伍\\\\+私藏）:\\\\s*(\\\\d+)")) || "0", 10);
   // ③ HP 百分比：HP: 26/80 (33%)
-  const hpPct = parseInt(num(/HP:\s*\d+\/\d+\s*\((\d+)%\)/) || "100", 10);
+  const hpPct = parseInt(num(new RegExp("HP:\\\\s*\\\\d+/\\\\d+\\\\s*\\\\((\\\\d+)%\\\\)")) || "100", 10);
   // ④ 最近资源：可达资源: 2个 (最近: 木材堆, 8米)
-  const resName = num(/最近:\s*([^,，]+?)\s*,/);
-  const resDist = parseFloat(num(/最近:\s*[^,，]+?,\s*([\d.]+)米/) || "0");
+  const resName = num(new RegExp("最近:\\\\s*([^,，]+?)\\\\s*,"));
+  const resDist = parseFloat(num(new RegExp("最近:\\\\s*[^,，]+?,\\\\s*([\\\\d.]+)米")) || "0");
 
   let out;
   if (hpPct < 15) {

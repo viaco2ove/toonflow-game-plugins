@@ -11,8 +11,10 @@
  *
  * ★ 硬钳制：地图集不能突破上下界，否则一张图就能把全局 token 打到破产：
  *   · 战斗态（engaged）下界 HARD_FLOOR_INTERVAL = 3000ms（LLM 往返 1.5~4s，低于 3s 决策会堆积）
- *   · 其他态下界 = brainConfig.minInterval = 5000ms
- *   · 上界 = brainConfig.maxInterval = 30000ms
+ *   · 其他态下界 = 用户配置的 minInterval（默认 5000ms）
+ *   · 上界 = min(用户配置的 maxInterval, HARD_CEIL_INTERVAL)
+ *     ★ v7：上下界改为读运行时配置（系统面板 → AI），用户调小 maxInterval 时
+ *       地图集也不能把间隔拉长 —— 用户配置优先于地图集，但仍有 HARD_CEIL 兜底。
  *
  * 设计文档：md/curr_design/toonflow-field-survival/ai/ai托管/ai托管.agent.触发频率.md
  */
@@ -21,6 +23,7 @@ import {
   HARD_CEIL_INTERVAL,
   HARD_FLOOR_INTERVAL,
 } from "./types";
+import { getRuntimeBrainConfig } from "./aiConfig";
 
 /** 地图级 AI 配置（events.json 顶层 `ai` 字段） */
 export interface MapAIConfig {
@@ -58,12 +61,19 @@ export function setCurrentCombatLevel(level: CombatLevel): void {
   currentLevel = level;
 }
 
-/** 钳制到合法区间 */
+/** 钳制到合法区间
+ *  ★ v7：上下界改为读**运行时配置**（系统面板 → AI 可调）：
+ *    · 下界：普通态 = 用户配的 minInterval；战斗态可下探到 HARD_FLOOR（3000ms，BOSS 图要 3s 粒度）
+ *    · 上界：min(用户配的 maxInterval, HARD_CEIL)
+ *      —— 用户把 maxInterval 调到 10s，则地图集也不能把间隔拉长到 30s（用户优先）；
+ *         但用户调到 120s 时，仍受 HARD_CEIL(60s) 保护，避免地图集把 token 打到破产。
+ */
 function clampInterval(raw: number): number {
   if (!Number.isFinite(raw) || raw <= 0) return raw;
-  // 战斗态允许下探到 HARD_FLOOR（BOSS 图需要 3s 粒度）；其他态用 5000 下界
-  const floor = currentLevel === "engaged" ? HARD_FLOOR_INTERVAL : 5000;
-  const ceil = Math.min(HARD_CEIL_INTERVAL, 30000);
+  const cfg = getRuntimeBrainConfig();
+  // 战斗态允许下探到 HARD_FLOOR（BOSS 图需要 3s 粒度）；其他态用用户配的 minInterval
+  const floor = currentLevel === "engaged" ? HARD_FLOOR_INTERVAL : cfg.minInterval;
+  const ceil = Math.min(HARD_CEIL_INTERVAL, cfg.maxInterval);
   return Math.min(Math.max(raw, floor), ceil);
 }
 

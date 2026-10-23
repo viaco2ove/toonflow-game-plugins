@@ -140,6 +140,13 @@ export const SPRITE_ANIM: Record<string, SpriteAnim> = {
   snake:       { idle: 4360, walk: [4360, 4368] },
   bat:         { idle: 3704, walk: [3704, 3712] },
   skeleton:    { idle: 2552, walk: [2552, 2560] },
+  // ★ 黑塔伪人系（帧对来自 assets/tilesetAnim.ts 的 TILE_ANIM_ID）
+  ht_student: { idle: 4336, walk: [4336, 4344] },
+  ht_paw:     { idle: 2672, walk: [2672, 2680] },
+  ht_elite:   { idle: 4817, walk: [4817, 4825] },
+  ht_teacher: { idle: 4812, walk: [4812, 4820] },
+  ht_host:    { idle: 4219, walk: [4219, 4227] },
+  ht_mr:      { idle: 4814, walk: [4814, 4822] },
   minotaur:    { idle: 7080, walk: [7080, 7088] },
 };
 

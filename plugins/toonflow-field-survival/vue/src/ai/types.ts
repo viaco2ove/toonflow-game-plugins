@@ -238,12 +238,16 @@ export const HARD_FLOOR_INTERVAL = 3000;
 export const HARD_CEIL_INTERVAL = 60000;
 
 /** 默认大脑配置
- *  ★ maxInterval 从 15000 上调到 30000 —— 这是核心降本杠杆：
- *    现状非战斗就是 15s 上限，5 角色 = 20 次/分；改 30s 后 = 10 次/分，直接砍半，
- *    而玩家几乎察觉不到差别（非战斗时 AI 决策内容重复度高）。 */
+ *  ★ maxInterval = 20000（非战斗态的实际间隔上限）。
+ *    这些值现在可以在「系统 → AI」页签里调，落库到 t_plugin_session_data，
+ *    运行时配置见 ai/aiConfig.ts（DEFAULT_AI_SETTINGS 是权威副本）。
+ *    20s 是「token 成本」与「AI 存在感」的折中：
+ *      15s → 5 角色 = 20 次/分（偏吵，且非战斗时决策内容重复度高）
+ *      20s → 5 角色 = 15 次/分（当前默认）
+ *      30s → 5 角色 = 10 次/分（省得多，但玩家容易察觉 AI「迟钝」） */
 export const DEFAULT_BRAIN_CONFIG: BrainConfig = {
   minInterval: 5000,
-  maxInterval: 30000,
+  maxInterval: 20000,
   adaptiveEnabled: true,
   maxManagedCount: 5,
 };

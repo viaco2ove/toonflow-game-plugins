@@ -53,6 +53,7 @@ const QUEST_MAP_SLUGS: Record<string, string> = {
   lichlair: "Lich Lair",
   lootgoblinlair: "Loot Goblin Lair",
   kingdom: "Kingdom",
+  overworld: "延城·地表",
 };
 /** slug → 显示名；已是显示名 / 中文名则原样返回 */
 function normQuestMap(v: unknown): string {
@@ -524,6 +525,39 @@ function currentTheme(): "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null {
     "Forest Dungeon 4": "RUINS", "Forest Dungeon 5": "RUINS",
     "Kingdom": null,
     "Lich Boss": "CATACOMBS",
+    // ★ 黑塔：从超忆症开始成神（slug + 中文显示名双写）
+    lichLair: null, mulberryTown: null, mulberryForest: "RUINS",
+    mulberryGraveyard: "CATACOMBS",
+    forestDungeon1: "RUINS", forestDungeon2: "RUINS", forestDungeon3: "CATACOMBS",
+    forestDungeon4: "MINE", forestDungeon5: "MINE",
+    mulberryDungeon1: "MINE", mulberryDungeon2: "MINE",
+    mulberryDungeon3: "ICE", mulberryDungeon4: "ICE", mulberryDungeon5: "ICE",
+    lootGoblinLair: "RUINS", oldForest: null, taintedForest: "CATACOMBS",
+    oldGraveyard: null, lichBoss: "ICE", oldlichBoss: "ICE",
+    orcCastle: null, overworld: null,
+    "陈曦的卧室": null,
+    "延城一中": null,
+    "网球场·黄昏": "RUINS",
+    "旧教学楼·天台": "CATACOMBS",
+    "记忆回廊·一层·早自习": "RUINS",
+    "记忆回廊·二层·课间十分钟": "RUINS",
+    "记忆回廊·三层·运动会": "CATACOMBS",
+    "记忆回廊·四层·那天下午": "MINE",
+    "记忆回廊·五层·被改写的放学": "MINE",
+    "黑塔·一层·门厅": "MINE",
+    "黑塔·二层·名册室": "MINE",
+    "黑塔·三层·咀嚼室": "ICE",
+    "黑塔·四层·剥忆室": "ICE",
+    "黑塔·五层·塔心": "ICE",
+    "旧货市场": "RUINS",
+    "旧书店": null,
+    "认知污染带": "CATACOMBS",
+    "被遗忘者名录": null,
+    "伪人总部·收容课教室": "ICE",
+    "伪人总部·拟态间": "ICE",
+    "黑塔·降临旧址": null,
+    "超凡界·界域": null,
+    "延城·地表": null,
   };
   if (TABLE[name] !== undefined) return TABLE[name];
   if (/graveyard|lich|crypt|catacomb|tomb/i.test(name)) return "CATACOMBS";

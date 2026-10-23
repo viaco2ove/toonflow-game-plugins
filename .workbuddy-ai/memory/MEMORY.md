@@ -8,8 +8,15 @@
    真宿主后端影子模块按 `<pluginKey>.<mtime>.mjs` 热重载不用重启；**dev-host（`--conn`）进程内永久缓存 entry.js，改了 entry.ts 必须重启 dev-server**；前端 src（含 eventScripts/mockHost）走 vite HMR 刷新即可，vite.config.ts 要重启。
 - esbuild 会把中文转义成 `\uXXXX`，校验产物先 `src.encode().decode('unicode_escape')` 再 grep。
 
-## vite.config.ts 反引号陷阱（2026-10-17）
-207→1572 行之间有超长 HTML 模板字符串 `const PAGE = \`<!doctype html>…\``，此区间内写注释/代码**出现任何反引号都会把模板提前闭合**，esbuild 报错位置是「下一个反引号之后」，极具误导性。排查：`grep -n '`' vite.config.ts`，207 前和 1572 后各一个、中间必须 0 个。
+## vite.config.ts 模板字符串三大陷阱（2026-10-17 / 2026-10-23）
+`const PAGE = \`<!doctype html>…\`` 是一整块 JS **模板字符串**（现约 257→1893 行），内有三个坑：
+1. **反引号**（2026-10-17）：区间内写注释/代码出现任何反引号都会把模板提前闭合，esbuild 报错位置是「下一个反引号之后」，极具误导性。排查：`grep -n '`' vite.config.ts`，起始前和结束行各一个、中间必须 0 个。
+2. **单反斜杠**（2026-10-23）：模板对「非法转义的单个反斜杠」**直接丢弃**——`\s→s`、`\d→d`、`\/→/`。`\/`→裸 `/` 会让正则提前闭合 → SyntaxError → **整页白屏**；`\s`/`\d`→裸字母则**静默失配**（兜底算错但零报错，更难查）。修法：正则字面量把反斜杠**双写**（`\\s`/`\\/`），或改用 `new RegExp("...")` 字符串形式（更稳）。
+3. **`${}` 插值**：插值内是**真 TS 代码**，反斜杠规则与模板不同（`\\` 是正常双写）；改模板时别把插值区一起处理。
+
+**永久门禁**：`vue/scripts/check-page-template.mjs`（`npm run check:page`，已挂进 `npm run build` 前置）——扫非法转义 + 渲染后 `<script>` 做 `node --check` + 正则语义比对。改 PAGE 模板后必跑。
+
+**排查要领**：浏览器报 `localhost/:1536 Uncaught SyntaxError` 里的数字是**渲染后 JS 的行号**（不是端口）。dev-host 实际跑在 **3000** 端口；`localhost/:1536` → 直接把 PAGE 模板渲染出来看第 1536 行是哪句。
 
 ## dev-host 桩（--conn）与真宿主差异
 真宿主由 CLI `python -m toon_plugins plugin_session_data -u … -story …` 把 `map_visual:<story>`（sessionId="all"）写进 `t_plugin_session_data`；dev-host 不会，需 `seedStoryVisualMap()` 从 `/story-data/toonflow-field-survival/map_design/<STORY>.tbg` 播种。entry.js 侧 `ensureStoryVisualMap()` 依赖 3 前提，缺一个即静默退化成「只有当前关」：`ctx.worldName` 非空、`tsApi.pluginData.getTemplate` 存在、模板里确有 `map_visual:<story>`。
@@ -29,6 +36,14 @@
 ## 地图名三套写法，切图只认 mapFiles key
 ① 关卡 key `mulberryDungeon1`（=bundle.mapFiles key，唯一能喂 `switchLevel`）② 归一英文名 `Mulberry Dungeon`（`normQuestMap` 产物，层号可能丢）③ 中文显示名 `冥夜走廊·一层`（Tiled `name`）。跨图寻路一律先过 `levelKeyOf()`（前端）/`rawQuestMapKey()`（后端）。
 **`toLowerCase().replace(/[^0-9a-z]/g,"")` 对纯中文名返回空串**——做前缀匹配恒真、做相等比较会把「桑镇」「桑林」判成同图，两处都必须 `if (!compact) return 原值`。
+
+## ★ 地图集是数据，前端代码表是全局共享的（改地图集的头号陷阱）
+`workshops/<故事>/map_design/<地图集>/` 只是数据目录；`mapConfig.ts`/`mockHost.ts`/`entry.ts` 里的表被**所有故事共用**（黑塔/赦夜人/通天传授等）。
+- **禁止**往 `QUEST_MAP_SLUGS`、`MAP_MOB_LEVEL_RANGE` 等表里加「某故事专属的显示名映射」：slug/文件名是跨故事共享的 key，重复 key 在 TS 对象里后者覆盖前者，会**打坏别的故事**。各故事的中文显示名一律写在自己地图 JSON 的顶层 `name` 字段（`getLevelDisplayName` 已优先读它）。
+- 表的增补原则「只增不删」，但**追加前必须查重**（同一 key 已在表里 → 改值而非新增行；否则 esbuild 报 Duplicate key）。
+- `THEME_BY_MAPNAME` / mockHost `currentTheme()` 的查表 key 是**关卡 key（slug，来自 App.vue `currentLevelName`）**，不是中文显示名。新增地图集时按 slug 登记（可再补一份中文名双写兜底）。
+- `dungeon_themes` 的四个槽位名 `RUINS`/`CATACOMBS`/`MINE`/`ICE` 由引擎按名查权重，**不能改名**；换题材时只换 `mob_distribution` 里的怪物与槽位语义说明。
+- 地图集里 `forestDungeon.json` 这类「无层号」文件可能**不存在**（只有 1~5），旧图靠对象属性 `createDungeon:true` 动态生成。事件里的 `teleport` 是固定目标，指向不存在的关卡会静默切图失败。
 
 ## 坐标：1 米/格、以图心为原点
 `metersToCell`：`gx = floor(x + cols/2)`。桑镇 43×56 → x∈[-21.5,21.5]/y∈[-28,28]；森林 60×40 → ±30/±20；冥夜走廊一层 31×23 → ±15.5/±11.5。任务坐标写超不报错，只会「寻路后原地不动」——查任务数据先按范围卡一遍。
