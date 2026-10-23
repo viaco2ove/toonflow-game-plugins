@@ -138,10 +138,22 @@ function senseResources(entity: Entity): AIResourcePerception[] {
 
 /** 感知世界信息 */
 function senseWorld(state: GameState): AIPerception["world"] {
+  // ★ 玩家战斗状态（宿主 entry.ts 权威维护）：
+  //   敌人在 20m 外时 AI 感知不到，但玩家确实在挨打 —— 这个字段是 AI 唯一能知道"战况"的途径。
+  const pc = (state as any).playerCombat;
+  const level = (pc?.level === "engaged" || pc?.level === "skirmish") ? pc.level : "none";
+  // 距离上次交战多少秒（宿主 tick 是 100ms 一拍）
+  const lastTick = typeof pc?.lastCombatTick === "number" ? pc.lastCombatTick : null;
+  const nowTick = typeof (state as any).tick === "number" ? (state as any).tick : 0;
+  const secondsSinceCombat = lastTick == null || lastTick < 0
+    ? 9999
+    : Math.max(0, Math.round(((nowTick - lastTick) / 10) * 10) / 10);
   return {
     currentMap: (state as any).levelName || "",
     nearbyMaps: [],
     timeOfDay: (state as any).timeOfDay || "unknown",
+    playerCombatLevel: level,
+    secondsSinceCombat,
   };
 }
 

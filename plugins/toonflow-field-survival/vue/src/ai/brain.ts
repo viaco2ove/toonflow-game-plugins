@@ -19,9 +19,16 @@ import type {
   BrainConfig,
   LLMDecision,
 } from "./types";
-import { DEFAULT_BRAIN_CONFIG } from "./types";
+import {
+  COMBAT_INTERVAL_ENGAGED,
+  COMBAT_INTERVAL_SKIRMISH,
+  DEFAULT_BRAIN_CONFIG,
+  IDLE_INTERVAL_BASE,
+  IDLE_INTERVAL_WITH_RESOURCES,
+} from "./types";
 import { checkEmergency, updatePerception } from "./sensor";
 import { readMapKnowledge } from "./mapKnowledge";
+import { readMapIntervalOverride } from "./mapInterval";
 import type { Entity, GameState } from "../types";
 
 /** AI 大脑状态 */
@@ -91,20 +98,44 @@ export function pushAIEvent(entityId: string, event: AIGameEvent): void {
   pendingEvents.set(entityId, list);
 }
 
-/** 计算自适应间隔 */
+/** 计算自适应间隔
+ *  ★ v6 重写：判据从「AI 自己身边有敌人」改为「玩家战斗状态」+「地图集覆盖」。
+ *  详见 md/curr_design/toonflow-field-survival/ai/ai托管/ai托管.agent.触发频率.md
+ */
 function calculateInterval(state: AIState, perception: AIPerception): number {
   if (!brainConfig.adaptiveEnabled) return brainConfig.minInterval;
 
-  // 战斗时缩短
+  // ① 地图集覆盖优先（最高优先级，见 mapKnowledge.readMapIntervalOverride）
+  const override = readMapIntervalOverride(state.mapName);
+  if (override != null) return override;
+
+  // ② 玩家战斗等级（主判据）
+  const level = perception.world?.playerCombatLevel || "none";
+  let base: number;
+  switch (level) {
+    case "engaged":
+      base = COMBAT_INTERVAL_ENGAGED;    // 5000
+      break;
+    case "skirmish":
+      base = COMBAT_INTERVAL_SKIRMISH;   // 10000
+      break;
+    default:
+      base = IDLE_INTERVAL_BASE;         // 20000
+      break;
+  }
+
+  // ③ AI 自身的次级修正：AI 自己身边有危险 → 缩短一档
+  //   （玩家在战斗但 AI 落单时，AI 也要快点反应）
   if (perception.nearby.enemies.length > 0) {
-    return Math.max(brainConfig.minInterval, 3000);
+    base = Math.max(brainConfig.minInterval, Math.round(base * 0.7));
   }
-  // 资源点存在时中等
-  if (perception.resources.length > 0) {
-    return (brainConfig.minInterval + brainConfig.maxInterval) / 2;
+
+  // ④ 资源点在附近 → 略快（只在完全非战斗时生效，避免拉长战斗节奏）
+  if (perception.resources.length > 0 && level === "none") {
+    base = Math.min(base, IDLE_INTERVAL_WITH_RESOURCES);
   }
-  // 空闲时延长
-  return brainConfig.maxInterval;
+
+  return Math.min(Math.max(base, brainConfig.minInterval), brainConfig.maxInterval);
 }
 
 /** 检查事件是否应该立即触发 */
@@ -168,6 +199,13 @@ ${perception.resources.length ? perception.resources.map((r) => `  - ${r.zoneNam
 `;
 }
 
+/** 战斗等级 → 中文描述（给 LLM 看的） */
+function combatLevelText(level?: string): string {
+  if (level === "engaged") return "交战中（玩家刚参与战斗）";
+  if (level === "skirmish") return "遭遇战（附近仍有敌人，未脱离接触）";
+  return "无威胁";
+}
+
 /** 构建 User Prompt（当前状态 + 决策请求） */
 function buildUserPrompt(state: AIState, perception: AIPerception): string {
   const recentMemory = state.memory.slice(-3).map((m) => {
@@ -187,6 +225,11 @@ function buildUserPrompt(state: AIState, perception: AIPerception): string {
 ${perception.nearby.enemies.length ? `- 周围有 ${perception.nearby.enemies.length} 个敌人
 - 最近敌人: ${perception.nearby.enemies[0]?.name} (HP: ${perception.nearby.enemies[0]?.hp}, 距离: ${perception.nearby.enemies[0]?.distance}米)` : "- 当前未在战斗"}
 
+### 玩家战况（宿主判定，可能超出你的感知范围）
+- 战况等级: ${combatLevelText(perception.world?.playerCombatLevel)}
+- 距上次交战: ${perception.world?.secondsSinceCombat ?? "未知"} 秒
+${(perception.world?.playerCombatLevel || "none") !== "none" ? "- ★ 玩家正在战斗中，你的决策应偏向支援/自保，不要去做无关的事" : "- 玩家当前未在战斗"}
+
 ### 资源状态
 - 背包物品数（队伍+私藏）: ${perception.self.inventory.length}
 - 可达资源: ${perception.resources.length}个${perception.resources[0] ? ` (最近: ${perception.resources[0].zoneName}, ${perception.resources[0].distance}米)` : ""}
@@ -196,13 +239,6 @@ ${recentMemory || "- 暂无"}
 
 ### 当前目标
 ${state.goal}
-
-## 决策要求
-
-1. **生存优先**：HP < 30% 必须治疗或撤退
-2. **效率优先**：有明确目标时保持专注
-3. **团队协作**：适当支援附近友方
-4. **资源管理**：背包较多时优先处理
 
 ## 输出格式
 
@@ -218,8 +254,7 @@ ${state.goal}
   }
 }
 \`\`\`
-
-可用动作类型：move, attack, gather, interact, useSkill, useItem, flee, wait, follow`;
+`;
 }
 
 /** 解析 LLM 响应 */
@@ -297,7 +332,73 @@ function fallbackDecision(perception: AIPerception): LLMDecision {
   };
 }
 
-/** ★ 主决策函数：调用 LLM 并返回结果 */
+/** ★ v6：决策触发评估结果 */
+export interface BrainTrigger {
+  /** 是否应该决策 */
+  should: boolean;
+  /** 触发优先级（P0 最高） */
+  priority: "P0" | "P1" | "P2";
+  /** 触发原因（写进记忆与日志） */
+  reason: string;
+  /** 紧急层已接管（此时不烧 LLM，直接执行） */
+  emergency?: AIAction | null;
+}
+
+/**
+ * ★ v6 阶段一：评估「这个角色现在该不该思考」（每 tick 跑，纯本地，不烧 token）
+ *
+ * 拆成两阶段的原因：调度器要先把所有「想决策」的角色收集起来排队，
+ * 再由 pump 逐个发起 LLM。如果在一个函数里既判断又发起，
+ * 多个角色同拍就会并发请求 → chatResult 单槽位互相覆盖 → 丢决策。
+ *
+ * 紧急层（checkEmergency）在这一阶段执行 —— 它是纯程序化的，
+ * **不受任何预算/熔断/并发限制**，保证 AI 在危急时永远能反应。
+ */
+export function evaluateBrainTrigger(entity: Entity, state: GameState): BrainTrigger {
+  const aiState = getOrCreateAIState(entity);
+  if (!aiState.enabled) return { should: false, priority: "P2", reason: "未启用" };
+
+  // ① 收集感知
+  const perception = updatePerception(entity, state);
+
+  // ② 紧急检查（覆盖 LLM 决策）—— 最高优先级，且不受预算限制
+  const emergency = checkEmergency(entity, perception);
+  aiState.emergency = emergency.flags;
+  if (emergency.shouldOverride && emergency.action) {
+    return { should: true, priority: "P0", reason: "紧急响应", emergency: emergency.action };
+  }
+
+  // ③ 检查事件触发（消费队列）
+  const events = pendingEvents.get(entity.id) || [];
+  pendingEvents.set(entity.id, []);
+  const highPriorityEvent = events.find((e) => shouldTriggerFromEvent(e, aiState.currentAction));
+
+  // ④ 检查心跳间隔
+  const now = Date.now();
+  const interval = calculateInterval(aiState, perception);
+  const intervalElapsed = now - aiState.lastBrainTick >= interval;
+
+  if (!intervalElapsed && !highPriorityEvent) {
+    return { should: false, priority: "P2", reason: "未到决策时间" };
+  }
+  if (now < aiState.cooldownUntil) {
+    return { should: false, priority: "P2", reason: "动作冷却中" };
+  }
+
+  // ⑤ 记录触发信息（供阶段二使用）
+  aiState.pendingTriggerReason = highPriorityEvent
+    ? `事件触发: ${highPriorityEvent.type}`
+    : `心跳触发（间隔 ${Math.round(interval / 1000)}s）`;
+  aiState.pendingTriggerPriority = highPriorityEvent ? highPriorityEvent.priority : "P2";
+
+  return {
+    should: true,
+    priority: highPriorityEvent ? highPriorityEvent.priority : "P2",
+    reason: aiState.pendingTriggerReason,
+  };
+}
+
+/** ★ v6 阶段二：真正调用 LLM 决策（由调度器逐个调用，全局单槽位） */
 export async function callBrain(
   entity: Entity,
   state: GameState,
@@ -308,7 +409,7 @@ export async function callBrain(
   // 1. 收集感知
   const perception = updatePerception(entity, state);
 
-  // 2. 紧急检查（覆盖 LLM 决策）
+  // 2. 紧急检查（覆盖 LLM 决策）—— 阶段一已处理过，这里再兜一次（防止直连调用）
   const emergency = checkEmergency(entity, perception);
   aiState.emergency = emergency.flags;
   if (emergency.shouldOverride && emergency.action) {
@@ -318,29 +419,15 @@ export async function callBrain(
     return { reasoning: "紧急响应", goal: aiState.goal, action: emergency.action };
   }
 
-  // 3. 检查事件触发
-  const events = pendingEvents.get(entity.id) || [];
-  pendingEvents.set(entity.id, []);
-  const highPriorityEvent = events.find((e) => shouldTriggerFromEvent(e, aiState.currentAction));
-
-  if (highPriorityEvent) {
-    addMemory(aiState, "system", `事件触发: ${highPriorityEvent.type}`);
+  // 3. 事件触发（阶段一已消费队列，这里从 pendingTriggerReason 读回）
+  if (aiState.pendingTriggerReason) {
+    addMemory(aiState, "system", aiState.pendingTriggerReason);
+    aiState.pendingTriggerReason = "";
   }
 
-  // 4. 检查心跳间隔
-  const now = Date.now();
-  const interval = calculateInterval(aiState, perception);
-  const intervalElapsed = now - aiState.lastBrainTick >= interval;
-  if (!intervalElapsed && !highPriorityEvent) {
-    return null; // 未到决策时间
-  }
-  if (now < aiState.cooldownUntil) {
-    return null; // 冷却中
-  }
-
-  // 5. 调用 LLM
+  // 4. 调用 LLM
   aiState.mode = "brain";
-  aiState.lastBrainTick = now;
+  aiState.lastBrainTick = Date.now();
 
   try {
     const systemPrompt = buildSystemPrompt(aiState, perception);
@@ -349,9 +436,10 @@ export async function callBrain(
     // ★ 复用 eventEngine 的 llm.speak 接口
     //    实际通过 aiTalkToLLM 桥接（避免与现有聊天通道冲突）
     const raw = await callLLM(entity.name, systemPrompt, userPrompt);
+    if (!raw) throw new Error("LLM 返回空（可能被调度器闸门拒绝或通道不可用）");
     const decision = parseLLMResponse(raw) || fallbackDecision(perception);
 
-    // 6. 应用决策
+    // 5. 应用决策
     aiState.goal = decision.goal;
     aiState.currentAction = decision.action;
     addMemory(aiState, decision.action.type as any, decision.action.context);

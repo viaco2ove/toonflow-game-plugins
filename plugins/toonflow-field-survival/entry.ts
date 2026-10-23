@@ -24,6 +24,7 @@
  *  插件自己的 agent 提示词写在插件里，不污染宿主）。编译走 esbuild --bundle 模式，
  *  这些 import 会被内联进单文件 entry.js，不产生运行时外部依赖。 */
 import {
+  PROMPT_FIELD_SURVIVAL_AI_BRAIN,
   PROMPT_FIELD_SURVIVAL_MAP_GENER,
   PROMPT_FIELD_SURVIVAL_QUEST_GENER,
   PROMPT_FIELD_SURVIVAL_SHOP_GENER,
@@ -520,6 +521,22 @@ export interface FieldSurvivalState {
   screenShakeIntensity?: number;
   /** ★ P1 打击感：顿帧剩余帧数（>0 时前端跳过本次渲染） */
   hitStopFrames?: number;
+  /** ★ AI 托管频率判据：玩家战斗状态（宿主权威，前端只读）
+   *  level: none（无威胁）| skirmish（遭遇战，未交手）| engaged（交战中）
+   *  · damage() 是所有伤害的唯一入口 → 玩家参与伤害即置 engaged
+   *  · engaged 保持 COMBAT_HOLD_TICKS 后降为 skirmish；skirmish 且附近无威胁则降为 none
+   *  · 等级跃迁时产生 combatTransition，供前端派发 AI 事件（边沿触发） */
+  playerCombat?: {
+    level: "none" | "skirmish" | "engaged";
+    /** 最后一次玩家参与的伤害结算时刻（tick） */
+    lastCombatTick: number;
+    /** 当前等级升起的时刻（tick） */
+    sinceTick: number;
+    /** 附近敌人数（skirmish 判据） */
+    nearbyEnemies: number;
+    /** ★ 本 tick 发生的等级跃迁（none→skirmish→engaged），前端消费一次后清空 */
+    combatTransition?: { from: "none" | "skirmish" | "engaged"; to: "none" | "skirmish" | "engaged"; tick: number };
+  };
   /** ★ v5：背包物品展示元数据（稀有度 / 类型 / 恢复量 / 估价） */
   bagMeta?: Record<string, BagItem>;
   /** ★ v5：背包自定义排列顺序（物品名数组） */
@@ -1265,6 +1282,22 @@ function dropKillChest(s: FieldSurvivalState, target: Entity): void {
 }
 
 function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity) {
+  // ★ AI 托管：玩家战斗状态打点（damage 是所有伤害的唯一入口 —— 普攻/技能/AI 攻击/怪物攻击都走这里）
+  //   玩家参与（挨打或出手）即视为进入交战 → engaged。
+  //   判据放在这里而不是「附近有敌人」，是因为战斗的开始必然产生一次伤害结算。
+  if (amount > 0 && (target?.side === "player" || attacker?.side === "player")) {
+    const pc = (s.playerCombat ||= {
+      level: "none" as const,
+      lastCombatTick: 0,
+      sinceTick: 0,
+      nearbyEnemies: 0,
+    });
+    pc.lastCombatTick = s.tick;
+    if (pc.level !== "engaged") {
+      pc.sinceTick = s.tick;
+      pc.level = "engaged";
+    }
+  }
   target.hp = clamp(target.hp - amount, 0, target.maxHp);
   // ★ game.md 普攻特效：被击者白闪 + 命中火花/爆炸；攻击者小跳（amount=0 的「未命中」占位不触发）
   if (amount > 0) {
@@ -1327,6 +1360,62 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
     } else {
       pushEvent(s, `${target.name} 倒下了`);
     }
+  }
+}
+
+/* ============================================================
+   ★ AI 托管：玩家战斗状态（频率判据，宿主权威）
+   ------------------------------------------------------------
+   为什么必须在宿主算：AI 的感知半径只有 13 米，而敌人在 20 米外时
+   AI 根本看不到玩家被围 —— 这正是「玩家挨打、队友反应慢」的根因。
+   宿主持有全部实体，能算准「玩家身边有没有威胁」。
+
+   三态：
+     engaged  — 玩家刚参与过伤害，且在 COMBAT_HOLD_TICKS 内（30s）
+     skirmish — engaged 超时，但附近仍有敌人（未脱离接触）
+     none     — 以上都不满足
+   ============================================================ */
+
+/** engaged 保持时长（30s = 300 tick，tick = 100ms） */
+const COMBAT_HOLD_TICKS = 300;
+/** skirmish 判据：附近多少米内有活敌 */
+const COMBAT_NEARBY_ENEMY_M = 20;
+
+/** 更新玩家战斗状态等级，并记录跃迁（供前端派发 AI 事件做边沿触发） */
+function updatePlayerCombatState(s: FieldSurvivalState, player: Entity): void {
+  const pc = (s.playerCombat ||= {
+    level: "none" as const,
+    lastCombatTick: -999999,
+    sinceTick: 0,
+    nearbyEnemies: 0,
+  });
+
+  // ① 统计玩家附近的活敌（skirmish 判据）
+  let near = 0;
+  for (const e of s.entities) {
+    if (e.side !== "enemy" || e.alive === false) continue;
+    if (dist(player, e) <= COMBAT_NEARBY_ENEMY_M) near += 1;
+  }
+  pc.nearbyEnemies = near;
+
+  // ② 判定目标等级
+  const prev = pc.level;
+  let next: "none" | "skirmish" | "engaged" = prev;
+  if (s.tick - pc.lastCombatTick <= COMBAT_HOLD_TICKS) {
+    next = "engaged";
+  } else if (near > 0) {
+    next = "skirmish";
+  } else {
+    next = "none";
+  }
+
+  // ③ 跃迁：记录 from→to（前端消费一次后清空）
+  if (next !== prev) {
+    pc.level = next;
+    pc.sinceTick = s.tick;
+    pc.combatTransition = { from: prev, to: next, tick: s.tick };
+    // 玩家脱离战斗时清掉「最近一次交战」的时间戳，避免下次交战被误判为 engaged
+    if (next === "none") pc.lastCombatTick = -999999;
   }
 }
 
@@ -1416,6 +1505,9 @@ let enemyNav: EnemyNavGrid | null = null;
 let enemyNavEpoch = "";
 /** 敌人碰撞半径（米）。比玩家的 0.4 略小：1 米宽的窄门里不至于卡住 */
 const ENEMY_NAV_R = 0.38;
+/** ★ v6：ally / AI 托管角色碰撞半径。与敌人同值（同为 32px 精灵贴图，
+ *   体型一致）；比玩家 0.4 小一点，避免 ally 跟玩家抢同一格时互相挤住。 */
+const AI_NAV_R = 0.38;
 
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -1997,8 +2089,23 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       moveY = a.y;
     }
 
-    if (target) moveTowards(a, target.x, target.y, speed * 0.92);
-    else if (doMove) moveTowards(a, moveX, moveY, speed * 0.8);
+    /* ★ v6 避障（修 AI 卡墙）：原来 moveTowards 是「直线给速度」，
+     *   撞墙时 isActionComplete 的 dist<0.8 永不满足 → AI 卡在移动态 60 秒
+     *   （_aiMoveTo 超时才清）。改为复用 enemyNav 的 navStep（八向局部避障，
+     *   注释见 navStep：「沿墙绕行而不是原地抖」）。无网格（切图首拍）退回直线。 */
+    const dstX = target ? target.x : moveX;
+    const dstY = target ? target.y : moveY;
+    if (enemyNav && (target || doMove)) {
+      const step = speed * 0.8 * TICK_DT_S;
+      const p = navStep(enemyNav, a.x, a.y, dstX - a.x, dstY - a.y, step, AI_NAV_R);
+      a.x = p.x;
+      a.y = p.y;
+      if (Math.abs(dstX - a.x) > 2) a.facing = dstX > a.x ? 0 : 180;
+    } else if (target) {
+      moveTowards(a, target.x, target.y, speed * 0.92);
+    } else if (doMove) {
+      moveTowards(a, moveX, moveY, speed * 0.8);
+    }
     if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
       damage(s, target, a.atk, a);
       a.cooldown = 30;
@@ -2013,7 +2120,16 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     if (a.side === "player" || a.side === "ally") return;
     const mv = (a as any)._aiMoveTo;
     if (!mv) return;
-    moveTowards(a, mv.x, mv.y, speed * 0.8);
+    // ★ v6 避障：与 ally 循环同源——NPC 被 #ai 派活时也走 navStep，撞墙能绕而不是卡 60s
+    if (enemyNav) {
+      const step = speed * 0.8 * TICK_DT_S;
+      const p = navStep(enemyNav, a.x, a.y, mv.x - a.x, mv.y - a.y, step, AI_NAV_R);
+      a.x = p.x;
+      a.y = p.y;
+      if (Math.abs(mv.x - a.x) > 2) a.facing = mv.x > a.x ? 0 : 180;
+    } else {
+      moveTowards(a, mv.x, mv.y, speed * 0.8);
+    }
     if (dist(a, mv) < 0.5) {
       delete (a as any)._aiMoveTo;
       delete (a as any)._aiMoveToTick;
@@ -2153,6 +2269,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   // ★ v4 每个区域各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
   //   （城镇安全区不刷新；不再用 enemies.length===0 触发清场补波）
   regionTick(s, player);
+
+  // ★ AI 托管：更新玩家战斗状态等级（频率判据，宿主权威）
+  updatePlayerCombatState(s, player);
 
   // 死亡判定
   if (!player.alive && s.phase === "playing") {
@@ -5033,7 +5152,7 @@ export async function handle_action(
       } else {
         pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor((skill as any).effects_type, "#fff"), icon: effectIcon((skill as any).effects_type), size: 1.6 });
       }
-      targets.slice(0, 3).forEach((t) => damage(s, t, skill.power));
+      targets.slice(0, 3).forEach((t) => damage(s, t, skill.power, player));
       pushEvent(s, targets.length ? `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标` : `施放 ${skill.name}`);
       return okResp(targets.length ? `${skill.name}` : `${skill.name}（空放）`);
     }
@@ -5064,7 +5183,7 @@ export async function handle_action(
       // ★ P2：普攻带当前武器/主手物品的 effects_type（从 playerCard 第一件 atk 装备推断，无则默认白）
       const mainItem = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
       pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor(mainItem?.effects_type, "#fff"), size: 1.2 });
-      damage(s, target, dmg);
+      damage(s, target, dmg, player);
       pushEvent(s, `普攻命中 ${target.name}，伤害 ${dmg}`);
       return okResp(`普攻 → ${target.name} -${dmg}`);
     }
@@ -5710,7 +5829,7 @@ export async function handle_action(
         pushEvent(s, `施放 ${sk.name}（空放，无目标）`);
         return okResp(`${sk.name}（空放）`);
       }
-      skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power));
+      skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power, meSk));
       pushEvent(s, `施放 ${sk.name}，命中 ${Math.min(3, skTargets.length)} 个目标`);
       return okResp(`${sk.name}`);
     }
@@ -6332,6 +6451,51 @@ export async function handle_action(
         mode,
         npcName: roleName,
       }));
+    }
+
+    case "sys_brain": {
+      // ★ AI 托管大脑（v6）：把前端拼好的实时感知交给 LLM，结果写回 s.chatResult
+      //   按 reqId 配对（前端 notifyBrainResult 只认 brain_ 前缀的 reqId）。
+      //
+      //   prompt 分工：systemPrompt 直接用插件常量 PROMPT_FIELD_SURVIVAL_AI_BRAIN
+      //   （entry.ts 顶部已 import，esbuild 会内联），不让前端每拍传 ~1200 token 的长串；
+      //   动态感知（角色设定 + 当前情况）由前端 brain.ts 拼成 userPrompt 传入。
+      //
+      //   通道复用 sys_chat 的成熟范式：ctx.tsApi.agent.run → PluginAgentRunner
+      //   （内部按 input.systemPrompt 拼 messages 调 u.ai.text.invoke，15s 超时）。
+      const reqId = str(params?.reqId, "");
+      const entityName = str(params?.entityName, "???");
+      const userPrompt = str(params?.userPrompt, "");
+      // ★ 异常也必须写回包，否则前端 brainResultWaiters 会一直 pending 到超时
+      const fail = (err: string) => {
+        s.chatResult = { reqId, ok: false, error: err };
+        persistSys(context, s);
+        return okResp(JSON.stringify({ error: err }));
+      };
+      if (!reqId) return fail("缺少 reqId");
+      if (!userPrompt.trim()) return fail("缺少 userPrompt（前端未提供实时感知）");
+      try {
+        if (!context?.tsApi?.agent) return fail("tsApi.agent 不可用");
+        const result = await context.tsApi.agent.run("field-survival-ai-brain", {
+          entityName,
+          systemPrompt: PROMPT_FIELD_SURVIVAL_AI_BRAIN,
+          userPrompt,
+        });
+        // 模型常把内容包进 ```json 围栏 → 先剥围栏（brain.ts 的正则已能容忍，这里再兜一层）
+        const raw = result?.ok && result?.output?.text
+          ? String(result.output.text)
+              .replace(/^\s*```[a-zA-Z]*\s*/, "")
+              .replace(/\s*```\s*$/, "")
+              .trim()
+          : "";
+        if (!raw) return fail(String(result?.error || "LLM 返回空"));
+        s.chatResult = { reqId, ok: true, text: raw };
+        persistSys(context, s);
+        return okResp("brain ok");
+      } catch (e) {
+        console.warn("[field-survival] sys_brain agent call failed:", e);
+        return fail(String((e as any)?.message || e || "brain agent 调用异常"));
+      }
     }
 
     case "page": {

@@ -100,6 +100,10 @@ export interface AIState {
   cooldownUntil: number;
   /** 角色所在地图 */
   mapName: string;
+  /** ★ v6：本次决策的触发原因（阶段一写入，阶段二消费后清空） */
+  pendingTriggerReason?: string;
+  /** ★ v6：本次决策的触发优先级 */
+  pendingTriggerPriority?: "P0" | "P1" | "P2";
 }
 
 /** 自身感知数据 */
@@ -166,7 +170,14 @@ export interface AIWorldPerception {
   currentMap: string;
   nearbyMaps: string[];
   timeOfDay: string;
+  /** ★ 玩家战斗等级（宿主权威，AI 频率判据） */
+  playerCombatLevel: AICombatLevel;
+  /** ★ 距离上次交战多少秒（宿主 tick 派生） */
+  secondsSinceCombat: number;
 }
+
+/** ★ 玩家战斗等级（宿主 entry.ts 维护，AI 侧只读） */
+export type AICombatLevel = "none" | "skirmish" | "engaged";
 
 /** 完整的感知数据 */
 export interface AIPerception {
@@ -203,10 +214,36 @@ export interface BrainConfig {
   maxManagedCount: number;
 }
 
-/** 默认大脑配置 */
+/* ============================================================
+   ★ 触发频率常量（见 md/curr_design/.../ai托管.agent.触发频率.md）
+   判据是「玩家战斗状态」而不是「AI 自己身边有敌人」——
+   原因：AI 感知半径只有 13m，敌人在 20m 外时 AI 看不到玩家被围，
+   按自己的敌人判会让「玩家挨打、队友反应慢」。
+   ============================================================ */
+
+/** 交战中（玩家刚参与过伤害，30s 内） */
+export const COMBAT_INTERVAL_ENGAGED = 5000;
+/** 遭遇战（交战中但已过保持窗口，附近仍有敌人） */
+export const COMBAT_INTERVAL_SKIRMISH = 10000;
+/** 非战斗（野外） */
+export const IDLE_INTERVAL_BASE = 20000;
+/** 非战斗但附近有资源点（略快，让 AI 去找东西） */
+export const IDLE_INTERVAL_WITH_RESOURCES = 15000;
+/** 城镇 / 安全区（最慢，AI 基本待命） */
+export const TOWN_INTERVAL_BASE = 30000;
+
+/** 地图集可覆盖的绝对下界（战斗态允许下探到此，防止决策堆积） */
+export const HARD_FLOOR_INTERVAL = 3000;
+/** 地图集可覆盖的绝对上界 */
+export const HARD_CEIL_INTERVAL = 60000;
+
+/** 默认大脑配置
+ *  ★ maxInterval 从 15000 上调到 30000 —— 这是核心降本杠杆：
+ *    现状非战斗就是 15s 上限，5 角色 = 20 次/分；改 30s 后 = 10 次/分，直接砍半，
+ *    而玩家几乎察觉不到差别（非战斗时 AI 决策内容重复度高）。 */
 export const DEFAULT_BRAIN_CONFIG: BrainConfig = {
   minInterval: 5000,
-  maxInterval: 15000,
+  maxInterval: 30000,
   adaptiveEnabled: true,
   maxManagedCount: 5,
 };

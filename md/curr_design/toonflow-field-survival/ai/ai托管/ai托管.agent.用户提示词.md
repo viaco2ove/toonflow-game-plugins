@@ -1,4 +1,4 @@
-# AI 托管 Agent · 用户提示词（动态感知）
+   # AI 托管 Agent · 用户提示词（动态感知）
 
 > **生成方**：插件前端 `vue/src/ai/brain.ts` 的 `buildSystemPrompt()` + `buildUserPrompt()`
 > **去向**：`input.userPrompt` → `messages[1]`（user 角色）

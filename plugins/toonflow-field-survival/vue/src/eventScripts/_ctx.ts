@@ -117,6 +117,10 @@ export interface EventDef {
     | { type: "flag_set"; key: string }
     | { type: "kill_count"; gte: number }
     | { type: "turn_count"; gte: number }
+    // ★ v6 AI 托管：定时器触发器 ——「地图集可以个性自己的定时器」的落点
+    //   everyMs：触发周期（ms）。硬下界 2000（低于此 LLM 决策会堆积而非变快）
+    //   when：触发条件 —— any（默认）| combat（仅玩家战斗/遭遇战时）| idle（仅非战斗时）
+    | { type: "interval"; everyMs: number; when?: "any" | "combat" | "idle" }
     | { type: "custom"; name: string };
   /** 条件（全部满足才 fire） */
   conditions?: Array<
@@ -137,6 +141,13 @@ export interface EventDef {
     | { type: "call_action"; name: string; args?: Record<string, unknown> }
     | { type: "llm_speak"; npcId: string; npcName: string; userText: string }
     | { type: "wait"; ms: number }
+    // ★ v6 AI 托管：唤醒托管角色的大脑（可精确地在剧情节点上"戳"一下 AI）
+    //   priority：P0 无条件立即决策 / P1 可打断 move·wait·follow / P2 不打断
+    //   target：可选，只唤醒指定角色（角色 id / "ally:名字" / 纯名字）；缺省 = 全部
+    | { type: "ai_trigger"; priority?: "P0" | "P1" | "P2"; reason?: string; target?: string }
+    // ★ v6 AI 托管：覆盖本图 AI 决策间隔（地图集"个性自己的定时器"）
+    //   钳制：engaged 下界 3000ms，其他态下界 5000ms，上界 30000ms
+    | { type: "ai_interval"; engaged?: number; skirmish?: number; idle?: number; all?: number }
   >;
   /** 备注（编辑器只读显示） */
   comment?: string;
@@ -148,5 +159,12 @@ export interface EventDef {
 export interface EventsFile {
   version: 1;
   map: string;
+  /** ★ v6 AI 托管：地图级 AI 配置（可选）
+   *  interval：按战斗等级分别指定的 AI 决策间隔（ms）
+   *  maxManaged：本图最大托管角色数 */
+  ai?: {
+    interval?: { engaged?: number; skirmish?: number; idle?: number; all?: number };
+    maxManaged?: number;
+  };
   events: EventDef[];
 }

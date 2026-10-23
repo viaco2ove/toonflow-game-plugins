@@ -1022,12 +1022,14 @@ function install(): void {
         return;
       }
       if (action === "sys_brain") {
-        // ★ 预览（standalone）无 AI 托管大脑 LLM 通道：立即回失败，避免调用方 45s 超时
+        // ★ 预览（standalone）无后端 LLM 通道：立即回失败（不等到前端 8s 超时），
+        //   前端 brain.ts 收到空串 → 走 fallbackDecision（程序化兜底，AI 不停摆）。
+        //   要真机 LLM 决策：走 --conn（dev-host）或安装后宿主（PluginAgentRunner）。
         const reqId = String(params?.reqId || "");
         (state as any).chatResult = {
           reqId,
           ok: false,
-          error: "preview 无 AI 托管大脑通道（请走 --conn / 安装后宿主以使用自由文本 #ai）",
+          error: "standalone 预览无 LLM 通道（请用 --conn / 安装后宿主）；已走程序化兜底",
         };
         push();
         return;

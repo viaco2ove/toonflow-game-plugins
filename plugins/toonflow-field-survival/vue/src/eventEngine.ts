@@ -287,15 +287,77 @@ async function runActions(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promi
       case "wait":
         await new Promise(r => setTimeout(r, a.ms));
         break;
+      // ★ v6 AI 托管：唤醒托管角色的大脑（地图集可以精确地在剧情节点上"戳"一下 AI）
+      case "ai_trigger":
+        await runAITrigger(a);
+        break;
+      // ★ v6 AI 托管：覆盖本图的 AI 决策间隔（地图集"个性自己的定时器"）
+      case "ai_interval":
+        await runAIInterval(a);
+        break;
     }
   }
+}
+
+/* ============================================================
+   ★ v6：AI 托管相关的两个新动作
+   ------------------------------------------------------------
+   设计文档：md/curr_design/.../ai托管/ai托管.agent.触发频率.md §1.3 / §4.1
+   ============================================================ */
+
+/** ai_interval 覆盖值（模块级：切图时清空，由 ai/mapInterval.ts 读取） */
+let aiIntervalOverride: {
+  engaged?: number; skirmish?: number; idle?: number; all?: number;
+} | null = null;
+
+/** ai_trigger 实现：向托管角色派发 AI 事件 */
+async function runAITrigger(a: {
+  priority?: "P0" | "P1" | "P2";
+  reason?: string;
+  /** 可选：只唤醒指定角色（"ally:萧肿" / 角色 id）；缺省 = 所有托管角色 */
+  target?: string;
+}): Promise<void> {
+  const priority = a.priority || "P2";
+  const reason = a.reason || "地图集触发";
+  try {
+    const { broadcastAIEvent } = await import("./ai");
+    broadcastAIEvent(priority, reason, a.target);
+  } catch (e) {
+    console.warn("[eventEngine] ai_trigger 执行失败:", e);
+  }
+}
+
+/** ai_interval 实现：设置本图 AI 间隔覆盖 */
+async function runAIInterval(a: {
+  engaged?: number; skirmish?: number; idle?: number; all?: number;
+}): Promise<void> {
+  aiIntervalOverride = { ...(aiIntervalOverride || {}), ...a };
+  try {
+    const { setMapIntervalOverride } = await import("./ai/mapInterval");
+    setMapIntervalOverride(aiIntervalOverride);
+    console.info("[eventEngine] ai_interval 覆盖已生效:", aiIntervalOverride);
+  } catch (e) {
+    console.warn("[eventEngine] ai_interval 设置失败:", e);
+  }
+}
+
+/** 读取当前生效的 interval 覆盖（ai/mapInterval.ts 反向读取，避免循环依赖） */
+export function getAIIntervalOverride(): {
+  engaged?: number; skirmish?: number; idle?: number; all?: number;
+} | null {
+  return aiIntervalOverride;
 }
 
 // ─── 事件触发入口 ───
 // repeat 事件（采集类 area_enter）：不进 firedIds 防重入，但加冷却（ms）防连点
 const repeatCooldown = new Map<string, number>();
 async function fireEvent(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promise<void> {
-  if (ev.repeat) {
+  // ★ v6：interval 事件按「重复事件」处理 —— 不占 firedIds（每次都要能 fire），
+  //   冷却由 tickIntervalEvents 自己做（这里不再叠加 repeatCooldown，避免双重延迟）
+  const isInterval = (ev.trigger as any)?.type === "interval";
+  if (isInterval) {
+    // 交给 tickIntervalEvents 的冷却控制，fireEvent 不做额外拦截
+  } else if (ev.repeat) {
     const cd = repeatCooldown.get(ev.id) || 0;
     if (Date.now() < cd) return;
     repeatCooldown.set(ev.id, Date.now() + 3000);
@@ -318,6 +380,11 @@ async function fireEvent(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promis
 /** ★ 调试/UI 用：读取当前已加载的事件定义（供 EventPanel 显示） */
 export function getLoadedEvents(): EventDef[] {
   return loadedEvents.value?.events || [];
+}
+
+/** ★ v6：读取当前已加载的完整事件文件（含顶层 ai 配置，供 mapInterval 读地图级覆盖） */
+export function getLoadedEventsFile(): EventsFile | null {
+  return loadedEvents.value;
 }
 
 /** ★ 调试/UI 用：读取当前已设置的 eventZones（供 EventPanel 显示区域） */
@@ -363,6 +430,104 @@ export async function onMapEntered(mapFile: string): Promise<void> {
   const evs = loadedEvents.value?.events || [];
   for (const ev of evs) {
     if (ev.trigger.type === "enter_map") void fireEvent(ev);
+  }
+  // ★ v6：重建 interval 定时器（新图可能有新的 interval 事件）+ 清空覆盖
+  resetIntervalTimers(evs);
+  aiIntervalOverride = null;
+  try {
+    const { clearMapIntervalOverride } = await import("./ai/mapInterval");
+    clearMapIntervalOverride();
+  } catch { /* mapInterval 不可用时忽略 */ }
+}
+
+/* ============================================================
+   ★ v6：interval 定时器触发器
+   ------------------------------------------------------------
+   「地图集可以个性自己的定时器」的落点。现状三种触发器全是离散事件
+   （enter_map / interact / area_enter），而 AI 托管需要的是「每隔一段时间
+   想一下」—— 之前没有任何接口能满足这个诉求。
+
+   约束（防止成为成本黑洞）：
+     1. 必须配 ai_trigger 或 UI 动作；纯 interval+set_flag 是合法倒计时
+     2. 不进 firedIds（和采集类 area_enter 一样可重复 fire），但加冷却防连点
+     3. everyMs 有硬下界（2000ms），一张图写 500 会被钳制并打警告
+   ============================================================ */
+
+/** interval 事件 id → 下次触发时刻 */
+const intervalTimers = new Map<string, number>();
+/** interval 事件 id → 上次触发时刻（冷却用） */
+const lastIntervalFire = new Map<string, number>();
+/** interval 最小冷却（ms） */
+const INTERVAL_MIN_COOLDOWN_MS = 1000;
+/** everyMs 硬下界（ms）—— 低于此值 LLM 决策会堆积而非变快 */
+const INTERVAL_EVERY_MS_FLOOR = 2000;
+/** 单图 interval 事件数量上限 */
+const INTERVAL_EVENTS_PER_MAP_MAX = 3;
+
+/** 切图时重建 interval 定时器 + 校验事件数量/everyMs 合法性 */
+function resetIntervalTimers(events: EventDef[]): void {
+  intervalTimers.clear();
+  lastIntervalFire.clear();
+  const now = Date.now();
+  const list = events.filter((ev) => (ev.trigger as any)?.type === "interval");
+  if (list.length > INTERVAL_EVENTS_PER_MAP_MAX) {
+    console.warn(
+      `[eventEngine] 本图有 ${list.length} 个 interval 事件，超过上限 ${INTERVAL_EVENTS_PER_MAP_MAX}；` +
+      `只有前 ${INTERVAL_EVENTS_PER_MAP_MAX} 个会生效（其余被忽略以控成本）`,
+    );
+  }
+  for (const ev of list.slice(0, INTERVAL_EVENTS_PER_MAP_MAX)) {
+    const t = ev.trigger as { type: "interval"; everyMs: number };
+    const every = Number(t.everyMs);
+    if (!Number.isFinite(every) || every < INTERVAL_EVERY_MS_FLOOR) {
+      console.warn(
+        `[eventEngine] ${ev.id}: everyMs=${t.everyMs} 低于硬下界 ${INTERVAL_EVERY_MS_FLOOR}ms，已钳制`,
+      );
+    }
+    const effective = Math.max(INTERVAL_EVERY_MS_FLOOR, every || INTERVAL_EVERY_MS_FLOOR);
+    intervalTimers.set(ev.id, now + effective);
+  }
+}
+
+/** 当前玩家战斗等级（由 App.vue 每 tick 通过 setPlayerCombatLevel 同步） */
+let currentCombatLevel: "none" | "skirmish" | "engaged" = "none";
+
+/** App.vue 每 tick 同步玩家战斗等级（interval 的 when 条件判据） */
+export function setPlayerCombatLevel(level: "none" | "skirmish" | "engaged"): void {
+  currentCombatLevel = level;
+}
+
+/**
+ * ★ v6：每 tick 调用，检查 interval 事件是否到期。
+ * App.vue 的 tick 循环里与 tickZones 同级调用。
+ */
+export function tickIntervalEvents(): void {
+  if (!intervalTimers.size) return;
+  const evs = loadedEvents.value?.events || [];
+  const now = Date.now();
+  for (const ev of evs) {
+    const t = ev.trigger as { type?: string; everyMs?: number; when?: string } | undefined;
+    if (t?.type !== "interval") continue;
+    if ((intervalTimers.get(ev.id) || 0) > now) continue;
+
+    // when 条件判定
+    if (t.when === "combat" && currentCombatLevel === "none") {
+      intervalTimers.set(ev.id, now + Math.max(INTERVAL_EVERY_MS_FLOOR, t.everyMs || 0));
+      continue;
+    }
+    if (t.when === "idle" && currentCombatLevel !== "none") {
+      intervalTimers.set(ev.id, now + Math.max(INTERVAL_EVERY_MS_FLOOR, t.everyMs || 0));
+      continue;
+    }
+
+    // 冷却防连点
+    const last = lastIntervalFire.get(ev.id) || 0;
+    const every = Math.max(INTERVAL_EVERY_MS_FLOOR, t.everyMs || 0);
+    intervalTimers.set(ev.id, now + every);
+    if (now - last < INTERVAL_MIN_COOLDOWN_MS) continue;
+    lastIntervalFire.set(ev.id, now);
+
+    void fireEvent(ev);
   }
 }
 

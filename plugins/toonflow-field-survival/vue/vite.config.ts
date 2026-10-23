@@ -449,6 +449,25 @@ const __impl = async (agentName, args) => {
     } catch { /* fallthrough → 本地兜底 */ }
     return await runMockQuestGener(args);
   }
+  // ★ v6 AI 托管大脑：走真实后端 /toon-api/plugin/agentRun（与 quest 同源），
+  //   让 dev-host（--conn）下也能拿到 LLM 决策 JSON；失败退本地兜底（保证链路通）。
+  //   注意：entry.ts case "sys_brain" 已自己拼 systemPrompt（插件常量），这里只透传 input。
+  if (n.indexOf("ai-brain") >= 0 || n === "field-survival-ai-brain") {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+        headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+      }
+      const r = await fetch("/toon-api/plugin/agentRun", {
+        method: "POST", headers,
+        body: JSON.stringify({ agentName: "field-survival-ai-brain", input: args || {}, aiConfigKey: "storyMiniGameModel" }),
+      });
+      const j = await r.json();
+      if (j && j.code === 200 && j.data) return j.data;
+      // 后端明确拒绝（如 agent 未注册）→ 也走兜底，别把错误抛给前端
+    } catch { /* fallthrough → 本地兜底 */ }
+    return runMockAiBrain(args);
+  }
   // ★ task-speaker-agent mock（dev-host 专用，返回 3 个选项 + 角色发言）
   if (n.indexOf("speaker") >= 0 || n.indexOf("task-speaker") >= 0) {
     await new Promise((r) => setTimeout(r, 600));
@@ -1760,6 +1779,59 @@ const QUEST_GENER_TEMPLATES = [
     }),
   },
 ];
+
+/** ★ v6 AI 托管大脑兜底：后端 /toon-api/plugin/agentRun 不可用时（无后端 / 未登录），
+ *  从 userPrompt 里**正则提取真实感知数据**再产出合法决策 JSON——
+ *  不是随机返回，而是按「有敌人打最近、没敌人去最近资源、都没有就等待」的程序化规则，
+ *  与插件 brain.ts 的 fallbackDecision 同口径，保证 dev-host 下链路可跑通。 */
+async function runMockAiBrain(args) {
+  const up = String((args || {}).userPrompt || "");
+  const num = (re) => { const m = up.match(re); return m ? m[1] : ""; };
+
+  // ① 周围敌人：哥布林 HP:14/30 距2.8米
+  const enemyRe = /([^\s（(,，]+)\s+HP:(\d+)\/(\d+)\s+距([\d.]+)米/g;
+  let best = null;
+  for (let m; (m = enemyRe.exec(up)) !== null;) {
+    const d = parseFloat(m[4]);
+    if (!best || d < best.dist) best = { name: m[1], hp: +m[2], maxHp: +m[3], dist: d };
+  }
+  // ② 背包物品数
+  const bagN = parseInt(num(/背包物品数（队伍\+私藏）:\s*(\d+)/) || "0", 10);
+  // ③ HP 百分比：HP: 26/80 (33%)
+  const hpPct = parseInt(num(/HP:\s*\d+\/\d+\s*\((\d+)%\)/) || "100", 10);
+  // ④ 最近资源：可达资源: 2个 (最近: 木材堆, 8米)
+  const resName = num(/最近:\s*([^,，]+?)\s*,/);
+  const resDist = parseFloat(num(/最近:\s*[^,，]+?,\s*([\d.]+)米/) || "0");
+
+  let out;
+  if (hpPct < 15) {
+    out = { reasoning: "血量危急", goal: "撤退保命", action: { type: "flee", context: "HP " + hpPct + "%，强制撤退" } };
+  } else if (best && hpPct >= 30) {
+    out = {
+      reasoning: "附近有敌人",
+      goal: "清理身边的敌人",
+      action: {
+        type: "attack",
+        target: { id: "e_mock_01", x: 0, y: 0, name: best.name },
+        context: "攻击 " + best.dist + " 米内的" + best.name,
+      },
+    };
+  } else if (resName && bagN < 8) {
+    out = {
+      reasoning: "威胁解除，去采集",
+      goal: "采集资源",
+      action: {
+        type: "gather",
+        target: { x: 0, y: 0, name: resName },
+        zoneName: resName,
+        context: "前往" + resName + "采集（" + resDist + "米）",
+      },
+    };
+  } else {
+    out = { reasoning: "无事可做", goal: "待命", action: { type: "wait", duration: 3000, context: "原地待命" } };
+  }
+  return { ok: true, output: { text: JSON.stringify(out) } };
+}
 
 async function runMockQuestGener(args) {
   const a = args || {};

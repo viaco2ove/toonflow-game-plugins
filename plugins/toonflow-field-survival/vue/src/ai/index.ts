@@ -16,8 +16,17 @@
 
 import type { AIGameEvent, AIState, AIAction } from "./types";
 import type { Entity, GameState } from "../types";
-import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
+import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, evaluateBrainTrigger, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
 import { executeAction, isActionComplete } from "./spine";
+import {
+  BRAIN_BUDGET,
+  enqueueBrainTask,
+  pickCombatRoles,
+  pumpBrainScheduler,
+  requeueBrainTask,
+  removeBrainTask,
+} from "./scheduler";
+import { setCurrentCombatLevel } from "./mapInterval";
 
 /** 启动 AI 托管（对外 API） */
 export function enableAI(entity: Entity, personality: string = "勇敢冲锋型"): boolean {
@@ -40,12 +49,15 @@ export function enableAI(entity: Entity, personality: string = "勇敢冲锋型"
 /** 停止 AI 托管 */
 export function disableAI(entityId: string): void {
   setAIEnabled(entityId, false);
+  // ★ v6：同时清掉该角色在调度器队列里的待办任务，避免关掉后还在排队
+  removeBrainTask(entityId);
   // 不立即删除，保留状态以便重新启用
 }
 
 /** 移除 AI 状态（实体消失时） */
 export function cleanupAI(entityId: string): void {
   removeAIState(entityId);
+  removeBrainTask(entityId);
 }
 
 /** 推入 AI 事件（外部通知） */
@@ -56,6 +68,75 @@ export function emitAIEvent(entityId: string, event: AIGameEvent): void {
 /** 外部通知战斗/系统事件 */
 export function notifyAICombat(entityId: string, description: string, data?: Record<string, unknown>): void {
   notifyAIEvent(entityId, "combat", description, data);
+}
+
+/**
+ * ★ v6：切图后广播 new_map 事件给所有托管角色（App.vue afterMapSwitchForEvents 调用）
+ *
+ * 理由：切图后 AI 的全部感知都失效了 —— 资源点来自 mapKnowledge（读 events.json），
+ * 地图知识摘要也换了。不通知的话，AI 会拿着上一张图的信息对新图做决策，
+ * 出现「跑去一个本图不存在的采集点」这类穿帮。
+ *
+ * P1 优先级：可打断 move/wait/follow，但不打断 attack/gather（正在打的架不打断）。
+ */
+export function broadcastAINewMap(mapFile: string): void {
+  const allStates = getAllAIStates();
+  let n = 0;
+  for (const [eid, st] of allStates.entries()) {
+    if (!isAIEnabled(eid)) continue;
+    // 更新角色所在地图（mapInterval 覆盖按 mapName 查）
+    st.mapName = mapFile;
+    pushAIEvent(eid, {
+      type: "new_map",
+      priority: "P1",
+      data: { map: mapFile },
+      timestamp: Date.now(),
+    });
+    n += 1;
+  }
+  if (n > 0) console.info(`[ai] 切图广播 new_map → ${n} 个托管角色（${mapFile}）`);
+}
+
+/**
+ * ★ v6：通用事件广播（事件引擎的 `ai_trigger` 动作调用）
+ *
+ * 这是「地图集可以精确地在剧情节点上戳一下 AI」的落点：
+ *   { "type": "ai_trigger", "priority": "P0", "reason": "伏击战开始" }
+ *
+ * @param priority 插队强度（P0 无条件 / P1 可打断移动类 / P2 不打断）
+ * @param reason 触发原因（写进 AI 记忆，LLM 能看到）
+ * @param target 可选：只唤醒指定角色（角色 id 或 "ally:名字"）；缺省 = 所有托管角色
+ */
+export function broadcastAIEvent(
+  priority: "P0" | "P1" | "P2",
+  reason: string,
+  target?: string,
+): void {
+  const allStates = getAllAIStates();
+  let n = 0;
+  for (const [eid, st] of allStates.entries()) {
+    if (!isAIEnabled(eid)) continue;
+    if (target && !matchAITarget(eid, st.characterName, target)) continue;
+    pushAIEvent(eid, {
+      type: "player_command",
+      priority,
+      data: { reason, source: "map_event" },
+      timestamp: Date.now(),
+    });
+    n += 1;
+  }
+  if (n > 0) {
+    console.info(`[ai] 地图集 ai_trigger → ${n} 个托管角色（P${priority[1]}）：${reason}`);
+  }
+}
+
+/** target 匹配：支持角色 id、"ally:名字"、纯名字 */
+function matchAITarget(entityId: string, characterName: string, target: string): boolean {
+  const t = String(target || "").trim();
+  if (!t) return true;
+  if (t === entityId) return true;
+  if (t.startsWith("ally:")) return characterName === t.slice(5).trim();
+  return characterName === t;
 }
 
 export function notifyAILoot(entityId: string, description: string, data?: Record<string, unknown>): void {
@@ -72,6 +153,39 @@ export function registerAILLM(
 /** ★ 主循环入口：每 tick 由 App.vue 调用（同步版本，fire-and-forget LLM 调用） */
 export function tickAllAIs(state: GameState, currentTick: number): void {
   if (!state) return;
+
+  // ★ v6：把宿主权威的玩家战斗状态同步给地图集覆盖模块（用于钳制与选档）
+  const pc = (state as any).playerCombat;
+  setCurrentCombatLevel(
+    pc?.level === "engaged" || pc?.level === "skirmish" ? pc.level : "none",
+  );
+
+  // ★ v6：玩家战斗状态跃迁（边沿触发）→ 向所有托管角色派发 AI 事件
+  //   只在「等级变化的那一刻」派发，不是战斗中每 tick 都派。
+  //   none→skirmish(P1) / skirmish→engaged(P0) / engaged→skirmish(P2)
+  const transition = (pc as any)?.combatTransition;
+  if (transition) {
+    const { from, to } = transition;
+    let prio: "P0" | "P1" | "P2" | null = null;
+    if (to === "engaged") prio = "P0";            // 开打：立即决策
+    else if (from === "none" && to === "skirmish") prio = "P1";  // 敌人靠近：战前准备
+    else if (to === "skirmish") prio = "P2";       // 脱离接触：收尾
+    if (prio) {
+      const allStates = getAllAIStates();
+      for (const eid of allStates.keys()) {
+        if (!isAIEnabled(eid)) continue;
+        pushAIEvent(eid, {
+          type: "enemy_spotted",
+          priority: prio,
+          data: { from, to, combatLevel: to },
+          timestamp: Date.now(),
+        });
+      }
+      console.info(`[ai] 玩家战斗状态跃迁: ${from} → ${to}（P${prio[1]}，广播给托管角色）`);
+    }
+    // 消费一次后清空，避免每 tick 重复派发
+    if (pc) pc.combatTransition = undefined;
+  }
 
   // ★ 消费宿主的采集到达标记 → 触发地图集事件脚本（产出权威在 events/scripts/*.ts）
   void consumeGatherArrivals(state);
@@ -105,6 +219,9 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
     }
   }
 
+  // ★ v6：收集候选托管角色（供调度器做战斗态「最近 N 个」筛选）
+  const managed = candidates.filter((e) => isAIEnabled(e.id));
+
   for (const entity of candidates) {
     if (!isAIEnabled(entity.id)) continue;
 
@@ -115,25 +232,26 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
       aiState.currentAction = null;
     }
 
-    // 决策（v0.2 异步：尝试 LLM，失败降级到兜底）
     if (!aiState.currentAction) {
-      // 发起异步决策（不阻塞 tick）
-      void (async () => {
+      // ★ v6 阶段一：评估「该不该思考」（纯本地，不烧 token）
+      const trigger = evaluateBrainTrigger(entity, state);
+
+      if (trigger.emergency) {
+        // 紧急层：直接执行，不排队、不烧 LLM、不受预算/熔断限制
+        aiState.mode = "emergency";
+        aiState.currentAction = trigger.emergency;
         try {
-          const decision = await callBrain(entity, state);
-          if (decision) {
-            const result = executeAction(entity, decision.action, state);
-            console.info(`[ai] ${entity.name}(${entity.id}): ${decision.action.type} - ${result.message}`);
-            if (result.success) {
-              const cd = decision.action.type === "wait" ? 2000 : 500;
-              aiState.cooldownUntil = Date.now() + cd;
-              aiState.currentAction = decision.action;
-            }
-          }
+          executeAction(entity, trigger.emergency, state);
         } catch (e) {
-          console.warn("[ai] brain 决策异常:", e);
+          console.warn("[ai] 紧急动作执行异常:", e);
         }
-      })();
+        continue;
+      }
+
+      if (trigger.should) {
+        // ★ 入队（不立即发起）—— 由 pumpBrainScheduler 逐个发起，避免 chatResult 单槽位冲突
+        enqueueBrainTask(entity.id, entity.name, trigger.priority, trigger.reason);
+      }
     } else {
       // ★ 当前动作未完成：继续执行
       try {
@@ -153,6 +271,41 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
       }
     }
   }
+
+  // ★ v6 阶段二：调度器泵（每 tick 最多发起一个 LLM 请求）
+  //   战斗态只让「离玩家最近」的少数角色进 LLM 队列（其余靠 emergency/兜底/后续心跳）。
+  const combatLevel = (state as any).playerCombat?.level || "none";
+  const player = (state.entities || []).find((e) => e.side === "player");
+  let llmAllowed: Set<string> | null = null;
+  if (combatLevel !== "none" && player && managed.length > BRAIN_BUDGET.combatLLMRoles) {
+    llmAllowed = pickCombatRoles(
+      managed.map((e) => ({ id: e.id, name: e.name, x: e.x, y: e.y })),
+      player.x,
+      player.y,
+      BRAIN_BUDGET.combatLLMRoles,
+    );
+  }
+
+  pumpBrainScheduler(managed.length, async (task) => {
+    // 战斗态筛选：不在「最近 N 个」里的角色，本次不出 LLM（退回队列等待下一轮）
+    if (llmAllowed && !llmAllowed.has(task.entityId)) {
+      requeueBrainTask(task);
+      return;
+    }
+    const entity = candidates.find((e) => e.id === task.entityId);
+    if (!entity) return;
+    const aiState = getOrCreateAIState(entity);
+    const decision = await callBrain(entity, state);
+    if (decision) {
+      const result = executeAction(entity, decision.action, state);
+      console.info(`[ai] ${entity.name}(${entity.id}): ${decision.action.type} - ${result.message}`);
+      if (result.success) {
+        const cd = decision.action.type === "wait" ? 2000 : 500;
+        aiState.cooldownUntil = Date.now() + cd;
+        aiState.currentAction = decision.action;
+      }
+    }
+  });
 }
 
 

@@ -51,7 +51,7 @@ import {
 import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
-import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag } from "./eventEngine";
+import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
 import { bakeTiledMap, eraseBakedObstacle, invalidateBake } from "./mapBake";
@@ -3043,6 +3043,16 @@ async function afterMapSwitchForEvents(mapFile: string): Promise<void> {
       setEventZones([]);
     }
   } catch { setEventZones([]); }
+
+  // ★ v6 AI 托管：切图后向所有托管角色派发 new_map 事件（P1，立即决策一次）
+  //   理由：切图后感知（资源点 / 地图知识）全部失效，大脑必须重建对本图的认知。
+  //   见 md/curr_design/.../ai托管.agent.触发频率.md §1.2
+  try {
+    const { broadcastAINewMap } = await import("./ai");
+    broadcastAINewMap(mapFile);
+  } catch (e) {
+    console.warn("[field-survival] 广播 AI new_map 事件失败:", e);
+  }
 }
 /** 关卡名 → 地图文件名（levelNameToFile 的本地包装，失败返回 ""；中文关卡名走 LEVEL_FILES 权威表） */
 function levelNameToFileSafe(levelName: string): string {
@@ -3807,6 +3817,12 @@ function localTick(): void {
     const meNow = s.entities.find((e) => e.side === "player");
     // ★ 事件系统：区域进出检测（eventZones，走同一玩家坐标）
     if (meNow) void tickZones(meNow.x, meNow.y);
+    // ★ v6 事件系统：interval 定时器触发器（地图集可自定义自己的定时器）
+    //   顺序很重要：先同步战斗等级（when 条件的判据），再 tick interval，最后 tickAllAIs
+    //   （interval 事件里的 ai_trigger 要在本拍的角色遍历之前入队）
+    const pcLevel = (s as any).playerCombat?.level;
+    setPlayerCombatLevel(pcLevel === "engaged" || pcLevel === "skirmish" ? pcLevel : "none");
+    tickIntervalEvents();
     // ★ AI 托管系统：每 tick 检查 AI 角色（异步、不阻塞游戏循环）
     void tickAllAIs(s, s.tick || 0);
     const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");
@@ -6188,7 +6204,12 @@ async function triggerChatSpeak(mode: "options" | "response" = "response", userT
  * 真实大模型返回 {"action":{...}, "goal":...} 格式的 JSON。
  */
 const brainResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; timer: number }> = [];
-function waitBrainResult(reqId: string, timeoutMs = 15000): Promise<any> {
+/** ★ 全局闸门：state.chatResult 是**单槽位**（后写入覆盖先写入），
+ *  多个 AI 角色同时发起 brain 请求会互相覆盖 → 必有一个永远等不到回包。
+ *  故同一时刻只允许一个 brain 请求在途；拿不到闸门的角色直接返回空串走程序化兜底
+ *  （brain.ts fallbackDecision），不发起请求也不占用时间。 */
+let brainBusy = false;
+function waitBrainResult(reqId: string, timeoutMs = 8000): Promise<any> {
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => {
       const i = brainResultWaiters.findIndex((w) => w.reqId === reqId);
@@ -6209,12 +6230,17 @@ function notifyBrainResult(res: any): void {
   w.resolve(res);
 }
 
-/** ★ AI 大脑 LLM 调用（v0.2）：通过宿主 agent 通道 */
+/** ★ AI 大脑 LLM 调用（v0.2）：通过宿主 agent 通道
+ *  ★ v6：加全局闸门 brainBusy（chatResult 单槽位，并发会互相覆盖）+ 超时 8s
+ *    （宿主 runPluginAgent 上限 15s，前端先放弃，不白等 7s）。
+ *    拿不到闸门 → 返回 "" → brain.ts 走 fallbackDecision（程序化兜底，AI 不停摆）。 */
 async function callBrainLLM(
   entityName: string,
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
+  if (brainBusy) return "";
+  brainBusy = true;
   const reqId = `brain_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   try {
     sendTick("sys_brain", { reqId, entityName, systemPrompt, userPrompt });
@@ -6228,6 +6254,8 @@ async function callBrainLLM(
   } catch (e: any) {
     console.warn("[ai] brain LLM 异常：", e);
     return "";
+  } finally {
+    brainBusy = false;
   }
 }
 
