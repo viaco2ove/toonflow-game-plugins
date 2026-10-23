@@ -6,7 +6,30 @@
 
 ---
 
-## 0. 总览：5 个任务
+## ✅ 实施状态（2026-10-23 已完成 P0 + P2）
+
+| 阶段 | 任务 | 文件 | 状态 |
+|---|---|---|---|
+| P0-① | 注册 `PROMPT_FIELD_SURVIVAL_AI_BRAIN` | `src/agents/plugins.prompts.ts` | ✅ 完成（+126 行） |
+| P0-② | `entry.ts` 加 `case "sys_brain"` | `entry.ts` | ✅ 完成（+79 行含避障） |
+| P0-③ | 前端并发闸门 + 超时 15s→8s | `vue/src/App.vue` | ✅ 完成（+16 行） |
+| P0-④ | ally 移动复用 `navStep` 避障 | `entry.ts` | ✅ 完成（ally + NPC 两处） |
+| P2-① | 删除前端 prompt 重复段 | `vue/src/ai/brain.ts` | ✅ 完成（-10 行） |
+| 附加 | dev-host `runMockAiBrain` 兜底 | `vue/vite.config.ts` | ✅ 完成 |
+| 附加 | mockHost 错误信息准确化 | `vue/src/mockHost.ts` | ✅ 完成 |
+| 附加 | 宿主 `runPluginAgent` 白名单 | `toonflow-game-app/src/lib/plugins/PluginAgentRunner.ts` | ✅ 完成（+20/-2） |
+
+**验收结果**：
+- 前端 `npm run build` 通过（444.25 kB）
+- `entry.js` esbuild 编译通过（228.9kb，无 import/import.meta）
+- 12 项产物校验全过（sys_brain case / agentName / 提示词内联 / reqId 校验 / 失败回包 / 剥围栏 / navStep×2 / AI_NAV_R / TICK_DT_S / chatResult / persistSys）
+- `runMockAiBrain` 单测 5/5 通过（attack / flee / gather / wait / 背包满不采）
+- 宿主 `PluginAgentRunner.ts` TypeScript 零新增错误（11 个错误均为预先存在）
+- 两处副本 MD5 一致：`plugins/.../entry.js` ↔ `toonflow-app-run-db/plugins/1/.../entry.js`；`ui/game.html` 同样一致
+
+---
+
+## 0. 总览：5 个任务（原始计划，留档）
 
 | 阶段 | 任务 | 文件 | 优先级 | 依赖 |
 |---|---|---|---|---|
@@ -141,19 +164,33 @@ if (enemyNav) {
 
 ---
 
-## 验收清单（全部完成后）
+## 验收清单（✅ 全部通过）
 
-| # | 检查项 | 命令 / 方法 |
+| # | 检查项 | 结果 |
 |---|---|---|
-| 1 | 提示词已注册 | `grep -c "PROMPT_FIELD_SURVIVAL_AI_BRAIN" plugins/toonflow-field-survival/src/agents/plugins.prompts.ts` ≥ 3 |
-| 2 | sys_brain case 已加 | `grep -n 'case "sys_brain"' plugins/toonflow-field-survival/entry.ts` |
-| 3 | 并发闸门已加 | `grep -c "brainBusy" plugins/toonflow-field-survival/vue/src/App.vue` ≥ 3 |
-| 4 | 超时已改 8s | `grep -n "timeoutMs = 8000" plugins/toonflow-field-survival/vue/src/App.vue` |
-| 5 | 避障已接 | `grep -c "navStep(enemyNav" plugins/toonflow-field-survival/entry.ts` ≥ 2 |
-| 6 | 前端构建通过 | `cd plugins/toonflow-field-survival/vue && npm run build` |
-| 7 | entry.js 已重编 | esbuild 编 `entry.js`，无 import / import.meta |
-| 8 | 三处 MD5 一致 | workshops 副本 / toonflow-app-run-db / toonflow-game-app 三份 `entry.js` |
-| 9 | 端到端 LLM 决策 | dev 服务器勾选 AI托管 → 控制台看 `[ai] <角色>: <type> - <message>` 不再是兜底文案 |
+| 1 | 提示词已注册 | ✅ `PROMPT_FIELD_SURVIVAL_AI_BRAIN` + `fieldSurvivalAiBrain` code + `pluginAgentPromptCode()` 映射 |
+| 2 | sys_brain case 已加 | ✅ `entry.ts`（剥围栏、reqId/userPrompt 校验、失败必回包） |
+| 3 | 并发闸门已加 | ✅ `App.vue` `brainBusy`（声明/检查/finally 释放 3 处） |
+| 4 | 超时已改 8s | ✅ `waitBrainResult(reqId, timeoutMs = 8000)` |
+| 5 | 避障已接 | ✅ ally 循环 + `#ai` NPC 应用器两处 `navStep(enemyNav, ...)`，`AI_NAV_R = 0.38` |
+| 6 | 前端构建通过 | ✅ 444.25 kB，renamed to ui/game.html |
+| 7 | entry.js 已重编 | ✅ 228.9kb，仅 `export {}` 无 import / import.meta = 0 |
+| 8 | 副本 MD5 一致 | ✅ entry.js `1b7766b9…`；ui/game.html `5a7558de…`（两处一致） |
+| 9 | 宿主白名单 | ✅ `AI_BRAIN_AGENT_NAME` 加入 `knownPluginAgents`，tsc 零新增错误 |
+| 10 | 兜底逻辑单测 | ✅ `runMockAiBrain` 5/5（attack/flee/gather/wait/背包满） |
+
+---
+
+## 遗留事项（P1/P2/P3，未实施）
+
+| 项 | 内容 | 优先级 |
+|---|---|---|
+| P2 参数校验 | `parseLLMResponse` 补 `type` 白名单 + `skillName`/`itemName`/`zoneName` 存在性校验（见[传出参数](ai托管/ai托管.agent.传出参数.md) §3.2） | P2 |
+| P2 失败冷却 | LLM 失败后 30s 冷却，避免每轮心跳白烧 | P2 |
+| P2 并发上限 | 同时托管 ≤5 角色 | P2 |
+| P2 感知增强 | 友方/NPC 报名字+距离；背包补 heal/mp 字段（见[用户提示词](ai托管/ai托管.agent.用户提示词.md) §6） | P2 |
+| P3 Capability Manifest | 能力注册表，让 prompt 只出现此刻真能执行的能力（见[ai怎么知道可以做什么](ai托管/ai托管.ai怎么知道可以做什么.md)） | P3 |
+| P3 RolePolicy | 性格参数化（fleeHpThreshold / allowGather / maxLeash） | P3 |
 
 ---
 
