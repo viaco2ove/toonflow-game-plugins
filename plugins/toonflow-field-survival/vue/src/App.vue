@@ -4387,7 +4387,10 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.save();
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.ellipse(px, py - 24, facingLeft ? -16 : 16, 24, 0, 0, Math.PI * 2);
+    // ★ 半径必须非负（负数会抛 IndexSizeError）；朝向用中心偏移表达
+    const r = 16;
+    const cx = facingLeft ? px - 6 : px + 6;
+    ctx.ellipse(cx, py - 24, r, 24, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }

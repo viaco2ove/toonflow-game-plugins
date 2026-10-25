@@ -42,7 +42,10 @@ export function resolveLocalTilesetUrl(): string | null {
     if (!story) return null;
     return (
       `/story-data/toonflow-field-survival/map_design/${encodeURIComponent(story)}` +
-      `/images/compiled_tileset_32x32.png`
+      `/images/compiled_tileset_32x32.png` +
+      // ★ cache-busting：图集内容会变（补瓦片 / 贴图替换），但路径固定 →
+      //   浏览器缓存住旧图集 → 新 gid 在旧图集里是空槽 → 渲染出棋盘格空洞。
+      `?_=${Date.now()}`
     );
   } catch {
     return null;
@@ -84,7 +87,7 @@ if (_devTilesetUrl) {
  * 生产环境在故事视觉包（数据库 map_visual）加载完成后，会调 setTilesetUrl()
  * 把 URL 换成包内 blob URL → 实现「安装插件后用数据库图集」。
  */
-let _tilesetUrl: string = _devTilesetUrl || "/images/compiled_tileset_32x32.png";
+let _tilesetUrl: string = _devTilesetUrl || "/images/compiled_tileset_32x32.png?_=" + Date.now();
 
 /** 替换图集 URL（生产：从数据库故事视觉包取到图集后调用） */
 export function setTilesetUrl(url: string | null): void {

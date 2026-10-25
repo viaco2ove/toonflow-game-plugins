@@ -437,8 +437,85 @@ def get_tileset(name: str):
         p / "compiled_tileset_32x32.png",
     ]:
         if candidate.exists():
-            return FileResponse(candidate, media_type="image/png")
+            # ★ 必须 no-cache：图集 PNG 换了内容但 URL 不变，
+            #   浏览器会按 etag 启发式缓存住旧图集 → 编辑器画出「瓦片错位/空洞」
+            #   （新 gid 在旧图集里是空槽 → 看着像棋盘格）。
+            resp = FileResponse(candidate, media_type="image/png")
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+            return resp
     raise HTTPException(404, "tileset not found")
+
+
+@app.get("/api/collections/{name}/sprites")
+def get_sprites(name: str):
+    """返回图集里的**人物/怪物动画帧**清单（用于「换实体形象」下拉框）。
+
+    为什么需要独立端点：
+      /dawnlike 端点只保留「有 description 的 tile」（3770 个无描述的 tile 被丢弃），
+      而人物动画帧在 compiled_dawnlike.json 里恰好**没有 description**，
+      只有 animated / animated_id 两个属性 —— 于是编辑器完全看不到人物贴图。
+
+    实体形象的实际来源是图集 tile id（runtime 约定：object.gid 指向图集，
+    entity_type 只决定行为类），所以这里直接给出「可当形象用的 tile id 列表」。
+
+    返回：
+      { tilewidth, tileheight, columns, tilecount,
+        sprites: [ { id, animId, category, label } ... ] }
+      - id      : 图集 tile id（写入 object.gid 时用 id+firstgid）
+      - animId  : walk 动画第二帧（compiled_dawnlike 的 animated_id）
+      - category: 'character'（有动画）或 'prop'（静态装饰）
+    """
+    p = ensure_collection(name)
+    src = p / "compiled_dawnlike.json"
+    if not src.exists():
+        raise HTTPException(404, "dawnlike not found")
+    with open(src, "r", encoding="utf-8") as fp:
+        raw = json.load(fp)
+
+    tilewidth = raw.get("tilewidth", 32)
+    tileheight = raw.get("tileheight", 32)
+    columns = raw.get("columns", 0)
+    tilecount = raw.get("tilecount", 0)
+
+    sprites = []
+    seen = set()
+    for t in raw.get("tiles", []):
+        tid = t.get("id")
+        if tid is None:
+            continue
+        props = {p["name"]: p.get("value") for p in t.get("properties", [])}
+        animated = props.get("animated", False) is True
+        anim_id = props.get("animated_id", 0)
+        anim_id = anim_id if isinstance(anim_id, int) and anim_id > 0 else 0
+        desc = (props.get("description") or "").strip()
+        # ★ 判定「可当形象」：有动画（人物/怪物 walk）或有 description（命名装饰）。
+        #   纯地面/墙砖（无动画无描述）不列 —— 它们是场景素材，不是实体形象。
+        if not animated and not desc:
+            continue
+        # walk 动画的「首帧」只取一次：animated_id 指向的是第二帧，第一帧是它自己
+        if animated and anim_id and anim_id < tid:
+            # 这是别人动画的第二帧 → 跳过（首帧已收录）
+            continue
+        if tid in seen:
+            continue
+        seen.add(tid)
+        sprites.append({
+            "id": tid,
+            "animId": anim_id,
+            "category": "character" if animated else "prop",
+            "label": desc or f"#{tid}",
+        })
+
+    sprites.sort(key=lambda s: (s["category"] != "character", s["id"]))
+    return {
+        "tilewidth": tilewidth,
+        "tileheight": tileheight,
+        "columns": columns,
+        "tilecount": tilecount,
+        "sprites": sprites,
+    }
 
 
 @app.get("/api/collections/{name}/dawnlike")
@@ -661,7 +738,13 @@ def serve_plugin_ui(file_path: str):
         ".webp": "image/webp", ".jpg": "image/jpeg", ".svg": "image/svg+xml",
     }
     ext = target.suffix.lower()
-    return FileResponse(target, media_type=MIME.get(ext, "application/octet-stream"))
+    resp = FileResponse(target, media_type=MIME.get(ext, "application/octet-stream"))
+    # ★ 预览用静态资源（game.html / images/）也会随构建变化 → 禁缓存，
+    #   否则改了前端还看到旧版本。
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 # ───────────────────────── Tile Style Change（贴图替换） ─────────────────────────
@@ -752,7 +835,12 @@ def get_material_meta(name: str):
 def get_material_tileset(name: str):
     """返回该地图集实际使用的 compiled_tileset_32x32.png"""
     _, png, _ = resolve_tileset_target(name)
-    return FileResponse(png, media_type="image/png")
+    # ★ 同上：图集内容会变（贴图替换），URL 固定 → 必须禁止缓存
+    resp = FileResponse(png, media_type="image/png")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 class OverrideReq(BaseModel):

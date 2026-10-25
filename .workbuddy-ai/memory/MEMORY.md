@@ -80,6 +80,21 @@
 - dev 调试地图集**不需要安装**：`npm run debug -- --story <故事名> --conn`，.tbg 会自动现场打包。
   需要安装的只有「装到真宿主跑」。
 
+## ★ 实体外观 = object.gid（地图编辑器换形象）
+- **game.md 铁律**：外观由 `object.gid` 指向图集，`entity_type` 只决定**行为类**。
+  全链路已通：`obj.gid` → `normalizeTiledMap` 提取 `npc.gid` → `injectMapNpcsToState` 写 `entity.gid`
+  → `drawEntity` 走 `walkTileId(gid-1)`（第二帧读 compiled_dawnlike 的 `animated_id`，不是猜 +8）。
+- ⚠️ **gid 是 Tiled 对象顶层字段，不在 properties 数组里** → 编辑器里改它不能走 `setProp`。
+  gid = tileId + firstgid；gid=0 = 回退「按类型默认形象」。
+- 编辑器 `/api/collections/{name}/dawnlike` **会丢掉全部无 description 的 tile**（3770 个），
+  而人物动画帧恰好无 description（只有 animated/animated_id）→ 看不到人物贴图。
+  故另建 `/api/collections/{name}/sprites`（有动画或有 description 才是「可当形象」；
+  `animated_id < id` 的是别人动画第二帧要跳过）。黑塔实测 1119 character + 1165 prop。
+- 缩略图 = canvas 裁图集 → 放大（`imageSmoothingEnabled=false`，像素风）→ toDataURL；
+  坐标 col = tileId%120, row = floor(tileId/120)，与编辑器画布渲染同口径。
+- 换行符：git 存 LF、工作区 CRLF（core.autocrlf）。用 Write 重写文件会写成 LF →
+  `git diff` 显示整文件全变但内容一致。改完要用 python 转回 CRLF。
+
 ## map-editor / AI 厂商目录（次要子项目）
 - AI 模型配置存后端 SQLite（`backend/ai_store.py`→ai_models.db）；canvas 切换显示必须 v-show 不能 v-if（模块级缓存 ctx，v-if 重建后永久黑屏）。
 - 厂商目录权威源在 Toonflow-game-web `src/utils/modelConfigCatalog.ts`（22 家，已移植 map-editor）。坑：voice+asr 的 baseUrl 硬编码 dashscope；tencent_ci/local_* 要手填；`manufacturer=="aliyun"`（无 _direct）是死分支；抠图厂商 {bria, aliyun_imageseg, tencent_ci, local_*} 只能绑背景分离槽位；别在 env 写占位 MODEL_path。

@@ -5,6 +5,7 @@ import TileStylePanel from './tile-style-change/TileStylePanel.vue'
 import ModelSettingsModal from './tile-style-change/ModelSettingsModal.vue'
 import MaterialPicker from './tile-style-change/MaterialPicker.vue'
 import TilesetWorkspace from './tile-style-change/TilesetWorkspace.vue'
+import SpritePicker from './SpritePicker.vue'
 
 // ─── 常量 ───
 const TILE_SIZE = 32
@@ -64,6 +65,8 @@ const currentMapName = ref(null)      // string
 const currentMap = ref(null)          // Tiled JSON
 const tileset = ref({ img: null, loaded: false })
 const dawnlike = ref(null)            // { tilewidth, tileheight, tiles: {id: {...}} }
+/** ★ 人物/怪物动画帧清单（换实体形象用；/dawnlike 不含无 description 的人物帧） */
+const spritesData = ref(null)         // { tilewidth, tileheight, columns, sprites: [...] }
 const isDirty = ref(false)
 const collectionsLoading = ref(false)
 const mapLoading = ref(false)
@@ -414,6 +417,13 @@ async function loadResources(collName) {
     dataSheets.value = await api.dataSheets(collName)
   } catch (e) {
     console.warn('data-sheets load failed:', e)
+  }
+  // ★ 人物/怪物动画帧清单（换实体形象用）
+  spritesData.value = null
+  try {
+    spritesData.value = await api.sprites(collName)
+  } catch (e) {
+    console.warn('sprites load failed:', e)
   }
 }
 
@@ -1229,6 +1239,30 @@ function applyObjProps(props) {
   render()
 }
 
+/**
+ * ★ 换实体形象（外观）—— 写 object.gid。
+ *
+ * 约定（game.md）：外观由 object.gid 指向图集，entity_type 只决定行为类。
+ * gid 是 Tiled 对象的**顶层字段**（不在 properties 数组里），所以不能走 setProp。
+ *
+ * gid = tileId + firstgid（Tiled 惯例：gid 从 firstgid 起算，图集内索引 = gid - firstgid）。
+ * gid = 0 表示「无图集贴图」→ runtime 回退按 entity_type/side 选默认形象。
+ */
+function onPickSprite({ gid, tileId, sprite }) {
+  if (!selectedObj.value) return
+  pushHistory()
+  selectedObj.value.gid = gid || undefined
+  // gid 变化时同时清掉旧的「按类型默认形象」标记，避免运行时两边打架
+  isDirty.value = true
+  render()
+  if (tileId) {
+    const name = sprite?.label && sprite.label !== `#${tileId}` ? sprite.label : `#${tileId}`
+    toast(`形象已换：${name}（tile ${tileId}）`)
+  } else {
+    toast('形象已恢复默认（按类型）')
+  }
+}
+
 // ─── 键盘 ───
 function onKeyDown(e) {
   if (e.key === 'Shift') { shiftHeld = true; updateCursor() }
@@ -1350,6 +1384,8 @@ const selectedObjInfo = computed(() => {
     id: selectedObj.value.id,
     props,
     entityType: props.entity_type || 'ITEM',
+    // ★ gid：Tiled 对象顶层字段（外观贴图，指向图集）—— 供「形象」选择器回显
+    gid: Number(selectedObj.value.gid) || 0,
   }
 })
 
@@ -1572,6 +1608,15 @@ function onPropApply() {
           <span class="prop-label">显示名</span>
           <input class="prop-input" type="text" :value="selectedObjInfo.props.full_name || ''" @input="(e) => onPropInput('full_name', e.target.value)">
         </div>
+        <!-- ★ 形象（外观）：从图集里挑人物贴图 → 写 object.gid（runtime 按 gid 出图） -->
+        <SpritePicker
+          :tileset-img="tileset.img"
+          :sprites-data="spritesData"
+          :first-gid="firstGid"
+          :columns="spritesData?.columns || 120"
+          :model-value="selectedObjInfo.gid || 0"
+          @pick="onPickSprite"
+        />
         <div class="prop-row" v-if="'camp' in selectedObjInfo.props || selectedObjInfo.entityType !== 'LEVEL_TRANSITION'">
           <span class="prop-label">阵营</span>
           <select class="prop-input" :value="selectedObjInfo.props.camp || 'neutral'" @change="(e) => onPropInput('camp', e.target.value)">

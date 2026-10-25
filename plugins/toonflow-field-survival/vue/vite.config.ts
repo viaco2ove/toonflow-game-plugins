@@ -223,7 +223,11 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
     name: "story-data",
     configureServer(server) {
       server.middlewares.use("/story-data", (req, res) => {
-        const filePath = resolve(workshopsRoot, decodeURIComponent(req.url!.replace(/^\//, "")));
+        // ★ 必须先剥掉查询串：客户端会带 cache-busting 参数（?_=<时间戳>），
+        //   连进路径里 existsSync 永远 false → 404。
+        //   （connect 的 use("/story-data") 已剥掉挂载前缀，req.url 形如 "/<故事>/..."）
+        const urlPath = (req.url || "").split("?")[0].split("#")[0];
+        const filePath = resolve(workshopsRoot, decodeURIComponent(urlPath.replace(/^\//, "")));
         if (!filePath.startsWith(workshopsRoot)) {
           res.statusCode = 403;
           res.end("Forbidden");

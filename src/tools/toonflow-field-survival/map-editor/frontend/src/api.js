@@ -2,8 +2,12 @@
 const BASE = 'http://127.0.0.1:8000/api'
 
 async function req(path, options = {}) {
+  // ★ 默认禁缓存：编辑器读的都是会被外部改写的磁盘文件（地图 JSON / 图集 / dawnlike），
+  //   fetch 默认会走 HTTP 缓存 → 存了旧版本却以为没变。
+  //   POST 一律绕过缓存（options.cache = 'no-store'）。
   const res = await fetch(BASE + path, {
     headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
     ...options,
   })
   if (!res.ok) {
@@ -39,10 +43,16 @@ export const api = {
   }),
 
   // 资源（返回 URL，不是 JSON）
-  tilesetUrl: (coll) => `${BASE}/collections/${encodeURIComponent(coll)}/tileset`,
-  dawnlikeUrl: (coll) => `${BASE}/collections/${encodeURIComponent(coll)}/dawnlike`,
-  dawnlike: (coll) => req(`/collections/${encodeURIComponent(coll)}/dawnlike`),
-  dataSheets: (coll) => req(`/collections/${encodeURIComponent(coll)}/data-sheets`),
+  // ★ tilesetUrl 必须带 cache-busting 参数：
+  //   图集 PNG 内容会变（补瓦片/贴图替换），但路径固定 → 浏览器按 etag 缓存住旧图集，
+  //   编辑器就会用「旧图集 + 新地图数据」渲染 → 新 gid 在旧图集里是空槽 → 棋盘格空洞。
+  //   加 ?_=<时间戳> 强制每次重新拉取。
+  tilesetUrl: (coll) => `${BASE}/collections/${encodeURIComponent(coll)}/tileset?_=${Date.now()}`,
+  dawnlikeUrl: (coll) => `${BASE}/collections/${encodeURIComponent(coll)}/dawnlike?_=${Date.now()}`,
+  dawnlike: (coll) => req(`/collections/${encodeURIComponent(coll)}/dawnlike?_=${Date.now()}`),
+  // ★ 人物/怪物动画帧清单（换实体形象用；/dawnlike 不含无 description 的人物帧）
+  sprites: (coll) => req(`/collections/${encodeURIComponent(coll)}/sprites?_=${Date.now()}`),
+  dataSheets: (coll) => req(`/collections/${encodeURIComponent(coll)}/data-sheets?_=${Date.now()}`),
 
   // dev-host（--conn 拟真宿主预览）
   devhostStart: (coll) => req(`/devhost/start?name=${encodeURIComponent(coll)}`, { method: 'POST' }),
