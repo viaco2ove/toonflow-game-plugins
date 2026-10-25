@@ -52,7 +52,7 @@ curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://localhost:5175/   # �
 ## 三、bsk CLI 进阶用法
 
 ### 3.1 键盘驱动——`--ref` 让键盘事件路由进 iframe
-observe 刷新 refs → 立刻 press --ref @e10 --hold-ms 2000 有效。
+
 **问题：** 直接 `bsk press w` 键盘事件落到顶层窗口，iframe 里的游戏收不到。
 
 **解决：** `--ref @eN` 让 bsk 先调用 `element.focus()`，焦点进 iframe 后键盘事件随之路由。
@@ -95,9 +95,6 @@ bsk click --session uiqp @e9
 ```
 
 ---
-### 3.4 鼠标点击
-1. evaluate 在主文档注入 <div id="__click_target_" style="position:fixed;left:Xpx;top:Ypx;width:2px;height:2px;pointer-events:none;z-index:99999">
-2. click --selector #_click_target → bsk 找到 div 中心坐标 (X,Y) → CDP 在 (X,Y) 派发真实鼠标事件 → 命中 canvas → 游戏寻路
 
 ## 四、消息协议——两条通道
 

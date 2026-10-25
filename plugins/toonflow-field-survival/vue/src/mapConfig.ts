@@ -296,6 +296,18 @@ export const NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   "ZOMBIE_CORPSE",
   "SKELETON_CORPSE",
   "CORPSE",
+  "SIGN",
+  // ★ 文字标识类（建筑名称显示；编辑器侧同名类型，见 building-labels.md）
+  "FLOAT_LABEL",
+  "SIGNBOARD",
+  "GROUND_TEXT",
+]);
+
+/** ★ 文字标识类实体：解析成 kind="text_label" 的装饰（App.vue 按 textKind 分三种画法） */
+export const TEXT_ENTITY_TYPES: Set<string> = new Set([
+  "FLOAT_LABEL",
+  "SIGNBOARD",
+  "GROUND_TEXT",
 ]);
 
 /** 单个 chunk 的方块数据（可选，不存就视为默认全泥土块） */
@@ -594,6 +606,24 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             y: wz,
             name: portalName,
             ...({ label: portalLabel } as any),
+          } as any);
+        } else if (TEXT_ENTITY_TYPES.has(String(props.entity_type))) {
+          // ★ 文字标识类（建筑名称）：
+          //   FLOAT_LABEL 悬浮文字（仿入口粉字，永远显示）
+          //   SIGNBOARD   路标（仿任务板黄边牌，永远显示）
+          //   GROUND_TEXT 地表文字（贴地注记，永远显示）
+          //   full_name = 显示文字；纯标注，无交互。
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          const label = String(props.full_name || props.name || "文字");
+          decorations.push({
+            id: `t_${decIdx++}`,
+            kind: "text_label" as any,
+            textKind: String(props.entity_type),   // FLOAT_LABEL / SIGNBOARD / GROUND_TEXT
+            x: wx,
+            y: wz,
+            name: label,
+            ...({ label } as any),
           } as any);
         } else if (!NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
           // ★ 未识别类型不得静默丢弃：至少告警，便于新增地图时及时补进白名单

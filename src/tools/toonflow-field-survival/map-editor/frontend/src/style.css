@@ -534,3 +534,78 @@ input:focus, select:focus {
   font-size: 10px;
   color: var(--dim);
 }
+/* ───────────────────────── 实体类型可搜索下拉框 ───────────────────────── */
+.etype-combo {
+  position: relative;
+  width: 190px;
+}
+.etype-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1d2127;
+  border: 1px solid #3a4048;
+  color: #e8eaed;
+  border-radius: 4px;
+  padding: 3px 7px;
+  font-size: 12px;
+  cursor: text;
+}
+.etype-input:focus {
+  outline: none;
+  border-color: #4fc3f7;
+}
+.etype-combo.open .etype-input {
+  border-color: #4fc3f7;
+}
+.etype-list {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #16191e;
+  border: 1px solid #3a4048;
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.5);
+  z-index: 300;
+  padding: 3px;
+}
+.etype-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #cfd4da;
+  white-space: nowrap;
+}
+.etype-item:hover {
+  background: #2a3038;
+}
+.etype-item.active {
+  background: #31404e;
+  color: #fff;
+}
+.etype-icon {
+  width: 16px;
+  text-align: center;
+}
+.etype-label {
+  flex: 1;
+}
+.etype-key {
+  font-size: 10px;
+  color: #6b7480;
+  font-family: Consolas, monospace;
+}
+.etype-empty {
+  padding: 8px;
+  text-align: center;
+  color: #6b7480;
+  font-size: 12px;
+}

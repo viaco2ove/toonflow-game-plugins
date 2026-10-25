@@ -1,0 +1,136 @@
+{
+  "_comment": "配方示例：程序化生成 32×32 瓦片。copy 改名为自己的配方。ops 按顺序叠画。",
+  "palette": "school",
+  "mapping": "school_tiles.json",
+  "colors": {
+    "_comment": "可选：覆盖内置调色板同名字色，如 \"BLACKBOARD\": [46, 62, 48]"
+  },
+  "tiles": [
+    {
+      "name": "blackboard",
+      "desc": "黑板（带粉笔字）",
+      "ops": [
+        { "op": "rect", "box": [0, 0, 31, 31], "fill": "$WOOD_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [1, 1, 30, 30], "fill": [46, 62, 48] },
+        { "op": "line", "from": [6, 2], "to": [6, 29], "color": [40, 56, 43] },
+        { "op": "line", "from": [14, 2], "to": [14, 29], "color": [40, 56, 43] },
+        { "op": "line", "from": [22, 2], "to": [22, 29], "color": [40, 56, 43] },
+        { "op": "chalk", "lines": [[4, 9, 16, 9], [4, 14, 22, 14], [4, 19, 13, 19], [20, 19, 26, 19]] }
+      ]
+    },
+    {
+      "name": "lectern",
+      "desc": "讲台",
+      "ops": [
+        { "op": "rect", "box": [0, 6, 31, 14], "fill": "$WOOD", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [0, 14, 31, 26], "fill": "$WOOD_D" },
+        { "op": "line", "from": [0, 14], "to": [31, 14], "color": "$OUTLINE" },
+        { "op": "dither", "color": [150, 90, 40], "density": 3, "box": [1, 15, 31, 25] }
+      ]
+    },
+    {
+      "name": "desk",
+      "desc": "双人课桌",
+      "ops": [
+        { "op": "rect", "box": [2, 8, 29, 23], "fill": "$WOOD", "outline": "$OUTLINE" },
+        { "op": "line", "from": [2, 12], "to": [29, 12], "color": "$WOOD_D" },
+        { "op": "dither", "color": [225, 150, 70], "density": 3, "box": [3, 9, 28, 11] },
+        { "op": "rect", "box": [4, 24, 7, 29], "fill": "$SLATE_D" },
+        { "op": "rect", "box": [24, 24, 27, 29], "fill": "$SLATE_D" }
+      ]
+    },
+    {
+      "name": "chair",
+      "desc": "椅子",
+      "ops": [
+        { "op": "rect", "box": [10, 8, 21, 13], "fill": "$WOOD" },
+        { "op": "rect", "box": [10, 14, 21, 21], "fill": "$WOOD_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [11, 22, 13, 27], "fill": "$SLATE_D" },
+        { "op": "rect", "box": [18, 22, 20, 27], "fill": "$SLATE_D" }
+      ]
+    },
+    {
+      "name": "concrete",
+      "desc": "水泥路面",
+      "ops": [
+        { "op": "fill", "color": "$SLATE_D" },
+        { "op": "dither", "color": [95, 90, 95], "density": 2 },
+        { "op": "line", "from": [0, 0], "to": [31, 0], "color": [60, 57, 60] },
+        { "op": "line", "from": [0, 16], "to": [31, 16], "color": [60, 57, 60] },
+        { "op": "line", "from": [16, 0], "to": [16, 15], "color": [60, 57, 60] },
+        { "op": "rect", "box": [0, 0, 31, 31], "outline": [50, 47, 50] }
+      ]
+    },
+    {
+      "name": "brick_wall",
+      "desc": "砖墙立面",
+      "ops": [
+        { "op": "brick", "base": "$BRICK", "mortar": "$MORTAR", "bw": 16, "bh": 8 },
+        { "op": "rect", "box": [0, 0, 31, 31], "outline": "$OUTLINE" }
+      ]
+    },
+    {
+      "name": "school_floor",
+      "desc": "教室水磨石地面",
+      "ops": [
+        { "op": "fill", "color": [186, 180, 168] },
+        { "op": "dither", "color": [170, 164, 152], "density": 2 },
+        { "op": "dither", "color": [200, 195, 184], "density": 4 },
+        { "op": "rect", "box": [0, 0, 31, 31], "outline": [150, 145, 134] }
+      ]
+    },
+    {
+      "name": "flag_base",
+      "desc": "升旗台石台",
+      "ops": [
+        { "op": "rect", "box": [2, 2, 29, 29], "fill": [168, 178, 186], "outline": "$OUTLINE" },
+        { "op": "rect", "box": [5, 5, 26, 26], "fill": [186, 195, 202] },
+        { "op": "dither", "color": [170, 180, 188], "density": 3, "box": [5, 5, 26, 26] }
+      ]
+    },
+    {
+      "name": "flagpole",
+      "desc": "旗杆",
+      "ops": [
+        { "op": "rect", "box": [14, 2, 16, 29], "fill": [198, 198, 204], "outline": "$OUTLINE" },
+        { "op": "tri", "points": [[17, 4], [28, 9], [17, 14]], "fill": "$RED", "outline": "$OUTLINE" }
+      ]
+    },
+    {
+      "name": "iron_fence",
+      "desc": "铁栏杆",
+      "ops": [
+        { "op": "fence", "rail": "$IRON_D", "bar": "$IRON", "outline": "$OUTLINE", "bars": [4, 13, 22, 28] }
+      ]
+    },
+    {
+      "name": "hoop",
+      "desc": "篮球架",
+      "ops": [
+        { "op": "rect", "box": [6, 2, 25, 17], "fill": [226, 222, 210], "outline": "$OUTLINE" },
+        { "op": "rect", "box": [11, 6, 20, 13], "outline": [190, 70, 60] },
+        { "op": "rect", "box": [15, 0, 17, 3], "fill": [110, 114, 122] }
+      ]
+    },
+    {
+      "name": "notice",
+      "desc": "校园公告栏",
+      "ops": [
+        { "op": "rect", "box": [1, 1, 30, 30], "fill": "$WOOD_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [3, 3, 28, 28], "fill": [96, 78, 56] },
+        { "op": "rect", "box": [6, 6, 15, 14], "fill": "$WHITE" },
+        { "op": "rect", "box": [17, 6, 26, 14], "fill": [222, 214, 196] },
+        { "op": "rect", "box": [6, 17, 26, 25], "fill": [210, 202, 184] }
+      ]
+    },
+    {
+      "name": "bench",
+      "desc": "长条排椅",
+      "ops": [
+        { "op": "rect", "box": [1, 10, 30, 17], "fill": "$WOOD", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [4, 18, 7, 25], "fill": "$SLATE_D" },
+        { "op": "rect", "box": [24, 18, 27, 25], "fill": "$SLATE_D" }
+      ]
+    }
+  ]
+}

@@ -5663,6 +5663,56 @@ function renderOneDecoration(
       ctx.fillStyle = "#8a7a6a";
       ctx.fillRect(x0, y0, bw, bh);
       ctx.restore();
+    } else if ((dec as any).kind === "text_label") {
+      // ★ 文字标识类（建筑名称）：三种画法，按 textKind 区分。
+      //   数据来自 mapConfig 的 FLOAT_LABEL / SIGNBOARD / GROUND_TEXT 实体。
+      ctx.save();
+      const label = (dec as any).label || (dec as any).name || "";
+      const tk = (dec as any).textKind || "FLOAT_LABEL";
+      // 距离衰减：>22m 隐藏，12~22m 半透明（免得满屏字吵）
+      let alpha = 1;
+      const meNow = (state.value?.entities ?? []).find((e) => e.side === "player");
+      if (meNow) {
+        const d2 = Math.hypot(dec.x - meNow.x, dec.y - meNow.y);
+        if (d2 > 22) alpha = 0;
+        else if (d2 > 12) alpha = 1 - (d2 - 12) / 10;
+      }
+      if (alpha > 0.02 && label) {
+        ctx.globalAlpha = alpha;
+        ctx.textAlign = "center";
+        if (tk === "SIGNBOARD") {
+          // 路标：深底黄边圆角牌（同任务板风格；rrPath 兼容旧浏览器）
+          const k = Math.max(0.6, Math.min(2.2, sx / 20));
+          ctx.font = `bold ${Math.round(13 * k)}px 'Microsoft YaHei', sans-serif`;
+          const tw = ctx.measureText(label).width;
+          const lx = px, ly = py - sx * 0.4;
+          const padX = 6 * k, padY = 3 * k;
+          ctx.fillStyle = "rgba(20,16,8,.88)";
+          rrPath(ctx, lx - tw / 2 - padX, ly - 13 * k - padY,
+                 tw + padX * 2, 16 * k + padY * 2, 6 * k);
+          ctx.fill();
+          ctx.strokeStyle = "#ffd54a";
+          ctx.lineWidth = 1.5 * k;
+          ctx.stroke();
+          ctx.fillStyle = "#ffe9a8";
+          ctx.fillText(label, lx, ly);
+        } else if (tk === "GROUND_TEXT") {
+          // 地表文字：贴地（画在格子中线偏下，半透明浅绿，像地图注记）
+          ctx.font = "bold 12px 'Microsoft YaHei', sans-serif";
+          ctx.fillStyle = "rgba(0,0,0,.5)";
+          ctx.fillText(label, px + 1, py + sx * 0.62 + 1);
+          ctx.fillStyle = "#c8e6c9";
+          ctx.fillText(label, px, py + sx * 0.62);
+        } else {
+          // FLOAT_LABEL：悬浮粉字+黑影（同入口 label，但没有红圈箭头）
+          ctx.font = `bold ${Math.max(8, Math.round(sx * 0.28))}px 'Microsoft YaHei', sans-serif`;
+          ctx.fillStyle = "rgba(0,0,0,.85)";
+          ctx.fillText(label, px + 1, py - sx * 0.55 + 1);
+          ctx.fillStyle = "#ff9999";
+          ctx.fillText(label, px, py - sx * 0.55);
+        }
+      }
+      ctx.restore();
     } else if ((dec as any).kind === "portal") {
       // ★ 地图连接处（入口）：红色半透明感知区域 + 脉冲箭头 + 目的地名
       ctx.save();

@@ -42,6 +42,10 @@ const OBJ_META = {
   ROCK:             { label: '岩石（装饰）',     color: '#b0bec5', icon: '🪨', sprite: 0 },
   GOLD:             { label: '金币',            color: '#ffd54f', icon: '🪙', sprite: 0 },
   KEY:              { label: '钥匙',            color: '#ffd54f', icon: '🔑', sprite: 0 },
+  // ── 文字标识类（建筑名称显示，见 tiles-maps-editor/references/building-labels.md）──
+  FLOAT_LABEL:      { label: '悬浮文字（仿入口）', color: '#f48fb1', icon: '🗨', sprite: 0 },
+  SIGNBOARD:        { label: '路标（仿任务板）',   color: '#ffd54a', icon: '🪧', sprite: 0 },
+  GROUND_TEXT:      { label: '地表文字（贴地）',   color: '#a5d6a7', icon: '🔤', sprite: 0 },
 }
 
 const PALETTE_CATS = [
@@ -71,6 +75,41 @@ const brushTileId = ref(DEFAULT_FILL_TILE)
 const placingType = ref('NPC')
 const placingCamp = ref('neutral')
 const placingLevel = ref(1)
+// ★ 文字类实体（悬浮文字/路标/地表文字）的显示文本
+const placingText = ref('')
+// ★ 实体类型可搜索下拉框
+const etypeQuery = ref('')
+const etypeOpen = ref(false)
+const etypePlaceholder = computed(() => {
+  const m = OBJ_META[placingType.value]
+  return m ? `${m.icon} ${m.label}` : '选择类型'
+})
+/** 文字类类型：不需要阵营/等级，需要显示文本输入框 */
+const TEXT_LIKE = new Set(['FLOAT_LABEL', 'SIGNBOARD', 'GROUND_TEXT'])
+const isTextLikeType = computed(() => TEXT_LIKE.has(placingType.value))
+/** 过滤：中文 label / 英文 key / 图标 都能搜（不区分大小写） */
+const filteredEtypes = computed(() => {
+  const q = etypeQuery.value.trim().toLowerCase()
+  const keys = Object.keys(OBJ_META)
+  if (!q) return keys
+  return keys.filter((k) => {
+    const m = OBJ_META[k]
+    return k.toLowerCase().includes(q) || m.label.toLowerCase().includes(q)
+  })
+})
+function pickEtype(key) {
+  placingType.value = key
+  etypeOpen.value = false
+  etypeQuery.value = ''
+}
+function pickFirstFiltered() {
+  const list = filteredEtypes.value
+  if (list.length) pickEtype(list[0])
+}
+function onEtypeBlur() {
+  // 延迟关闭，让 mousedown 的选项点击先触发
+  setTimeout(() => { etypeOpen.value = false }, 120)
+}
 const showGrid = ref(false)
 const showCollision = ref(false)
 
@@ -885,6 +924,48 @@ function render() {
         ctx.textBaseline = 'middle'
         ctx.fillText(meta.icon, sx + sz / 2, sy + sz / 2)
       }
+      // ★ 文字类实体：按类型画预览样式（引擎内同款外观）
+      if (props.entity_type === 'FLOAT_LABEL') {
+        // 悬浮文字：粉字+黑影（同引擎 portal label）
+        const label = props.full_name || '文字'
+        ctx.font = `bold ${Math.round(12 * zoom.value)}px 'Microsoft YaHei'`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = 'rgba(0,0,0,.85)'
+        ctx.fillText(label, sx + sz / 2 + 1, sy - sz * 0.1 + 1)
+        ctx.fillStyle = '#ff9999'
+        ctx.fillText(label, sx + sz / 2, sy - sz * 0.1)
+        continue
+      }
+      if (props.entity_type === 'SIGNBOARD') {
+        // 路标：深底黄边圆角牌（同任务板）
+        const label = props.full_name || '路标'
+        const k = Math.max(0.6, Math.min(2, zoom.value))
+        ctx.font = `bold ${Math.round(12 * k)}px 'Microsoft YaHei'`
+        ctx.textAlign = 'center'
+        const tw = ctx.measureText(label).width
+        const lx = sx + sz / 2, ly = sy - 4
+        ctx.fillStyle = 'rgba(20,16,8,.88)'
+        ctx.beginPath()
+        ctx.roundRect(lx - tw / 2 - 6, ly - 14, tw + 12, 18, 5)
+        ctx.fill()
+        ctx.strokeStyle = '#ffd54a'
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+        ctx.fillStyle = '#ffe9a8'
+        ctx.fillText(label, lx, ly)
+        continue
+      }
+      if (props.entity_type === 'GROUND_TEXT') {
+        // 地表文字：贴地（画在格子中线，半透明绿字，像地图注记）
+        const label = props.full_name || '文字'
+        ctx.font = `bold ${Math.round(11 * zoom.value)}px 'Microsoft YaHei'`
+        ctx.textAlign = 'center'
+        ctx.fillStyle = 'rgba(0,0,0,.5)'
+        ctx.fillText(label, sx + sz / 2 + 1, sy + sz * 0.62 + 1)
+        ctx.fillStyle = '#c8e6c9'
+        ctx.fillText(label, sx + sz / 2, sy + sz * 0.62)
+        continue
+      }
       if (zoom.value >= 0.5) {
         const name = props.full_name || props.name || obj.name || props.entity_type || ''
         if (name) {
@@ -1085,6 +1166,7 @@ function handleClick(tx, ty) {
       const L = getObjLayer()
       if (!L) return
       pushHistory()
+      // ★ 文字类实体（悬浮文字/路标/地表文字）：带 full_name 显示文本
       const props = placingType.value === 'LEVEL_TRANSITION'
         ? { entity_type: placingType.value, portalID: 'Mulberry Town' }
         : placingType.value === 'CHEST'
@@ -1093,6 +1175,11 @@ function handleClick(tx, ty) {
         ? { entity_type: placingType.value, heal: 40 }
         : placingType.value === 'SPAWN_POINT'
         ? { entity_type: placingType.value }
+        : TEXT_LIKE.has(placingType.value)
+        ? {
+            entity_type: placingType.value,
+            full_name: placingText.value.trim() || '文字',
+          }
         : { entity_type: placingType.value, camp: placingCamp.value, level: placingLevel.value }
       const newObj = {
         id: newObjId(), name: '', type: '',
@@ -1306,15 +1393,49 @@ function onPropApply() {
     </div>
     <div class="toolbar-group" v-show="tool==='place'">
       <label class="inline">类型：</label>
-      <select v-model="placingType">
-        <option v-for="(meta, key) in OBJ_META" :key="key" :value="key">{{ meta.icon }} {{ meta.label }}</option>
-      </select>
-      <select v-model="placingCamp" style="width:60px">
+      <!-- ★ 可搜索的实体类型选择器：输入关键字过滤（拼音首字/中文/英文 key 都能搜） -->
+      <div class="etype-combo" :class="{ open: etypeOpen }">
+        <input
+          class="etype-input"
+          type="text"
+          v-model="etypeQuery"
+          @focus="etypeOpen = true"
+          @blur="onEtypeBlur"
+          @keydown.esc="etypeOpen = false"
+          @keydown.enter.prevent="pickFirstFiltered"
+          :placeholder="etypePlaceholder"
+          title="输入关键字搜索实体类型（如：门、NPC、路标）"
+        >
+        <div class="etype-list" v-show="etypeOpen">
+          <div
+            v-for="key in filteredEtypes"
+            :key="key"
+            class="etype-item"
+            :class="{ active: key === placingType }"
+            @mousedown.prevent="pickEtype(key)"
+          >
+            <span class="etype-icon">{{ OBJ_META[key].icon }}</span>
+            <span class="etype-label">{{ OBJ_META[key].label }}</span>
+            <span class="etype-key">{{ key }}</span>
+          </div>
+          <div class="etype-empty" v-if="!filteredEtypes.length">无匹配类型</div>
+        </div>
+      </div>
+      <select v-model="placingCamp" style="width:60px" v-show="!isTextLikeType">
         <option value="hostile">敌对</option>
         <option value="neutral">中立</option>
         <option value="friendly">友好</option>
       </select>
-      <input type="number" v-model.number="placingLevel" min="1" max="999" style="width:46px" title="等级">
+      <input type="number" v-model.number="placingLevel" min="1" max="999" style="width:46px" title="等级" v-show="!isTextLikeType">
+      <!-- 文字类实体的显示文本 -->
+      <input
+        type="text"
+        v-model="placingText"
+        v-show="isTextLikeType"
+        style="width:130px"
+        placeholder="显示文字，如：高三教学楼"
+        title="悬浮/贴地显示的文字"
+      >
     </div>
     <div class="sep"></div>
     <div class="toolbar-group">
