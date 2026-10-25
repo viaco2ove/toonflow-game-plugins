@@ -911,6 +911,13 @@ function reportLevels(): void {
     //      → 回显 2 个……地图面板出现一排同名关卡（2026-10-17 实测 4 个「森林」）。
     items = [{ id: currentLevelName.value, display: getLevelDisplayName(currentLevelName.value) }]
       .filter((i: any) => i.id);
+    // ★ 2026-10-25：只报当前关是「静默降级」，用户看到地图面板「全部地图（1）」却不知为何。
+    //   明确告警一次，把排查方向指到「视觉地图包没加载上」这个唯一根因上。
+    console.warn(
+      "[field-survival] 地图关卡清单为空（故事视觉地图包未加载）：地图面板只显示当前关。" +
+        " 排查：① dev 下 <故事>.tbg 是否存在（无则 npm run debug 会自动现场打包）；" +
+        " ② 控制台搜「故事集是否从数据库获取成功」看是否 ❌；③ entry 侧 map_visual:<故事名> 模板是否播种。",
+    );
   }
   // ★ 双保险：按 id 去重（同一个关名出现多次只保留第一次）
   const seen = new Set<string>();
@@ -919,6 +926,7 @@ function reportLevels(): void {
   if (!items.length || key === sysLevelsReported) return;
   sysLevelsReported = key;
   sendTick("sys", { levels: items.map(i => i.id), displayNames: items.map(i => i.display) });
+  console.info(`[field-survival] 已上报关卡清单（${items.length} 张）→ 地图面板「全部地图」`, items.map(i => i.id).join(", "));
 }
 
 const pendingSys = ref("");
@@ -1368,7 +1376,7 @@ const  isStageRotateOn =ref(false);
 
 /** 地图主题（开局后从 state.map 取；也演示 toonflowJsApi 从插件数据表读 map_data） */
 const mapTheme = ref("");
-const mapZones = computed(() => state.value?.map?.zones || []);
+const mapZones = computed(() => resolvedZones());
 const mapSourceLabel = computed(() => {
   const s = state.value?.mapSource;
   return s === "agent" ? "AI 地图" : s === "stored" ? "缓存地图" : s === "fallback" ? "默认地图" : "";
@@ -2634,10 +2642,33 @@ let pendingDeadMobIds: Set<string> = new Set();
    ★ 安全区 / 本地怪物信息发布（供 standalone mockHost 复用 App 侧判定）
    ============================================================ */
 
+/**
+ * ★ 当前关卡的区域列表（zone 名称已按当前地图修正）。
+ *
+ * 修复「所有地图中央都显示『晨曦镇』」：
+ *   宿主开局把一份固定的区域表（城镇 + 6 野区）写进 state.map.zones，
+ *   其中城镇名硬编码为「晨曦镇」→ 切到森林/墓地/地牢后，
+ *   地图中央依旧显示「晨曦镇」三个字，纯属串图。
+ *   这里统一取 zones 并把 safe 区（城镇）的名字换成**当前地图的显示名**，
+ *   非 safe 的野区名（东岭林场 / 西北矿丘…）保持不变。
+ *
+ * 主地图绘制、小地图绘制、当前区域判定、兜底刷怪判定都走这里，
+ * 保证「区域名」在各处的口径一致（否则怪物的 zoneName 记账会对不上）。
+ */
+function resolvedZones(): Array<any> {
+  const raw = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
+  if (!raw.length) return raw;
+  // 城镇显示名：优先当前地图的中文显示名，其次当前关卡名，都没有就不改（保持原名）
+  const mapLabel = (() => {
+    try { return (getLevelDisplayName(currentLevelName.value) || "").trim(); } catch { return ""; }
+  })();
+  if (!mapLabel) return raw;
+  return raw.map((z) => (z?.kind === "safe" ? { ...z, name: mapLabel } : z));
+}
+
 /** 当前关卡的 safe zone（无则空数组） */
 function activeSafeZones(): Array<any> {
-  const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
-  return zones.filter((z) => z?.kind === "safe");
+  return resolvedZones().filter((z) => z?.kind === "safe");
 }
 
 /**
@@ -3255,7 +3286,7 @@ function spawnLocalMobsIfNeeded(): void {
   //   凭空补怪 —— 这是"所有地图都有野怪"的第二条来源。
   if (!mapCfg.value || !(mapCfg.value.mobs?.length)) return;
 
-  const zones = ((state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || []) as Array<any>;
+  const zones = resolvedZones();
   const currentZone = zones.find((z) => {
     if (z.rx !== undefined && z.ry !== undefined) {
       return Math.abs(z.x - me.x) <= z.rx && Math.abs(z.y - me.y) <= z.ry;
@@ -3924,7 +3955,7 @@ function localTick(): void {
 
   // 区域刷新追踪（支持圆形和矩形区域）
   const meForZone = s.entities.find((e) => e.side === "player");
-  const zones = (state.value?.map?.zones?.length ? state.value.map.zones : mapCfg.value?.zones) || [];
+  const zones = resolvedZones();
   const zone = zones.find((z: any) => {
     if (!meForZone) return false;
     // 优先用矩形范围（rx/ry），否则用圆形（r）
@@ -5145,7 +5176,7 @@ function render() {
     marsh: "rgba(110, 156, 128, .14)",
     wild: "rgba(196, 156, 96, .14)",
   };
-  const allZones = (s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || [];
+  const allZones = resolvedZones();
 
   /* ============================================================
      关键修复：放弃 ctx.scale 世界变换，全部改用屏幕像素空间画
@@ -5970,7 +6001,7 @@ function drawMinimap() {
   g.stroke();
 
   // ★ v4：区域名称 —— 当前区域徽标（顶部）+ 邻近区域名称（按方位贴边指示）
-  const zoneList = ((s.map?.zones?.length ? s.map.zones : mapCfg.value?.zones) || []) as Array<
+  const zoneList = resolvedZones() as Array<
     { name: string; x: number; y: number; r: number; kind?: string }
   >;
   if (zoneList.length) {

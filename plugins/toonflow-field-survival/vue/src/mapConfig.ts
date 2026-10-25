@@ -1005,7 +1005,12 @@ export function listLevelNames(): string[] {
  */
 export function getLevelDisplayName(levelName: string): string {
   // ① 从故事包（Tiled JSON）的顶层 name 取中文显示名
-  const tiled = getStoryMapRaw(levelName);
+  //    ★ getStoryMapRaw 的 key 是**地图文件名**（"mulberryTown"），
+  //      而本函数收到的是**关卡名**（"Mulberry Town"）—— 必须先经 levelNameToFile
+  //      转换才能命中，否则永远查不到 Tiled 里的中文名（"大罗宗外门" 等），
+  //      只能退到硬编码表里的旧名（"城镇"）。
+  const file = levelNameToFile(levelName);
+  const tiled = file ? getStoryMapRaw(file) : null;
   const tiledName = tiled && typeof tiled === "object" ? String(tiled.name || "").trim() : "";
   if (tiledName) return tiledName;
   // ② 硬编码

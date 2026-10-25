@@ -65,6 +65,21 @@
   buildItems/buildSkills(playerCard) 重建，排序落 patchCard + `s.skillOrder` + persistSys/restoreSys；
   `reportLevels()` 兜底只能报当前关，绝不能拼 `sysMapNodes`（回声环）。
 
+## ★ dev 免安装调试地图集（2026-10-25）
+- **地图面板「全部地图」只显示当前关 = 磁盘缺 `<故事>.tbg`**（不是前端 bug）。
+  根因链：dev-host `seedStoryVisualMap()` 只认磁盘 .tbg → 目录形态地图集播种失败 →
+  `bundle=null` → `listLevelNames()` 空（LEVEL_FILES 已清空）→ 只剩当前关。
+- 修法：`vue/vite.config.ts` storyData 中间件加 `ensureTbgBuilt()`，零依赖手写 zip
+  （local header + 中央目录 + EOCD，deflate-raw 用 `node:zlib`，配 crc32 查表），
+  规则同 `cli.py build_tbg_file`（ZIP_DEFLATED、跳 test_data/__pycache__/node_modules/.git）。
+  - 磁盘**无** .tbg → 写标准 `<故事>.tbg`（与 CLI -build 同名同位置）。
+  - 磁盘**有**但源更新 → 写旁路 `<故事>.tbg.devcache`，**不覆盖用户已有 .tbg**（零破坏）。
+  - ⚠️ 判断必须放在 `existsSync(filePath)` **之前**，否则旧 .tbg 永远命中、源改动不生效。
+- `maps/first.map.json` 的 `start_map.value` 决定起始图：写**关卡 key（slug）**最稳
+  （"Lich Lair"→lichLair→陈曦的卧室 12x12 小图；应写 "mulberryTown"→延城一中 43x56）。
+- dev 调试地图集**不需要安装**：`npm run debug -- --story <故事名> --conn`，.tbg 会自动现场打包。
+  需要安装的只有「装到真宿主跑」。
+
 ## map-editor / AI 厂商目录（次要子项目）
 - AI 模型配置存后端 SQLite（`backend/ai_store.py`→ai_models.db）；canvas 切换显示必须 v-show 不能 v-if（模块级缓存 ctx，v-if 重建后永久黑屏）。
 - 厂商目录权威源在 Toonflow-game-web `src/utils/modelConfigCatalog.ts`（22 家，已移植 map-editor）。坑：voice+asr 的 baseUrl 硬编码 dashscope；tencent_ci/local_* 要手填；`manufacturer=="aliyun"`（无 _direct）是死分支；抠图厂商 {bria, aliyun_imageseg, tencent_ci, local_*} 只能绑背景分离槽位；别在 env 写占位 MODEL_path。

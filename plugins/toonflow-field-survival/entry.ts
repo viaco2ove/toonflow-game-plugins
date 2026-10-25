@@ -701,7 +701,7 @@ const QUEST_GATHER_ALIAS: Record<string, string[]> = {
    ★ v4 区域刷新（Region Respawn）+ 城镇安全区 + 敌人探测/脱战
    ------------------------------------------------------------
    1) 世界按「城镇（安全区） + 6 个野区」划分（正六边形拓扑，区域名见 WORLD_REGIONS）；
-      主角出生地 = 晨曦镇（安全区），镇内布置建筑与中立角色，城镇永不刷新野怪。
+      主角出生地 = 城镇（安全区，名字跟随当前地图），镇内布置建筑与中立角色，城镇永不刷新野怪。
    2) 每个野区各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
       （补满该区域配额）；玩家在场时计时挂起；不再用 enemies.length===0 触发。
    3) 敌人探测半径 = MOB_DETECT_M（10 米），超出 MOB_DISENGAGE_M（12 米）脱战，
@@ -742,7 +742,7 @@ interface RegionDef {
 
 /** 区域划分方案：城镇居中（安全区），6 个野区环绕（环半径 480 m，区域半径 240 m） */
 const WORLD_REGIONS: RegionDef[] = [
-  { id: "town",  name: "晨曦镇",   short: "晨曦", kind: "safe",   x: 0,    y: 0,     r: 160, safe: true,  lv: 0, mobs: 0, desc: "玩家出生的城镇（安全区）：商铺、民居、水井与中立居民，不刷新野怪" },
+  { id: "town",  name: "城镇",     short: "城镇", kind: "safe",   x: 0,    y: 0,     r: 160, safe: true,  lv: 0, mobs: 0, desc: "玩家出生的城镇（安全区）：商铺、民居、水井与中立居民，不刷新野怪" },
   { id: "wood",  name: "东岭林场", short: "东岭", kind: "forest", x: 480,  y: 0,     r: 240, safe: false, lv: 1, mobs: 4, desc: "低矮林地，狼群与哥布林斥候游荡" },
   { id: "shore", name: "东北浅滩", short: "东北", kind: "shore",  x: 240,  y: 416,   r: 240, safe: false, lv: 1, mobs: 3, desc: "水边滩地，毒蛇与蝙蝠出没" },
   { id: "mine",  name: "西北矿丘", short: "西北", kind: "mine",   x: -240, y: 416,   r: 240, safe: false, lv: 2, mobs: 4, desc: "废弃矿丘，骷髅兵与哥布林盘踞" },
@@ -750,6 +750,28 @@ const WORLD_REGIONS: RegionDef[] = [
   { id: "marsh", name: "西南沼地", short: "西南", kind: "marsh",  x: -240, y: -416,  r: 240, safe: false, lv: 3, mobs: 5, desc: "沼泽泥地，毒蛇群与巨狼" },
   { id: "wild",  name: "东南荒原", short: "东南", kind: "wild",   x: 240,  y: -416,  r: 240, safe: false, lv: 3, mobs: 5, desc: "开阔荒原，成群野兽巡行" },
 ];
+
+/**
+ * ★ 区域列表 → 写入 map.zones（前端主地图/小地图据此显示区域名）。
+ *
+ * 修复「所有地图中央都显示『晨曦镇』」：
+ *   之前这里无条件把 WORLD_REGIONS 写进 map.zones，而 WORLD_REGIONS[0] 的
+ *   name 是硬编码的「晨曦镇」→ 任何地图（森林/墓地/地牢/修真图）中央都被画上
+ *   「晨曦镇」三个字，纯属串图。
+ *   现在按当前地图名生成区域名：
+ *     · 城镇安全区（kind=safe）→ 用当前地图的显示名（如「城镇」「大罗宗外门」）；
+ *     · 其余野区 → 保留原名（它们是野外分区，与具体地图无关）。
+ *
+ * @param mapDisplayName 当前地图显示名（中文优先，空则回退 levelName / 通用词）
+ * @param levelName      当前关卡名（英文/驼峰），显示名缺失时兜底
+ */
+function buildZonesForMap(mapDisplayName: string, levelName: string): MapData["zones"] {
+  const label = (mapDisplayName || levelName || "").trim();
+  return WORLD_REGIONS.map((r) => ({
+    name: r.id === "town" ? (label || "城镇") : r.name,
+    x: r.x, y: r.y, r: r.r, kind: r.kind, desc: r.desc,
+  }));
+}
 
 function str(v: unknown, d = ""): string {
   return typeof v === "string" ? v : v == null ? d : String(v);
@@ -1979,8 +2001,10 @@ const TOWN_NPCS: Array<{ name: string; x: number; y: number }> = [
 function ensureTown(s: FieldSurvivalState): void {
   const town = WORLD_REGIONS[0];
   if (!s.town || !(s.town as any).buildings) {
+    // 城镇名跟随当前关卡（不再一律「晨曦镇」）
+    const townName = str(s.levelName, "") || town.name;
     s.town = {
-      id: town.id, name: town.name, x: town.x, y: town.y, r: town.r, safe: true,
+      id: town.id, name: townName, x: town.x, y: town.y, r: town.r, safe: true,
       buildings: TOWN_BUILDINGS.map((b, i) => ({ ...b, id: `b_${i}` })),
       npcs: TOWN_NPCS.map((n, i) => ({ id: `npc_${i}`, ...n })),
     };
@@ -4951,11 +4975,11 @@ export async function handle_action(
       s.map = await ensureMapData(context);
       s.mapSource = (s.map?.notes || "").includes("fallback") ? "fallback" : "agent";
 
-      // ★ v4：区域划分（晨曦镇 + 6 野区）写入 map.zones —— 主地图与小地图据此显示区域名称
+      // ★ v4：区域划分（城镇安全区 + 6 野区）写入 map.zones —— 主地图与小地图据此显示区域名称
+      //   城镇区名跟随当前关卡名（不再一律写死「晨曦镇」→ 换图后串名）。
+      //   中文显示名由前端 getLevelDisplayName 二次修正（能读 Tiled JSON 里的中文名）。
       if (s.map) {
-        s.map.zones = WORLD_REGIONS.map((r) => ({
-          name: r.name, x: r.x, y: r.y, r: r.r, kind: r.kind, desc: r.desc,
-        }));
+        s.map.zones = buildZonesForMap("", curLv);
       }
       // ★ v4：建立城镇（安全区：建筑 + 中立角色）与区域运行时状态
       ensureTown(s);

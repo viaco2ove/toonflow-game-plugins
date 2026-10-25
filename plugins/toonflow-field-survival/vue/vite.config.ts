@@ -1,8 +1,9 @@
 import { defineConfig, loadEnv, Plugin } from "vite";
-import { resolve } from "path";
-import { readFileSync, existsSync, statSync } from "fs";
+import { resolve, join } from "path";
+import { readFileSync, existsSync, statSync, readdirSync, writeFileSync } from "fs";
 import http from "http";
 import { spawnSync } from "child_process";
+import { deflateRawSync } from "node:zlib";
 // @ts-ignore
 import vue from "@vitejs/plugin-vue";
 import { viteSingleFile } from "vite-plugin-singlefile";
@@ -38,6 +39,184 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
   loadDotenvLight(envPath);
 }
 
+/* ============================================================
+   ★ .tbg 现场打包（dev 免安装调试，2026-10-25）
+   ------------------------------------------------------------
+   背景：dev-host 的 seedStoryVisualMap() 只认磁盘上的 <故事>.tbg；
+   地图集是「目录」形态（maps/ + images/ + compiled_dawnlike.json …）时
+   没有 .tbg → 模板 map_visual:<故事> 播种失败 → 前端 bundle=null →
+   listLevelNames() 空 → 地图面板「全部地图」只剩当前关（实测）。
+   原先只能靠 python -m toon_plugins … -build 手动打包，违背
+   「npm run debug 不需要安装就能直接调试地图集」。
+
+   做法：story-data 中间件收到 .tbg 请求时，用同目录的源目录现场打成 zip
+   （规则与 cli.py build_tbg_file 完全一致：ZIP_DEFLATED、跳过
+   test_data/__pycache__/node_modules/.git、arcname 相对源目录）。
+   写盘策略（零破坏）：
+     · 磁盘上没有 <故事>.tbg → 写 <故事>.tbg（与 CLI -build 同名同位置）；
+     · 磁盘上已有但源目录更新 → 写 <故事>.tbg.devcache 旁路包，不覆盖已有 .tbg。
+   源目录有文件更新（mtime 比包新）时自动重打，保证「地图编辑器改完 → 刷新即见」不回退。
+   ============================================================ */
+const TBG_SKIP_DIRS = new Set(["test_data", "__pycache__", "node_modules", ".git"]);
+
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf: Buffer): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** 目录 → zip Buffer（local file header + 数据 + 中央目录 + EOCD；store/deflate-raw 自选） */
+function zipDirToBuffer(dir: string): Buffer {
+  const entries: { name: string; data: Buffer }[] = [];
+  const walk = (rel: string): void => {
+    const abs = rel ? join(dir, rel) : dir;
+    for (const fn of readdirSync(abs)) {
+      if (TBG_SKIP_DIRS.has(fn)) continue;
+      const childRel = rel ? rel + "/" + fn : fn;
+      if (statSync(join(dir, childRel)).isDirectory()) walk(childRel);
+      else entries.push({ name: childRel, data: readFileSync(join(dir, childRel)) });
+    }
+  };
+  walk("");
+  // DOS 时间戳固定为 2024-01-01 00:00（解析方不依赖真实 mtime）
+  const dosTime = 0;
+  const dosDate = ((2024 - 1980) << 9) | (1 << 5) | 1;
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, "utf8");
+    const crc = crc32(e.data);
+    const comp = deflateRawSync(e.data, { level: 6 });
+    const store = comp.length >= e.data.length;
+    const method = store ? 0 : 8;
+    const payload = store ? e.data : comp;
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0);
+    lh.writeUInt16LE(20, 4);
+    lh.writeUInt16LE(0, 6);
+    lh.writeUInt16LE(method, 8);
+    lh.writeUInt16LE(dosTime, 10);
+    lh.writeUInt16LE(dosDate, 12);
+    lh.writeUInt32LE(crc, 14);
+    lh.writeUInt32LE(payload.length, 18);
+    lh.writeUInt32LE(e.data.length, 22);
+    lh.writeUInt16LE(nameBuf.length, 26);
+    lh.writeUInt16LE(0, 28);
+    locals.push(lh, nameBuf, payload);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0);
+    ch.writeUInt16LE(20, 4);
+    ch.writeUInt16LE(20, 6);
+    ch.writeUInt16LE(0, 8);
+    ch.writeUInt16LE(method, 10);
+    ch.writeUInt16LE(dosTime, 12);
+    ch.writeUInt16LE(dosDate, 14);
+    ch.writeUInt32LE(crc, 16);
+    ch.writeUInt32LE(payload.length, 20);
+    ch.writeUInt32LE(e.data.length, 24);
+    ch.writeUInt16LE(nameBuf.length, 28);
+    ch.writeUInt16LE(0, 30);
+    ch.writeUInt16LE(0, 32);
+    ch.writeUInt16LE(0, 34);
+    ch.writeUInt16LE(0, 36);
+    ch.writeUInt32LE(0, 38);
+    ch.writeUInt32LE(offset, 42);
+    centrals.push(ch, nameBuf);
+    offset += 30 + nameBuf.length + payload.length;
+  }
+  const centralBuf = Buffer.concat(centrals);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  eocd.writeUInt16LE(0, 20);
+  return Buffer.concat([...locals, centralBuf, eocd]);
+}
+
+/** 目录内最新文件 mtime（ms）；空目录返回 0 */
+function dirNewestMtimeMs(dir: string): number {
+  let newest = 0;
+  const walk = (rel: string): void => {
+    const abs = rel ? join(dir, rel) : dir;
+    for (const fn of readdirSync(abs)) {
+      if (TBG_SKIP_DIRS.has(fn)) continue;
+      const childRel = rel ? rel + "/" + fn : fn;
+      const st = statSync(join(dir, childRel));
+      if (st.isDirectory()) walk(childRel);
+      else if (st.mtimeMs > newest) newest = st.mtimeMs;
+    }
+  };
+  walk("");
+  return newest;
+}
+
+/**
+ * 确保 <故事>.tbg 可用：不存在 / 源目录比它新（地图改过）→ 用同目录源现场打包。
+ * 仅当同目录源存在且含 maps/ 子目录（确认是地图集）时才动手，其余返回 false
+ * （调用方按 404 处理，行为与改造前一致）。
+ *
+ * ★ 写盘策略（2026-10-25 修正）：
+ *   ① 磁盘上**没有** <故事>.tbg → 写 <故事>.tbg（与 python -m toon_plugins … -build 同名同位置，
+ *      后续 CLI 操作照常识别它）。
+ *   ② 磁盘上**已有** <故事>.tbg 但源目录比它新 → **不动它**，改写 <故事>.tbg.devcache
+ *      （dev 专用旁路文件），HTTP 返回这个最新包。
+ *      原因：已有 .tbg 是用户手工/CLI 打的产物（可能含手工调整），dev 调试不该静默覆盖；
+ *      旁路文件保证「改完地图刷新即见」的新鲜度，同时零破坏。
+ * @returns true = 现在有可用的包（原始 .tbg 或 dev 旁路包）
+ */
+function ensureTbgBuilt(tbgPath: string): { ok: boolean; servedPath: string } {
+  const fail = { ok: false, servedPath: tbgPath };
+  try {
+    const srcDir = tbgPath.replace(/\.tbg$/i, "");
+    if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) return fail;
+    if (!existsSync(join(srcDir, "maps")) || !statSync(join(srcDir, "maps")).isDirectory()) return fail;
+    const devCache = tbgPath.replace(/\.tbg$/i, "") + ".tbg.devcache";
+    const hasTbg = existsSync(tbgPath);
+    if (hasTbg && dirNewestMtimeMs(srcDir) <= statSync(tbgPath).mtimeMs) {
+      return { ok: true, servedPath: tbgPath };   // 已有 .tbg 且新鲜 → 直接用它
+    }
+    if (!hasTbg) {
+      // ① 首次：写标准 .tbg（与 CLI -build 同名同位置）
+      const buf = zipDirToBuffer(srcDir);
+      writeFileSync(tbgPath, buf);
+      console.log(
+        `[story-data] 已现场打包 .tbg：${tbgPath}（${(buf.length / 1048576).toFixed(1)}MB，首次自动打包；` +
+        `等同 python -m toon_plugins … -build）`,
+      );
+      return { ok: true, servedPath: tbgPath };
+    }
+    // ② 已有 .tbg 但源更新 → 写 dev 旁路包，不覆盖用户产物
+    if (existsSync(devCache) && dirNewestMtimeMs(srcDir) <= statSync(devCache).mtimeMs) {
+      return { ok: true, servedPath: devCache };  // 旁路包已新鲜
+    }
+    const buf = zipDirToBuffer(srcDir);
+    writeFileSync(devCache, buf);
+    console.log(
+      `[story-data] 源目录有更新 → 现场打包到 dev 旁路包（不覆盖已有 .tbg）：${devCache}` +
+      `（${(buf.length / 1048576).toFixed(1)}MB）；原 .tbg 保持不变`,
+    );
+    return { ok: true, servedPath: devCache };
+  } catch (e) {
+    console.warn("[story-data] .tbg 现场打包失败：", e);
+    return fail;
+  }
+}
+
 /** 故事目录读取中间件：/story-data/<storyName>/... → 读取对应文件 */
 function storyDataPlugin(workshopsRoot: string): Plugin {
   return {
@@ -50,7 +229,20 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
           res.end("Forbidden");
           return;
         }
-        if (!existsSync(filePath)) {
+        // ★ dev 免安装调试：.tbg 请求 → 若磁盘上没有、或源目录比它新（地图改过），
+        //   就用同目录源现场打包（见 ensureTbgBuilt），再走下面的二进制分支返回。
+        //   必须放在 existsSync 判断之前，否则旧 .tbg 永远命中、源目录改动不生效。
+        //   servedPath 可能是 dev 旁路包（<故事>.tbg.devcache）——读它、不读原始 .tbg。
+        let readPath = filePath;
+        if (/\.tbg$/i.test(filePath)) {
+          const r = ensureTbgBuilt(filePath);
+          if (!r.ok) {
+            res.statusCode = 404;
+            res.end("Not found: " + filePath);
+            return;
+          }
+          readPath = r.servedPath;
+        } else if (!existsSync(filePath)) {
           res.statusCode = 404;
           res.end("Not found: " + filePath);
           return;
@@ -59,11 +251,11 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
         //   不能 readFileSync(...,"utf-8") —— 非法字节会被替换成 U+FFFD，zip 直接损坏。
         if (/\.(tbg|zip|png|jpg|jpeg|webp|tmx|tsx|bin)$/i.test(filePath)) {
           try {
-            const buf = readFileSync(filePath);
+            const buf = readFileSync(readPath);
             // ★ 图片必须给正确的 Content-Type，否则浏览器 <img> 解码失败，
             //   canvas 画不出图集（表现为「游戏里没图」而非报错）。
             //   2026-10-22：dev 图集走 /story-data 实时读本地最新，必须 image/png。
-            const ext = filePath.slice(filePath.lastIndexOf(".") + 1).toLowerCase();
+            const ext = readPath.slice(readPath.lastIndexOf(".") + 1).toLowerCase();
             const mime: Record<string, string> = {
               png: "image/png",
               jpg: "image/jpeg",
