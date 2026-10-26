@@ -45,10 +45,37 @@ export function resolveLocalTilesetUrl(): string | null {
       `/images/compiled_tileset_32x32.png` +
       // ★ cache-busting：图集内容会变（补瓦片 / 贴图替换），但路径固定 →
       //   浏览器缓存住旧图集 → 新 gid 在旧图集里是空槽 → 渲染出棋盘格空洞。
+      //   ⚠️ 只能加在 /story-data 通道上 —— 宿主 getAsset 通道对查询串敏感，
+      //     加了会 401（见 resolveTilesetFallbackUrl 的说明）。
       `?_=${Date.now()}`
     );
   } catch {
     return null;
+  }
+}
+
+/**
+ * ★ 兜底图集 URL（③ vue/public/images/）。
+ *
+ * ⚠️ 宿主环境（已安装插件，iframe URL 含 getAsset）必须走 **assetUrl()**：
+ *   `assetUrl("images/...")` → `/plugin/getAsset?pluginId=..&token=..&path=ui/images/...`
+ *   裸路径 `/images/xxx.png` 在宿主里指向宿主自己的静态目录 → **401 Unauthorized**。
+ *   （与 eventEngine.ts 的 isGetAsset 分支同一套路。）
+ *
+ * ⚠️ cache-busting（?_=）**只加在 /story-data dev 通道**：
+ *   getAsset 通道带查询串会被宿主鉴权拦掉 → 401。
+ *   生产环境的正确图集来自数据库故事视觉包（blob URL），本来就绕过 HTTP 缓存。
+ */
+function resolveTilesetFallbackUrl(): string {
+  if (typeof window === "undefined") return "/images/compiled_tileset_32x32.png";
+  try {
+    // 宿主 getAsset 环境 → 走带 token 的插件资源通道
+    if (location.href.includes("getAsset")) {
+      return assetUrl("images/compiled_tileset_32x32.png");
+    }
+    return "/images/compiled_tileset_32x32.png?_=" + Date.now();
+  } catch {
+    return "/images/compiled_tileset_32x32.png";
   }
 }
 
@@ -83,11 +110,13 @@ if (_devTilesetUrl) {
 /**
  * ★ 图集 URL（运行时可变）。
  *
- * 初值：dev → 本地地图集 URL（/story-data 实时读盘）；否则 → public 兜底。
+ * 初值：dev → 本地地图集 URL（/story-data 实时读盘）；
+ *       宿主(getAsset) → assetUrl("images/...")（带 token，否则 401）；
+ *       其它 → public 兜底。
  * 生产环境在故事视觉包（数据库 map_visual）加载完成后，会调 setTilesetUrl()
  * 把 URL 换成包内 blob URL → 实现「安装插件后用数据库图集」。
  */
-let _tilesetUrl: string = _devTilesetUrl || "/images/compiled_tileset_32x32.png?_=" + Date.now();
+let _tilesetUrl: string = _devTilesetUrl || resolveTilesetFallbackUrl();
 
 /** 替换图集 URL（生产：从数据库故事视觉包取到图集后调用） */
 export function setTilesetUrl(url: string | null): void {
