@@ -68,7 +68,7 @@ SK=".workbuddy-ai/skills/cognitive-tiles-maps/scripts"
 用 `scripts/elements.py` 一次性盘清地图里所有元素的构成：
 
 ```sh
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/elements.py <地图集>/maps/<name>.json
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/elements.py <地图集>/maps/<name>.json
 ```
 
 输出：
@@ -100,7 +100,7 @@ SK=".workbuddy-ai/skills/cognitive-tiles-maps/scripts"
 **在图上标出来看**（这一步不做，后面全白干）：
 
 ```sh
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py <地图集>/maps/<name>.json
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py <地图集>/maps/<name>.json
 ```
 
 产出：
@@ -123,7 +123,7 @@ SK=".workbuddy-ai/skills/cognitive-tiles-maps/scripts"
 | 其他立面家族 | 用 `scripts/facades.py` 扫 | 自动列出 col/row 范围 + 色系 |
 
 ```sh
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/facades.py <图集.png> --sheet /tmp/f.png
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/facades.py <图集.png> --sheet /tmp/f.png
 ```
 
 > ⚠️ 立面家族里**色系很杂**（同一套里含受光面/背光面/描边/窗玻璃），
@@ -157,8 +157,8 @@ SK=".workbuddy-ai/skills/cognitive-tiles-maps/scripts"
 需要图集里**没有**对应素材时（黑板、水泥路、砖墙）：
 
 ```sh
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/make_tiles.py --mapset <地图集> \
-    --plan .workbuddy-ai/skills/tiles-maps-editor/assets/plan_example.json
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/make_tiles.py --mapset <地图集> \
+    --plan workbuddy-ai/skills/tiles-maps-editor/assets/plan_example.json
 ```
 
 - 素材必须**程序化生成**（32×32 绝不用 AI 生图：原版每格仅 12–16 色，AI 插画缩到 32px 会糊）
@@ -169,8 +169,8 @@ SK=".workbuddy-ai/skills/cognitive-tiles-maps/scripts"
 
 **若只是"换配色"而不是"造新素材"**，用 `tile-style-change`：
 ```sh
-python .workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py --story <地图集名> suggest 建筑
-python .workbuddy-ai/skills/tile-style-change/scripts/skin_recolor.py --name "stone wall" --palette modern --preview /tmp/p.png
+python workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py --story <地图集名> suggest 建筑
+python workbuddy-ai/skills/tile-style-change/scripts/skin_recolor.py --name "stone wall" --palette modern --preview /tmp/p.png
 ```
 
 ### 改数据的铁律

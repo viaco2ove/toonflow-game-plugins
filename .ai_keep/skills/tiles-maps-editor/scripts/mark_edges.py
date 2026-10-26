@@ -86,7 +86,7 @@ def find_blocks(data: list[int], W: int, H: int, structure: set[int],
 def main() -> int:
     ap = argparse.ArgumentParser(description="红线标出建筑物边缘（墙边）")
     ap.add_argument("map_json")
-    ap.add_argument("--out", default=".workbuddy-ai/cognition")
+    ap.add_argument("--out", default="workbuddy-ai/cognition")
     ap.add_argument("--layer", type=int, default=2,
                     help="看第几层（1 起）；延城一中楼体在 L2")
     ap.add_argument("--min-size", type=int, default=10, help="连通块最小格数")

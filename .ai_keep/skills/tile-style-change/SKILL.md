@@ -39,7 +39,7 @@ description: 以「对象 / 系列」为单位给游戏图集换皮相。当用�
 
 ```bash
 cd <repo>
-python .workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py list
+python workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py list
 ```
 
 不带 `--story` 时自动取最近修改过的地图集；有多个会打印提示，**必要时显式指定**：

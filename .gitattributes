@@ -1,0 +1,15 @@
+# Windows junction 标记为符号链接
+*.lnk text=auto
+/.claude export-subst
+/.qoder export-subst
+/.trellis export-subst
+/.agents export-subst
+/.workbuddy export-subst
+/.mlink export-subst
+# 告诉git：这些是符号链接，不要把链接当成普通目录存
+/.claude symlink
+/.qoder symlink
+/.trellis symlink
+/.agents symlink
+/.workbuddy symlink
+/.mlink symlink

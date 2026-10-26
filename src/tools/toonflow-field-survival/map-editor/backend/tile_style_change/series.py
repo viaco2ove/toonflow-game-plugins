@@ -42,7 +42,7 @@ def _server():
     return server
 
 
-# ─── 系列/对象识别（与 .workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py 同逻辑）───
+# ─── 系列/对象识别（与 workbuddy-ai/skills/tile-style-change/scripts/tile_groups.py 同逻辑）───
 ZH_ALIAS = {
     "半兽人": "orc", "地精": "goblin", "僵尸": "zombie", "骷髅": "skeleton",
     "小恶魔": "imp", "老鼠": "rat", "蝙蝠": "bat", "蛇": "snake",

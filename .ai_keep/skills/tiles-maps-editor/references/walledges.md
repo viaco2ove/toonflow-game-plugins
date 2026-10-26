@@ -40,7 +40,7 @@
 
 ```sh
 PY="C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py \
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py \
       <地图集>/maps/<name>.json --prefix 延城一中
 ```
 
@@ -56,7 +56,7 @@ PY="C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
 - `--layer N` 看第几层（延城一中楼体在 **L2**，默认 2）
 - `--min-size N` 连通块最小格数（默认 10）
 - `--structure g1,g2,...` 自定义"算楼体"的 gid 集合
-- `--out 目录` 输出目录（默认 `.workbuddy-ai/cognition`）
+- `--out 目录` 输出目录（默认 `../../../../.aispace/workbuddy-ai/cognition`）
 
 ---
 
@@ -94,7 +94,7 @@ PY="C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
 ### 自动扫描所有家族
 
 ```sh
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/facades.py <图集.png> \
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/facades.py <图集.png> \
       --sheet /tmp/facades.png --json /tmp/facades.json
 ```
 
@@ -123,8 +123,8 @@ PY="C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
 改完必须**渲染 + 亲眼看**（铁律 #0）：
 
 ```sh
-"$PY" .workbuddy-ai/skills/cognitive-tiles-maps/scripts/inspect_map.py <地图.json>
-"$PY" .workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py <地图.json>
+"$PY" workbuddy-ai/skills/cognitive-tiles-maps/scripts/inspect_map.py <地图.json>
+"$PY" workbuddy-ai/skills/tiles-maps-editor/scripts/mark_edges.py <地图.json>
 ```
 
 看墙边高亮图：

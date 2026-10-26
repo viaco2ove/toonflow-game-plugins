@@ -2585,6 +2585,11 @@ const currentLevelName = ref(DEFAULT_START_LEVEL);
 const levelSwitching = ref(false);
 /** 切图过渡期标记（true = 本帧正在切图，丢弃所有旧图怪） */
 const switchingLevel = ref(false);
+/** 开局视觉包接管重载（同关卡内容替换）：与 switchingLevel 共用加载遮罩 */
+const mapReloading = ref(false);
+/** 地图加载遮罩可见性：portal 切图 / 传送跨图（switchLevel → switchingLevel）
+ *  + 开局接管重载（mapReloading）。同图传送纯挪坐标，不触发遮罩。 */
+const mapLoadingVisible = computed(() => switchingLevel.value || mapReloading.value);
 /** ★ 最近一次切图完成时刻（ms）。onHostState 的 isLevelSwitch 兜底用它区分
  *   「切图后宿主还没采纳新怪的过渡帧」（不能丢刚 push 的新图怪）和
  *   「真·回老图场景」（老怪不能跟人）。 */
@@ -7359,6 +7364,8 @@ onMounted(async () => {
       //   有包 → 按包的 first.map.json 定起始图（不同则 switchLevel 全量切图；
       //         相同则重载 mapCfg + 碰撞网格，让地图内容来自该故事而非共用回退图）。
       void (async () => {
+        // 接管重载期间显示「地图加载中」遮罩（含 17MB 视觉包 force 重读的等待）
+        mapReloading.value = true;
         try {
           const b = await loadStoryMapBundle(true);
           if (!b || Object.keys(b.files).length === 0) return;
@@ -7371,9 +7378,34 @@ onMounted(async () => {
           if (lv && !sameLevel(lv, currentLevelName.value)) {
             await switchLevel(levelKeyOf(lv) || lv);
           } else {
+            // ★ 同名关卡"内容替换"（默认 ui/maps → 故事视觉包）：不能只换 mapCfg——
+            //   渲染层有三处按关卡名/旧数据缓存的脏状态，不清掉屏幕永远显示旧图：
+            //     ① mapBake.bakedCache：以关卡名为键（mapBake.ts），同名必命中旧烘焙图；
+            //     ② chunkSystem：按旧图尺寸/缩放生成，尺寸变了会错位；
+            //     ③ groundTileCache：旧图的地表瓦片 id 缓存。
+            //   2026-10-26 实测：开局首帧用默认图完成烘焙 → 故事包到达后仅重载 mapCfg，
+            //   画面停在默认图，直到手动传送（switchLevel 全量重建）才恢复——根因即 ①。
             const cfg = await loadMapConfig(currentLevelName.value);
             mapCfg.value = cfg;
             await rebuildWalkGrid(currentLevelName.value);
+            invalidateBake();
+            groundTileCache.clear();
+            // 装饰 chunk 索引按新 cfg 重建（与 switchLevel 同一套逻辑；
+            // 不走 initDecorations()——它对空 decorations 会退化成随机散树）
+            decorationsByChunk.clear();
+            for (const d of cfg.decorations as Decoration[]) {
+              const cx = Math.floor(d.x / 16);
+              const cz = Math.floor(d.y / 16);
+              const key = `${cx},${cz}`;
+              if (!decorationsByChunk.has(key)) decorationsByChunk.set(key, []);
+              decorationsByChunk.get(key)!.push(d);
+            }
+            mapDecorations.value = [];
+            const meNow = (state.value?.entities ?? []).find((e) => e.side === "player");
+            chunkSystem = new ChunkTerrainSystem(makeScaleFromMap(cfg));
+            chunkSystem.init();
+            chunkSystem.updateAroundPlayer(meNow?.x ?? 0, meNow?.y ?? 0, performance.now());
+            for (let i = 0; i < 30; i++) chunkSystem.tick();
           }
           console.info(
             "[field-survival] playing：已按会话视觉地图包渲染（",
@@ -7388,6 +7420,8 @@ onMounted(async () => {
           reportLevels();
         } catch (e) {
           console.warn("[field-survival] playing 视觉包刷新失败（继续用回退地图）：", e);
+        } finally {
+          mapReloading.value = false;
         }
       })();
     }
@@ -7789,6 +7823,13 @@ watch(() => state.value?.phase, (p) => {
         </div>
       </div>
 
+      <!-- 🗺 地图加载中遮罩：portal 切图 / 传送跨图 / 开局视觉包接管共用。
+           纯视觉（pointer-events:none），不挡摇杆与按钮操作 -->
+      <div v-if="mapLoadingVisible" class="map-loading" aria-live="polite">
+        <span class="map-loading__spinner"></span>
+        <span class="map-loading__text">地图加载中…</span>
+      </div>
+
       <div class="events">
         <div v-for="(e, i) in (state?.events || []).slice(-8)" :key="i">{{ e }}</div>
       </div>
@@ -8176,6 +8217,35 @@ body {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+/* ============== 地图加载中遮罩（portal 切图 / 传送跨图 / 开局视觉包接管） ============== */
+.map-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(10, 12, 16, 0.72);
+  pointer-events: none; /* 纯视觉遮罩：不挡摇杆/按钮，加载完自动消失 */
+}
+
+.map-loading__spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #7ec8ff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.map-loading__text {
+  color: #cfe3f7;
+  font-size: 14px;
+  letter-spacing: 2px;
 }
 
 /* ============== 上传地图按钮 ============== */

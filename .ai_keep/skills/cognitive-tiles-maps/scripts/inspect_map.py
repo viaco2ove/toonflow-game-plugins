@@ -4,7 +4,7 @@
 用法:
   python inspect_map.py <map.json> [--out <dir>] [--no-png] [--legend]
 
-输出（默认写到 .workbuddy-ai/cognition/<地图名>/）:
+输出（默认写到 workbuddy-ai/cognition/<地图名>/）:
   <地图名>.png        分层渲染整图（L1/L2/L3 叠加，事件区/对象标记）
   layer-L1.png ...    每层单独渲染（排查层间遮挡用）
   report.md           结构报告：尺寸/层/NPC对象/事件区/瓦片用量（含图集分类映射）
@@ -103,7 +103,7 @@ def render_layer(map_file: MapFile, layer, ts: TileSet, scale: int = 1, transpar
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("map_json")
-    ap.add_argument("--out", default=None, help="output dir (default .workbuddy-ai/cognition/<name>)")
+    ap.add_argument("--out", default=None, help="output dir (default workbuddy-ai/cognition/<name>)")
     ap.add_argument("--no-png", action="store_true")
     ap.add_argument("--scale", type=int, default=1)
     args = ap.parse_args()

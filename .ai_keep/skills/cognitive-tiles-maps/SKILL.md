@@ -51,7 +51,7 @@ PY="C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
 输入是 Tiled 格式地图 JSON，例如
 `workshops/toonflow-field-survival/map_design/<故事>/maps/mulberryTown.json`。
 
-**输出**（默认 `.workbuddy-ai/cognition/<地图显示名>/`）：
+**输出**（默认 `../../../.aispace/workbuddy-ai/cognition/<地图显示名>/`）：
 
 | 文件 | 内容 |
 |---|---|

@@ -79,8 +79,8 @@ run.local.ps1
 /nul
 /logs2/
 .hide.*
-/.claude/worktrees/agent-a4554f8deb76d473f/
-/.claude/worktrees/
+/.aispace/claude/worktrees/agent-a4554f8deb76d473f/
+/.aispace/claude/worktrees/
 /toonflow-pkg-v1.0.2/
 /script/debug/tavo_app_webview/app_apk_reverse/tavo_decoded/lib/
 /script/debug/tavo_app_webview/app_apk_reverse/tavo_decoded/build/resources.zip
@@ -100,10 +100,10 @@ null
 /workshops/
 /plugins/toonflow-field-survival/ui/
 /plugins/toonflow-field-survival/entry.js
-/.workbuddy-ai/
+/.aispace/workbuddy-ai/
 /src/tools/toonflow-field-survival/map-editor/backend/ai_models.db
 /.qoder/
-/.workbuddy-ai/
-/.claude/
+/.aispace/workbuddy-ai/
+/.aispace/claude/
 /.aispace/
 /init-aispace-links.js

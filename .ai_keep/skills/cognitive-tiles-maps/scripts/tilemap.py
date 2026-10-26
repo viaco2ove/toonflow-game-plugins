@@ -26,7 +26,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit(
         "PIL (Pillow) is required. Use a python that has it, e.g.\n"
-        "  C:/Users/viaco/.workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
+        "  C:/Users/viaco/workbuddy-ai/binaries/python/versions/3.13.12/python.exe"
     ) from exc
 
 
@@ -68,7 +68,7 @@ def mapset_dir_for(map_json: Path) -> Path:
 
 
 def project_root_for(path: Path) -> Path:
-    """Walk up from `path` until a dir containing `.workbuddy-ai` is found.
+    """Walk up from `path` until a dir containing `workbuddy-ai` is found.
 
     Falls back to 4 levels up (workshops/<story>/map_design/<mapset> -> project root).
     """
@@ -76,7 +76,7 @@ def project_root_for(path: Path) -> Path:
     if p.is_file():
         p = p.parent
     for cand in [p, *p.parents]:
-        if (cand / ".workbuddy-ai").is_dir():
+        if (cand / "workbuddy-ai").is_dir():
             return cand
         if (cand / "workshops").is_dir() and (cand / "plugins").is_dir():
             return cand
@@ -85,7 +85,7 @@ def project_root_for(path: Path) -> Path:
 
 
 def default_out_dir(path: Path, name: str) -> Path:
-    return project_root_for(path) / ".workbuddy-ai" / "cognition" / name
+    return project_root_for(path) / "workbuddy-ai" / "cognition" / name
 
 
 def resolve_tileset(map_json: Path, prefer: str | None = None) -> tuple[Path, Path | None]:
