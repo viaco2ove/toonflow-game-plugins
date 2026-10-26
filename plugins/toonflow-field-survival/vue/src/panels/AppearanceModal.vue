@@ -29,6 +29,10 @@ const props = defineProps<{
   /** 角色 → 绑定条目（含 image / prompt / source / createdAt） */
   binds: Record<string, { image: string; prompt?: string; source?: string; createdAt?: number }>;
   gen: { status?: string; message?: string } | null;
+  /** ★ 本地正在等待回包的 sys_sprite_* 动作（App.vue 的 pendingSys）。
+   *  后端会把 tick 阻塞到动作完成后才回包，前端永远观察不到中间态——
+   *  没有这个本地 busy 信号时，点击后按钮文字/状态行全程无变化，表现为「点了没反应」。 */
+  busyAction: string;
 }>();
 
 const emit = defineEmits<{
@@ -55,6 +59,20 @@ const uploadFileInput = ref<HTMLInputElement | null>(null);
 const preparing = ref(false);
 
 const busy = computed(() => String(props.gen && props.gen.status || "") === "running");
+/** ★ 各 sys_sprite_* 动作在等待回包时展示的状态文案（本地 pending，不等 state 回推） */
+const ACTION_LABELS: Record<string, string> = {
+  sys_sprite_bind: "正在更换形象…",
+  sys_sprite_unbind: "正在恢复默认形象…",
+  sys_sprite_generate: "正在生成形象…",
+  sys_sprite_gallery_del: "正在删除形象…",
+  sys_sprite_gallery_clear: "正在清空图库…",
+  sys_sprite_upload: "正在上传形象…",
+};
+/** 本地 pending 的 sys_sprite_* 动作（含 AI 生成）——回包或超时后由 App.vue 清掉 */
+const actionLabel = computed(() => ACTION_LABELS[props.busyAction || ""] || "");
+const actionBusy = computed(() => !!actionLabel.value);
+/** 生成按钮的 busy：state 里的 running（理论上看不到，后端阻塞回包）+ 本地 pending 双保险 */
+const genBusy = computed(() => busy.value || props.busyAction === "sys_sprite_generate");
 const current = computed<Target | null>(() => props.targets.find((t) => t.id === props.targetId) || null);
 const currentAvatar = computed(() => (current.value && current.value.avatarPath) || "");
 /** ★ 实体形象预览位只展示「已绑定的实体形象」；无绑定时显示占位（默认形象由 canvas tileset 渲染）。
@@ -184,7 +202,7 @@ async function fetchAsDataUrl(url: string): Promise<string> {
 
 async function onGenerate(opts?: { programmatic?: boolean }): Promise<void> {
   const text = prompt.value.trim();
-  if (!text || busy.value || preparing.value) return;
+  if (!text || genBusy.value || preparing.value) return;
   preparing.value = true;
   try {
     // 程序生成不走参考图（本地像素画法不消费参考图），AI 生成照常收集
@@ -232,7 +250,12 @@ watch(
               {{ t.isPlayer ? "用户 · " : "" }}{{ t.name }}
             </option>
           </select>
-          <button class="apm-btn apm-btn--upload" title="选一张本地图片直接作为该角色的实体形象" @click="pickUploadFile">📁 上传</button>
+          <button
+            class="apm-btn apm-btn--upload"
+            title="选一张本地图片直接作为该角色的实体形象"
+            :disabled="actionBusy"
+            @click="pickUploadFile"
+          >📁 上传</button>
           <button class="apm-x" title="关闭" @click="emit('close')">×</button>
         </div>
 
@@ -242,7 +265,15 @@ watch(
           <div class="apm-prev-main">
             <div class="apm-prev-name">{{ current ? current.name : "未选择角色" }}</div>
             <div class="apm-prev-tip">{{ hasBind ? "已使用自定义实体形象" : "当前为默认实体形象" }}</div>
-            <button v-if="hasBind" class="apm-btn apm-btn--ghost" @click="emit('unbind', targetId)">恢复默认实体形象</button>
+            <!-- ★ 本地 pending 状态行：点击后立刻给出「正在更换形象…」等反馈，
+                 避免后端回包前（AI 生图可达 60s+）整个弹窗毫无变化 -->
+            <div v-if="actionLabel" class="apm-prev-busy">{{ actionLabel }}</div>
+            <button
+              v-if="hasBind"
+              class="apm-btn apm-btn--ghost"
+              :disabled="actionBusy"
+              @click="emit('unbind', targetId)"
+            >{{ busyAction === "sys_sprite_unbind" ? "正在恢复…" : "恢复默认实体形象" }}</button>
           </div>
         </div>
 
@@ -263,6 +294,7 @@ watch(
               class="apm-cell"
               :class="{ 'apm-cell--on': currentImage === p.path }"
               :title="p.label + '（点击使用）'"
+              :disabled="actionBusy"
               @click="emit('bind', targetId, p.path, { source: 'preset' })"
             >
               <img :src="imgSrc(p.path)" alt="" />
@@ -308,19 +340,19 @@ watch(
               <span class="apm-count">{{ refs.length }}/{{ MAX_REFS }}</span>
               <button
                 class="apm-btn apm-btn--go"
-                :disabled="busy || preparing || !prompt.trim()"
+                :disabled="genBusy || preparing || !prompt.trim()"
                 @click="onGenerate()"
               >
-                {{ busy ? "生成中…" : (preparing ? "准备参考图…" : "AI 生成") }}
+                {{ genBusy ? "生成中…" : (preparing ? "准备参考图…" : "AI 生成") }}
               </button>
               <button
                 class="apm-btn apm-btn--ghost"
-                :disabled="busy || preparing || !prompt.trim()"
+                :disabled="genBusy || preparing || !prompt.trim()"
                 title="不调用图片模型，按提示词本地程序化画一张（免费、秒出、效果简单）"
                 @click="onGenerate({ programmatic: true })"
               >程序生成</button>
             </div>
-            <div v-if="busy" class="apm-tip">图片模型推理通常需要 30~90 秒，请勿关闭面板…</div>
+            <div v-if="genBusy" class="apm-tip">图片模型推理通常需要 30~90 秒，请勿关闭面板…</div>
             <div v-else-if="gen && gen.status === 'error'" class="apm-tip apm-tip--err">
               上次生成失败：{{ gen.message || "未知错误" }}
             </div>
@@ -338,8 +370,16 @@ watch(
               <div v-for="g in gallery" :key="g.id" class="apm-gitem">
                 <img :src="imgSrc(g.image)" alt="" />
                 <div class="apm-gitem__ops">
-                  <button class="apm-btn apm-btn--mini" @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })">选用</button>
-                  <button class="apm-btn apm-btn--mini apm-btn--del" @click="emit('delete', g.id)">删除</button>
+                  <button
+                    class="apm-btn apm-btn--mini"
+                    :disabled="actionBusy"
+                    @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })"
+                  >{{ busyAction === "sys_sprite_bind" ? "更换中…" : "选用" }}</button>
+                  <button
+                    class="apm-btn apm-btn--mini apm-btn--del"
+                    :disabled="actionBusy"
+                    @click="emit('delete', g.id)"
+                  >{{ busyAction === "sys_sprite_gallery_del" ? "删除中…" : "删除" }}</button>
                 </div>
                 <div class="apm-gitem__p" :title="g.prompt">
                   <span v-if="g.matting && g.matting !== 'skipped'" class="apm-gitem__m" :title="'背景已透明化（' + g.matting + '）'">透明底</span>
@@ -348,7 +388,11 @@ watch(
               </div>
             </div>
             <div v-if="gallery.length" class="apm-mine-foot">
-              <button class="apm-btn apm-btn--del" @click="emit('clear')">清空全部</button>
+              <button
+                class="apm-btn apm-btn--del"
+                :disabled="actionBusy"
+                @click="emit('clear')"
+              >{{ busyAction === "sys_sprite_gallery_clear" ? "清空中…" : "清空全部" }}</button>
             </div>
           </div>
         </div>
@@ -434,6 +478,7 @@ watch(
 .apm-prev-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .apm-prev-name { font-weight: 700; }
 .apm-prev-tip { font-size: 11px; color: #93a2b3; }
+.apm-prev-busy { font-size: 11px; color: #ffd76a; }
 .apm-tabs {
   display: flex;
   gap: 4px;

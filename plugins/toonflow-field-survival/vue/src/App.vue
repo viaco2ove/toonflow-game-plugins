@@ -7983,6 +7983,7 @@ watch(() => state.value?.phase, (p) => {
       :gallery="appearanceGallery"
       :binds="appearanceBinds"
       :gen="appearanceGen"
+      :busy-action="pendingSys.startsWith('sys_sprite_') ? pendingSys : ''"
       @close="showAppearanceModal = false"
       @pick-target="onAppearancePickTarget"
       @bind="onAppearanceBind"
