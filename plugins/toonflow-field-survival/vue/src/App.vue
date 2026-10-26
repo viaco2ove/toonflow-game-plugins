@@ -7047,18 +7047,20 @@ onMounted(async () => {
   //   文件缺失 / 解析失败 / 字段为空 → 回退 DEFAULT_START_LEVEL（"Mulberry Town"），绝不抛错。
   // ★ 故事绑定：先把当前会话的视觉地图包(map_visual)读进缓存，
   //   供下面的 loadStartLevelName / loadMapConfig 优先取用（取不到回退 ui/maps）。
-  //   生产 iframe 下 await（包是主数据源）；dev/standalone 不阻塞（直读 workshops storyMapBase）。
-  if (import.meta.env.DEV) {
-    void loadStoryMapBundle();
-  } else {
-    await loadStoryMapBundle();
-  }
+  //   生产 iframe 下 **不阻塞选人**：选人面板只需要 state.roles（十几 KB 的 JSON），
+  //   而地图包是 17MB base64 + 36MB 解压（数秒），await 会把「角色加载慢」直接放大成
+  //   数秒白屏。改为后台加载：进入 playing 时另有 force=true 的强制重读 + 切图兜底
+  //   （见下方 start 成功分支），选人阶段晚一点拿到包完全无感。
+  void loadStoryMapBundle().catch((e) => console.warn("[field-survival] 地图包后台加载失败:", e));
   // ★ 图集来源（2026-10-22）：
   //   dev → 已在 assets.ts 里指向本地地图集 URL（workshops 最新），这里不动；
   //   生产（已安装插件）→ 数据库 map_visual 包内的 images/compiled_tileset_32x32.png 是权威图集，
   //     取出后替换当前图集；包内没有则保留 public/ 兜底。
-  if (!import.meta.env.DEV) {
+  //   ★ 同样不阻塞：图集没换上之前用 public/ 兜底（同源编译产物，内容一致），
+  //     包内图集到位后 applyTilesetImage 会热替换 + invalidateBake。
+  void (async () => {
     try {
+      await loadStoryMapBundle(); // 幂等（loaded 标记），等待上面的后台加载完成
       const objUrl = getStoryTilesetObjectUrl();
       if (objUrl) {
         await applyTilesetImage(objUrl);
@@ -7068,7 +7070,7 @@ onMounted(async () => {
     } catch (e) {
       console.warn("[field-survival] 应用包内图集失败（沿用兜底）:", e);
     }
-  }
+  })();
   let startLevel = await loadStartLevelName();
   // ★ 独立预览模式（地图编辑器 window.open ?__standalone=1&map=<文件名>）：
   //   URL 的 map 参数强制进指定地图（覆盖 first.map.json 的 start_map），直接预览正在编辑的那张图。
