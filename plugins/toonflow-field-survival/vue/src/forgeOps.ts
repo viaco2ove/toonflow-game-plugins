@@ -227,8 +227,9 @@ export async function opCraft(
     return false;
   }
 
-  // ★ 图纸是消耗品：打造成功后扣掉 1 张
-  if (blueprint) await deps.bagRemove(blueprint, 1);
+  // ★ 图纸是消耗品，但**只能扣一次**：由后端 sys_forge_create/sys_alchemy_create
+  //   在同一个事务里 removeFromPlayerBag 扣掉（那里同时写 persistSys，最可靠）。
+  //   ⚠️ 前端曾经也扣一次 → 实测 2 张图纸打一件装备后归零（双重扣除）。
 
   const effectText = final.effect && final.effect.type !== "none"
     ? `${final.effect.type} +${final.effect.value}%（${final.effect.duration}s）`
