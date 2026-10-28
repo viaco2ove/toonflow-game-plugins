@@ -168,5 +168,35 @@ check("后端 forge_create 消耗图纸", entry.includes("if (fBlueprint) remove
 check("后端 alchemy_create 消耗药方", entry.includes("if (aBlueprint) removeFromPlayerBag(s, aBlueprint, 1)"));
 check("后端拦截产物=图纸", entry.includes("if (looksLikeBlueprintName(fItem.name))") && entry.includes("if (looksLikeBlueprintName(aPill.name))"));
 
+/* 10. ★ 面板关闭按钮可点（setPointerCapture 吞掉 click 的坑） */
+console.log("\n=== 面板关闭按钮 ===");
+check("锻造面板有 close 按钮", app.includes('class="forge-panel__close"'));
+check("close 按钮绑定 closeForgeAlchemyPanel", app.includes("@click=\"closeForgeAlchemyPanel\""));
+// ★ 根因：header 上有 @pointerdown 拖拽 + setPointerCapture，
+//   会把 pointerup 重定向到 header → 浏览器不在按钮上合成 click → 点关闭毫无反应。
+//   修法：按钮上加 @pointerdown.stop，并且拖拽启动时排除可交互元素。
+const closeBtnMatch = app.match(/<button[^>]*class="forge-panel__close"[\s\S]*?>/);
+check("close 按钮带 @pointerdown.stop", !!closeBtnMatch && closeBtnMatch[0].includes("@pointerdown.stop"));
+check("拖拽启动排除可交互元素（isInteractiveTarget 用 closest 判定）",
+  app.includes("function isInteractiveTarget(") && app.includes('el.closest("button, a, input, select, textarea")'));
+check("有共享 isInteractiveTarget 守卫", app.includes("function isInteractiveTarget(") && app.includes("if (isInteractiveTarget(e.target)) return;"));
+check("三个拖拽启动都用了守卫",
+  app.includes("function onSysBtnDragStart") &&
+  /function onSysBtnDragStart[\s\S]{0,200}isInteractiveTarget/.test(app) &&
+  /function onSysPanelDragStart[\s\S]{0,260}isInteractiveTarget/.test(app) &&
+  /function onForgePanelDragStart[\s\S]{0,300}isInteractiveTarget/.test(app));
+// ★ 同一个坑在 SystemPanel 也存在（.sp-head 拖拽 + sp-close 按钮）→ 同步修
+const sysPanelSrc = readFileSync(join(vueSrc, "SystemPanel.vue"), "utf-8");
+const spCloseMatch = sysPanelSrc.match(/<button[^>]*class="sp-close"[\s\S]*?>/);
+check("系统面板 sp-close 带 @pointerdown.stop", !!spCloseMatch && spCloseMatch[0].includes("@pointerdown.stop"));
+check("系统面板 sp-head 有拖拽（坑的前提）", sysPanelSrc.includes('class="sp-head" @pointerdown="emit(\'drag-start\', $event)"'));
+// 面板根有 @pointerdown.stop（防止拖拽面板时点到游戏层）
+check("面板根有 @pointerdown.stop", /class="forge-panel"[\s\S]{0,200}@pointerdown\.stop/.test(app));
+// 关闭后不应被 runForgeOp 的 finally 立刻重开（重开逻辑只在操作入口路径）
+check("closeForgeAlchemyPanel 只置 false", /function closeForgeAlchemyPanel\(\): void \{\s*forgePanelOpen\.value = false;\s*\}/.test(app));
+// 对照：聊天/任务板面板的 header 没有拖拽 → 它们的 ✕ 一直是好的
+check("聊天面板 header 无拖拽（对照）", app.includes("class=\"chat-panel__header\"") && !/class="chat-panel__header"[^>]*@pointerdown/.test(app));
+check("任务板 header 无拖拽（对照）", app.includes("class=\"quest-panel__header\"") && !/class="quest-panel__header"[^>]*@pointerdown/.test(app));
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);
 process.exit(fail > 0 ? 1 : 0);

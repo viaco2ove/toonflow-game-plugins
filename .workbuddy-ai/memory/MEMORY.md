@@ -41,16 +41,26 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
 - trigger 声明 10 种**实现 5 种**：`enter_map`/`interact`/`proximity`/`area_enter`/`interval`；其余 5 种写了是死事件。
 - condition 声明 4 种**实现 1 种**：`flag_check`（`eq`/`ne`/`exists`/`missing`），其余恒真通过。
 - action 12 种：`call_action` ❌ 未实现（`registerAction` no-op）；`llm_speak` ⚠️ 占位返回空串；
-  **`run_script` 的 `args` 不透传**（`runScript(a.script, actor)` 丢弃 args）→ 一脚本服务多对象只能「找最近实体」猜。
+  **`run_script` 的 `args` 已透传**（2026-10-28 P0-2 落地 → `ctx.event.args`，见下）。
 - ctx 空实现混在白名单里：`npc.setLabel/move/faceTo`、`audio.play`、`llm.speak`、`registerAction`。
   **`validate_events.mjs` 的 CTX_API 只查名字在不在表里，不查有没有真效果 → 校验通过 ≠ 功能可用。**
 - `ctx.cmd` **不等后端回执**（立即 resolve 空串）；要结果必须前端实现（`forgeOps.ts` 的 `sendSysCmdAwait`）。
 - `proximity` 运行时：半径 `Math.max(0.8, radius||2.8)`；按 uid 找 `mapnpc_<uid>[_*]`/`mapmob_<uid>[_*]`；
   半径内**最近者**胜；`alive===false` 跳过；挂 proximity 的 uid 被 `eventUidsHas` 排除出「💬 聊天」→ **一个 uid 只能一种入口**；
   `repeat` 硬编码 3 秒冷却且**条件不满足也进冷却**（设施类别叠 condition）。
-- ★ **已知缺口**（改插件时优先补）：① `ctx.ui.notice` 运行时已有（`evNoticeOpen`/`forgeOpsDeps`）但**没进 `makeCtx`** → 脚本弹不出模态框；
-  ② 脚本读不到 money/level（`hooks` 有 `playerLevel`/`money`，`Ctx` 无）；③ `proximity` 无 `maxUses`/动态 label；
-  ④ `ctx.player` 是快照，改实体只能 `ctx.npc.setField`（走 `entityRef`）。
+- ★ **已补齐的能力缺口**（2026-10-28 P0 落地，随 v1.0.25 构建；**纯通用能力，不含业务语义**）：
+  - `ctx.ui.notice({title, detail?, confirmText?})` → Promise，模态弹窗（必须点确认）；**AI 执行者自动跳过**。
+    用途：购买/打造成功这类「不能只用 toast（会飘走）」的结果反馈。
+  - `ctx.event = { id, uid?, args }` → 事件上下文。`id`=事件 id；`uid`=触发实体（Tiled 对象 id，
+    **仅 interact/proximity 有**，enter_map/area_enter/interval 为 undefined）；`args`=run_script 透传参数（**非对象归一为 {}**）。
+    → 地图集侧**不再需要「找最近实体」猜目标**（如 E70 训练假人）。
+  - `ctx.playerCard = { level, money, hp, maxHp }` → 玩家卡**只读快照**（AI 拿到的也是玩家卡）；
+    取不到时 `{level:1,money:0,hp:0,maxHp:0}`。改数值仍要 `ctx.cmd`/`ctx.save`。
+  - 三者已进 `validate_events.mjs` 的 CTX_API 白名单。
+- ★ **剩余缺口**（改插件时优先补）：① `proximity` 无 `maxUses`/动态 label（G4/G5）；
+  ② `ctx.player` 是快照，改实体只能 `ctx.npc.setField`（走 `entityRef`）；
+  ③ `ctx.cmd` 不等回执（需要前端自己写 await 版）；
+  ④ 空实现未标 `@deprecated`。
 - 业务数据必须走 `ctx.story.readJson("data/x.json")`（按 path 缓存一局；安装态读 `.tbg`）；**`import` 数据会被编进 `ui/game.html`** = 头号严重违规。
 
 ## AI 托管（toonflow-field-survival）
@@ -101,6 +111,13 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
 - **白屏先查 `public/index.html` 覆盖**：Vite 的 public/ 同名文件会覆盖根 index.html。本项目遗留 Rotten Soup 模板（无 script）→ dev 白屏零报错，已改名 `rotten-soup.html`；`viteSingleFile()` 只在 production 启用。判别：curl `/index.html` 看有没有 `<script type="module" src="/src/main.ts">`。
 - **SFC 模板插新 `v-if` 块**：不要插在自闭合组件标签（`<Xxx ... />`）紧后面 —— 该位置元素可能不归入根作用域，引用的 ref 不进 `__returned__` → `$setup.xxx` 恒 undefined → `v-if` 永远 false 且无报错。排查：fetch('/src/App.vue') 编译产物搜 `__returned__ = {`。修复：挪到明确顶层兄弟位置。
 - `setupState` 代理读 ref 是解包的（直接得 boolean），写它 = 写 ref.value，可用于 E2E 注入。
+- ★ **「可拖拽 header 里的按钮点了没反应」= setPointerCapture 吞掉 click**（不是绑定写错！）：
+  祖先元素在 pointerdown 里调 `setPointerCapture` → 后续 pointerup 被重定向到该祖先 →
+  浏览器不在按钮上合成 click → `@click` 永不触发。两个条件同时满足才中招：① 祖先 setPointerCapture；
+  ② 按钮是它的后代（pointerdown 冒泡上去）。修法（双保险）：按钮加 `@pointerdown.stop` +
+  拖拽启动时 `closest("button, a, input, select, textarea")` 排除。
+  已修：`.forge-panel__close`（App.vue）、`.sp-close`（SystemPanel.vue）。
+  对照：`.chat-panel__header`/`.quest-panel__header` 无拖拽 → 它们的 ✕ 一直正常。
 
 ## 锻造/炼丹/假人事件体系
 - **商品数据属于地图集**：设计 md → `gen-shop-goods.mjs` → `<故事>/data/shop.{forge,alchemy}.json` → 脚本 `ctx.story.readJson`

@@ -154,7 +154,16 @@ let sysDragStart: { x: number; y: number; px: number; py: number } | null = null
 let sysDragMoved = false;
 let sysDragTarget: "btn" | "panel" | null = null;
 
+/** ★ 拖拽启动前先排除可交互元素。
+ *  setPointerCapture 会把后续 pointerup 重定向到捕获元素，浏览器就不再在
+ *  按钮上合成 click → 落在按钮上的 pointerdown 不能启动拖拽。 */
+function isInteractiveTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null;
+  return !!(el && el.closest && el.closest("button, a, input, select, textarea"));
+}
+
 function onSysBtnDragStart(e: PointerEvent) {
+  if (isInteractiveTarget(e.target)) return;
   sysDragStart = { x: e.clientX, y: e.clientY, px: sysBtnPos.value.x, py: sysBtnPos.value.y };
   sysDragMoved = false;
   sysDragTarget = "btn";
@@ -165,6 +174,8 @@ function onSysBtnDragStart(e: PointerEvent) {
 
 function onSysPanelDragStart(e: PointerEvent) {
   // 仅在面板头部按下时允许拖动（@pointerdown 头部）
+  // ★ 头部里的关闭按钮等可交互元素不启动拖拽（否则 click 被 setPointerCapture 吞掉）
+  if (isInteractiveTarget(e.target)) return;
   sysDragStart = { x: e.clientX, y: e.clientY, px: sysPanelPos.value.x, py: sysPanelPos.value.y };
   sysDragMoved = false;
   sysDragTarget = "panel";
@@ -179,6 +190,10 @@ let forgeDragStart: { x: number; y: number; px: number; py: number } | null = nu
 let forgeDragMoved = false;
 
 function onForgePanelDragStart(e: PointerEvent) {
+  // ★ 落在可交互元素（关闭按钮等）上时**不启动拖拽**：
+  //   setPointerCapture 会把后续 pointerup 重定向到 head，
+  //   浏览器就不再在按钮上合成 click → 按钮点了没反应。
+  if (isInteractiveTarget(e.target)) return;
   forgeDragStart = { x: e.clientX, y: e.clientY, px: forgePanelPos.value.x, py: forgePanelPos.value.y };
   forgeDragMoved = false;
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -7534,6 +7549,22 @@ onMounted(async () => {
     confirm: (opts) => evConfirmOpen(opts),
     select: (opts) => evSelectOpen(opts),
     prompt: (opts) => evPromptOpen(opts),
+    /** ★ 结果弹窗（模态）：脚本侧「必须点确认」的反馈走这里，与面板操作体验一致 */
+    notice: (opts) => evNoticeOpen({
+      title: opts.title,
+      detail: opts.detail,
+      okText: opts.confirmText,
+    }),
+    /** ★ 玩家卡只读快照（设施脚本做门槛判断：钱/等级/血量） */
+    playerCard: () => {
+      const me = (state.value?.entities ?? []).find(e => e.side === "player");
+      return {
+        level: Math.max(1, Math.round(Number((state.value?.playerCard as any)?.level) || 1)),
+        money: sysGold.value,
+        hp: Math.round(Number(me?.hp ?? 0)),
+        maxHp: Math.round(Number(me?.maxHp ?? 0)),
+      };
+    },
     openShopPanel: (opts) => openForgeAlchemyPanel(opts.mode, opts.tab || "sell", opts.goods as any[] | undefined),
     /** ★ 故事包内任意 JSON 读取（地图集自带数据文件，插件不存业务数据） */
     readStoryJson: (path: string) => readStoryJson(path),
@@ -8565,7 +8596,14 @@ watch(() => state.value?.phase, (p) => {
           {{ forgePanelMode === "forge" ? "🔨 锻造" : "🔥 炼丹" }}
         </span>
         <span class="forge-panel__gold">💰{{ sysGold }}</span>
-        <button class="forge-panel__close" @click="closeForgeAlchemyPanel">✕</button>
+        <!-- ★ 必须 @pointerdown.stop：否则 pointerdown 冒泡到 .forge-panel__head 触发
+               setPointerCapture，浏览器把后续 pointerup 全部重定向到 head，
+               click 事件就不会落在按钮上 → 点关闭「毫无反应」。 -->
+        <button
+          class="forge-panel__close"
+          @pointerdown.stop
+          @click="closeForgeAlchemyPanel"
+        >✕</button>
       </div>
       <div class="forge-panel__body">
         <ForgeAlchemyPanel

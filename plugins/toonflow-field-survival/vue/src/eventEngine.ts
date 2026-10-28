@@ -14,7 +14,7 @@
  */
 import { ref } from "vue";
 import { assetUrl } from "./assets";
-import type { Ctx, EventsFile, EventDef } from "../../../../../workshops/toonflow-field-survival/map_design//events/shared/_ctx";
+import type { Ctx, EventsFile, EventDef } from "./eventScripts/_ctx";
 
 // ─── 运行时状态 ───
 const loadedEvents = ref<EventsFile | null>(null);
@@ -74,6 +74,10 @@ export interface EventHooks {
   };
   /** ★ 事件脚本调用后端命令（sendTick 通道） */
   runCmd(action: string, params: Record<string, unknown>): Promise<string>;
+  /** ★ 结果弹窗（模态，必须点确认）：resolve 于玩家关闭时 */
+  notice?(opts: { title: string; detail?: string; confirmText?: string }): Promise<void>;
+  /** ★ 玩家卡只读快照（等级/金钱/血量）：设施脚本做门槛判断用 */
+  playerCard?(): { level: number; money: number; hp: number; maxHp: number };
 }
 
 // ─── flag 缓存（会话内） ───
@@ -173,24 +177,42 @@ const scriptModules = import.meta.glob("./eventScripts/*.ts", { eager: false });
 export interface EventActor { roleId: string; name: string; }
 const PLAYER_ACTOR: EventActor = { roleId: "", name: "player" };
 
-async function runScript(name: string, actor: EventActor = PLAYER_ACTOR): Promise<void> {
+/** ★ 本次触发的事件上下文（透传给脚本的 ctx.event）
+ *  以前 run_script 的 args 被丢弃 → 一个脚本服务 N 个对象时只能「猜目标」
+ *  （如 E70_training_dummy 里写死 uids=[251..254] 再找最近的）。 */
+export interface EventCtxInfo {
+  id: string;
+  uid?: string;
+  args: Record<string, unknown>;
+}
+const EMPTY_EVENT_INFO: EventCtxInfo = { id: "", args: {} };
+
+async function runScript(
+  name: string,
+  actor: EventActor = PLAYER_ACTOR,
+  info: EventCtxInfo = EMPTY_EVENT_INFO,
+): Promise<void> {
   const key = Object.keys(scriptModules).find(k => k.endsWith(`/${name}.ts`));
   if (!key) {
     console.warn("[eventEngine] run_script 找不到脚本:", name);
     return;
   }
   const mod = await scriptModules[key]() as { default: (ctx: Ctx) => Promise<void> };
-  const ctx = makeCtx(actor);
+  const ctx = makeCtx(actor, info);
   await mod.default(ctx);
 }
 
 // ─── ctx 构造（_ctx.ts 接口的运行时实现） ───
-function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
+function makeCtx(actor: EventActor = PLAYER_ACTOR, info: EventCtxInfo = EMPTY_EVENT_INFO): Ctx {
   const isAi = !!actor.roleId;
   return {
     player: (hooks?.player() || { id: "player", name: "陆川", side: "player" as const, x: 0, y: 0, hp: 1, maxHp: 1 }) as Ctx["player"],
     mapName: hooks?.currentMapFile() || "",
     actor: { roleId: actor.roleId, ai: isAi, name: actor.name || "player" },
+    // ★ 本次事件上下文（哪个事件 / 哪个 uid / run_script 的 args）
+    event: { id: info.id, uid: info.uid, args: info.args || {} },
+    // ★ 玩家卡只读快照（门槛判断用；拿不到时给安全默认值）
+    playerCard: hooks?.playerCard?.() || { level: 1, money: 0, hp: 0, maxHp: 0 },
     save: {
       getFlag: async <T,>(key: string): Promise<T | null> => {
         const f = await loadFlags();
@@ -263,6 +285,19 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
           return;
         }
         hooks?.openShopPanel?.(opts);
+      },
+      // ★ 结果弹窗（模态，必须点确认）：花钱/交付这类操作不能只用会消失的 toast
+      notice: (opts) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} ${opts.title || "提示"}：自动确认`);
+          return Promise.resolve();
+        }
+        // 兼容两种字段名：confirmText（脚本侧）/ okText（面板侧）
+        return hooks?.notice?.({
+          title: opts.title,
+          detail: opts.detail,
+          confirmText: opts.confirmText,
+        }) ?? Promise.resolve();
       },
     },
     // ★ 故事包只读访问：地图集自己的数据（data/*.json）从这里读，插件不存业务数据
@@ -377,7 +412,15 @@ async function runActions(ev: EventDef, actor: EventActor = PLAYER_ACTOR): Promi
         hooks?.teleport(a.map, a.x, a.y);
         break;
       case "run_script":
-        await runScript(a.script, actor);
+        // ★ 透传事件上下文：脚本靠 ctx.event.uid 知道「是哪个对象触发的」，
+        //   ctx.event.args 拿 run_script 里写的参数（以前 a.args 被直接丢弃）。
+        await runScript(a.script, actor, {
+          id: String(ev.id || ""),
+          uid: (ev.trigger as any)?.uid != null ? String((ev.trigger as any).uid) : undefined,
+          args: (a.args && typeof a.args === "object" && !Array.isArray(a.args))
+            ? (a.args as Record<string, unknown>)
+            : {},
+        });
         break;
       case "call_action":
         console.warn("[eventEngine] call_action v0.2 未实现:", a.name);

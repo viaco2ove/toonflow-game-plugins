@@ -72,7 +72,9 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
       <span class="sp-title">系统v3.1 · {{ player?.name || "玩家" }}</span>
       <span class="sp-gold">💰{{ gold }}</span>
       <span class="sp-map">{{ getLevelDisplayName(currentMap) }}</span>
-      <button class="sp-close" @click="emit('close')" title="关闭">×</button>
+      <!-- ★ 必须 @pointerdown.stop：否则 pointerdown 冒泡到 .sp-head 触发 setPointerCapture，
+           浏览器把后续 pointerup 重定向到 head → 不在按钮上合成 click → 关闭按钮点了没反应。 -->
+      <button class="sp-close" @pointerdown.stop @click="emit('close')" title="关闭">×</button>
     </div>
 
     <div class="sp-tabs">

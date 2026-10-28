@@ -58,6 +58,27 @@ export interface Ctx {
     name: string;
   };
 
+  /** ★ 本次触发的事件上下文（哪个事件、哪个 uid、run_script 传了什么参数）
+   *  一个脚本服务 N 个对象时，靠它区分「是哪个对象触发的」——
+   *  不用再自己猜「玩家附近最近的实体」。 */
+  event: {
+    /** 事件 id（events.json 里的 id） */
+    id: string;
+    /** trigger.uid（interact / proximity 才有；其它触发器为 undefined） */
+    uid?: string;
+    /** run_script 动作里写的 args（原样透传；没写就是空对象） */
+    args: Record<string, unknown>;
+  };
+
+  /** ★ 玩家卡只读快照（等级 / 金钱 / 当前血量）
+   *  设施脚本做门槛判断用（钱够不够、等级够不够），不必等后端回执。 */
+  playerCard: {
+    level: number;
+    money: number;
+    hp: number;
+    maxHp: number;
+  };
+
   /** 玩家卡 flag 读写（唯一来源 t_plugin_session_data） */
   save: {
     getFlag<T = unknown>(key: string): Promise<T | null>;
@@ -106,6 +127,11 @@ export interface Ctx {
      *         省略时该面板售卖页为空（不会去插件里找兜底数据）。
      *  ★ ctx.actor.ai 时自动忽略（AI 不开面板）。 */
     openShopPanel(opts: { mode: "forge" | "alchemy"; tab?: string; goods?: ShopGood[] }): void;
+    /** ★ 结果弹窗（模态，必须点「知道了」才关）——用于「结果必须有明确回执」的场景：
+     *  买东西、打造、交付任务、扣钱失败……
+     *  toast 会自己消失，notice 不会。
+     *  ★ ctx.actor.ai 时引擎自动跳过（只留事件日志），不阻塞 AI 执行。 */
+    notice(opts: { title: string; detail?: string; confirmText?: string }): Promise<void>;
   };
 
   /** ★ 故事包只读访问（安装后读 map_visual .tbg 内的条目；dev 读 /story-data）

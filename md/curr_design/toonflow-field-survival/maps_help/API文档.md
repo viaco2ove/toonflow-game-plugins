@@ -271,6 +271,8 @@ export default async function main(ctx: Ctx): Promise<void> {
 | `ctx.player` | `Entity`（只读快照） | 改数值请走 save/level API / `ctx.cmd`；取不到玩家时有兜底假对象 |
 | `ctx.mapName` | `string` | 当前地图文件名（不含 .json） |
 | `ctx.actor` | `{ roleId: string; ai: boolean; name: string }` | 执行者。`roleId=""` = 玩家本人；非空 = AI 托管角色。**采集/交互脚本必须据此分流**，见 §2.3 |
+| `ctx.event` | `{ id: string; uid?: string; args: Record<string, unknown> }` | ★ **当前触发事件上下文**。`id` = 事件 id；`uid` = 触发实体（Tiled 对象 id，`proximity`/`interact` 才有）；`args` = `run_script` 动作里透传的参数。详见 §2.8 |
+| `ctx.playerCard` | `{ level: number; money: number; hp: number; maxHp: number }` | ★ **玩家卡只读快照**。用于按等级/金币/血量分支。取不到时返回 `{level:1, money:0, hp:0, maxHp:0}`。详见 §2.8 |
 
 **存档（flag）**
 
@@ -300,6 +302,7 @@ export default async function main(ctx: Ctx): Promise<void> {
 | `ctx.ui.select(opts)` | `Promise<string \| null>` | ★ 多选面板 `{title, detail?, options:[{label,value,desc?}]}`。取消 → null。**AI 自动选第一个** |
 | `ctx.ui.prompt(opts)` | `Promise<string \| null>` | ★ 文本输入 `{title, detail?, placeholder?, defaultValue?}`。取消 → null。**AI 自动返回 defaultValue/空串** |
 | `ctx.ui.openShopPanel(opts)` | `void` | ★ 打开锻造/炼丹多标签面板，见 §2.7。**AI 执行者自动忽略** |
+| `ctx.ui.notice(opts)` | `Promise<void>` | ★ **结果模态弹窗** `{title, detail?, confirmText?}`。用于「购买成功 / 打造成功」这类需要明确反馈的结果。**AI 执行者自动跳过（立即 resolve）**。见 §2.8 |
 
 **AI 生成 / 背包**
 
@@ -445,6 +448,119 @@ ctx.ui.openShopPanel({
 
 ---
 
+### 2.8 ★ 事件上下文与结果反馈（ctx.event / ctx.playerCard / ctx.ui.notice）
+
+> 这三项是「引擎内部状态/通道」，地图集侧无法绕过，因此放在插件里；**但它们是通用能力，
+> 不含任何故事的业务语义**（没有 `ctx.forge.open()` 这种东西）。
+
+#### 2.8.1 ctx.event —— 当前触发事件上下文
+
+```ts
+ctx.event: {
+  id: string;                    // 事件 id（events.json 里那条的 id）
+  uid?: string;                  // 触发实体的 Tiled 对象 id；interact / proximity 才有
+  args: Record<string, unknown>; // run_script 动作里写的 args（透传，原样）
+}
+```
+
+**为什么需要**：以前 `run_script` 的 `args` 被引擎直接丢弃，且脚本不知道是哪个对象触发的，
+只能「猜目标」（例如训练假人脚本里写死 `uids = [251,252,253,254]` 再取最近的一个）。
+现在这两个信息都能直接拿到：
+
+```ts
+// events/maps/xxx.events.json
+{
+  "id": "dummy_hit",
+  "trigger": { "type": "interact", "uid": "253" },
+  "actions": [
+    { "type": "run_script", "script": "E70_training_dummy", "args": { "mode": "duel" } }
+  ]
+}
+```
+
+```ts
+// events/scripts/E70_training_dummy.ts
+export default async function (ctx: Ctx) {
+  // ★ 不用再猜：直接用触发事件的 uid
+  const uid = ctx.event.uid;                  // "253"
+  const mode = String(ctx.event.args.mode || "stand");   // "duel"
+
+  const target = uid ? ctx.npc.byUid(uid) : null;
+  if (!target) { ctx.ui.toast("没找到目标", "red"); return; }
+  ...
+}
+```
+
+**坑**：
+
+| 坑 | 说明 |
+|----|------|
+| `args` 非对象会被归空 | `args: "abc"` / `args: []` → 一律变成 `{}`，脚本里直接当空对象用 |
+| `uid` 只有 interact/proximity 有 | `enter_map` / `area_enter` / `interval` 触发时 `uid` 是 `undefined` |
+| 同一个脚本服务多个对象时 | 用 `ctx.event.uid` 区分，别写死 uid 列表 |
+| 手动调 `runScript`（脚本内调脚本） | `ctx.event` 会是空上下文（`id=""`、`args={}`），脚本要能容忍 |
+
+#### 2.8.2 ctx.playerCard —— 玩家卡只读快照
+
+```ts
+ctx.playerCard: {
+  level: number;   // 玩家等级，>= 1
+  money: number;   // 金币
+  hp: number;      // 当前血量
+  maxHp: number;   // 最大血量
+}
+```
+
+用途：**按玩家状态分支**，而不必先去 `ctx.cmd` 拿回执（`ctx.cmd` 不等回执，见 §2.2）。
+
+```ts
+if (ctx.playerCard.level >= 20) {
+  ctx.ui.toast("你的修为已足以挑战掌门", "gold");
+} else if (ctx.playerCard.money < 100) {
+  ctx.ui.toast("盘缠不足", "red");
+}
+```
+
+**坑**：
+
+- 这是**只读快照**，改数值要走 `ctx.cmd` / `ctx.save`；改了不会回写。
+- 取不到玩家实体时 hp/maxHp 为 0，level 兜底 1，money 取当前金币。
+- **AI 执行者拿到的是同一个玩家卡快照**（不是 AI 自己的属性）。AI 自己的属性在 `ctx.actor` / `ctx.npc.byUid(roleId)`。
+
+#### 2.8.3 ctx.ui.notice —— 结果模态弹窗
+
+```ts
+await ctx.ui.notice({
+  title: "打造成功",
+  detail: "获得【精铁剑】×1",
+  confirmText: "确定",     // 可选，默认「确定」
+});
+```
+
+用途：**结果反馈不能只用 toast**（toast 会飘走、玩家看不见），凡「购买成功 / 打造成功 /
+任务完成 / 重要奖励」这类必须让玩家确认的结果，都用 `notice`。
+
+**坑**：
+
+- `notice` 是 `Promise`，**要 await**（不 await 也能弹，但 await 后面的代码在玩家点确认前不会执行）。
+- **AI 执行者自动跳过**（立即 resolve），不会打断 AI 托管流程。
+- 字段名兼容 `confirmText`（脚本侧）/ `okText`（面板侧），传 `confirmText` 即可。
+- 无 `detail` 时就是一个只有标题 + 确定按钮的提示框。
+
+#### 2.8.4 校验器白名单
+
+上述三项已加入 `validate_events.mjs` 的 `CTX_API` 白名单：
+
+```
+ui.notice
+event.id  event.uid  event.args
+playerCard.level  playerCard.money  playerCard.hp  playerCard.maxHp
+```
+
+未在白名单里的 ctx 调用会被判 **error**（注释里写非法调用原文**同样**会被扫到）。
+
+---
+
 ## 3. quests.json 任务 API
 
 后端 `entry.ts` 每 tick 消费（questList / syncQuest*），任务板 UI 展示。
@@ -531,13 +647,15 @@ CTX_API 白名单（当前）：
 ```
 save.getFlag/setFlag/delFlag/all
 npc.byUid/setLabel/move/faceTo/setField
-ui.toast/subtitle/event/confirm/select/prompt/openShopPanel
+ui.toast/subtitle/event/confirm/select/prompt/openShopPanel/notice
 ai.generate
 bag.give/list/remove
 story.readJson
 level.switchTo/setLocked
 audio.play   llm.speak   registerAction
 actor.roleId/ai/name
+event.id/event.uid/event.args
+playerCard.level/playerCard.money/playerCard.hp/playerCard.maxHp
 ```
 
 退出码：有 ✗ → exit 1。**写完/改完事件必跑，跑到 0 error 再同步、再打 .tbg。**
@@ -563,6 +681,10 @@ actor.roleId/ai/name
 | 记录剧情进度 | `set_flag` / `ctx.save.setFlag`，命名 `phase_<n>_done` |
 | 发物品 | `ctx.bag.give(name,count)`（走 sys_item_add 链） |
 | 要玩家确认/选择/输入 | `ctx.ui.confirm` / `select` / `prompt`（AI 自动通过） |
+| 购买/打造成功后弹窗告知 | `await ctx.ui.notice({title, detail})`（AI 自动跳过） |
+| 脚本要知道自己被谁触发 | `ctx.event.uid`（interact/proximity 才有）+ `ctx.event.id` |
+| 脚本要拿 run_script 里配的参数 | `ctx.event.args`（透传，非对象归空为 `{}`） |
+| 按玩家等级/金币/血量分支 | `ctx.playerCard.{level,money,hp,maxHp}`（只读快照） |
 | 读地图集自己的数据文件 | `ctx.story.readJson("data/xxx.json")` |
 | 改实体阵营/血量（假人） | `ctx.npc.setField(uid, {side, hp, dummyMode})` |
 | 击杀奖励/掉落 | 野怪对象属性 `bounty` / `dropTable`（**不是** kill_count 事件） |
@@ -583,3 +705,8 @@ actor.roleId/ai/name
 - 修正 §1.3/§1.5 实现状态表（原文档只写了 3 种触发器）。
 - 校验器白名单同步：trigger 增 `proximity`/`interval`，action 增 `ai_trigger`/`ai_interval`，
   CTX_API 增 `npc.setField`/`ui.select`/`ui.prompt`/`ui.openShopPanel`/`ai.generate`/`bag.list`/`bag.remove`/`story.readJson`。
+- 新增 §2.8：`ctx.event`（事件上下文 `{id,uid,args}`）、`ctx.playerCard`（玩家卡只读快照）、
+  `ctx.ui.notice`（结果模态弹窗）三项通用 ctx API；`run_script` 动作的 `args` 现已透传到
+  `ctx.event.args`，触发实体的 uid 透传到 `ctx.event.uid`。
+- 校验器白名单同步：CTX_API 增 `ui.notice`/`event.id`/`event.uid`/`event.args`/
+  `playerCard.level`/`playerCard.money`/`playerCard.hp`/`playerCard.maxHp`。
