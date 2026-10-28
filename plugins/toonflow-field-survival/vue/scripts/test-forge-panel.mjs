@@ -138,7 +138,9 @@ const common = readFileSync(join(vueSrc, "eventScripts/forgeCommon.ts"), "utf-8"
 check("forgeCommon 有 blueprintProduct", common.includes("export function blueprintProduct("));
 check("forgeCommon 有 looksLikeBlueprint", common.includes("export function looksLikeBlueprint("));
 check("forgeOps 用 blueprintProduct 解析产物", forgeOpsSrc.includes("input = blueprintProduct(picked)"));
-check("图纸打造后消耗图纸", forgeOpsSrc.includes("if (blueprint) await deps.bagRemove(blueprint, 1)"));
+// 图纸消耗只由后端做（前端再扣一次 = 双重扣除，实测 2 张图纸打一件归零）
+check("图纸不在前端重复扣除", !forgeOpsSrc.includes("await deps.bagRemove(blueprint, 1)"));
+check("blueprint 参数传给后端", forgeOpsSrc.includes("blueprint,") && forgeOpsSrc.includes("input,"));
 check("提示词带图纸约束", common.includes("【按图纸制造】") && common.includes("【按药方炼制】"));
 check("buildForgePrompt 支持 blueprint 参数", common.includes('typeHint = "", blueprint = ""'));
 check("图纸筛选覆盖 总纲/编缀/锻造术", common.includes("总纲|编缀"));

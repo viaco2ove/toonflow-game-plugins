@@ -84,7 +84,9 @@ console.log("\n=== 图纸打造（铁剑图纸）===");
   check("提示词含【按图纸制造】", String(rec.aiPrompts[0] || "").includes("【按图纸制造】"));
   check("提示词点名成品「铁剑」", String(rec.aiPrompts[0] || "").includes("铁剑"));
   check("提示词禁止产出图纸", String(rec.aiPrompts[0] || "").includes("图纸是消耗品"));
-  check("图纸被消耗 1 张", rec.removed.some((r) => r.name === "铁剑图纸" && r.count === 1), JSON.stringify(rec.removed));
+  // ★ 图纸消耗交给后端（同一事务内 removeFromPlayerBag）；前端再扣会变双重扣除
+  check("前端不重复扣图纸", rec.removed.length === 0, JSON.stringify(rec.removed));
+  check("blueprint 参数交给后端扣", cmd?.params?.blueprint === "铁剑图纸");
   check("弹出「🔨 锻造成功」", rec.notices[0]?.title === "🔨 锻造成功", rec.notices[0]?.title);
   check("弹窗内容含获得「铁剑」", String(rec.notices[0]?.detail || "").includes("获得「铁剑」"), rec.notices[0]?.detail);
   check("弹窗内容含已消耗图纸", String(rec.notices[0]?.detail || "").includes("已消耗图纸「铁剑图纸」"));
@@ -118,7 +120,7 @@ console.log("\n=== 药方炼丹 ===");
   await opCraft(deps, "alchemy", "blueprint");
   const cmd = rec.cmds.find((c) => c.action === "sys_alchemy_create");
   check("input = 「九转回魂丹」", cmd?.params?.input === "九转回魂丹", cmd?.params?.input);
-  check("药方被消耗", rec.removed.some((r) => r.name === "九转回魂丹配方"));
+  check("药方参数交给后端扣", cmd?.params?.blueprint === "九转回魂丹配方");
   check("弹出「🔥 炼丹成功」", rec.notices[0]?.title === "🔥 炼丹成功");
 }
 
@@ -129,7 +131,7 @@ console.log("\n=== 金钱不足 ===");
   const ok = await opCraft(deps, "forge", "blueprint");
   check("返回 false", ok === false);
   check("没有发命令", rec.cmds.length === 0);
-  check("没有消耗图纸", rec.removed.length === 0);
+  check("没有消耗图纸", rec.removed.length === 0 && !rec.cmds.some((c) => c.params?.blueprint));
   check("弹出「💰 金钱不足」", rec.notices[0]?.title === "💰 金钱不足", rec.notices[0]?.title);
 }
 
