@@ -104,6 +104,10 @@ export interface MapMob {
   camp: "neutral" | "hostile" | "friendly";
   /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」；未标注则只显示类型中文名 */
   full_name?: string;
+  /** ★ 练习假人标记（Tiled 属性 training_dummy=true）：camp=neutral 但要能被打 */
+  trainingDummy?: boolean;
+  /** ★ 假人默认模式（Tiled 属性 dummy_mode）：stand（站桩）/ duel（模拟实战） */
+  dummyMode?: string;
   /** ★ 击杀赏金（Tiled 对象属性 bounty(JSON)，如 {"exp":60,"money":40}） */
   bounty?: { exp?: number; money?: number };
   /** ★ 击杀掉落表（Tiled 对象属性 dropTable(JSON)，如 [{"name":"暗核","w":100}]）。
@@ -252,6 +256,28 @@ export const NPC_DIALOG_ZH: Record<string, string> = {
 export function normalizeCamp(v: any): "neutral" | "hostile" | "friendly" | null {
   const s = String(v || "").trim().toLowerCase();
   return s === "neutral" || s === "hostile" || s === "friendly" ? s : null;
+}
+
+/**
+ * ★ 是否「练习假人」（Tiled 属性 training_dummy=true）
+ *   假人 camp=neutral 但要有 hp 可被攻击 → 必须走 mobs 分支而不是装饰物分支。
+ */
+function isTrainingDummy(props: Record<string, any>): boolean {
+  const v = props.training_dummy;
+  return v === true || v === 1 || String(v ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * ★ CHEST 是否是「可交互设施」（而非普通掉落宝箱占位）。
+ *   判据：有 full_name / name / dialog 属性中任意一个有效值。
+ *   - 炼丹炉（uid=257，full_name="炼丹炉"）→ true，进 npcs[] 可走近触发事件
+ *   - 无名 CHEST（id=157/158/204 等掉落宝箱占位）→ false，保持原行为不生成实体
+ */
+function hasChestName(props: Record<string, any>): boolean {
+  const fullName = props.full_name != null ? String(props.full_name).trim() : "";
+  const propName = String(props.name || "").trim();
+  const dialog = typeof props.dialog === "string" ? props.dialog.trim() : "";
+  return !!fullName || !!propName || !!dialog;
 }
 
 /**
@@ -460,7 +486,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
     } else if (layer?.type === "objectgroup" && Array.isArray(layer.objects)) {
       // 每个 object → entity（只处理 PLAYER，其它作为 NPC 装饰）
       for (const obj of layer.objects) {
-        const props = Array.isArray(obj.properties)
+        const props: Record<string, any> = Array.isArray(obj.properties)
           ? Object.fromEntries(obj.properties.map((p: any) => [p.name, p.value]))
           : {};
         if (props.entity_type === "PLAYER" || props.entity_type === "SPAWN_POINT") {
@@ -471,13 +497,15 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             x: obj.x / 32 - W / 2,
             y: obj.y / 32 - 1 - H / 2,
           };
-        } else if (props.entity_type === "NPC") {
+        } else if (props.entity_type === "NPC" || (props.entity_type === "CHEST" && hasChestName(props))) {
           // ★ 分层处理（game.md：entity_type 只决定行为类，外观由 object.gid 指向图集）：
           //   - 无名占位 NPC（含农场动物：mulberryTown id 190/191/192 的牛）→ 只进装饰层，
           //     用 obj.gid 选贴图 + wanders 游走，**不生成实体、不画头顶名字**，
           //     避免「莫名奇妙的 NPC」刷屏，同时动物也能以正确的牛贴图出现。
           //   - 有名字或有 dialog 的 NPC → 装饰层 + npcs[]（App.vue 生成 mapnpc_* 实体，
           //     支持走近触发「💬 聊天」+ 头顶中文名）。
+          //   - ★ CHEST（如炼丹炉 uid=257，有 full_name）→ 同样进 npcs[]，作为可交互设施
+          //     （走近可触发事件）。无名 CHEST（普通掉落宝箱占位）不进 npcs[]，保持原行为。
           const fullName = props.full_name != null ? String(props.full_name) : "";
           const propName = String(props.name || "").trim();
           const objName = String(obj.name || "").trim();
@@ -534,13 +562,19 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             unnamed: !interactable,
             pickupItem: isPickup ? String(props.pickup_item) : undefined,
           });
-        } else if (normalizeCamp(props.camp) !== "neutral"
-                   && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile")) {
+        } else if ((normalizeCamp(props.camp) !== "neutral"
+                   && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile"))
+                   || isTrainingDummy(props)) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
           //   阵营判定（game.md 优化）：对象带 camp 属性时以 camp 为准；
           //   没有 camp 时回退 entity_type 白名单推断（白名单内 → hostile），原地图无需修改依然可用。
           //   camp=hostile 还允许白名单外的类型也能成为野怪（走兜底档案），消除 entity_type 判定的不可靠性。
           //   等级优先取 Tiled 属性 props.level，未标注时用 MOB_ARCHETYPES 默认值。
+          //
+          //   ★ 练习假人（training_dummy=true）：camp=neutral 但**必须进 mobs**——
+          //   它要有 hp（能被攻击）、能被近战命中、能显示血条。camp=neutral 时
+          //   走下面的「NPC 装饰物」分支就只剩一张贴图，攻击不到。
+          //   敌我判定交给 App.vue（camp=neutral → side=neutral，不主动攻击）。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
           const mobName = String(props.name || obj.name || "野怪");
@@ -561,6 +595,8 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             level: mobLevel,
             camp: normalizeCamp(props.camp) || "hostile",
             full_name: props.full_name != null ? String(props.full_name) : undefined,
+            trainingDummy: isTrainingDummy(props),
+            dummyMode: props.dummy_mode != null ? String(props.dummy_mode) : undefined,
             bounty: bountyProp && typeof bountyProp === "object" && !Array.isArray(bountyProp)
               ? {
                   exp: bountyProp.exp != null ? num(bountyProp.exp, 0) : undefined,

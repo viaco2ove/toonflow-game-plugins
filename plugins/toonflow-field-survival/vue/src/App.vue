@@ -25,6 +25,11 @@ import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
+import ForgeAlchemyPanel from "./panels/ForgeAlchemyPanel.vue";
+// ★ 售卖分类兜底：旧存档 / 旧宿主 entry.js 推来的商品没有 cat 字段，用本地清单补全
+import { FORGE_GOODS as FORGE_GOODS_REF } from "../../src/shop/forgeGoods";
+import { ALCHEMY_GOODS as ALCHEMY_GOODS_REF } from "../../src/shop/alchemyGoods";
+import { opCraft, opUpgrade, opDissolve, type ForgeOpsDeps } from "./forgeOps";
 import AppearanceModal from "./panels/AppearanceModal.vue";
 import QuestPanel from "./panels/QuestPanel.vue";
 import {
@@ -51,7 +56,7 @@ import {
 import { ChunkTerrainSystem } from "./chunkTerrain";
 import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
-import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel } from "./eventEngine";
+import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
 // ★ AI 托管运行时配置（系统 → AI 页签可调，落库 t_plugin_session_data）
@@ -171,6 +176,38 @@ function onSysPanelDragStart(e: PointerEvent) {
   window.addEventListener("pointerup", onSysDragEnd);
 }
 
+/* ----------------- 锻造 / 炼丹 面板（独立拖拽） ----------------- */
+const forgePanelPos = ref({ x: 70, y: 16 });
+let forgeDragStart: { x: number; y: number; px: number; py: number } | null = null;
+let forgeDragMoved = false;
+
+function onForgePanelDragStart(e: PointerEvent) {
+  forgeDragStart = { x: e.clientX, y: e.clientY, px: forgePanelPos.value.x, py: forgePanelPos.value.y };
+  forgeDragMoved = false;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  window.addEventListener("pointermove", onForgeDragMove);
+  window.addEventListener("pointerup", onForgeDragEnd);
+}
+
+function onForgeDragMove(e: PointerEvent) {
+  if (!forgeDragStart) return;
+  const dx = e.clientX - forgeDragStart.x;
+  const dy = e.clientY - forgeDragStart.y;
+  if (!forgeDragMoved && Math.hypot(dx, dy) > SYS_DRAG_THRESHOLD) forgeDragMoved = true;
+  if (!forgeDragMoved) return;
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  forgePanelPos.value.x = Math.max(0, Math.min(W - 440, forgeDragStart.px + dx));
+  forgePanelPos.value.y = Math.max(0, Math.min(H - 520, forgeDragStart.py + dy));
+}
+
+function onForgeDragEnd() {
+  forgeDragStart = null;
+  forgeDragMoved = false;
+  window.removeEventListener("pointermove", onForgeDragMove);
+  window.removeEventListener("pointerup", onForgeDragEnd);
+}
+
 function onSysDragMove(e: PointerEvent) {
   if (!sysDragStart || !sysDragTarget) return;
   const dx = e.clientX - sysDragStart.x;
@@ -253,6 +290,113 @@ function evConfirmClose(ok: boolean): void {
   if (!c) return;
   evConfirm.value = null;
   c.resolve(ok);
+}
+
+/** ★ 事件系统多选面板（锻造/炼丹的功能菜单） */
+const evSelect = ref<{
+  title: string;
+  detail: string;
+  options: Array<{ label: string; value: string; desc?: string }>;
+  resolve: (v: string | null) => void;
+} | null>(null);
+function evSelectOpen(opts: { title: string; detail?: string; options: Array<{ label: string; value: string; desc?: string }> }): Promise<string | null> {
+  // 已有弹窗未关闭时，新请求直接拒绝（防连点叠加）
+  if (evConfirm.value || evSelect.value || evPrompt.value) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    evSelect.value = {
+      title: String(opts.title || ""),
+      detail: String(opts.detail || ""),
+      options: Array.isArray(opts.options) ? opts.options : [],
+      resolve,
+    };
+  });
+}
+function evSelectClose(value: string | null): void {
+  const s = evSelect.value;
+  if (!s) return;
+  evSelect.value = null;
+  s.resolve(value);
+}
+
+/** ★ 事件系统文本输入（输入物品名称/丹药名称） */
+const evPrompt = ref<{
+  title: string;
+  detail: string;
+  placeholder: string;
+  value: string;
+  resolve: (v: string | null) => void;
+} | null>(null);
+function evPromptOpen(opts: { title: string; detail?: string; placeholder?: string; defaultValue?: string }): Promise<string | null> {
+  if (evConfirm.value || evSelect.value || evPrompt.value) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    evPrompt.value = {
+      title: String(opts.title || ""),
+      detail: String(opts.detail || ""),
+      placeholder: String(opts.placeholder || ""),
+      value: String(opts.defaultValue || ""),
+      resolve,
+    };
+  });
+}
+function evPromptClose(value: string | null): void {
+  const p = evPrompt.value;
+  if (!p) return;
+  evPrompt.value = null;
+  p.resolve(value);
+}
+/** 输入框回车提交 */
+function onEvPromptKeydown(e: KeyboardEvent): void {
+  if (e.key !== "Enter") return;
+  evPromptClose(evPrompt.value?.value ?? "");
+}
+
+/**
+ * ★ 结果弹窗（购买成功 / 打造成功 / 升级成功 / 溶解成功…）
+ *   飘字（showToast）几秒就散，重要结果必须让玩家点一下确认。
+ */
+const evNotice = ref<{ title: string; detail: string; okText: string; resolve: () => void } | null>(null);
+function evNoticeOpen(opts: { title: string; detail?: string; okText?: string }): Promise<void> {
+  // 已有同类弹窗未关闭 → 关掉旧的再开新的（连续操作不能把结果吞掉）
+  if (evNotice.value) { evNotice.value.resolve(); evNotice.value = null; }
+  return new Promise((resolve) => {
+    evNotice.value = {
+      title: String(opts.title || ""),
+      detail: String(opts.detail || ""),
+      okText: String(opts.okText || "知道了"),
+      resolve,
+    };
+  });
+}
+function evNoticeClose(): void {
+  const n = evNotice.value;
+  if (!n) return;
+  evNotice.value = null;
+  n.resolve();
+}
+
+/** ★ 事件脚本读背包（ctx.bag.list）
+ *  前端已有本地派生的 sysBagItems（参数卡 + bagMeta + itemMeta 合并），
+ *  直接用它即可，不必等后端回包。 */
+function eventBagList(): Array<{ name: string; count: number; kind: string; rarity: string; heal: number; lv?: number; desc?: string }> {
+  return sysBagItems.value.map((it) => ({
+    name: String(it.name || ""),
+    count: Math.max(1, Math.round(Number(it.count) || 1)),
+    kind: String((it as any).kind || "material"),
+    rarity: String((it as any).rarity || "common"),
+    heal: Math.round(Number((it as any).heal) || 0),
+    lv: (it as any).lv != null ? Math.round(Number((it as any).lv) || 1) : undefined,
+    desc: (it as any).desc ? String((it as any).desc) : undefined,
+  })).filter((x) => !!x.name);
+}
+
+/** ★ 事件脚本移除物品（ctx.bag.remove）
+ *  走 sendTick("sys_bag_remove") 让后端落账（前端直接改 state 会被宿主 push 覆盖）。 */
+function eventBagRemove(name: string, count = 1): Promise<boolean> {
+  const nm = String(name || "").trim();
+  if (!nm) return Promise.resolve(false);
+  sendTick("sys_bag_remove", { name: nm, count: Math.max(1, Math.round(count)) });
+  showToast(`失去 ${nm}${count > 1 ? `×${count}` : ""}`);
+  return Promise.resolve(true);
 }
 
 /** 事件系统发放物品：走 sendTick("sys_item_add") 让 mockHost 接管（避免本地 state 被 mock 全量覆盖） */
@@ -487,6 +631,55 @@ const sysRing = computed<{ items: SysItem[]; skills: string[] }>(() => {
 
 const sysGoods = computed<SysGood[]>(() => (((state.value as any)?.shopGoods || []) as SysGood[]));
 const sysGoodsSource = computed(() => String((state.value as any)?.shopSource || "builtin"));
+/**
+ * ★ 售卖分类（cat）兜底补全
+ *   商品清单的权威来源是 src/shop/*.ts（由设计文档生成，带 cat）。
+ *   但 state.forgeGoods 可能来自「旧存档」或「宿主里缓存的旧 entry.js」，
+ *   这些数据没有 cat → 售卖页只有「全部」有货、分类页全空。
+ *   这里按 id → name 顺序回查本地清单补上，仍查不到再按名称关键词推导。
+ */
+const FORGE_CAT_BY_ID = new Map<string, string>((FORGE_GOODS_REF as any[]).map((g: any) => [String(g.id), String(g.cat)]));
+const FORGE_CAT_BY_NAME = new Map<string, string>((FORGE_GOODS_REF as any[]).map((g: any) => [String(g.name), String(g.cat)]));
+const ALCHEMY_CAT_BY_ID = new Map<string, string>((ALCHEMY_GOODS_REF as any[]).map((g: any) => [String(g.id), String(g.cat)]));
+const ALCHEMY_CAT_BY_NAME = new Map<string, string>((ALCHEMY_GOODS_REF as any[]).map((g: any) => [String(g.name), String(g.cat)]));
+
+/** 最后兜底：按名称/类型关键词推导分类（分类名必须与面板 CAT_ORDER 一致） */
+function inferShopCat(name: string, kind: string, isAlchemy: boolean): string {
+  const n = String(name || "");
+  if (isAlchemy) {
+    if (/丹方|药方|方$/.test(n)) return "药方";
+    if (/丹|丸|散|膏|露|浆/.test(n)) return "丹药";
+    if (/草|参|芝|花|叶|根|果|莲|茸|蕈/.test(n)) return "药草";
+    if (/炉|鼎|杵|研钵|器具|礼盒|套装/.test(n)) return "器具";
+    return "材料";
+  }
+  if (kind === "skill_book" || /术|技能/.test(n)) return "技能";
+  if (/图纸|图谱|秘法|总纲|编缀图|锻造法/.test(n)) return "图纸";
+  if (/剑|刀|枪|弓|弩|匕首|拳套|棍|棒|锤|斧|杖|戈|矛/.test(n)) return "武器";
+  if (/甲|盔|靴|护腿|盾|袍|衣|裤|帽|护腕|披风/.test(n)) return "防具";
+  if (/戒|项链|护符|手镯|耳坠|玉佩|念珠|腰带|坠/.test(n)) return "饰品";
+  return "材料";
+}
+
+/** 给商品列表补齐 cat（有 cat 的原样返回，避免无谓重建） */
+function withShopCat(list: any[], byId: Map<string, string>, byName: Map<string, string>, isAlchemy: boolean): any[] {
+  if (!Array.isArray(list) || !list.length) return [];
+  if (list.every((g: any) => g && g.cat)) return list;
+  return list.map((g: any) => {
+    if (!g || g.cat) return g;
+    const cat = byId.get(String(g.id)) || byName.get(String(g.name)) || inferShopCat(g.name, g.kind, isAlchemy);
+    return { ...g, cat };
+  });
+}
+
+/** ★ 锻造大师商品（149 种，来自 物品售卖.list.md） */
+const sysForgeGoods = computed<SysGood[]>(() =>
+  withShopCat(((state.value as any)?.forgeGoods || []) as any[], FORGE_CAT_BY_ID, FORGE_CAT_BY_NAME, false) as SysGood[],
+);
+/** ★ 炼丹炉商品（163 种，来自 物品售卖.炼丹.list.md） */
+const sysAlchemyGoods = computed<SysGood[]>(() =>
+  withShopCat(((state.value as any)?.alchemyGoods || []) as any[], ALCHEMY_CAT_BY_ID, ALCHEMY_CAT_BY_NAME, true) as SysGood[],
+);
 
 function cardToRole(c: any, i: number): SysRole {
   const side = String(c?.side || "npc");
@@ -946,6 +1139,39 @@ function runSysCmd(action: string, params: Record<string, any> = {}): void {
   sysCmdTimer = window.setTimeout(() => { pendingSys.value = ""; }, SYS_CMD_WAIT_MS[action] ?? 3000);
 }
 
+/**
+ * ★ 发命令并等后端回执（response 文本），超时返回 ""。
+ *   runSysCmd 是「发射后不管」，锻造/购买需要知道后端到底成功没有
+ *   （金钱不足、原物品不在背包…只有后端知道），所以这里要等。
+ *
+ *   判据：等 response 变非空。为了兼容「连续两次买同一件东西、response
+ *   文本完全一样」的情况，中间出现过一次空 response（tick 会清空）也算
+ *   新回执。
+ */
+function sendSysCmdAwait(action: string, params: Record<string, any> = {}, timeoutMs = 8000): Promise<string> {
+  return new Promise((resolve) => {
+    const before = String((state.value as any)?.response || "");
+    let sawEmpty = false;
+    pendingSys.value = action;
+    sendTick(action, params);
+    const t0 = Date.now();
+    const timer = window.setInterval(() => {
+      const resp = String((state.value as any)?.response || "");
+      if (!resp) {
+        sawEmpty = true;
+      } else if (resp !== before || sawEmpty) {
+        window.clearInterval(timer);
+        resolve(resp);
+        return;
+      }
+      if (Date.now() - t0 > timeoutMs) {
+        window.clearInterval(timer);
+        resolve("");
+      }
+    }, 80);
+  });
+}
+
 /** 插件回推 response → 显示到面板底栏（仅系统命令触发时才提示） */
 watch(
   () => String(((state.value as any)?.response) || ""),
@@ -1064,9 +1290,34 @@ function onSysShopAgent() {
   runSysCmd("sys_shop_refresh", { agent: true });
 }
 
-function onSysBuyItem(good: SysGood, count = 1) {
-  sysNotice.value = `购买 ${good.name} ×${count}`;
-  runSysCmd("sys_shop_buy", { id: good.id, name: good.name, count: Math.max(1, Math.floor(count)) });
+async function onSysBuyItem(good: SysGood, count = 1): Promise<void> {
+  const n = Math.max(1, Math.floor(count));
+  const cost = Math.round(Number(good.price) || 0) * n;
+  const before = sysGold.value;
+  if (before < cost) {
+    await evNoticeOpen({
+      title: "💰 金钱不足",
+      detail: `「${good.name}」×${n} 需要 ${cost} 金，你身上只有 ${before} 金。`,
+    });
+    return;
+  }
+  sysNotice.value = `购买 ${good.name} ×${n}`;
+  const resp = await sendSysCmdAwait("sys_shop_buy", { id: good.id, name: good.name, count: n });
+  // 后端明确拒绝（"购买 xxx×1" 是成功文案）
+  if (resp && !/^购买/.test(resp)) {
+    await evNoticeOpen({ title: "❌ 购买失败", detail: resp });
+    return;
+  }
+  const after = sysGold.value;
+  await evNoticeOpen({
+    title: "✅ 购买成功",
+    detail: [
+      `获得「${good.name}」×${n}`,
+      `花费 ${cost} 金`,
+      after !== before ? `余额 ${after} 金` : "",
+      good.desc ? `　${good.desc}` : "",
+    ].filter((x) => x !== "").join("\n"),
+  });
 }
 
 function onSysUseSkill(skill: SysSkill) {
@@ -1147,6 +1398,12 @@ function onAppearanceDelete(id: string) {
 function onAppearanceClear() {
   sysNotice.value = "正在清空形象…";
   runSysCmd("sys_sprite_gallery_clear", {});
+}
+/** 图库形象左右翻转：新图由弹窗 canvas 生成，后端替换条目并同步引用它的绑定 */
+function onAppearanceFlip(id: string, image: string) {
+  if (!id || !image) return;
+  sysNotice.value = "正在翻转形象…";
+  runSysCmd("sys_sprite_flip", { id, image });
 }
 
 /** game.md 物品修改：参数保存到 t_plugin_session_data（entry 侧 itemMeta + 参数卡物品名列表） */
@@ -2132,8 +2389,10 @@ function onRightClick(e: MouseEvent) {
   const tx = me.x + dx;
   const ty = me.y + dy;
   // 找点击位置 1.5m 内最近的活敌人
+  //   ★ 练习假人（trainingDummy，side=neutral）也可被点击攻击——
+  //   玩家点了假人 → 后端 damage() 正常结算（打的是"自愿为敌"的目标）
   const clicked = s.entities
-    .filter((e) => e.side === "enemy" && e.alive !== false)
+    .filter((e) => (e.side === "enemy" || (e as any).trainingDummy === true) && e.alive !== false)
     .map((e) => ({ e, d: Math.hypot(e.x - tx, e.y - ty) }))
     .filter(({ d }) => d < 1.5)
     .sort((a, b) => a.d - b.d)[0]?.e;
@@ -2714,7 +2973,10 @@ function publishLocalMapMobs(): void {
     (window as any).__collectLocalEnemies = () => {
       const list = ((state.value?.entities || []) as Array<any>).filter(
         (e) =>
-          e?.side === "enemy" &&
+          // ★ 练习假人（trainingDummy）也算「本地权威实体」——
+          //   它 side=neutral（不主动攻击），但由前端 switchLevel 生成，
+          //   不上报的话宿主/mock 的 state 会把它整份覆盖掉（mock 的 syncAppEntities 只同步本地实体）。
+          (e?.side === "enemy" || (e as any)?.trainingDummy === true) &&
           typeof e?.id === "string" &&
           (e.id.startsWith("mapmob_") || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
       );
@@ -2837,6 +3099,84 @@ function freeEnemySpot(x: number, y: number): { x: number; y: number } {
   if (!walkGrid) return c;
   const sp = snapEnemySpawn(walkGrid, c.x, c.y, ENEMY_COLLIDE_R);
   return sp ? { x: sp.x, y: sp.z } : c;
+}
+
+/**
+ * ★ 把 cfg.mobs[] 注入到 state.entities（mapmob_*）。
+ *   从 switchLevel 抽出，供「开局」和「切图」两条路径共用 ——
+ *   ★ 开局原本只注入 NPC 不注入 mobs → 练习假人（trainingDummy）等
+ *     「本地权威实体」在开局时不存在 → 走近也没按钮。
+ *
+ *   阵营映射（game.md）：
+ *     hostile → side=enemy（会主动攻击）
+ *     friendly → side=ally（友方，不参战）
+ *     neutral → side=neutral（★ 练习假人：不主动攻击，但可被玩家攻击）
+ */
+function injectMapMobsToState(s: GameState | null | undefined, cfg: MapConfig | null | undefined): void {
+  if (!s || !cfg?.mobs?.length) return;
+  for (const mob of cfg.mobs) {
+    // 档案表统一取自 mapConfig.MOB_ARCHETYPES（与地图白名单同一份数据）
+    let arch = MOB_ARCHETYPES[mob.entity_type];
+    if (!arch) {
+      console.warn(
+        "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
+      );
+      arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
+    }
+    // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级按比例缩放
+    const lv = mob.level ?? arch.level ?? 1;
+    // ★ 练习假人4（level=0 = auto）：等级永远比用户高 5 级（设计文档：假人事件.md）
+    //   每次进图重算 —— 用户升级后再进图，假人更强。
+    let effLv = lv;
+    if (mob.trainingDummy && lv <= 0) {
+      const playerLv = Math.max(1, Math.round(Number(s.playerCard?.level) || 1));
+      effLv = playerLv + 5;
+    }
+    const effScale = 1 + (effLv - 1) * 0.3; // 每级 +30%
+    const hpScaled = Math.floor(arch.hp * effScale);
+    // ★ 阵营：camp 属性 > entity_type 推断（mapConfig 已归一）
+    const camp = mob.camp || "hostile";
+    const mobSide = camp === "friendly" ? "ally" : camp === "neutral" ? "neutral" : "enemy";
+    // 头顶显示：类型中文名 + 可选姓名——「哥布林」/「哥布林(低阶湮物)」
+    const zhName = ENTITY_TYPE_ZH[mob.entity_type] || arch.name;
+    const mobLabel = mob.full_name ? `${zhName}(${mob.full_name})` : zhName;
+    // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
+    //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外。
+    const mobPos = freeEnemySpot(mob.x, mob.y);
+    // ★ game.md 68：<30s 离图回来 → 该 Tiled 怪保持死亡（pendingDeadMobIds）
+    const revived = pendingDeadMobIds.has(String(mob.id));
+    if (revived) pendingDeadMobIds.delete(String(mob.id));
+    const enemyId = `mapmob_${mob.id}_${currentMapMobTs}`;
+    if (s.entities.some((e) => String(e.id) === enemyId)) continue;
+    s.entities.push({
+      id: enemyId,
+      name: mobLabel,
+      side: mobSide,
+      x: mobPos.x,
+      y: mobPos.y,
+      vx: 0, vy: 0,
+      hp: hpScaled, maxHp: hpScaled,
+      mp: 0, maxMp: 0,
+      exp: Math.floor(hpScaled * 0.5), expToNext: 0,
+      level: effLv,
+      atk: Math.floor(arch.atk * effScale),
+      def: Math.floor((arch.atk * 0.3) * effScale),
+      facing: 180, cooldown: 0, alive: !revived,
+      homeX: mobPos.x,
+      homeY: mobPos.y,
+      // ★ 击杀奖励数据透传（Tiled 对象属性 bounty / dropTable(JSON)）
+      bounty: mob.bounty,
+      dropTable: mob.dropTable,
+      // ★ game.md 阵营/类型/姓名透传（头顶标签、角色面板敌对判定用）
+      camp,
+      entity_type: mob.entity_type,
+      full_name: mob.full_name,
+      // ★ 练习假人标记（事件脚本按此判定弹出「对打」菜单）
+      trainingDummy: mob.trainingDummy === true,
+      dummyMode: mob.dummyMode,
+    } as any);
+    if (revived) deadLocalEnemyIds.add(enemyId);
+  }
 }
 
 /**
@@ -3044,66 +3384,7 @@ async function switchLevel(levelName: string): Promise<boolean> {
     //   localEnemiesPayload 上报只认本世代，宿主在途的旧图怪（回流 mapmob_*）不认。
     currentMapMobTs = String(Date.now());
     if (s && next.mobs?.length) {
-      for (const mob of next.mobs) {
-        // ★ 档案表统一取自 mapConfig.MOB_ARCHETYPES（与地图白名单同一份数据）：
-        //   未登记类型不再静默退化成 30/6 的"哥布林斥候"，而是告警 + 兜底
-        let arch = MOB_ARCHETYPES[mob.entity_type];
-        if (!arch) {
-          console.warn(
-            "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
-          );
-          arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
-        }
-        // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级按比例缩放
-        const lv = mob.level ?? arch.level ?? 1;
-        const lvScale = 1 + (lv - 1) * 0.3; // 每级 +30%
-        const hpScaled = Math.floor(arch.hp * lvScale);
-        // ★ 阵营（game.md）：地图对象 camp 属性 > entity_type 推断（mapConfig 已归一）。
-        //   hostile → 敌对野怪（side enemy）；friendly → 友方（side ally，不组队不跟随）；
-        //   neutral 在 mapConfig 已转为 NPC 装饰物，不会进 mobs。
-        const camp = mob.camp || "hostile";
-        const mobSide = camp === "friendly" ? "ally" : "enemy";
-        // ★ 头顶显示（game.md）：类型中文名 + 可选姓名——「哥布林」/「哥布林(低阶湮物)」
-        const zhName = ENTITY_TYPE_ZH[mob.entity_type] || arch.name;
-        const mobLabel = mob.full_name ? `${zhName}(${mob.full_name})` : zhName;
-        // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
-        //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外/宿主世界外，
-        //   既进不了小地图视野，也进不了任何攻击射程。
-        const mobPos = freeEnemySpot(mob.x, mob.y);
-        // ★ game.md 68：<30s 离图回来 → 该 Tiled 怪保持死亡（pendingDeadMobIds 由
-        //   switchLevel 上面的"记忆死亡怪"段写入）。这是按图记忆，不依赖 host。
-        const revived = pendingDeadMobIds.has(String(mob.id));
-        if (revived) pendingDeadMobIds.delete(String(mob.id));
-        const enemyId = `mapmob_${mob.id}_${currentMapMobTs}`;   // fix⑧：世代统一 ts（原来循环内 Date.now() 每只不同，无法按世代过滤）
-        s.entities.push({
-          id: enemyId,
-          name: mobLabel,
-          side: mobSide,
-          x: mobPos.x,
-          y: mobPos.y,
-          vx: 0, vy: 0,
-          hp: hpScaled, maxHp: hpScaled,
-          mp: 0, maxMp: 0,
-          exp: Math.floor(hpScaled * 0.5), expToNext: 0,
-          level: lv,
-          atk: Math.floor(arch.atk * lvScale),
-          def: Math.floor((arch.atk * 0.3) * lvScale),
-          facing: 180, cooldown: 0, alive: !revived,
-          homeX: mobPos.x,
-          homeY: mobPos.y,
-          // ★ 击杀奖励数据透传（Tiled 对象属性 bounty / dropTable(JSON)）：
-          //   实体上带着它们 → localEnemiesPayload 整份上报 → entry.ts applyLocalEnemies
-          //   落到实体 → dropKillChest 按本怪的表抽物资（BOSS 可配「必掉暗核」）。
-          //   缺省时后端落回全局 DEFAULT_DROP_TABLE。
-          bounty: mob.bounty,
-          dropTable: mob.dropTable,
-          // ★ game.md 阵营/类型/姓名透传（头顶标签、角色面板敌对判定用）
-          camp,
-          entity_type: mob.entity_type,
-          full_name: mob.full_name,
-        } as any);
-        if (revived) deadLocalEnemyIds.add(enemyId);
-      }
+      injectMapMobsToState(s, next);
       state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
     }
     // ★ 从 Tiled 地图 Actors 层加载中立 NPC（mulberryTown 的 Mayor Leonard / Bar / NPC 等）。
@@ -6177,8 +6458,189 @@ function onPickupConfirm(): void {
 }
 
 /** 暂时忽略：关闭提示，本次靠近不再弹出（离开范围后重新提示） */
-function onPickupDismiss(): void {
-  pickupDismissed.value = true;
+function onPickupDismiss(): void {  pickupDismissed.value = true;
+}
+
+/* ============================================================
+   ★ 靠近自动弹出的交互按钮（锻造大师 / 炼丹炉 / 练习假人 …）
+   ------------------------------------------------------------
+   需求：「走进锻造大师，弹出"锻造"按钮」——不是点💬聊天才弹，
+   而是走进范围就自动弹。
+   实现：
+     1. 实体上带 interactionAction 标记（mapnpc_* / mapmob_* 实体注入时写入）
+     2. 本模块每帧扫 2.5m 内最近的此类实体 → 渲染一个悬浮按钮
+     3. 点按钮 → fireInteractEvent(tiledId) → 事件系统接管（跑脚本弹菜单）
+   ============================================================ */
+const nearInteraction = ref<{
+  id: string;
+  tiledId: string;
+  name: string;
+  action: string;
+  label: string;
+  icon: string;
+  hint: string;
+} | null>(null);
+const interactionDismissed = ref(false);
+
+function updateNearInteraction(): void {
+  const s = state.value;
+  if (!s) { if (nearInteraction.value) nearInteraction.value = null; return; }
+  const me = s.entities.find((e) => e.side === "player");
+  if (!me) { if (nearInteraction.value) nearInteraction.value = null; return; }
+  // ★ 数据源：事件配置里的 proximity 点位（哪个 uid → 什么按钮）
+  const points = getProximityPoints();
+  if (points.length === 0) {
+    if (nearInteraction.value) nearInteraction.value = null;
+    return;
+  }
+  let best: typeof nearInteraction.value = null;
+  let bestDist = Infinity;
+  for (const p of points) {
+    // 找该 uid 对应的实体（mapnpc_<uid> / mapmob_<uid>_<ts>）
+    const ent = s.entities.find((e) => {
+      const id = String(e.id);
+      return id === `mapnpc_${p.uid}` || id.startsWith(`mapnpc_${p.uid}_`) || id.startsWith(`mapmob_${p.uid}_`) || id === `mapmob_${p.uid}`;
+    });
+    if (!ent || ent.alive === false) continue;
+    const d = Math.hypot(ent.x - me.x, ent.y - me.y);
+    if (d > p.radius) continue;
+    if (d < bestDist) {
+      bestDist = d;
+      best = {
+        id: String(ent.id),
+        tiledId: p.uid,
+        name: String(ent.name || ""),
+        action: "proximity",
+        label: p.label,
+        icon: p.icon,
+        hint: p.hint,
+      };
+    }
+  }
+  if (best?.id !== nearInteraction.value?.id) {
+    nearInteraction.value = best;
+    interactionDismissed.value = false;   // 换目标/重新靠近 → 恢复弹出
+  }
+}
+
+/** 点交互按钮 → 交给事件系统（interact 事件跑脚本） */
+async function onInteractionClick(): Promise<void> {
+  const it = nearInteraction.value;
+  if (!it) return;
+  nearInteraction.value = null;
+  interactionDismissed.value = true;
+  if (it.tiledId) {
+    await fireInteractEvent(it.tiledId);
+  }
+}
+
+/* ============================================================
+   ★ 锻造 / 炼丹 多标签面板
+   ------------------------------------------------------------
+   「走进锻造大师，弹出"锻造"按钮，点击进入 多标签页"锻造"面板」
+   → 事件脚本的"物品售卖"不再是弹货单文字，而是直接打开本面板的售卖页签。
+   面板由事件脚本通过 ctx.ui.openShopPanel({mode, tab}) 打开。
+   ============================================================ */
+const forgePanelOpen = ref(false);
+const forgePanelMode = ref<"forge" | "alchemy">("forge");
+const forgePanelTab = ref<string>("sell");
+
+/** 打开锻造/炼丹面板（事件脚本 ctx.ui.openShopPanel 调用） */
+function openForgeAlchemyPanel(mode: "forge" | "alchemy", tab = "sell"): void {
+  forgePanelMode.value = mode;
+  forgePanelTab.value = tab;
+  forgePanelOpen.value = true;
+  showSystemPanel.value = false;
+}
+
+/** 关闭 */
+function closeForgeAlchemyPanel(): void {
+  forgePanelOpen.value = false;
+}
+
+/** 售卖页签的购买（走 sys_shop_buy） */
+function onForgeBuy(g: any, n: number): void {
+  void onSysBuyItem(g, n);
+}
+
+/** 物品打造 / 开始炼丹：三种输入方式 */
+function onForgeCraftInput(): void {
+  forgePanelOpen.value = false;
+  void runForgeOp("craft", "input");
+}
+function onForgeCraftRandom(): void {
+  forgePanelOpen.value = false;
+  void runForgeOp("craft", "random");
+}
+function onForgeCraftBlueprint(): void {
+  forgePanelOpen.value = false;
+  void runForgeOp("craft", "blueprint");
+}
+
+/** ★ 升级装备（面板内选好目标 → 交给事件脚本执行） */
+function onForgeUpgradeItem(item: any): void {
+  forgePanelOpen.value = false;
+  void runForgeOp("upgrade", item);
+}
+
+/** ★ 溶解装备 / 丹药 */
+function onForgeDissolveItem(item: any): void {
+  forgePanelOpen.value = false;
+  void runForgeOp("dissolve", item);
+}
+
+/** ★ 面板操作统一入口（forgeOps 的依赖注入点） */
+async function runForgeOp(kind: "craft" | "upgrade" | "dissolve", arg: any): Promise<void> {
+  const mode = forgePanelMode.value;
+  const tab = forgePanelTab.value || "craft";
+  const deps = forgeOpsDeps();
+  try {
+    if (kind === "craft") {
+      await opCraft(deps, mode, arg as "input" | "random" | "blueprint");
+    } else if (kind === "upgrade") {
+      await opUpgrade(deps, arg);
+    } else {
+      await opDissolve(deps, mode, arg);
+    }
+  } catch (e: any) {
+    console.warn("[forgeOps] 操作失败：", e);
+    showToast("操作失败：" + String(e?.message || e), "red");
+  } finally {
+    // ★ 打造入口会先关面板（避免遮挡输入/选择弹窗），操作结束后回到面板，
+    //   否则玩家每打一件东西都要重新走过去找 NPC。
+    if (!forgePanelOpen.value) openForgeAlchemyPanel(mode, tab);
+  }
+}
+
+/** ★ forgeOps 依赖注入 */
+function forgeOpsDeps(): ForgeOpsDeps {
+  return {
+    // ★ 等后端回执：打造/升级/溶解成功与否只有后端知道（金钱不足、物品不在背包…）
+    cmd: (action, params) => sendSysCmdAwait(action, params || {}, 8000),
+    aiGenerate: (agent, prompt, timeoutMs) => eventAgentRun(agent, prompt, { timeoutMs }),
+    bagList: async () => eventBagList(),
+    bagRemove: async (name, count) => eventBagRemove(name, count),
+    toast: (text, color) => showToast(text, color),
+    subtitle: (text, ms) => {
+      showToast(text);
+      if (state.value) state.value.events.push(`[字幕] ${text}`);
+    },
+    event: (text) => {
+      if (state.value) state.value.events.push(`[事件] ${text}`);
+      console.info("[forge]", text);
+    },
+    confirm: (opts) => evConfirmOpen(opts),
+    select: (opts) => evSelectOpen(opts),
+    prompt: (opts) => evPromptOpen(opts),
+    notice: (opts) => evNoticeOpen(opts),
+    playerLevel: () => Math.max(1, Math.round(Number((state.value?.playerCard as any)?.level) || 1)),
+    money: () => sysGold.value,
+  };
+}
+
+/** 关闭交互提示（下次靠近再弹） */
+function onInteractionDismiss(): void {
+  interactionDismissed.value = true;
 }
 
 /** 任务数据（宿主 state.questView 权威，前端只读） */
@@ -6215,12 +6677,20 @@ function updateNearChat(): void {
 
   let best: typeof nearChat.value = null;
   let bestDist = CHAT_RADIUS_M;
+  // ★ 有 proximity 交互点的实体（锻造大师/炼丹炉/假人）不显示「💬 聊天」——
+  //   它们由「🔨 锻造」「🔥 炼丹」「⚔ 对打」按钮接管，避免同时出两个按钮。
+  const proximityUids = new Set(getProximityPoints().map((p) => p.uid));
   for (const e of s.entities) {
     if (e.side === "enemy" || !e.alive || e.side === "player") continue;
     // ★ 任务板不是人：不进「💬 聊天」，改由「📜 任务」按钮接管
     if (BOARD_NAME_RE.test(String(e.name || ""))) continue;
     // ★ 可拾取物（斧头等）不是对话对象，靠近只出「是否拾取」提示
     if ((e as any).pickupItem) continue;
+    // ★ proximity 交互点：交给专属按钮
+    const eid = String(e.id);
+    const tiledId = eid.startsWith("mapnpc_") ? eid.slice(7).split("_")[0]
+      : eid.startsWith("mapmob_") ? eid.slice(7).split("_")[0] : "";
+    if (tiledId && proximityUids.has(tiledId)) continue;
     const d = Math.hypot(e.x - me.x, e.y - me.y);
     if (d < bestDist) { bestDist = d; best = { id: e.id, name: e.name, avatarPath: e.avatarPath }; }
   }
@@ -6399,6 +6869,56 @@ function notifyBrainResult(res: any): void {
   brainResultWaiters.splice(i, 1);
   window.clearTimeout(w.timer);
   w.resolve(res);
+}
+
+/* ============================================================
+   ★ 事件系统 AI 生成通道（ctx.ai.generate）
+   ------------------------------------------------------------
+   独立于 chatResult（单槽位，对话/大脑共用），用 state.agentResult
+   { reqId, ok, text, error } 单独回传，避免「锻造生成」与
+   「角色对话」互相覆盖。
+   ============================================================ */
+const agentResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; timer: number }> = [];
+
+function waitAgentResult(reqId: string, timeoutMs = 20000): Promise<any> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      const i = agentResultWaiters.findIndex((w) => w.reqId === reqId);
+      if (i >= 0) agentResultWaiters.splice(i, 1);
+      resolve({ ok: false, error: "AI 调用超时" });
+    }, timeoutMs);
+    agentResultWaiters.push({ reqId, resolve, timer });
+  });
+}
+
+/** 宿主推送 agentResult 时配对取回 */
+function notifyAgentResult(res: any): void {
+  const rid = String(res?.reqId || "");
+  if (!rid || !rid.startsWith("agent_")) return;
+  const i = agentResultWaiters.findIndex((w) => w.reqId === rid);
+  if (i < 0) return;
+  const w = agentResultWaiters[i];
+  agentResultWaiters.splice(i, 1);
+  window.clearTimeout(w.timer);
+  w.resolve(res);
+}
+
+/** ★ 事件脚本调 AI agent（ctx.ai.generate 的宿主侧实现） */
+async function eventAgentRun(agentName: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string> {
+  const reqId = `agent_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const timeoutMs = Math.max(3000, Math.min(120000, Number(opts?.timeoutMs) || 20000));
+  try {
+    sendTick("sys_agent_run", { reqId, agentName, prompt, timeoutMs });
+    const res = await waitAgentResult(reqId, timeoutMs + 2000);
+    if (!res?.ok) {
+      console.warn("[eventEngine] AI 调用失败：", res?.error);
+      return "";
+    }
+    return String(res.text || "");
+  } catch (e: any) {
+    console.warn("[eventEngine] AI 调用异常：", e);
+    return "";
+  }
 }
 
 /** ★ AI 大脑 LLM 调用（v0.2）：通过宿主 agent 通道
@@ -6611,6 +7131,8 @@ function loop(ts: number) {
     updateNearBoard();
     // ★ 可拾取物：10Hz 刷新附近可拾取物（走近 → 出「是否拾取」提示）
     updateNearPickup();
+    // ★ 靠近弹交互按钮：10Hz 刷新（走近锻造大师/炼丹炉/假人 → 出「锻造」「炼丹」「对打」按钮）
+    updateNearInteraction();
     // ★ 任务目的地：10Hz 刷新「到达」浮动按钮的显隐
     updateQuestArriveBtn();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
@@ -6953,8 +7475,28 @@ onMounted(async () => {
       return me ? { id: me.id, x: me.x, y: me.y } : null;
     },
     entityByTiledId: (tiledId: string) => {
-      const e = (state.value?.entities ?? []).find(en => String(en.id).startsWith(`mapnpc_${tiledId}_`));
-      return e ? { id: e.id, x: e.x, y: e.y, name: e.name } : null;
+      // ★ 同时认 mapnpc_*（NPC/设施）和 mapmob_*（野怪/练习假人）——
+      //   练习假人是 mapmob_<tiledId>_<ts> 实体，事件脚本要用它找目标。
+      const e = (state.value?.entities ?? []).find(en => {
+        const id = String(en.id);
+        return id.startsWith(`mapnpc_${tiledId}_`) || id.startsWith(`mapnpc_${tiledId}`)
+          || id.startsWith(`mapmob_${tiledId}_`) || id.startsWith(`mapmob_${tiledId}`);
+      });
+      return e ? {
+        id: e.id, x: e.x, y: e.y, name: e.name,
+        level: e.level, alive: e.alive, side: e.side,
+        hp: e.hp, maxHp: e.maxHp,
+        trainingDummy: (e as any).trainingDummy, dummyMode: (e as any).dummyMode,
+      } : null;
+    },
+    /** ★ 实体可变引用（事件脚本改假人阵营/血量用） */
+    entityRef: (tiledId: string) => {
+      const e = (state.value?.entities ?? []).find(en => {
+        const id = String(en.id);
+        return id.startsWith(`mapnpc_${tiledId}_`) || id.startsWith(`mapnpc_${tiledId}`)
+          || id.startsWith(`mapmob_${tiledId}_`) || id.startsWith(`mapmob_${tiledId}`);
+      });
+      return (e as any) || null;
     },
     toast: (text: string, color?: string) => showToast(text),
     subtitle: (text: string, durationMs?: number) => {
@@ -6973,6 +7515,12 @@ onMounted(async () => {
       (s as any).teleportTarget = { mapName, x, y, name: mapName, rev: s.sysRevision };
     },
     confirm: (opts) => evConfirmOpen(opts),
+    select: (opts) => evSelectOpen(opts),
+    prompt: (opts) => evPromptOpen(opts),
+    openShopPanel: (opts) => openForgeAlchemyPanel(opts.mode, opts.tab || "sell"),
+    agentRun: (agentName, prompt, opts) => eventAgentRun(agentName, prompt, opts),
+    bagList: async () => eventBagList(),
+    bagRemove: async (name, count) => eventBagRemove(name, count),
     giveItem: (name, count) => evGiveItem(name, count),
     giveItemToAi: (roleId, name, count) => evGiveItemToAi(roleId, name, count),
     pluginData: {
@@ -6982,6 +7530,11 @@ onMounted(async () => {
       set: async (key: string, value: unknown) => {
         try { await toonflowJsApi.pluginData.set(key, value); } catch { /* ignore */ }
       },
+    },
+    /** ★ 事件脚本调用后端命令 */
+    runCmd: (action: string, params: Record<string, unknown>) => {
+      sendTick(action, params);
+      return Promise.resolve("");
     },
   });
   // ★ AI 托管系统 LLM 调用器（v0.2：走宿主 agent 通道）
@@ -7113,6 +7666,11 @@ onMounted(async () => {
     //   必须在 settleSpawn 之后，否则 debugPullFirstNear 会把 NPC 挪到玩家旧坐标，
     //   然后 settleSpawn 又把玩家挪走 → NPC 仍离玩家 14m+ → 永远触发不了聊天按钮
     injectMapNpcsToState(state.value, cfg, { debugPullFirstNear: true });
+    // ★ 注入地图怪物 / 练习假人（mapmob_*）—— 与 switchLevel 同源逻辑。
+    //   ★ 开局原本**不注入** mobs → 练习假人（trainingDummy）等本地权威实体在开局时
+    //   根本不存在 → 走近也没按钮、也打不了。开局必须补上这一步。
+    currentMapMobTs = String(Date.now());
+    injectMapMobsToState(state.value, cfg);
     // 开局也武装切图闸门（首帧即离开触发圈会自动解除，只在落点异常时起作用）
     portalLatchPending = true;
     // ★ 初始关卡的 safe zone 立即发布给 mockHost（切图时会随关卡更新），
@@ -7172,6 +7730,11 @@ onMounted(async () => {
       notifyChatResult(incomingChat);
       notifyBrainResult(incomingChat);
     }
+    // ★ sys_agent_run 结果回推：事件系统 AI 生成（锻造/炼丹）走独立通道
+    const incomingAgent = (d.state as any)?.agentResult;
+    if (incomingAgent && typeof incomingAgent === "object") {
+      notifyAgentResult(incomingAgent);
+    }
     // ★ 宿主/ mock 推送前的本地实体快照：用于把 App 侧生成的地图怪物（mapmob_*）归并保留
     const prevEntities = (state.value?.entities || []) as Entity[];
     const incoming = d.state as GameState;
@@ -7224,6 +7787,8 @@ onMounted(async () => {
       }
       // ★ 客户端权威中立实体（mapnpc_*，地图 Actors 层的城镇 NPC）— 同样不在 incoming 里，
       //   必须按合并而非丢弃。规则与 mapmob_* 对齐。
+      //   ★ 练习假人（trainingDummy，mapmob_* 前缀、side=neutral）也归此类——
+      //   事件脚本会改它的 side/hp，若不回补会被宿主整份覆盖（改了白改）。
       // ★ 切图期间（switchingLevel）不回补任何 mapnpc_* —— switchLevel 已把旧图 NPC 清掉，
       //   新图 NPC 尚未注入；此时回补 prevEntities 里的 mapnpc_* 会把旧图 NPC「复活」到新图
       //   （城镇 NPC 坐标恰好在新图出生点几十米内，直接串场显示）。
@@ -7231,9 +7796,11 @@ onMounted(async () => {
         ? []
         : prevEntities.filter(
             (e: any) =>
-              e?.side === "neutral" &&
               typeof e?.id === "string" &&
-              e.id.startsWith("mapnpc_"),
+              (
+                (e?.side === "neutral" && e.id.startsWith("mapnpc_")) ||
+                ((e as any)?.trainingDummy === true && e.id.startsWith("mapmob_") && isCurrentMapMob(e.id))
+              ),
           );
       for (const e of localEnemies as any[]) {
         if (e.alive === false && !deadLocalEnemyIds.has(e.id)) deadLocalEnemyIds.add(e.id);
@@ -7285,16 +7852,28 @@ onMounted(async () => {
       //   修复「实体无限翻倍」：此前无条件 append，宿主侧 ensureTown 每帧注入的 mapnpc_*
       //   与客户端保留的 mapnpc_* 同 id 叠加 → 900+ tick 后 mapnpc_100 重复 996 次、
       //   总实体数 24000+，渲染直接卡死。
-      //   规则：incoming 里已有的 id 以宿主为准；只回补宿主缺失的客户端 mapnpc_*。
-      const incomingNpcIds = new Set(
+      //   规则：客户端权威（mapnpc_* 与 mapmob_ 训练假人）**覆盖** incoming 的同 id 实体——
+      //   事件脚本会改它们的 side/hp（假人开战），mock/宿主侧的副本是旧快照，
+      //   以宿主为准会把脚本改的状态每 tick 回滚（实测：side=enemy 1s 内被打回 neutral）。
+      const incomingClientIds = new Set(
         incoming.entities
-          .filter((e: any) => typeof e?.id === "string" && e.id.startsWith("mapnpc_"))
+          .filter((e: any) => {
+            if (typeof e?.id !== "string") return false;
+            if (e.id.startsWith("mapnpc_")) return true;
+            return e.id.startsWith("mapmob_") && (e as any).trainingDummy === true;
+          })
           .map((e: any) => e.id),
       );
-      const keptNpcs = localNpcs.filter(
-        (e: any) => e.alive !== false && !incomingNpcIds.has(e.id),
-      );
-      if (keptNpcs.length) incoming.entities = [...incoming.entities, ...keptNpcs];
+      const keptNpcs = localNpcs.filter((e: any) => e.alive !== false);
+      if (keptNpcs.length) {
+        // 覆盖：先剔除 incoming 的同 id 客户端实体，再回补客户端权威版
+        if (incomingClientIds.size) {
+          incoming.entities = incoming.entities.filter(
+            (e: any) => !(typeof e?.id === "string" && incomingClientIds.has(e.id)),
+          );
+        }
+        incoming.entities = [...incoming.entities, ...keptNpcs];
+      }
     }
   // ★ 敌人碰撞收口（在 state.value 赋值之前就地改写 incoming 的敌怪坐标）
   if (incoming && Array.isArray(incoming.entities)) applyEnemyCollision(incoming.entities as Entity[]);
@@ -7354,6 +7933,13 @@ onMounted(async () => {
       //   → injectMapNpcsToState early-return），表现为"开局后地图 NPC 全部缺失"。
       //   这里在真正进入 playing 时再补一次注入（函数内部按 id 去重 + 50m 距离闸，幂等安全）。
       setTimeout(() => injectMapNpcsToState(state.value, mapCfg.value, { debugPullFirstNear: true }), 320);
+      // ★ 同理补注入地图怪物 / 练习假人（mapmob_*）——
+      //   onMounted 注入时 state.value 可能还是 null（宿主还没推 playing），
+      //   导致练习假人等「本地权威实体」开局时不存在 → 走近没按钮、也打不了。
+      setTimeout(() => {
+        currentMapMobTs = String(Date.now());
+        injectMapMobsToState(state.value, mapCfg.value);
+      }, 320);
       // 成功进入战斗，清除 loading（★ fix③：同时清掉超时计时与提示）
       starting.value = false;
       clearStartTimers();
@@ -7651,6 +8237,13 @@ watch(() => state.value?.phase, (p) => {
         <button v-if="nearChat" class="btn btn--chat" title="与角色对话" @click="onChatStart">💬 聊天</button>
         <!-- ★ 任务板：靠近任务板触发出任务按钮 -->
         <button v-if="nearBoard" class="btn btn--quest" title="打开任务板：接取 / 交还 / 放弃委托" @click="onQuestOpen">📜 任务</button>
+        <!-- ★ 靠近弹交互按钮：走进锻造大师/炼丹炉/练习假人 → 直接出「锻造」「炼丹」「对打」 -->
+        <button
+          v-if="nearInteraction && !interactionDismissed"
+          class="btn btn--action"
+          :title="nearInteraction.hint || `与${nearInteraction.name}交互`"
+          @click="onInteractionClick"
+        >{{ nearInteraction.icon }} {{ nearInteraction.label }}</button>
       </div>
 
       <!-- ★ 任务板面板（走近任务板点击「任务」打开） -->
@@ -7688,6 +8281,59 @@ watch(() => state.value?.phase, (p) => {
           <div class="ev-confirm__btns">
             <button class="ev-confirm__cancel" @click="evConfirmClose(false)">{{ evConfirm.cancelText }}</button>
             <button class="ev-confirm__ok" @click="evConfirmClose(true)">{{ evConfirm.confirmText }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ★ 事件系统多选面板（锻造/炼丹的功能菜单） -->
+      <div v-if="evSelect" class="ev-confirm-overlay" @click.self="evSelectClose(null)">
+        <div class="ev-confirm ev-confirm--wide">
+          <div class="ev-confirm__title">{{ evSelect.title }}</div>
+          <div v-if="evSelect.detail" class="ev-confirm__detail">{{ evSelect.detail }}</div>
+          <div class="ev-select__list">
+            <button
+              v-for="opt in evSelect.options"
+              :key="opt.value"
+              class="ev-select__item"
+              @click="evSelectClose(opt.value)"
+            >
+              <span class="ev-select__label">{{ opt.label }}</span>
+              <span v-if="opt.desc" class="ev-select__desc">{{ opt.desc }}</span>
+            </button>
+          </div>
+          <div class="ev-confirm__btns">
+            <button class="ev-confirm__cancel" @click="evSelectClose(null)">取消</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ★ 事件系统文本输入（输入物品名称/丹药名称） -->
+      <div v-if="evPrompt" class="ev-confirm-overlay" @click.self="evPromptClose(null)">
+        <div class="ev-confirm ev-confirm--wide">
+          <div class="ev-confirm__title">{{ evPrompt.title }}</div>
+          <div v-if="evPrompt.detail" class="ev-confirm__detail">{{ evPrompt.detail }}</div>
+          <input
+            v-model="evPrompt.value"
+            class="ev-prompt__input"
+            type="text"
+            :placeholder="evPrompt.placeholder"
+            maxlength="40"
+            @keydown="onEvPromptKeydown"
+          />
+          <div class="ev-confirm__btns">
+            <button class="ev-confirm__cancel" @click="evPromptClose(null)">取消</button>
+            <button class="ev-confirm__ok" @click="evPromptClose(evPrompt.value)">确定</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ★ 结果弹窗：购买成功 / 打造成功 / 升级成功 / 溶解成功 -->
+      <div v-if="evNotice" class="ev-confirm-overlay" @click.self="evNoticeClose">
+        <div class="ev-confirm ev-notice">
+          <div class="ev-confirm__title ev-notice__title">{{ evNotice.title }}</div>
+          <div v-if="evNotice.detail" class="ev-notice__detail">{{ evNotice.detail }}</div>
+          <div class="ev-confirm__btns">
+            <button class="ev-confirm__ok" @click="evNoticeClose">{{ evNotice.okText }}</button>
           </div>
         </div>
       </div>
@@ -7888,6 +8534,39 @@ watch(() => state.value?.phase, (p) => {
       </div>
     </section>
 
+    <!-- ★ 锻造 / 炼丹 多标签面板（走进设施 → 弹「锻造/炼丹」按钮 → 点开本面板） -->
+    <div
+      v-if="forgePanelOpen"
+      class="forge-panel"
+      :style="{ left: forgePanelPos.x + 'px', top: forgePanelPos.y + 'px' }"
+      @pointerdown.stop
+    >
+      <div class="forge-panel__head" @pointerdown="onForgePanelDragStart">
+        <span class="forge-panel__title">
+          {{ forgePanelMode === "forge" ? "🔨 锻造" : "🔥 炼丹" }}
+        </span>
+        <span class="forge-panel__gold">💰{{ sysGold }}</span>
+        <button class="forge-panel__close" @click="closeForgeAlchemyPanel">✕</button>
+      </div>
+      <div class="forge-panel__body">
+        <ForgeAlchemyPanel
+          :mode="forgePanelMode"
+          :forge-goods="sysForgeGoods"
+          :alchemy-goods="sysAlchemyGoods"
+          :gold="sysGold"
+          :bag-items="sysBagItems"
+          :player-level="sysPlayerRole?.level || 1"
+          :initial-tab="forgePanelTab"
+          @buy="onForgeBuy"
+          @craft-input="onForgeCraftInput"
+          @craft-random="onForgeCraftRandom"
+          @craft-blueprint="onForgeCraftBlueprint"
+          @upgrade-item="onForgeUpgradeItem"
+          @dissolve-item="onForgeDissolveItem"
+        />
+      </div>
+    </div>
+
     <!-- 调试面板（仅 debug 模式可见） -->
     <DebugPanel
       v-if="debugMode"
@@ -7972,6 +8651,7 @@ watch(() => state.value?.phase, (p) => {
         @open-appearance="onOpenAppearance"
         @close="showSystemPanel = false"
       />
+
     </div>
 
     <!-- 实体形象弹窗 -->
@@ -7991,6 +8671,7 @@ watch(() => state.value?.phase, (p) => {
       @generate="onAppearanceGenerate"
       @delete="onAppearanceDelete"
       @clear="onAppearanceClear"
+      @flip="onAppearanceFlip"
       @upload-bind="onAppearanceUploadBind"
     />
   </div>
@@ -8066,6 +8747,47 @@ body {
   flex-direction: column;
   user-select: none;
   font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+}
+
+/* ★ 锻造 / 炼丹 多标签面板 */
+.forge-panel {
+  position: fixed;
+  z-index: 9998;
+  width: 420px;
+  max-width: 94vw;
+  height: 480px;
+  max-height: 88vh;
+  background: #1e1f1f;
+  border: 2px solid #6a5a3a;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.75);
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+}
+.forge-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid #4f4f4f;
+  background: linear-gradient(180deg, #2a2418, #1e1f1f);
+  cursor: move;
+}
+.forge-panel__title { font-size: 14px; font-weight: 700; color: #ffe79e; }
+.forge-panel__gold { margin-left: auto; color: #ffd76a; font-size: 12px; }
+.forge-panel__close {
+  width: 20px; height: 20px; padding: 0;
+  border: 1px solid #6a5a3a; border-radius: 3px;
+  background: #1a1610; color: #c8b888;
+  font-size: 12px; cursor: pointer; line-height: 1;
+}
+.forge-panel__close:hover { color: #ffe79e; border-color: #d4a13e; }
+.forge-panel__body {
+  flex: 1 1 auto; min-height: 0;
+  padding: 8px 10px;
+  display: flex; flex-direction: column;
 }
 
 /* 通用：暗色像素边框风格 */
@@ -8737,6 +9459,92 @@ body {
 .ev-confirm__ok:hover { background: #e8b95e; }
 .ev-confirm__cancel:hover { color: #ffe79e; border-color: #d4a13e; }
 
+/* ★ 结果弹窗（购买/打造/升级/溶解）：比确认框更醒目，详情保留换行 */
+.ev-notice {
+  min-width: 260px;
+  max-width: 86%;
+  border-width: 2px;
+  border-color: #ffd479;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 212, 121, 0.25) inset;
+  animation: ev-notice-in 0.16s ease-out;
+}
+@keyframes ev-notice-in {
+  from { transform: translateY(6px) scale(0.97); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+.ev-notice__title {
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+.ev-notice__detail {
+  font-size: 12.5px;
+  color: #ddd0a8;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  margin-bottom: 4px;
+}
+
+/* ★ 事件系统多选面板（锻造/炼丹功能菜单） */
+.ev-confirm--wide {
+  min-width: 320px;
+  max-width: 92%;
+}
+.ev-select__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.ev-select__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #6a5a3a;
+  border-radius: 3px;
+  background: #1a1610;
+  color: #c8b888;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ev-select__item:hover {
+  border-color: #d4a13e;
+  background: #241d12;
+  color: #ffe79e;
+}
+.ev-select__label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ev-select__desc {
+  font-size: 11px;
+  color: #9a8c68;
+}
+
+/* ★ 事件系统文本输入 */
+.ev-prompt__input {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 8px 0;
+  padding: 7px 10px;
+  border: 1px solid #6a5a3a;
+  border-radius: 3px;
+  background: #14110c;
+  color: #f4e8c0;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.ev-prompt__input:focus {
+  border-color: #d4a13e;
+}
+
 /* ★ game.md 床碰撞：睡眠按钮（靠近床铺出现，像素风与退出按钮同族、暖色区分） */
 .btn--sleep {
   border: 2px solid #8a5a2a;
@@ -8783,6 +9591,29 @@ body {
 @keyframes chatPulse {
   0%, 100% { filter: brightness(1); }
   50% { filter: brightness(1.2); }
+}
+
+/* ★ 靠近弹交互按钮（锻造/炼丹/对打）——金色调，比聊天按钮更醒目 */
+.btn--action {
+  border: 2px solid #8a6a20;
+  border-radius: 0;
+  padding: 2px 8px;
+  cursor: pointer;
+  background: #d4a13e;
+  color: #1a1410;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  box-shadow: 0 2px 0 #6a4f14;
+  animation: actionPulse 1.2s ease-in-out infinite;
+}
+.btn--action:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #6a4f14;
+}
+@keyframes actionPulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
 }
 
 /* ★ 任务板：靠近任务板出的「任务」按钮 */

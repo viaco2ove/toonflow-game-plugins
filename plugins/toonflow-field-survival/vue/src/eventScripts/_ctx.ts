@@ -59,6 +59,9 @@ export interface Ctx {
     move(uid: string, x: number, y: number): void;
     /** 让 NPC 朝向玩家 */
     faceTo(uid: string, targetId: string): void;
+    /** ★ 直接改实体字段（side/hp/level/alive 等）——事件脚本改假人阵营/血量用。
+     *  按 Tiled object id 定位（认 mapnpc_* 与 mapmob_*）。返回是否改成功。 */
+    setField(uid: string, patch: Record<string, unknown>): boolean;
   };
 
   /** UI 反馈 */
@@ -72,12 +75,36 @@ export interface Ctx {
     /** 确认对话框（采集/交互确认）：resolve(true)=玩家点了确定。
      *  ★ ctx.actor.ai 时引擎自动 resolve(true)，不弹窗打断玩家。 */
     confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
+    /** ★ 多选面板（锻造/炼丹的功能菜单）：resolve(选项 value)，取消 resolve(null)。
+     *  ★ ctx.actor.ai 时引擎自动 resolve(第一个选项)，不弹窗打断玩家。 */
+    select(opts: { title: string; detail?: string; options: Array<{ label: string; value: string; desc?: string }> }): Promise<string | null>;
+    /** ★ 文本输入框（输入物品名称/丹药名称）：resolve(输入文本)，取消 resolve(null)。
+     *  ★ ctx.actor.ai 时引擎自动 resolve(空串)，不弹窗打断玩家。 */
+    prompt(opts: { title: string; detail?: string; placeholder?: string; defaultValue?: string }): Promise<string | null>;
+    /** ★ 打开锻造/炼丹多标签面板。
+     *  mode: "forge"（锻造：售卖/打造/升级/溶解）| "alchemy"（炼丹：售卖/炼丹/溶解）
+     *  tab:  初始标签（默认 "sell"）
+     *  ★ ctx.actor.ai 时自动忽略（AI 不开面板）。 */
+    openShopPanel(opts: { mode: "forge" | "alchemy"; tab?: string }): void;
   };
 
-  /** 背包操作（走宿主 sys_item_add 同款入包链，mock/真实宿主都落账） */
+  /** ★ AI 生成（对接大模型）
+   *  ★ ctx.actor.ai 时引擎自动返回空串，不消耗玩家资源。 */
+  ai: {
+    /** 调 agent 生成物品/丹药，返回 AI 的纯文本（通常是 JSON）。
+     *  失败返回空串（脚本内自行做兜底）。 */
+    generate(agentName: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string>;
+  };
+
+  /** ★ 背包操作（除 give 之外的读写）
+   *  ★ ctx.actor.ai 时读 AI 私藏，写操作自动跳过。 */
   bag: {
     /** 发放物品。ctx.actor.ai 时进该 AI 的 _aiBag，否则进玩家背包。 */
     give(name: string, count?: number): void;
+    /** 读取玩家背包物品列表（升级/溶解时选目标用） */
+    list(): Promise<Array<{ name: string; count: number; kind: string; rarity: string; heal: number; lv?: number; desc?: string }>>;
+    /** 移除物品（溶解/升级替换时用）。ctx.actor.ai 时跳过。 */
+    remove(name: string, count?: number): Promise<boolean>;
   };
 
   /** 关卡操作 */
@@ -101,8 +128,12 @@ export interface Ctx {
 
   /** 引擎注册钩子 */
   registerAction(name: string, fn: (args: Record<string, unknown>, ctx: Ctx) => Promise<void>): void;
-}
 
+  /** ★ 调用后端插件命令（sendTick 通道）
+   *  用于事件脚本触发 entry.ts 中定义的 sys_xxx 指令。
+   *  AI 执行时自动跳过并记日志，不弹窗不阻塞。 */
+  cmd(action: string, params?: Record<string, unknown>): Promise<string>;
+}
 /** 事件定义（maps/<name>.events.json 里的一行） */
 export interface EventDef {
   id: string;
@@ -110,6 +141,9 @@ export interface EventDef {
   trigger:
     | { type: "enter_map" }
     | { type: "interact"; uid: string }
+    // ★ proximity：靠近自动弹交互按钮（比 interact 更主动）
+    //   uid：Tiled object id；radius：触发半径（米，默认 2.8）
+    | { type: "proximity"; uid: string; radius?: number }
     // ★ ai.gather：向 AI 托管声明「这个 zone 能采什么」（mapKnowledge 读取，可选字段）
     //   缺省时按 事件id → zone名 顺序推断。取值：herb / fish / wood / ore / other
     | { type: "area_enter"; zone: string; ai?: { gather?: "herb" | "fish" | "wood" | "ore" | "other" } }
@@ -151,6 +185,15 @@ export interface EventDef {
   >;
   /** 备注（编辑器只读显示） */
   comment?: string;
+  /** ★ proximity 触发器的展示信息：靠近时弹出的按钮文案 */
+  proximity?: {
+    /** 按钮文字（如「锻造」「炼丹」「对打」） */
+    label?: string;
+    /** 按钮图标（如「🔨」「🔥」「⚔」） */
+    icon?: string;
+    /** 提示语（可选，显示在按钮下方） */
+    hint?: string;
+  };
   /** 可重复触发（采集类 area_enter）：跳过「本次会话一次机会」防重入 */
   repeat?: boolean;
 }

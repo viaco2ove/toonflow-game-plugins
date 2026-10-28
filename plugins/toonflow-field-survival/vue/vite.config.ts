@@ -2131,13 +2131,24 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       vue(),
-      viteSingleFile(),
+      // ★ viteSingleFile 只在生产构建时启用。
+      //   原因：它会把 <script type="module" src="/src/main.ts"> 内联进 HTML
+      //   并把原 script 标签替换成注释（<!-- built files will be auto injected -->），
+      //   在 dev 模式下 JS 完全不执行 → 页面空白、控制台无报错（看起来像"加载失败"）。
+      //   dev 必须保留外链 script 才能跑 HMR + 调试。
+      ...(mode === "production" ? [viteSingleFile()] : []),
       // 仅在非生产模式注册中间件
       ...(mode === "production" ? [] : [storyDataPlugin(workshopsRoot), devHostPlugin(CONN, STORY)]),
     ],
     server: {
       port: 3000,
       host: true, // ★ 监听所有接口（包括 127.0.0.1 和 ::1），确保 bsk CDP 能连接
+      // ★ dev 模式的 HTML 入口：必须用根目录的 index.html（带 <script src="/src/main.ts">），
+      //   不能用 public/index.html —— public 目录的文件会**覆盖**同名根文件，
+      //   而 public/index.html 是 Rotten Soup 遗留模板（无 script 标签），
+      //   导致 dev 环境 JS 完全不执行、页面空白且控制台无报错。
+      //   Vite 没有「public 同名文件不覆盖 root」的开关，只能靠 build.rollupOptions.input 区分：
+      //   dev 用根 index.html（默认行为），生产显式指定 public/index.html 作为模板。
       // ★ 允许 --conn 拟真宿主桩通过 /@fs/ 动态 import 插件入口 entry.js
       //   （vite 默认只允许 workspace root=vue/ 目录，entry.js 在其上一级）
       fs: {

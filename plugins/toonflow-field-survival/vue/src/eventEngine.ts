@@ -27,8 +27,14 @@ export interface EventHooks {
   currentMapFile(): string;
   /** 玩家实体（没有则 null） */
   player(): { id: string; x: number; y: number } | null;
-  /** 实体按 Tiled object id 查（NPC/物件） */
-  entityByTiledId(tiledId: string): { id: string; x: number; y: number; name?: string } | null;
+  /** 实体按 Tiled object id 查（NPC/野怪/练习假人） */
+  entityByTiledId(tiledId: string): {
+    id: string; x: number; y: number; name?: string;
+    level?: number; alive?: boolean; side?: string;
+    hp?: number; maxHp?: number; trainingDummy?: boolean; dummyMode?: string;
+  } | null;
+  /** ★ 实体按 Tiled object id 取**可变引用**（改 side/hp 等直接改 state 里的实体） */
+  entityRef?(tiledId: string): Record<string, unknown> | null;
   /** 右下角飘字 */
   toast(text: string, color?: string): void;
   /** 顶部字幕 */
@@ -39,6 +45,18 @@ export interface EventHooks {
   teleport(mapName: string, x: number, y: number): void;
   /** 确认对话框（采集/交互确认）：resolve(true)=确定 */
   confirm(opts: { title: string; detail?: string; confirmText?: string; cancelText?: string }): Promise<boolean>;
+  /** ★ 多选面板：resolve(选项 value)，取消 resolve(null) */
+  select(opts: { title: string; detail?: string; options: Array<{ label: string; value: string; desc?: string }> }): Promise<string | null>;
+  /** ★ 文本输入：resolve(输入文本)，取消 resolve(null) */
+  prompt(opts: { title: string; detail?: string; placeholder?: string; defaultValue?: string }): Promise<string | null>;
+  /** ★ 打开锻造/炼丹多标签面板 */
+  openShopPanel?(opts: { mode: "forge" | "alchemy"; tab?: string }): void;
+  /** ★ AI agent 调用：返回纯文本（通常是 JSON），失败返回空串 */
+  agentRun(agentName: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string>;
+  /** ★ 读取玩家背包（返回 Promise） */
+  bagList(): Promise<Array<{ name: string; count: number; kind: string; rarity: string; heal: number; lv?: number; desc?: string }>>;
+  /** ★ 移除背包物品 */
+  bagRemove(name: string, count?: number): Promise<boolean>;
   /** 发放物品到玩家背包（走 sys_item_add 通道，mock/真实宿主都能落账） */
   giveItem(name: string, count?: number): void;
   /** 发放物品到指定 AI 角色的私藏（entity._aiBag，走 ai_bag_add 通道）
@@ -50,6 +68,8 @@ export interface EventHooks {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
   };
+  /** ★ 事件脚本调用后端命令（sendTick 通道） */
+  runCmd(action: string, params: Record<string, unknown>): Promise<string>;
 }
 
 // ─── flag 缓存（会话内） ───
@@ -189,6 +209,17 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
       setLabel: () => { /* TODO: 头顶名运行时改写（v0.2） */ },
       move: () => { /* TODO: NPC 移动（v0.2） */ },
       faceTo: () => { /* TODO */ },
+      // ★ 直接改实体字段（假人改阵营/血量等）
+      setField: (uid: string, patch: Record<string, unknown>) => {
+        const ent: any = hooks?.entityByTiledId(uid);
+        if (!ent) return false;
+        // entityByTiledId 返回的是快照，改它不影响 state.entities——
+        // 需要引擎提供可变引用。找不到可变实体时返回 false（脚本自行降级）。
+        const live: any = hooks?.entityRef?.(uid);
+        if (!live) return false;
+        Object.assign(live, patch);
+        return true;
+      },
     },
     ui: {
       toast: (text: string, color?: string) => hooks?.toast(text, color),
@@ -205,12 +236,59 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
         }
         return hooks?.confirm(opts) ?? Promise.resolve(false);
       },
+      // ★ 多选面板（锻造/炼丹功能菜单）
+      select: (opts) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} ${opts.title || "选择"}：自动选择首个选项`);
+          return Promise.resolve(opts.options?.[0]?.value ?? null);
+        }
+        return hooks?.select(opts) ?? Promise.resolve(null);
+      },
+      // ★ 文本输入（输入物品名称/丹药名称）
+      prompt: (opts) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} ${opts.title || "输入"}：自动跳过`);
+          return Promise.resolve(opts.defaultValue ?? "");
+        }
+        return hooks?.prompt(opts) ?? Promise.resolve(null);
+      },
+      // ★ 打开锻造/炼丹多标签面板
+      openShopPanel: (opts) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} 打开${opts.mode === "forge" ? "锻造" : "炼丹"}面板：自动跳过`);
+          return;
+        }
+        hooks?.openShopPanel?.(opts);
+      },
+    },
+    // ★ AI 生成（对接大模型）
+    ai: {
+      generate: async (agentName: string, prompt: string, opts?) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} 调用 AI ${agentName}：自动跳过`);
+          return "";
+        }
+        return (await hooks?.agentRun(agentName, prompt, opts)) || "";
+      },
     },
     bag: {
       // ★ 分流：AI 的产出进 _aiBag（不污染玩家参数卡派生的背包），玩家自己的照旧
       give: (name: string, count?: number) => {
         if (isAi) hooks?.giveItemToAi(actor.roleId, name, count);
         else hooks?.giveItem(name, count);
+      },
+      // ★ 读取背包（升级/溶解时选目标）
+      list: async () => {
+        const items = await hooks?.bagList();
+        return Array.isArray(items) ? items : [];
+      },
+      // ★ 移除物品（溶解/升级替换）
+      remove: async (name: string, count?: number) => {
+        if (isAi) {
+          hooks?.eventLog(`${actor.name} 移除 ${name}：AI 不操作玩家背包`);
+          return false;
+        }
+        return (await hooks?.bagRemove(name, count)) || false;
       },
     },
     level: {
@@ -233,6 +311,13 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
       },
     },
     registerAction: () => { /* v0.2: 自定义动作注册表 */ },
+    cmd: (action: string, params?: Record<string, unknown>) => {
+      if (isAi) {
+        hooks?.eventLog(`${actor.name} 触发 ${action}`);
+        return Promise.resolve("");
+      }
+      return hooks?.runCmd(action, params || {}) ?? Promise.resolve("");
+    },
   };
 }
 
@@ -535,7 +620,9 @@ export function tickIntervalEvents(): void {
 export async function onInteract(tiledId: string): Promise<void> {
   const evs = loadedEvents.value?.events || [];
   for (const ev of evs) {
-    if (ev.trigger.type === "interact" && String(ev.trigger.uid) === String(tiledId)) {
+    const t = ev.trigger as any;
+    // ★ proximity 也归到 onInteract：靠近按钮点击走同一条链
+    if ((t?.type === "interact" || t?.type === "proximity") && String(t.uid) === String(tiledId)) {
       await fireEvent(ev);
     }
   }
@@ -581,5 +668,41 @@ export async function tickZones(px: number, py: number): Promise<void> {
 /** 该 Tiled object id 是否挂着 interact 事件（App.vue 判断"事件接管 vs 弹聊天"用） */
 export function eventUidsHas(tiledId: string): boolean {
   const evs = loadedEvents.value?.events || [];
-  return evs.some(ev => ev.trigger.type === "interact" && String(ev.trigger.uid) === String(tiledId));
+  return evs.some(ev => {
+    const t = ev.trigger as any;
+    // ★ proximity 也算：这类实体由专属按钮接管，不该再弹普通聊天面板
+    return (t?.type === "interact" || t?.type === "proximity") && String(t.uid) === String(tiledId);
+  });
+}
+
+/**
+ * ★ 靠近自动弹按钮的交互点清单（proximity 触发器）
+ *   返回：{ uid, radius, label, icon, hint }[]
+ *   App.vue 每帧用玩家坐标查最近的 → 渲染「锻造」/「炼丹」/「对打」按钮。
+ */
+export interface ProximityPoint {
+  uid: string;
+  radius: number;
+  label: string;
+  icon: string;
+  hint: string;
+}
+export function getProximityPoints(): ProximityPoint[] {
+  const evs = loadedEvents.value?.events || [];
+  const out: ProximityPoint[] = [];
+  for (const ev of evs) {
+    const t = ev.trigger as any;
+    if (t?.type !== "proximity") continue;
+    const uid = String(t.uid || "");
+    if (!uid) continue;
+    const p = (ev as any).proximity || {};
+    out.push({
+      uid,
+      radius: Math.max(0.8, Number(t.radius) || 2.8),
+      label: String(p.label || "交互"),
+      icon: String(p.icon || "✦"),
+      hint: String(p.hint || ""),
+    });
+  }
+  return out;
 }

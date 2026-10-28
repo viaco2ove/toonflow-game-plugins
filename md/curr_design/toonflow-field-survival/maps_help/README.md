@@ -4,6 +4,9 @@
 > 正本数据：`workshops/toonflow-field-survival/map_design/<故事名>/`
 > 运行时插件：`plugins/toonflow-field-survival/`
 
+## 严重违规事项
+- 把地图集独有的业务写到插件里（地图集自己的ai 和触发器和事件和ui 设计应该在地图集里面编写）
+
 ## 文档导读
 
 | 文档 | 内容 | 读者 |

@@ -43,6 +43,8 @@ const emit = defineEmits<{
   (e: "unbind", target: string): void;
   (e: "generate", prompt: string, refs: string[], opts?: { programmatic?: boolean }): void;
   (e: "delete", id: string): void;
+  /** 左右翻转图库形象：id = 图库条目，dataUrl = 前端 canvas 翻转后的新图 */
+  (e: "flip", id: string, dataUrl: string): void;
   (e: "clear"): void;
   /** 上传图片并立即绑定（不走 AI） */
   (e: "upload-bind", target: string, dataUrl: string): void;
@@ -67,6 +69,7 @@ const ACTION_LABELS: Record<string, string> = {
   sys_sprite_gallery_del: "正在删除形象…",
   sys_sprite_gallery_clear: "正在清空图库…",
   sys_sprite_upload: "正在上传形象…",
+  sys_sprite_flip: "正在翻转形象…",
 };
 /** 本地 pending 的 sys_sprite_* 动作（含 AI 生成）——回包或超时后由 App.vue 清掉 */
 const actionLabel = computed(() => ACTION_LABELS[props.busyAction || ""] || "");
@@ -218,6 +221,39 @@ async function onGenerate(opts?: { programmatic?: boolean }): Promise<void> {
   } finally {
     preparing.value = false;
   }
+}
+
+/** 左右翻转 data:URL 图片：canvas scale(-1,1)，输出 PNG 保留透明通道（AI 图的透明底不丢） */
+function flipImageHorizontal(src: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const cv = document.createElement("canvas");
+        cv.width = img.naturalWidth || 1;
+        cv.height = img.naturalHeight || 1;
+        const cx = cv.getContext("2d");
+        if (!cx) return reject(new Error("canvas 不可用"));
+        cx.translate(cv.width, 0);
+        cx.scale(-1, 1);
+        cx.drawImage(img, 0, 0);
+        resolve(cv.toDataURL("image/png"));
+      } catch (e) {
+        reject(e);
+      }
+    };
+    img.onerror = () => reject(new Error("图片加载失败"));
+    img.src = src;
+  });
+}
+
+/** 点「反向」：本地翻转后交给后端替换图库条目 + 同步引用它的绑定 */
+async function onFlip(g: any): Promise<void> {
+  if (actionBusy.value) return;
+  try {
+    const flipped = await flipImageHorizontal(imgSrc(g.image));
+    emit("flip", String(g.id), flipped);
+  } catch { /* 翻转失败（图片加载/跨域）安静忽略 */ }
 }
 
 /** 生成完成 → 自动切到「我的生成」，让用户马上看到结果 */
@@ -375,6 +411,12 @@ watch(
                     :disabled="actionBusy"
                     @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })"
                   >{{ busyAction === "sys_sprite_bind" ? "更换中…" : "选用" }}</button>
+                  <button
+                    class="apm-btn apm-btn--mini"
+                    :disabled="actionBusy"
+                    title="面部左右翻转（AI 生成有时面向右边）"
+                    @click="onFlip(g)"
+                  >{{ busyAction === "sys_sprite_flip" ? "翻转中…" : "反向" }}</button>
                   <button
                     class="apm-btn apm-btn--mini apm-btn--del"
                     :disabled="actionBusy"

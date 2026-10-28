@@ -300,6 +300,24 @@ export const PLUGIN_AGENT_PROMPT_CODES = {
   taskSpeaker: "task-speaker-agent",
 } as const;
 
+/**
+ * ★ agent 名 → systemPrompt 全文（供 entry.ts case "sys_agent_run" 用）
+ *   锻造/炼丹/升级三个 agent 的 prompt 直接内联在插件里，
+ *   不依赖宿主侧的 agent 配置（宿主 agent 只需登记名字即可）。
+ */
+export function getAgentSystemPrompt(agentName: string): string {
+  switch (String(agentName || "").trim()) {
+    case "field-survival-forge-item":
+      return PROMPT_FIELD_SURVIVAL_FORGE_ITEM;
+    case "field-survival-alchemy-pill":
+      return PROMPT_FIELD_SURVIVAL_ALCHEMY_PILL;
+    case "field-survival-item-upgrade":
+      return PROMPT_FIELD_SURVIVAL_ITEM_UPGRADE;
+    default:
+      return "";
+  }
+}
+
 /** 插件 agent 名 → prompt code */
 export function pluginAgentPromptCode(agentName: string): string {
   switch (String(agentName || "").trim()) {
@@ -316,6 +334,15 @@ export function pluginAgentPromptCode(agentName: string): string {
     // ★ v6 AI 托管大脑：输出决策 JSON（供 entry.ts case "sys_brain" 消费）
     case "field-survival-ai-brain":
       return PLUGIN_AGENT_PROMPT_CODES.fieldSurvivalAiBrain;
+    // ★ 锻造大师：物品打造（事件系统 ctx.ai.generate）
+    case "field-survival-forge-item":
+      return PROMPT_FIELD_SURVIVAL_FORGE_ITEM;
+    // ★ 炼丹炉：丹药炼制（事件系统 ctx.ai.generate）
+    case "field-survival-alchemy-pill":
+      return PROMPT_FIELD_SURVIVAL_ALCHEMY_PILL;
+    // ★ 锻造大师：装备升级（事件系统 ctx.ai.generate）
+    case "field-survival-item-upgrade":
+      return PROMPT_FIELD_SURVIVAL_ITEM_UPGRADE;
     // ★ 角色发言器：插件对话功能（城镇 NPC / 队友 / 旁白）
     case "task-speaker-agent":
       return PLUGIN_AGENT_PROMPT_CODES.taskSpeaker;
@@ -323,3 +350,104 @@ export function pluginAgentPromptCode(agentName: string): string {
       return "";
   }
 }
+
+/* ============================================================
+   ★ 锻造大师 / 炼丹炉：AI 生成物品与丹药
+   ------------------------------------------------------------
+   这三个 prompt 是「事件系统 ctx.ai.generate()」的 systemPrompt，
+   由 entry.ts case "sys_agent_run" 通过 ctx.tsApi.agent.run 调用。
+   ============================================================ */
+
+/** 物品打造：按名称/随机生成材料、装备、武器、衣服、技能、图纸 */
+export const PROMPT_FIELD_SURVIVAL_FORGE_ITEM = `你是「锻造大师」（野外生存游戏 NPC）的锻造助手。
+
+## 你的职责
+玩家找锻造大师打造物品。你根据玩家给的名称或随机方向，生成**一件**符合武侠/修仙风格的物品。
+
+## 输出 JSON 结构（严格遵守，只输出一个 JSON 对象，不要解释、不要代码块）
+{
+  "name": "物品名（不超过 8 个汉字）",
+  "kind": "material|equipment|weapon|armor|skill_book",
+  "rarity": "common|fine|rare|epic|legend",
+  "heal": 0,
+  "desc": "一句描述（不超过 30 字）",
+  "price": 50,
+  "atk": 0,
+  "def": 0,
+  "durability": 100
+}
+
+## 约束
+1. 品质概率：common 40% / fine 35% / rare 20% / epic 4% / legend 1%
+2. 只有 equipment/weapon/armor 才需要 atk/def/durability；material 和 skill_book 的 atk/def/durability 填 0
+3. heal 只有 consumable 类才非 0；这里材料类一律填 0
+4. 价格与品质、玩家等级挂钩：common 10-50 / fine 50-200 / rare 200-500 / epic 500-1500 / legend 1500+
+5. 名称要有创意、符合中文武侠/修仙风格（如「寒铁软剑」「赤霄护腕」）
+6. 描述不超过 30 字，要体现物品特点
+
+## 输入
+玩家等级：{{level}}
+玩家想要的物品：{{input}}
+{{typeHint}}`;
+
+/** 丹药炼制：按名称/药方/随机生成丹药 */
+export const PROMPT_FIELD_SURVIVAL_ALCHEMY_PILL = `你是「炼丹炉」（野外生存游戏设施）的炼丹助手。
+
+## 你的职责
+玩家往丹炉里投料炼丹。你根据玩家给的丹药名或药方，生成**一颗**符合武侠/修仙风格的丹药。
+
+## 输出 JSON 结构（严格遵守，只输出一个 JSON 对象，不要解释、不要代码块）
+{
+  "name": "丹药名（不超过 6 个汉字）",
+  "kind": "consumable",
+  "rarity": "common|fine|rare|epic|legend",
+  "heal": 60,
+  "desc": "一句描述（不超过 30 字）",
+  "price": 60,
+  "effect": {
+    "type": "atk|def|spd|crit|all|exp|drop|none",
+    "value": 10,
+    "duration": 60
+  }
+}
+
+## 约束
+1. 品质概率：common 40% / fine 35% / rare 20% / epic 4% / legend 1%
+2. 恢复类丹药：heal > 0，effect.type 填 "none"
+3. 增益类丹药：heal 填 0，effect.type 填实际效果（atk=攻击% / def=防御% / spd=速度% / crit=暴击率% / all=全属性% / exp=经验加成% / drop=掉落率%）
+4. effect.value 是百分比数值（1-50），effect.duration 是持续秒数（30-300）
+5. 价格与品质、恢复值挂钩：common 10-50 / fine 50-200 / rare 200-500 / epic 500-1500 / legend 1500+
+6. 名称要有丹药味（如「九转还魂丹」「清心散」「聚气丸」）
+7. 描述不超过 30 字
+
+## 输入
+玩家等级：{{level}}
+玩家想炼的丹药：{{input}}
+{{typeHint}}`;
+
+/** 装备升级：对已有装备升级，附加属性 */
+export const PROMPT_FIELD_SURVIVAL_ITEM_UPGRADE = `你是「锻造大师」（野外生存游戏 NPC）的装备重铸助手。
+
+## 你的职责
+玩家把已有装备交给锻造大师升级。你生成该装备**升级后**的数值。
+
+## 输出 JSON 结构（严格遵守，只输出一个 JSON 对象，不要解释、不要代码块）
+{
+  "name": "升级后名称（保留原装备辨识度，可加 +1 / 精锻 / 强化 等后缀）",
+  "atk": 12,
+  "def": 8,
+  "durability": 120,
+  "desc": "升级后的一句描述（不超过 30 字）"
+}
+
+## 约束
+1. 属性比原装备提升 20%~50%
+2. 原装备没有的属性填 0，不要凭空新增
+3. 名称必须保留原装备名的主体（如「精钢剑」→「精钢剑+1」或「精锻精钢剑」）
+4. 耐久随等级提升 10%~30%
+5. 描述不超过 30 字
+
+## 输入
+原装备名称：{{name}}
+当前等级：{{lv}} → 目标等级：{{nextLv}}
+当前属性：{{stats}}`;

@@ -20,6 +20,9 @@ import {
   snapEnemySpawn,
   type WalkGrid,
 } from "./collision";
+// ★ 锻造/炼丹面板的商品清单（与 entry.ts 同源，从设计文档生成）
+import { FORGE_GOODS } from "../../src/shop/forgeGoods";
+import { ALCHEMY_GOODS } from "../../src/shop/alchemyGoods";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
 interface TestDataBundle {
@@ -968,7 +971,20 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
       { id: "b_duanjian", name: "精钢短剑", price: 220, kind: "equipment", rarity: "rare", heal: 0, desc: "攻击 +6", from: "builtin" },
       { id: "b_hufu", name: "皮甲护符", price: 160, kind: "equipment", rarity: "fine", heal: 0, desc: "防御 +4", from: "builtin" },
       { id: "b_xinde", name: "基础技能心得", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "习得一项基础技能", from: "builtin" },
+      // ★ 锻造大师商品（对齐 entry.ts FORGE_SHOP_GOODS 的核心几项）
+      { id: "f_iron_ore", name: "铁矿石", price: 15, kind: "material", rarity: "common", heal: 0, desc: "含铁量较高的矿石", from: "forge_master" },
+      { id: "f_pine_wood", name: "松木", price: 5, kind: "material", rarity: "common", heal: 0, desc: "常见的松树木材", from: "forge_master" },
+      { id: "f_iron_sword", name: "铁剑", price: 80, kind: "equipment", rarity: "common", heal: 0, desc: "普通的铁制长剑", from: "forge_master" },
+      { id: "f_leather_armor", name: "皮甲", price: 140, kind: "equipment", rarity: "fine", heal: 0, desc: "整片皮革制成的护甲", from: "forge_master" },
+      // ★ 炼丹炉商品（对齐 entry.ts ALCHEMY_SHOP_GOODS 的核心几项）
+      { id: "a_ginseng", name: "人参", price: 50, kind: "material", rarity: "fine", heal: 0, desc: "大补元气的百草之王", from: "alchemy_furnace" },
+      { id: "a_ganoderma", name: "灵芝", price: 80, kind: "material", rarity: "fine", heal: 0, desc: "养命之药的仙草", from: "alchemy_furnace" },
+      { id: "a_heal_powder", name: "止血散", price: 15, kind: "consumable", rarity: "common", heal: 20, desc: "恢复 20 点生命", from: "alchemy_furnace" },
+      { id: "a_big_pill", name: "大还丹", price: 160, kind: "consumable", rarity: "rare", heal: 200, desc: "恢复 200 点生命", from: "alchemy_furnace" },
     ],
+    // ★ 锻造/炼丹面板的完整商品清单（149 + 163 种，来自设计文档生成的 src/shop/*.ts）
+    forgeGoods: FORGE_GOODS,
+    alchemyGoods: ALCHEMY_GOODS,
     skillPage: 0,
     itemPage: 0,
     map: null,
@@ -1760,7 +1776,11 @@ function install(): void {
       }
       if (action === "sys_shop_buy") {
         // ★ 对齐 entry.js case "sys_shop_buy":扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
-        const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id);
+        //   ★ 锻造/炼丹面板的商品在 state.forgeGoods / state.alchemyGoods 里，
+        //   不在 shopGoods（那是商城货源）→ 三个来源都要查。
+        const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id)
+          || ((state as any).forgeGoods || []).find((g: any) => g.id === params?.id)
+          || ((state as any).alchemyGoods || []).find((g: any) => g.id === params?.id);
         if (!good) {
           state.events.push("[mock] 商品不存在");
           push();
@@ -1813,6 +1833,190 @@ function install(): void {
         }
         arr.push(base > 1 ? `${nm}×${base}` : nm);
         state.events.push(`[mock] 获得 ${nm}×${ask}`);
+        push();
+        return;
+      }
+      if (action === "sys_forge_create" || action === "sys_alchemy_create") {
+        // ★ 锻造大师 / 炼丹炉：优先用前端传来的 AI JSON（params.aiJson），
+        //   没有则随机兜底。扣 10 金钱后入包。
+        //   （对齐 entry.ts case "sys_forge_create" / "sys_alchemy_create"）
+        const pc: any = (state as any).playerCard || ((state as any).playerCard = {});
+        const money = Math.round(Number(pc.money) || 0);
+        if (money < 10) {
+          state.events.push("[mock] 金钱不足：需要 10 金钱");
+          push();
+          return;
+        }
+        const isForge = action === "sys_forge_create";
+        const input = String(params?.input || "").trim();
+        // ★ 解析前端传来的 AI JSON
+        let aiObj: any = null;
+        try {
+          const raw = String(params?.aiJson || "").trim();
+          if (raw) {
+            const stripped = raw.replace(/^\s*```[a-zA-Z]*\s*/, "").replace(/\s*```\s*$/, "").trim();
+            const m = stripped.match(/\{[\s\S]*\}/);
+            if (m) aiObj = JSON.parse(m[0]);
+          }
+        } catch { aiObj = null; }
+        const names = isForge
+          ? ["粗制剑", "精锻刀", "寒铁枪", "疾风弓", "烈焰杖", "雷霆甲", "暗影靴", "圣光盾", "陨星戒指", "龙骨护符"]
+          : ["九转丹", "清心丸", "回春散", "凝神膏", "聚气露", "还魂液", "霸王丹", "金刚丸", "回天丹", "悟道丹"];
+        const nm = aiObj?.name
+          ? String(aiObj.name).slice(0, 20)
+          : (input
+            ? (isForge ? input.slice(0, 12) : (input.slice(0, 10) + (/[丹丸散膏露液]/.test(input) ? "" : "丹")))
+            : names[Math.floor(Math.random() * names.length)]);
+        const heal = isForge ? 0 : Math.max(0, Math.round(Number(aiObj?.heal) || (20 + Math.floor(Math.random() * 60))));
+        pc.money = money - 10;
+        const slot = (state.items || []).find((x: any) => x.name === nm);
+        if (slot) slot.count += 1;
+        else (state.items || []).push({
+          name: nm, count: 1,
+          heal,
+          mp: 0,
+          type: isForge ? "atk" : "hp",
+        });
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const old = arr.findIndex((x) => clean(x) === clean(nm));
+        let base = 1;
+        if (old >= 0) {
+          const m = arr[old].match(/[×xX*]\s*(\d+)/);
+          base = (m ? Number(m[1]) : 1) + 1;
+          arr.splice(old, 1);
+        }
+        arr.push(base > 1 ? `${nm}×${base}` : nm);
+        state.events.push(`[mock] ${isForge ? "锻造" : "炼丹"}获得 ${nm}`);
+        push();
+        return;
+      }
+      if (action === "sys_bag_remove") {
+        // ★ 事件系统移除物品（溶解/升级替换）：对齐 entry.ts removeFromPlayerBag
+        const rmName = String(params?.name || "").trim().slice(0, 20);
+        const rmCount = Math.max(1, Math.round(Number(params?.count) || 1));
+        if (!rmName) { state.events.push("[mock] sys_bag_remove 缺 name"); push(); return; }
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const pc: any = (state as any).playerCard || ((state as any).playerCard = {});
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const idx = arr.findIndex((x) => clean(x) === clean(rmName));
+        if (idx < 0) { state.events.push(`[mock] 「${rmName}」不在背包中`); push(); return; }
+        const m = arr[idx].match(/[×xX*]\s*(\d+)/);
+        const have = m ? Number(m[1]) : 1;
+        if (have > rmCount) {
+          arr[idx] = `${rmName}×${have - rmCount}`;
+        } else {
+          arr.splice(idx, 1);
+        }
+        const slot = (state.items || []).find((x: any) => x.name === rmName);
+        if (slot) {
+          slot.count -= rmCount;
+          if (slot.count <= 0) (state.items || []).splice((state.items || []).indexOf(slot), 1);
+        }
+        state.events.push(`[mock] 失去 ${rmName}×${rmCount}`);
+        push();
+        return;
+      }
+      if (action === "sys_item_upgrade") {
+        // ★ 装备升级：移除旧装备 → 加入升级后的新装备（对齐 entry.ts）
+        const pc: any = (state as any).playerCard || ((state as any).playerCard = {});
+        const oldName = String(params?.oldName || "").trim().slice(0, 20);
+        const cost = Math.max(1, Math.round(Number(params?.cost) || 20));
+        const money = Math.round(Number(pc.money) || 0);
+        if (!oldName) { state.events.push("[mock] sys_item_upgrade 缺 oldName"); push(); return; }
+        if (money < cost) { state.events.push(`[mock] 金钱不足：需要 ${cost}`); push(); return; }
+        let newName = oldName;
+        try {
+          const raw = String(params?.aiJson || "").trim();
+          if (raw) {
+            const stripped = raw.replace(/^\s*```[a-zA-Z]*\s*/, "").replace(/\s*```\s*$/, "").trim();
+            const m = stripped.match(/\{[\s\S]*\}/);
+            if (m) {
+              const o = JSON.parse(m[0]);
+              if (o?.name) newName = String(o.name).slice(0, 20);
+            }
+          }
+        } catch { /* ignore */ }
+        // 移除旧装备
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const idx = arr.findIndex((x) => clean(x) === clean(oldName));
+        if (idx >= 0) {
+          const m = arr[idx].match(/[×xX*]\s*(\d+)/);
+          const have = m ? Number(m[1]) : 1;
+          if (have > 1) arr[idx] = `${oldName}×${have - 1}`;
+          else arr.splice(idx, 1);
+        }
+        const slot0 = (state.items || []).find((x: any) => x.name === oldName);
+        if (slot0) {
+          slot0.count -= 1;
+          if (slot0.count <= 0) (state.items || []).splice((state.items || []).indexOf(slot0), 1);
+        }
+        // 加入新装备
+        pc.money = money - cost;
+        const slot = (state.items || []).find((x: any) => x.name === newName);
+        if (slot) slot.count += 1;
+        else (state.items || []).push({ name: newName, count: 1, heal: 0, mp: 0, type: "atk" });
+        arr.push(newName);
+        state.events.push(`[mock] 升级装备：${oldName} → ${newName}`);
+        push();
+        return;
+      }
+      if (action === "sys_item_dissolve") {
+        // ★ 溶解物品：移除物品 → 按品质/恢复量返还材料（对齐 entry.ts）
+        const dName = String(params?.name || "").trim().slice(0, 20);
+        if (!dName) { state.events.push("[mock] sys_item_dissolve 缺 name"); push(); return; }
+        const dRarity = String(params?.rarity || "common");
+        const dLv = Math.max(1, Math.round(Number(params?.lv) || 1));
+        const dHeal = Math.round(Number(params?.heal) || 0);
+        const isPill = params?.isPill === true;
+        const MULT: Record<string, number> = { common: 1, fine: 2, rare: 4, epic: 8, legend: 15 };
+        const returns: Record<string, number> = isPill
+          ? { 草药: Math.max(1, Math.round(dHeal / 20)), 灵芝: Math.max(0, Math.round(dHeal / 100)) }
+          : { 铁矿石: Math.max(1, dLv * (MULT[dRarity] || 1)), 灵石碎屑: Math.max(0, Math.floor((dLv * (MULT[dRarity] || 1)) / 3)) };
+        // 移除原物品
+        const clean = (v: string) => String(v || "").replace(/[（(][^）)]*[）)]/g, " ").replace(/[×xX*]\s*\d+/g, " ").trim().toLowerCase();
+        const pc: any = (state as any).playerCard || ((state as any).playerCard = {});
+        const arr: string[] = Array.isArray(pc.items) ? pc.items : (pc.items = []);
+        const idx = arr.findIndex((x) => clean(x) === clean(dName));
+        if (idx < 0) { state.events.push(`[mock] 「${dName}」不在背包中`); push(); return; }
+        const m = arr[idx].match(/[×xX*]\s*(\d+)/);
+        const have = m ? Number(m[1]) : 1;
+        if (have > 1) arr[idx] = `${dName}×${have - 1}`;
+        else arr.splice(idx, 1);
+        const slot = (state.items || []).find((x: any) => x.name === dName);
+        if (slot) {
+          slot.count -= 1;
+          if (slot.count <= 0) (state.items || []).splice((state.items || []).indexOf(slot), 1);
+        }
+        // 返还材料
+        const given: string[] = [];
+        for (const [k, v] of Object.entries(returns)) {
+          const n = Math.round(Number(v) || 0);
+          if (n <= 0) continue;
+          const s2 = (state.items || []).find((x: any) => x.name === k);
+          if (s2) s2.count += n;
+          else (state.items || []).push({ name: k, count: n, heal: 0, mp: 0, type: "hp" });
+          const i2 = arr.findIndex((x) => clean(x) === clean(k));
+          if (i2 >= 0) {
+            const m2 = arr[i2].match(/[×xX*]\s*(\d+)/);
+            const h2 = (m2 ? Number(m2[1]) : 1) + n;
+            arr.splice(i2, 1);
+            arr.push(`${k}×${h2}`);
+          } else {
+            arr.push(n > 1 ? `${k}×${n}` : k);
+          }
+          given.push(`${k}×${n}`);
+        }
+        state.events.push(`[mock] 溶解 ${dName} → ${given.join("、") || "无返还"}`);
+        push();
+        return;
+      }
+      if (action === "sys_agent_run") {
+        // ★ 通用 AI agent 调用（mock 模式无真实 LLM → 直接返回失败，脚本走随机兜底）
+        const reqId = String(params?.reqId || "");
+        (state as any).agentResult = { reqId, ok: false, error: "mock 模式不支持 AI 调用" };
+        state.events.push("[mock] sys_agent_run：mock 模式无 LLM，已回退随机生成");
         push();
         return;
       }

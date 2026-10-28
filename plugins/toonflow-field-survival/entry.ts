@@ -25,11 +25,17 @@
  *  这些 import 会被内联进单文件 entry.js，不产生运行时外部依赖。 */
 import {
   PROMPT_FIELD_SURVIVAL_AI_BRAIN,
+  PROMPT_FIELD_SURVIVAL_ALCHEMY_PILL,
+  PROMPT_FIELD_SURVIVAL_FORGE_ITEM,
+  PROMPT_FIELD_SURVIVAL_ITEM_UPGRADE,
   PROMPT_FIELD_SURVIVAL_MAP_GENER,
   PROMPT_FIELD_SURVIVAL_QUEST_GENER,
   PROMPT_FIELD_SURVIVAL_SHOP_GENER,
   PROMPT_FIELD_SURVIVAL_SPRITE_GENER,
+  getAgentSystemPrompt,
 } from "./src/agents/plugins.prompts";
+import { FORGE_GOODS as FORGE_GOODS_DATA } from "./src/shop/forgeGoods";
+import { ALCHEMY_GOODS as ALCHEMY_GOODS_DATA } from "./src/shop/alchemyGoods";
 
 interface PluginGameContext {
   pluginId: string;
@@ -511,6 +517,15 @@ export interface FieldSurvivalState {
     options?: string[];
     error?: string;
   } | null;
+  /** ★ 通用 AI agent 调用结果（事件系统 ctx.ai.generate 用）
+   *  结构：{ reqId, ok, text, error } —— 独立于 chatResult 单槽位，
+   *  避免「锻造生成」与「角色对话」互相覆盖。 */
+  agentResult?: {
+    reqId: string;
+    ok: boolean;
+    text?: string;
+    error?: string;
+  } | null;
   /** ★ v5：组队跟随的角色 id 列表 */
   partyIds?: string[];
   /** ★ v5：角色卡（含地图名与坐标，落 t_plugin_session_data） */
@@ -546,7 +561,9 @@ export interface FieldSurvivalState {
   /** ★ v5：商城商品 */
   shopGoods?: ShopGood[];
   shopSource?: "agent" | "builtin";
-  /** ★ v5：大地图节点（前端上报的关卡列表） */
+  /** ★ 锻造大师 / 炼丹炉商品（商城页签的子标签页用；from=forge_master / alchemy_furnace） */
+  forgeGoods?: ShopGood[];
+  alchemyGoods?: ShopGood[];  /** ★ v5：大地图节点（前端上报的关卡列表） */
   mapNodes?: MapNode[];
   /** ★ v5：面板数据版本号（用于前端感知传送等一次性指令） */
   sysRevision?: number;
@@ -1360,7 +1377,20 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
         pushEvent(s, `护送失败：${qd ? qd.title : qid}`);
       }
     }
-    if (target.side === "enemy") {
+    if ((target as any).trainingDummy === true) {
+      // ★ 练习假人被摧毁：不给经验/金钱/掉落/宝箱（设计文档：模拟实战模式击碎才有经验，
+      //   而那笔经验由事件脚本按 flag 发——这里只做"倒下"表现）。
+      //   模拟实战模式下写 flag `dummy_destroyed_<实体id>`（事件脚本据此判定）；
+      //   站桩模式下事件脚本自会回血，不写 flag。
+      //   ★ setPlayerFlag 走 pluginData（player_flags 表）——与事件引擎 flagCache 同源。
+      //   damage() 是同步函数拿不到 ctx，这里 fire-and-forget（后端 handle_action 闭包里的 context）。
+      const dummyMode = String((target as any).dummyMode || "");
+      if (dummyMode !== "stand") {
+        const dummyFlagKey = `dummy_destroyed_${target.id}`;
+        void setPlayerFlag(ctxRef?.(), dummyFlagKey, true);
+      }
+      pushEvent(s, `${target.name} 散架了`);
+    } else if (target.side === "enemy") {
       s.kills += 1;
       // 优先地图 archetype 的赏金（map-gener agent 产出）
       const bounty = (target as any).bounty as { exp?: number; money?: number } | undefined;
@@ -2341,7 +2371,7 @@ export interface ItemMeta {
   /** ★ P2 技能属性特效（空串/缺省 = 走默认 VFX） */
   effects_type?: string;
 }
-export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; }
+export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; cat?: string; }
 export interface NpcCard {
   id: string; name: string; side: string; enemy: boolean;
   level: number; hp: number; maxHp: number; exp: number; alive: boolean;
@@ -2427,6 +2457,16 @@ const BUILTIN_SHOP_GOODS: ShopGood[] = [
   { id: "b_xinde", name: "基础技能心得", price: 320, kind: "skill_book", rarity: "rare", heal: 0, desc: "习得一项基础技能", from: "builtin" },
 ];
 
+/**
+ * ★ 锻造大师 / 炼丹炉售卖商品
+ *   数据来源：workshops/.../events/实体交互/物品售卖.list.md（149 种）
+ *             workshops/.../events/实体交互/物品售卖.炼丹.list.md（163 种）
+ *   由 vue/scripts/gen-shop-goods.mjs 从 markdown 表格自动生成
+ *   → src/shop/forgeGoods.ts / src/shop/alchemyGoods.ts
+ */
+const FORGE_SHOP_GOODS: ShopGood[] = FORGE_GOODS_DATA;
+const ALCHEMY_SHOP_GOODS: ShopGood[] = ALCHEMY_GOODS_DATA;
+
 function normRarity(v: any): string {
   const r = String(v ?? "").toLowerCase().trim();
   return RARITY_LIST.indexOf(r) >= 0 ? r : "common";
@@ -2447,6 +2487,204 @@ function defaultHeal(name: string, kind: string): number {
   if (/回气|伤药|灵泉|清心|愈合/.test(n)) return 30;
   if (/干粮|粮|肉|果|汤|鱼/.test(n)) return 14;
   return 20;
+}
+
+/* ============================================================
+   ★ 锻造大师 / 炼丹炉：AI 生成 + 背包读写 + 溶解返还
+   ============================================================ */
+
+/** 从 AI 返回文本里抽出第一个 JSON 对象（模型常包 ```json 围栏） */
+function extractJsonObject(text: string): any | null {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const stripped = raw.replace(/^\s*```[a-zA-Z]*\s*/, "").replace(/\s*```\s*$/, "").trim();
+  const m = stripped.match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch { return null; }
+}
+
+/** AI 生成的物品（已校验 + 归一化） */
+export interface GeneratedItem {
+  name: string;
+  kind: string;
+  rarity: string;
+  heal: number;
+  desc: string;
+  price: number;
+  atk: number;
+  def: number;
+  durability: number;
+  lv?: number;
+  effect?: { type: string; value: number; duration: number };
+}
+
+const ITEM_KINDS = ["material", "equipment", "weapon", "armor", "skill_book", "consumable"];
+const RARITY_VALUES = ["common", "fine", "rare", "epic", "legend"];
+
+/** 校验并归一化 AI 生成的物品（防止越界值 / 空名 / 非法品质） */
+function normalizeGeneratedItem(raw: any, fallback: { name: string; kind: string; rarity: string; heal: number; desc: string; price: number }): GeneratedItem {
+  const rarity = RARITY_VALUES.indexOf(String(raw?.rarity)) >= 0 ? String(raw.rarity) : fallback.rarity;
+  const kind = ITEM_KINDS.indexOf(String(raw?.kind)) >= 0 ? String(raw.kind) : fallback.kind;
+  const name = String(raw?.name || fallback.name).trim().slice(0, 20) || fallback.name;
+  return {
+    name,
+    kind,
+    rarity,
+    heal: Math.max(0, Math.min(9999, Math.round(num(raw?.heal, fallback.heal)))),
+    desc: String(raw?.desc || fallback.desc).slice(0, 60),
+    price: Math.max(1, Math.round(num(raw?.price, fallback.price))),
+    atk: Math.max(0, Math.min(9999, Math.round(num(raw?.atk, 0)))),
+    def: Math.max(0, Math.min(9999, Math.round(num(raw?.def, 0)))),
+    durability: Math.max(0, Math.min(99999, Math.round(num(raw?.durability, 0)))),
+    lv: raw?.lv != null ? Math.max(1, Math.round(num(raw.lv, 1))) : undefined,
+    effect: raw?.effect && typeof raw.effect === "object"
+      ? {
+          type: String(raw.effect.type || "none").slice(0, 20),
+          value: Math.max(0, Math.min(9999, Math.round(num(raw.effect.value, 0)))),
+          duration: Math.max(0, Math.min(9999, Math.round(num(raw.effect.duration, 0)))),
+        }
+      : undefined,
+  };
+}
+
+/** ★ 溶解返还算法：按品质 × 等级算材料
+ *  common×1 / fine×2 / rare×4 / epic×8 / legend×15
+ *  铁矿石 = lv × 倍率；灵石碎屑 = floor(lv × 倍率 / 3) */
+const DISSOLVE_RARITY_MULT: Record<string, number> = {
+  common: 1, fine: 2, rare: 4, epic: 8, legend: 15,
+};
+/**
+ * ★ 图纸 / 药方 → 实际产物名（后端兜底版，与 vue/src/eventScripts/forgeCommon.ts 同规则）
+ *   「铁剑图纸」→「铁剑」、「九转回魂丹配方」→「九转回魂丹」
+ *   返回 "" = 图纸没写明产物（随机丹方残卷之类），让 AI 自由发挥。
+ */
+const BP_SUFFIXES = [
+  "铸造总纲", "铸造秘法", "铸造术", "铸造法",
+  "锻造总纲", "锻造秘法", "锻造术", "锻造法",
+  "炼制秘法", "炼法", "制法",
+  "编缀图", "图纸", "图谱", "图",
+  "总纲", "拓本", "残卷", "秘法", "秘方", "配方", "丹方", "药方", "丹谱", "药谱",
+];
+const BP_MEANINGLESS = /^(随机|上古|未知|残缺|古老|残破|无字|空白|神秘|传说|神兵|虚空)$/;
+function blueprintProductName(blueprintName: string): string {
+  let s = String(blueprintName || "").trim();
+  if (!s) return "";
+  for (let i = 0; i < 4; i++) {
+    let hit = false;
+    for (const suf of BP_SUFFIXES) {
+      if (s.length >= suf.length && s.endsWith(suf)) { s = s.slice(0, -suf.length); hit = true; break; }
+    }
+    if (!hit) break;
+  }
+  s = s.replace(/(铸造|锻造|炼制|编缀|制作|的)+$/, "").trim();
+  if (s.length < 2 || BP_MEANINGLESS.test(s)) return "";
+  return s;
+}
+/** 名字是否像「图纸 / 药方」这类载体（拦 AI 把图纸本身当产物） */
+function looksLikeBlueprintName(name: string): boolean {
+  const s = String(name || "");
+  if (!s) return false;
+  return /图纸|图谱|编缀图|总纲|拓本|残卷|秘法|秘方|配方|丹方|药方|丹谱|药谱|锻造法|锻造术|铸造法|铸造术/.test(s);
+}
+
+function calcDissolveReturns(rarity: string, lv: number): { ore: number; stone: number } {
+  const mult = DISSOLVE_RARITY_MULT[rarity] || 1;
+  const l = Math.max(1, Math.round(lv));
+  return {
+    ore: Math.max(1, l * mult),
+    stone: Math.max(0, Math.floor((l * mult) / 3)),
+  };
+}
+
+/** ★ 丹药溶解返还：按恢复量换算草药 */
+function calcPillDissolveReturns(heal: number): { herb: number; lingzhi: number } {
+  const h = Math.max(1, Math.round(heal));
+  return {
+    herb: Math.max(1, Math.round(h / 20)),
+    lingzhi: Math.max(0, Math.round(h / 100)),
+  };
+}
+
+/** ★ 读取玩家背包（给事件脚本选目标用） */
+function listPlayerBag(s: FieldSurvivalState): Array<{ name: string; count: number; kind: string; rarity: string; heal: number; lv?: number; desc?: string }> {
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  return bag.map((b) => ({
+    name: b.name,
+    count: Math.max(1, Math.round(num(b.count, 1))),
+    kind: String(b.kind || "material"),
+    rarity: String(b.rarity || "common"),
+    heal: Math.round(num(b.heal, 0)),
+    lv: b.lv != null ? Math.round(num(b.lv, 1)) : undefined,
+    desc: b.desc,
+  }));
+}
+
+/** ★ 从玩家背包移除物品（溶解/升级替换用） */
+function removeFromPlayerBag(s: FieldSurvivalState, name: string, count = 1): boolean {
+  const nm = str(name).trim().slice(0, 20);
+  if (!nm) return false;
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  const target = bag.find((x) => sameName(x.name, nm));
+  if (!target) return false;
+  const n = Math.max(1, Math.round(num(count, 1)));
+  if (target.count > n) {
+    target.count -= n;
+  } else {
+    const idx = bag.findIndex((x) => sameName(x.name, nm));
+    if (idx >= 0) bag.splice(idx, 1);
+  }
+  patchCard(s, { items: serializeBag(bag, card.items) });
+  applyBagAttributes(s);
+  return true;
+}
+
+/** ★ 锻造大师：随机生成物品（AI 不可用时的兜底） */
+function rollForgeItem(input: string, _level: number): { name: string; kind: string; rarity: string; heal: number; desc: string; price: number } {
+  const prefixes = ["粗制", "精锻", "寒铁", "烈焰", "疾风", "雷霆", "暗影", "圣光", "龙骨", "陨星"];
+  const bodies = ["剑", "刀", "枪", "弓", "杖", "甲", "盔", "靴", "盾", "戒指", "护符", "拳套"];
+  const suffixes = ["", "·破晓", "·噬魂", "·龙纹", "·星陨", "·霜华", "·焚天", "·幽冥"];
+  const r = Math.random();
+  const rarity = r < 0.40 ? "common" : r < 0.75 ? "fine" : r < 0.95 ? "rare" : r < 0.99 ? "epic" : "legend";
+  let name: string;
+  if (input && input.trim()) {
+    name = input.trim().slice(0, 12);
+  } else {
+    const pre = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const body = bodies[Math.floor(Math.random() * bodies.length)];
+    const suf = suffixes[Math.floor(Math.random() * suffixes.length)];
+    name = `${pre}${body}${suf}`;
+  }
+  const rarityPrice: Record<string, number> = { common: 15, fine: 50, rare: 150, epic: 400, legend: 1000 };
+  const price = Math.max(10, rarityPrice[rarity] || 10);
+  const kind = /剑|刀|枪|弓|杖|甲|盔|靴|盾|戒指|护符|拳套/.test(name) ? "equipment" : "material";
+  const desc = `随机打造的${name}（${rarity}）`;
+  return { name, kind, rarity, heal: 0, desc, price };
+}
+
+/** ★ 炼丹炉：随机生成丹药（AI 不可用时的兜底） */
+function rollAlchemyPill(input: string, _level: number): { name: string; kind: string; rarity: string; heal: number; desc: string; price: number } {
+  const prefixes = ["九转", "清心", "回春", "凝神", "聚气", "还魂", "霸王", "金刚", "回天", "悟道"];
+  const bodies = ["丹", "丸", "散", "膏", "露", "液"];
+  const suffixes = ["", "·上品", "·秘制", "·仙方", "·古方", "·灵炼"];
+  const r = Math.random();
+  const rarity = r < 0.40 ? "common" : r < 0.75 ? "fine" : r < 0.95 ? "rare" : r < 0.99 ? "epic" : "legend";
+  let name: string;
+  if (input && input.trim()) {
+    name = input.trim().slice(0, 10);
+    if (!/丹|丸|散|膏|露|液/.test(name)) name += "丹";
+  } else {
+    const pre = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const body = bodies[Math.floor(Math.random() * bodies.length)];
+    const suf = suffixes[Math.floor(Math.random() * suffixes.length)];
+    name = `${pre}${body}${suf}`;
+  }
+  const baseHeal: Record<string, number> = { common: 20, fine: 50, rare: 120, epic: 300, legend: 800 };
+  const heal = baseHeal[rarity] || 20;
+  const price = Math.max(10, heal * 2);
+  const desc = `随机炼制的${name}（${rarity}），恢复 ${heal} 点生命`;
+  return { name, kind: "consumable", rarity, heal, desc, price };
 }
 
 /** 参数卡里的物品项（字符串 "干粮×3" / "干粮（备注）" 或对象）→ BagItem */
@@ -4779,6 +5017,16 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
   return notes;
 }
 
+/**
+ * ★ 锻造大师 / 炼丹炉的商品清单（供商城页签的子标签页直接购买）
+ *   - from="forge_master"   → 🔨 锻造子标签
+ *   - from="alchemy_furnace"→ 🔥 炼丹子标签
+ *   这些商品始终在售（不随商城 agent 刷新而变），前端按 from 分组显示。
+ */
+function forgeAlchemyGoods(): ShopGood[] {
+  return [...FORGE_SHOP_GOODS, ...ALCHEMY_SHOP_GOODS];
+}
+
 // ---------------------------------------------------------------------------
 // handle_action
 // ---------------------------------------------------------------------------
@@ -4817,12 +5065,17 @@ function normalizeQuickbarLegacy(s: FieldSurvivalState): void {
   clampQuickbarPages(s);
 }
 
+/** ★ 最近一次 handle_action 的 context 引用（damage() 等无 ctx 的深层函数 fire-and-forget 用） */
+let lastPluginContext: PluginGameContext | undefined;
+function ctxRef(): PluginGameContext | undefined { return lastPluginContext; }
+
 export async function handle_action(
   action: string,
   params: Record<string, any>,
   state: Record<string, any>,
   context: PluginGameContext,
 ): Promise<{ code: number; message: string; state: FieldSurvivalState; response?: string; actions?: string[] }> {
+  lastPluginContext = context;
   const s: FieldSurvivalState =
     state && Object.keys(state).length > 0 && ((state as any).version === 2 || (state as any).version === 3 || (state as any).version === 4)
       ? (state as unknown as FieldSurvivalState)
@@ -5074,6 +5327,9 @@ export async function handle_action(
       ensureNpcCards(s, s.levelName || "");
       // ★ game.md 商城：开局即建货源（商城 agent 故事物资 + 插件自带物资），不等第一次 tick
       if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
+      // ★ 锻造/炼丹面板的商品清单（独立于商城货源，始终在售）
+      s.forgeGoods = FORGE_SHOP_GOODS;
+      s.alchemyGoods = ALCHEMY_SHOP_GOODS;
       s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
@@ -5197,7 +5453,10 @@ export async function handle_action(
       const player = s.entities.find((e) => e.side === "player");
       if (!player || !player.alive) return okResp("");
       // ★ 方案三：普攻——在 SKILL_RANGE_M 内找最近活敌，短冷却无消耗
-      const enemies = s.entities.filter((e) => e.side === "enemy" && e.alive !== false);
+      //   ★ 练习假人（trainingDummy，side=neutral）也算合法攻击目标——
+      //   玩家点了假人 → damage() 正常结算；kills/exp 走下面的 dummy 特判（不给经验）
+      const enemies = s.entities.filter((e) =>
+        (e.side === "enemy" || (e as any).trainingDummy === true) && e.alive !== false);
       const inRange = enemies.filter((e) => dist(player, e) < SKILL_RANGE_M);
       if (!inRange.length) return okResp("附近没有敌人");
       const target = inRange.reduce((best, e) => (!best || dist(player, e) < dist(player, best) ? e : best), inRange[0]);
@@ -5240,6 +5499,13 @@ export async function handle_action(
       if (!s.ring) s.ring = { items: [], skills: [] };
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
       if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
+      // ★ 锻造/炼丹面板的商品清单（独立于商城货源，始终在售）
+      //   ★ 2026-10-28：必须【始终】用常量覆盖，不能只在「为空」时补。
+      //     旧存档里存的是没有 cat（售卖分类）字段的老清单，若沿用会让
+      //     售卖页的分类子标签全部为空（只有「全部」有货）。
+      //     这份清单是固定配置、不随玩家变化，覆盖无副作用。
+      s.forgeGoods = FORGE_SHOP_GOODS;
+      s.alchemyGoods = ALCHEMY_SHOP_GOODS;
       ensureNpcCards(s, s.levelName || "");
       await persistSys(context, s);
       return okResp("");
@@ -5639,6 +5905,36 @@ export async function handle_action(
       return okResp("已删除该形象");
     }
 
+    case "sys_sprite_flip": {
+      // 左右翻转一张图库形象（AI 生成有时面向右边，用户要求可翻转）：
+      // 替换图库条目 image，并同步所有「绑定图 == 旧图」的绑定，让已使用的角色立即换向
+      const id = str(params?.id).trim();
+      const image = str(params?.image).trim();
+      const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
+      const idx = gal.findIndex((g) => String(g.id) === id);
+      if (idx < 0) return okResp("形象不存在（可能已删除）");
+      if (!image) return okResp("缺少翻转后的图片");
+      const oldImg = gal[idx].image;
+      if (oldImg === image) return okResp("图片未变化，无需翻转");
+      gal[idx] = { ...gal[idx], image };
+      s.spriteGallery = gal;
+      const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
+      const flippedTargets: string[] = [];
+      Object.keys(binds).forEach((k) => {
+        if (binds[k] && binds[k].image === oldImg) {
+          binds[k] = { ...binds[k], image };
+          flippedTargets.push(k);
+        }
+      });
+      (s as any).spriteBinds = binds;
+      // ★ 写回后再 apply——否则 spriteOverrideFor 仍读到旧 binds（闭包引用），实体不换向
+      flippedTargets.forEach((k) => applySpriteBindToEntities(s, k));
+      ensureNpcCards(s, s.levelName || "");
+      s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
+      await persistSys(context, s);
+      return okResp("已左右翻转该形象");
+    }
+
     case "sys_sprite_gallery_clear": {
       // 清空图库（绑定的形象一并解绑）
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery : [];
@@ -6000,7 +6296,7 @@ export async function handle_action(
     case "sys_shop_buy": {
       const id = str(params?.id);
       const ask = Math.max(1, Math.round(num(params?.count, 1)));
-      const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id);
+      const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id) || FORGE_SHOP_GOODS.find((g) => g.id === id) || ALCHEMY_SHOP_GOODS.find((g) => g.id === id);
       if (!good) return okResp("商品不存在");
       const card = (s.playerCard || {}) as Record<string, any>;
       const money = Math.round(num(card.money, 0));
@@ -6568,6 +6864,168 @@ export async function handle_action(
       };
       pushEvent(s, "你主动结束了本次野外生存。");
       return { code: 0, message: "exit", state: s, response: "野外生存结束" };
+    }
+
+    case "sys_agent_run": {
+      // ★ 通用 AI agent 调用通道（事件系统 ctx.ai.generate 用）
+      //   独立于 chatResult 单槽位 → state.agentResult{reqId,...}，
+      //   避免「锻造生成」与「角色对话」互相覆盖。
+      const aReqId = str(params?.reqId, "");
+      const aAgent = str(params?.agentName, "");
+      const aPrompt = str(params?.prompt, "");
+      const aFail = (err: string) => {
+        s.agentResult = { reqId: aReqId, ok: false, error: err };
+        persistSys(context, s);
+        return okResp(JSON.stringify({ error: err }));
+      };
+      if (!aReqId) return aFail("缺少 reqId");
+      if (!aAgent) return aFail("缺少 agentName");
+      if (!aPrompt.trim()) return aFail("缺少 prompt");
+      if (!context?.tsApi?.agent?.run) return aFail("tsApi.agent 不可用（宿主未接入 AI）");
+      try {
+        const aTimeout = Math.max(3000, Math.round(num(params?.timeoutMs, 20000)));
+        // systemPrompt：前端传了就用前端传的；没传则按 agent 名从插件常量表取
+        const aSystem = str(params?.systemPrompt, "") || getAgentSystemPrompt(aAgent);
+        const r: any = await withTimeout(
+          context.tsApi.agent.run(aAgent, { prompt: aPrompt, systemPrompt: aSystem }),
+          aTimeout,
+          "agent timeout",
+        );
+        const text = String(r?.output?.text ?? r?.text ?? r?.output ?? "");
+        if (!text.trim()) {
+          s.agentResult = { reqId: aReqId, ok: false, error: "agent 返回空内容" };
+        } else {
+          s.agentResult = { reqId: aReqId, ok: true, text };
+        }
+      } catch (e: any) {
+        s.agentResult = { reqId: aReqId, ok: false, error: String(e?.message || e) };
+      }
+      await persistSys(context, s);
+      return okResp("agent 调用完成");
+    }
+
+    case "sys_bag_list": {
+      // ★ 事件系统读背包（升级/溶解时选目标）
+      const list = listPlayerBag(s);
+      return okResp(JSON.stringify(list));
+    }
+
+    case "sys_dummy_reward": {
+      // ★ 练习假人（模拟实战）击碎奖励：加经验（设计文档：模拟实战模式击碎才有经验）
+      const drExp = Math.max(0, Math.round(num(params?.exp, 0)));
+      const drName = str(params?.name, "练习假人");
+      if (drExp > 0) {
+        const me = playerEntity(s);
+        gainPlayerExp(s, drExp);
+        if (me) floater(s, `+${drExp} 经验`, me.x, me.y - 30);
+        pushEvent(s, `击碎 ${drName}，获得 ${drExp} 经验`);
+        await persistSys(context, s);
+      }
+      return okResp(drExp > 0 ? `+${drExp} 经验` : "");
+    }
+
+    case "sys_bag_remove": {
+      // ★ 事件系统移除背包物品（溶解/升级替换）
+      const rmName = str(params?.name, "").trim().slice(0, 20);
+      const rmCount = Math.max(1, Math.round(num(params?.count, 1)));
+      if (!rmName) return okResp("缺少 name");
+      const okRemove = removeFromPlayerBag(s, rmName, rmCount);
+      if (okRemove) {
+        pushEvent(s, `失去 ${rmName}×${rmCount}`);
+        await persistSys(context, s);
+      }
+      return okResp(okRemove ? `已移除 ${rmName}×${rmCount}` : "物品不存在");
+    }
+
+    case "sys_forge_create": {
+      // ★ 锻造大师打造：优先用 AI 生成（params.aiJson），失败回退随机算法
+      const fCard = (s.playerCard || {}) as Record<string, any>;
+      const fMoney = Math.round(num(fCard.money, 0));
+      if (fMoney < 10) return okResp("金钱不足：打造需要 10 金钱");
+      const fInput = str(params?.input, "");
+      const fLevel = Math.round(num(fCard.level, 1));
+      // AI 结果（前端 ctx.ai.generate 拿到后回传）；没有则走随机兜底
+      const fRaw = extractJsonObject(str(params?.aiJson, ""));
+      const fFallback = rollForgeItem(fInput, fLevel);
+      const fItem = fRaw ? normalizeGeneratedItem(fRaw, fFallback) : { ...fFallback, atk: 0, def: 0, durability: 0 };
+      // ★ 图纸：使用后消耗 1 张，且产物绝不能是图纸本身
+      //   （老逻辑把图纸名当 input 喂 AI → 产出「铁剑图纸」，图纸还留包里越打越多）
+      const fBlueprint = str(params?.blueprint, "").trim().slice(0, 20);
+      if (looksLikeBlueprintName(fItem.name)) {
+        fItem.name = blueprintProductName(fItem.name) || blueprintProductName(fBlueprint) || "无名器物";
+      }
+      patchCard(s, { money: fMoney - 10 });
+      addBagItemToCard(s, fItem.name, 1);
+      if (fBlueprint) removeFromPlayerBag(s, fBlueprint, 1);
+      pushEvent(s, `锻造获得 ${fItem.name}（${fItem.rarity}）${fBlueprint ? `，消耗图纸「${fBlueprint}」` : ""}`);
+      await persistSys(context, s);
+      return okResp(`锻造完成！获得「${fItem.name}」`);
+    }
+
+    case "sys_alchemy_create": {
+      // ★ 炼丹炉炼制：优先用 AI 生成（params.aiJson），失败回退随机算法
+      const aCard = (s.playerCard || {}) as Record<string, any>;
+      const aMoney = Math.round(num(aCard.money, 0));
+      if (aMoney < 10) return okResp("金钱不足：炼丹需要 10 金钱");
+      const aInput = str(params?.input, "");
+      const aLevel = Math.round(num(aCard.level, 1));
+      const aRaw = extractJsonObject(str(params?.aiJson, ""));
+      const aFallback = rollAlchemyPill(aInput, aLevel);
+      const aPill = aRaw ? normalizeGeneratedItem(aRaw, aFallback) : { ...aFallback, atk: 0, def: 0, durability: 0 };
+      // ★ 药方：使用后消耗 1 张，产物绝不能是药方本身
+      const aBlueprint = str(params?.blueprint, "").trim().slice(0, 20);
+      if (looksLikeBlueprintName(aPill.name)) {
+        aPill.name = blueprintProductName(aPill.name) || blueprintProductName(aBlueprint) || "无名丹药";
+      }
+      patchCard(s, { money: aMoney - 10 });
+      addBagItemToCard(s, aPill.name, 1);
+      if (aBlueprint) removeFromPlayerBag(s, aBlueprint, 1);
+      pushEvent(s, `炼丹获得 ${aPill.name}（${aPill.rarity}）${aBlueprint ? `，消耗药方「${aBlueprint}」` : ""}`);
+      await persistSys(context, s);
+      return okResp(`炼丹完成！获得「${aPill.name}」`);
+    }
+
+    case "sys_item_upgrade": {
+      // ★ 装备升级：移除旧装备 → 加入升级后的新装备
+      const uCard = (s.playerCard || {}) as Record<string, any>;
+      const uMoney = Math.round(num(uCard.money, 0));
+      const uCost = Math.max(1, Math.round(num(params?.cost, 20)));
+      if (uMoney < uCost) return okResp(`金钱不足：升级需要 ${uCost}，现有 ${uMoney}`);
+      const oldName = str(params?.oldName, "").trim().slice(0, 20);
+      if (!oldName) return okResp("缺少 oldName");
+      const uRaw = extractJsonObject(str(params?.aiJson, ""));
+      if (!uRaw) return okResp("AI 未返回有效升级数据");
+      const uFallback = rollForgeItem(oldName, Math.round(num(uCard.level, 1)));
+      const uItem = normalizeGeneratedItem(uRaw, uFallback);
+      // 移除旧装备
+      if (!removeFromPlayerBag(s, oldName, 1)) return okResp(`原装备「${oldName}」不在背包中`);
+      patchCard(s, { money: uMoney - uCost });
+      addBagItemToCard(s, uItem.name, 1);
+      pushEvent(s, `升级装备：${oldName} → ${uItem.name}`);
+      await persistSys(context, s);
+      return okResp(`升级完成！「${uItem.name}」`);
+    }
+
+    case "sys_item_dissolve": {
+      // ★ 溶解物品：移除物品 → 按品质算法返还材料
+      const dName = str(params?.name, "").trim().slice(0, 20);
+      if (!dName) return okResp("缺少 name");
+      const dRarity = str(params?.rarity, "common");
+      const dLv = Math.max(1, Math.round(num(params?.lv, 1)));
+      const dHeal = Math.round(num(params?.heal, 0));
+      const dIsPill = params?.isPill === true;
+      if (!removeFromPlayerBag(s, dName, 1)) return okResp(`「${dName}」不在背包中`);
+      const returns = dIsPill
+        ? (() => { const r = calcPillDissolveReturns(dHeal); return { 草药: r.herb, 灵芝: r.lingzhi }; })()
+        : (() => { const r = calcDissolveReturns(dRarity, dLv); return { 铁矿石: r.ore, 灵石碎屑: r.stone }; })();
+      const giveText: string[] = [];
+      for (const [k, v] of Object.entries(returns)) {
+        const n = Math.round(num(v, 0));
+        if (n > 0) { addBagItemToCard(s, k, n); giveText.push(`${k}×${n}`); }
+      }
+      pushEvent(s, `溶解 ${dName} → ${giveText.join("、") || "无返还"}`);
+      await persistSys(context, s);
+      return okResp(`溶解完成，获得 ${giveText.join("、") || "无返还"}`);
     }
 
     default:

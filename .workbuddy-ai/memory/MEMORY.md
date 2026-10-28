@@ -104,3 +104,30 @@
 - scripts：elements.py（像素判材质/道路段/建筑轮廓/活物清单）、actors.py（对象层 CRUD，坐标是像素、NPC 复用 uid、野怪三处一致）、make_tiles.py（配方驱动程序化瓦片，id>=12900 空白段）
 - 铁律承袭：改完必须看渲染图；commit_layers() 必须；屋顶可能压住真房间；路要整段统一替换
 - map-editor API：POST /api/collections/{name}/maps/{map} 保存（备份固定名会覆盖）；POST /api/tile-style/override 换格贴图（改图集本体，gid 不变）
+
+## ★ Vue SFC 模板插入新元素的陷阱（2026-10-28）
+- 往 App.vue 模板加新的 `v-if` 块，**不要插在自闭合组件标签（`<Xxx ... />`）紧后面**——
+  Vue SFC 编译器做「模板引用 → setup 暴露表（__returned__）」分析时，该位置的元素可能
+  不归入根作用域，导致引用的 ref 不进 `__returned__` → 渲染函数里 `$setup.xxx` 恒 undefined →
+  `v-if` 永远 false 且无任何报错。
+- 排查手法：fetch('/src/App.vue') 编译产物，搜 `__returned__ = {` 里有没有你的变量名。
+- 修复：把块挪到明确的顶层兄弟位置（如 `<DebugPanel>` 前、`<section>` 后）。
+- 另：`setupState` 代理读 ref 是解包的（直接得 boolean），写它 = 写 ref.value，可用于 E2E 注入。
+
+## ★ dev 白屏先查 public/index.html 覆盖（2026-10-27）
+- Vite 的 public/ 同名文件会**覆盖**根 index.html。本项目 public/index.html 是 Rotten Soup
+  遗留模板（无 script 标签）→ dev 服务无 JS 静态页 → 白屏、零控制台报错。
+  已改名 `public/rotten-soup.html`；`viteSingleFile()` 只在 production 启用。
+- 判别：curl localhost:3000/index.html 看有没有 `<script type="module" src="/src/main.ts">`。
+
+## 锻造/炼丹/假人事件体系（2026-10-27~28 落地）
+- 商品数据管线：设计文档 md 表格 → `vue/scripts/gen-shop-goods.mjs` → `src/shop/{forge,alchemy}Goods.ts`
+  （锻造 149 种 / 炼丹 163 种，from=forge_master/alchemy_furnace）。改文档后重跑生成器。
+- 交互链：proximity 事件（trigger.type=proximity + proximity.label/icon）→ HUD「🔨锻造」按钮
+  → 事件脚本只调 `ctx.ui.openShopPanel({mode,tab})` → ForgeAlchemyPanel 多标签面板
+  （锻造4标签/炼丹3标签，售卖页直接购买）→ 面板操作走 `vue/src/forgeOps.ts`（依赖注入，调后端 cmd）。
+- 练习假人：地图属性 training_dummy=true → mapConfig 特批进 mobs（side=neutral 可被打）；
+  脚本用 `ctx.npc.setField(uid, patch)`（引擎 entityRef 可变引用）改 side/hp；
+  状态合并是「客户端权威优先」（mapnpc_* 与 mapmob_假人覆盖宿主同 id 实体）。
+- onHostState 合并若以宿主/mock 为准，事件脚本改的实体状态会被每 tick 回滚——
+  本地权威实体必须客户端优先。
