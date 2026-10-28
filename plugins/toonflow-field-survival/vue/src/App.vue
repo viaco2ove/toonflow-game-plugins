@@ -20,15 +20,12 @@ declare global {
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable } from "./bridge";
 import { toonflowJsApi } from "./toonflowJsApi";
-import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext } from "./storyMap";
+import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext, readStoryJson } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
 import ForgeAlchemyPanel from "./panels/ForgeAlchemyPanel.vue";
-// ★ 售卖分类兜底：旧存档 / 旧宿主 entry.js 推来的商品没有 cat 字段，用本地清单补全
-import { FORGE_GOODS as FORGE_GOODS_REF } from "../../src/shop/forgeGoods";
-import { ALCHEMY_GOODS as ALCHEMY_GOODS_REF } from "../../src/shop/alchemyGoods";
 import { opCraft, opUpgrade, opDissolve, type ForgeOpsDeps } from "./forgeOps";
 import AppearanceModal from "./panels/AppearanceModal.vue";
 import QuestPanel from "./panels/QuestPanel.vue";
@@ -632,18 +629,20 @@ const sysRing = computed<{ items: SysItem[]; skills: string[] }>(() => {
 const sysGoods = computed<SysGood[]>(() => (((state.value as any)?.shopGoods || []) as SysGood[]));
 const sysGoodsSource = computed(() => String((state.value as any)?.shopSource || "builtin"));
 /**
- * ★ 售卖分类（cat）兜底补全
- *   商品清单的权威来源是 src/shop/*.ts（由设计文档生成，带 cat）。
- *   但 state.forgeGoods 可能来自「旧存档」或「宿主里缓存的旧 entry.js」，
- *   这些数据没有 cat → 售卖页只有「全部」有货、分类页全空。
- *   这里按 id → name 顺序回查本地清单补上，仍查不到再按名称关键词推导。
+ * ★ 锻造 / 炼丹面板的售卖清单：由地图集提供，插件不存
+ * ------------------------------------------------------------
+ * 数据链路：故事包 data/shop.*.json
+ *   → 事件脚本 ctx.story.readJson(...)
+ *   → ctx.ui.openShopPanel({ mode, tab, goods })
+ *   → 这里落到 forgePanelGoods / alchemyPanelGoods，面板只负责按 cat 分组渲染。
+ *
+ * ★ 为什么不再用插件内的常量清单：规范「严重违规事项」明确禁止把
+ *   地图集独有的业务写进插件。改货单 = 改故事包 JSON + 重打包。
  */
-const FORGE_CAT_BY_ID = new Map<string, string>((FORGE_GOODS_REF as any[]).map((g: any) => [String(g.id), String(g.cat)]));
-const FORGE_CAT_BY_NAME = new Map<string, string>((FORGE_GOODS_REF as any[]).map((g: any) => [String(g.name), String(g.cat)]));
-const ALCHEMY_CAT_BY_ID = new Map<string, string>((ALCHEMY_GOODS_REF as any[]).map((g: any) => [String(g.id), String(g.cat)]));
-const ALCHEMY_CAT_BY_NAME = new Map<string, string>((ALCHEMY_GOODS_REF as any[]).map((g: any) => [String(g.name), String(g.cat)]));
+const forgePanelGoods = ref<any[]>([]);
+const alchemyPanelGoods = ref<any[]>([]);
 
-/** 最后兜底：按名称/类型关键词推导分类（分类名必须与面板 CAT_ORDER 一致） */
+/** 最后兜底：按名称/类型关键词推导分类（仅用于地图集没写 cat 的商品） */
 function inferShopCat(name: string, kind: string, isAlchemy: boolean): string {
   const n = String(name || "");
   if (isAlchemy) {
@@ -661,25 +660,20 @@ function inferShopCat(name: string, kind: string, isAlchemy: boolean): string {
   return "材料";
 }
 
-/** 给商品列表补齐 cat（有 cat 的原样返回，避免无谓重建） */
-function withShopCat(list: any[], byId: Map<string, string>, byName: Map<string, string>, isAlchemy: boolean): any[] {
+/** 给商品列表补齐 cat（地图集自己给了 cat 就原样用；没给才按关键词猜） */
+function withShopCat(list: any[], isAlchemy: boolean): any[] {
   if (!Array.isArray(list) || !list.length) return [];
   if (list.every((g: any) => g && g.cat)) return list;
   return list.map((g: any) => {
     if (!g || g.cat) return g;
-    const cat = byId.get(String(g.id)) || byName.get(String(g.name)) || inferShopCat(g.name, g.kind, isAlchemy);
-    return { ...g, cat };
+    return { ...g, cat: inferShopCat(g.name, g.kind, isAlchemy) };
   });
 }
 
-/** ★ 锻造大师商品（149 种，来自 物品售卖.list.md） */
-const sysForgeGoods = computed<SysGood[]>(() =>
-  withShopCat(((state.value as any)?.forgeGoods || []) as any[], FORGE_CAT_BY_ID, FORGE_CAT_BY_NAME, false) as SysGood[],
-);
-/** ★ 炼丹炉商品（163 种，来自 物品售卖.炼丹.list.md） */
-const sysAlchemyGoods = computed<SysGood[]>(() =>
-  withShopCat(((state.value as any)?.alchemyGoods || []) as any[], ALCHEMY_CAT_BY_ID, ALCHEMY_CAT_BY_NAME, true) as SysGood[],
-);
+/** ★ 锻造大师商品（来自地图集故事包 data/shop.forge.json） */
+const sysForgeGoods = computed<SysGood[]>(() => withShopCat(forgePanelGoods.value, false) as SysGood[]);
+/** ★ 炼丹炉商品（来自地图集故事包 data/shop.alchemy.json） */
+const sysAlchemyGoods = computed<SysGood[]>(() => withShopCat(alchemyPanelGoods.value, true) as SysGood[]);
 
 function cardToRole(c: any, i: number): SysRole {
   const side = String(c?.side || "npc");
@@ -1302,7 +1296,24 @@ async function onSysBuyItem(good: SysGood, count = 1): Promise<void> {
     return;
   }
   sysNotice.value = `购买 ${good.name} ×${n}`;
-  const resp = await sendSysCmdAwait("sys_shop_buy", { id: good.id, name: good.name, count: n });
+  // ★ 把商品对象一起带上：地图集自带的货单（data/shop.*.json）只存在于故事包里，
+  //   插件后端没有权威副本可查，只能由前端把这一件商品原样回传落账。
+  const resp = await sendSysCmdAwait("sys_shop_buy", {
+    id: good.id,
+    name: good.name,
+    count: n,
+    good: {
+      id: good.id,
+      name: good.name,
+      price: good.price,
+      kind: good.kind,
+      rarity: good.rarity,
+      heal: good.heal,
+      desc: good.desc,
+      from: good.from,
+      cat: (good as any).cat,
+    },
+  });
   // 后端明确拒绝（"购买 xxx×1" 是成功文案）
   if (resp && !/^购买/.test(resp)) {
     await evNoticeOpen({ title: "❌ 购买失败", detail: resp });
@@ -6545,10 +6556,16 @@ const forgePanelOpen = ref(false);
 const forgePanelMode = ref<"forge" | "alchemy">("forge");
 const forgePanelTab = ref<string>("sell");
 
-/** 打开锻造/炼丹面板（事件脚本 ctx.ui.openShopPanel 调用） */
-function openForgeAlchemyPanel(mode: "forge" | "alchemy", tab = "sell"): void {
+/** 打开锻造/炼丹面板（事件脚本 ctx.ui.openShopPanel 调用）
+ *  goods：该地图集自带的售卖清单（来自故事包 data/shop.*.json）。
+ *         不传时沿用上一次的清单（打造/升级后自动回到面板不会把货架清空）。 */
+function openForgeAlchemyPanel(mode: "forge" | "alchemy", tab = "sell", goods?: any[]): void {
   forgePanelMode.value = mode;
   forgePanelTab.value = tab;
+  if (Array.isArray(goods)) {
+    if (mode === "forge") forgePanelGoods.value = goods;
+    else alchemyPanelGoods.value = goods;
+  }
   forgePanelOpen.value = true;
   showSystemPanel.value = false;
 }
@@ -7517,7 +7534,9 @@ onMounted(async () => {
     confirm: (opts) => evConfirmOpen(opts),
     select: (opts) => evSelectOpen(opts),
     prompt: (opts) => evPromptOpen(opts),
-    openShopPanel: (opts) => openForgeAlchemyPanel(opts.mode, opts.tab || "sell"),
+    openShopPanel: (opts) => openForgeAlchemyPanel(opts.mode, opts.tab || "sell", opts.goods as any[] | undefined),
+    /** ★ 故事包内任意 JSON 读取（地图集自带数据文件，插件不存业务数据） */
+    readStoryJson: (path: string) => readStoryJson(path),
     agentRun: (agentName, prompt, opts) => eventAgentRun(agentName, prompt, opts),
     bagList: async () => eventBagList(),
     bagRemove: async (name, count) => eventBagRemove(name, count),

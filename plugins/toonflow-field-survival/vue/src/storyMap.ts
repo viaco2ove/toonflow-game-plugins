@@ -460,6 +460,88 @@ export function getStoryMapEntry(path: string): any | null {
   return null;
 }
 
+/* ============================================================
+   ★ 故事包「任意 JSON」读取（地图集自带数据文件）
+   ------------------------------------------------------------
+   用途：地图集自己的业务数据（如 通天传授 的 data/shop.forge.json）必须随
+   故事包走，插件源码里不许硬编码。事件脚本用 ctx.story.readJson 读，
+   引擎侧由 App.vue 注入的 readStoryJson 钩子落到这里。
+
+   两条通道：
+     ① 安装后（iframe 内）：map_visual .tbg 里的同名 entry（zipTbg 已把 .json
+        解成对象）——与图集/地图同一份包，切故事自动隔离。
+     ② dev-host / standalone（无宿主包）：/story-data 中间件实时读盘，
+        先试 map_design（运行时故事目录），再试 map_design_pre（设计目录）。
+   结果按 path 缓存（同一局内数据不变；重打包需刷新页面）。
+   ============================================================ */
+const storyJsonCache = new Map<string, unknown>();
+
+/** 当前 dev 故事名（?story= → window.__STORY__）。与 mapConfig.resolveDevStoryName 同口径，
+ *  但不能从 mapConfig import（mapConfig 依赖本模块，会成环）。 */
+function devStoryName(): string {
+  try {
+    const sp = new URLSearchParams(location.search);
+    return sp.get("story") || (window as any).__STORY__ || "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 读故事包内任意 JSON（相对故事根目录，如 "data/shop.forge.json"）。
+ * 不存在 / 解析失败返回 null（调用方自行兜底，不要静默造数据）。
+ */
+export async function readStoryJson(path: string): Promise<unknown | null> {
+  const p = String(path || "").replace(/^\/+/, "");
+  if (!p) return null;
+  if (storyJsonCache.has(p)) return storyJsonCache.get(p);
+
+  // ① 安装后：故事视觉包（.tbg）里的条目
+  //   ★ 包可能还没加载（事件脚本在开局早期就被触发）→ 先补一次加载再查，
+  //     否则真实宿主里会误判成「没有数据」而给出空货架。
+  if (!bundle) {
+    try { await loadStoryMapBundle(); } catch { /* 无包时按 dev 通道继续 */ }
+  }
+  const entry = getStoryMapEntry(p);
+  if (entry != null) {
+    // zipTbg 已把 .json 解成对象；个别形态是字符串（未解包的 files 结构）
+    let val: unknown = entry;
+    if (typeof entry === "string") {
+      try { val = JSON.parse(entry); } catch { val = null; }
+    }
+    if (val != null) {
+      storyJsonCache.set(p, val);
+      return val;
+    }
+  }
+
+  // ② dev-host / 本地预览：/story-data 实时读盘（运行时目录优先，其次设计目录）
+  const story = devStoryName();
+  if (story) {
+    const enc = encodeURIComponent(story);
+    const bases = [
+      `/story-data/toonflow-field-survival/map_design/${enc}/`,
+      `/story-data/toonflow-field-survival/map_design_pre/${enc}/`,
+    ];
+    for (const base of bases) {
+      try {
+        const r = await fetch(base + p);
+        if (!r.ok) continue;
+        const val = await r.json();
+        storyJsonCache.set(p, val);
+        return val;
+      } catch { /* 换下一条前缀 */ }
+    }
+  }
+  console.warn(`[field-survival] 故事包内读不到 ${p}（故事：${story || "未知"}）`);
+  return null;
+}
+
+/** 清空故事包 JSON 缓存（重打包故事 / 切故事后调用） */
+export function clearStoryJsonCache(): void {
+  storyJsonCache.clear();
+}
+
 /** 便利：取 tileset 属性表（compiled_dawnlike.json） */
 export function getStoryTileset(): any | null {
   return bundle?.tileset ?? getStoryMapEntry("compiled_dawnlike.json");

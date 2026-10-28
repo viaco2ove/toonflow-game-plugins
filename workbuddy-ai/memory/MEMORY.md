@@ -121,13 +121,35 @@
 - 判别：curl localhost:3000/index.html 看有没有 `<script type="module" src="/src/main.ts">`。
 
 ## 锻造/炼丹/假人事件体系（2026-10-27~28 落地）
-- 商品数据管线：设计文档 md 表格 → `vue/scripts/gen-shop-goods.mjs` → `src/shop/{forge,alchemy}Goods.ts`
-  （锻造 149 种 / 炼丹 163 种，from=forge_master/alchemy_furnace）。改文档后重跑生成器。
+- **商品数据属于地图集，不在插件里**（2026-10-28 整改，规范「严重违规事项」）：
+  设计文档 md → `gen-shop-goods.mjs` → 故事包 `map_design/<故事>/data/shop.{forge,alchemy}.json`
+  → 事件脚本 `ctx.story.readJson(...)` → `ctx.ui.openShopPanel({mode,tab,goods})`
+  → App.vue `forgePanelGoods` ref → 面板按 cat 分组；购买走 `sys_shop_buy` 的 `params.good`（后端 `normalizeShopGoodParam` 校验 price>0）。
+  插件 `src/shop/` 已删除；**改货单只改故事包 + 重建 .tbg**，不动插件。
+- 通用 API：`ctx.story.readJson(path)`（安装后读 map_visual .tbg 条目 / dev 读 `/story-data`），
+  地图集任何自带配置都走它，别硬编码进插件。
+- ⚠️ 改故事目录内容后必须 `python -m toon_plugins plugin_session_data -i toonflow-field-survival -build <故事目录>`，
+  否则安装态读不到新文件（dev-host 由 vite 中间件自动重打）。
+- ⚠️ 事件 JSON 三份副本会悄悄落后于故事正本（曾 8 条 vs 13 条，缺 E50/E60/E70），
+  改完跑 `.cache/validate_events.mjs <故事>` 看「源与副本不一致」⚠ 并同步 `vue/public/events/maps` + `ui/events/maps`。
+- `_ctx.ts` 四份副本（插件侧 + 三故事 shared）必须 md5 一致，改接口先统一再改签名。
 - 交互链：proximity 事件（trigger.type=proximity + proximity.label/icon）→ HUD「🔨锻造」按钮
-  → 事件脚本只调 `ctx.ui.openShopPanel({mode,tab})` → ForgeAlchemyPanel 多标签面板
+  → 事件脚本调 `ctx.ui.openShopPanel` → ForgeAlchemyPanel 多标签面板
   （锻造4标签/炼丹3标签，售卖页直接购买）→ 面板操作走 `vue/src/forgeOps.ts`（依赖注入，调后端 cmd）。
 - 练习假人：地图属性 training_dummy=true → mapConfig 特批进 mobs（side=neutral 可被打）；
   脚本用 `ctx.npc.setField(uid, patch)`（引擎 entityRef 可变引用）改 side/hp；
   状态合并是「客户端权威优先」（mapnpc_* 与 mapmob_假人覆盖宿主同 id 实体）。
 - onHostState 合并若以宿主/mock 为准，事件脚本改的实体状态会被每 tick 回滚——
   本地权威实体必须客户端优先。
+
+### ★ 三条硬规矩（2026-10-28 实战踩出来的）
+1. **消耗类操作只能扣一次**：图纸/药方/材料，前端扣 + 后端扣 = 双重扣除（实测 2 张图纸打一件归零）。
+   统一由**后端**在命令 case 里 `removeFromPlayerBag`，前端只传参数（`blueprint`）。
+2. **三处必须同步**：`entry.ts`（真宿主）/ `mockHost.ts`（standalone、`--mode debug`）/ `vue/src`（前端逻辑）。
+   后端加的参数与新逻辑，mockHost 里通常有一套平行实现，漏改就只在 mock 模式下错。
+3. **mockHost 不回推 `state.response`** → 前端「等后端回执」的 `sendSysCmdAwait` 会等满超时。
+   mock 分支要显式 `(state as any).response = ...`（sys_chat 早有先例）。
+- 结果反馈分级：`showToast` 飘字（过程/次要）+ `evNotice` 模态框（购买/打造/升级/溶解的最终结果，必须点确认）。
+  判定成功要用后端 response，不能只看前端乐观值（金钱不足、物品不在背包只有后端知道）。
+- 用图纸打造：`blueprintProduct(图纸名)` 剥后缀得成品名（铁剑图纸→铁剑），`looksLikeBlueprint` 拦 AI 把图纸当产物；
+  前端 + entry.ts + mockHost 三处都要有这套兜底。

@@ -34,8 +34,6 @@ import {
   PROMPT_FIELD_SURVIVAL_SPRITE_GENER,
   getAgentSystemPrompt,
 } from "./src/agents/plugins.prompts";
-import { FORGE_GOODS as FORGE_GOODS_DATA } from "./src/shop/forgeGoods";
-import { ALCHEMY_GOODS as ALCHEMY_GOODS_DATA } from "./src/shop/alchemyGoods";
 
 interface PluginGameContext {
   pluginId: string;
@@ -561,9 +559,7 @@ export interface FieldSurvivalState {
   /** ★ v5：商城商品 */
   shopGoods?: ShopGood[];
   shopSource?: "agent" | "builtin";
-  /** ★ 锻造大师 / 炼丹炉商品（商城页签的子标签页用；from=forge_master / alchemy_furnace） */
-  forgeGoods?: ShopGood[];
-  alchemyGoods?: ShopGood[];  /** ★ v5：大地图节点（前端上报的关卡列表） */
+  /** ★ v5：大地图节点（前端上报的关卡列表） */
   mapNodes?: MapNode[];
   /** ★ v5：面板数据版本号（用于前端感知传送等一次性指令） */
   sysRevision?: number;
@@ -2458,14 +2454,14 @@ const BUILTIN_SHOP_GOODS: ShopGood[] = [
 ];
 
 /**
- * ★ 锻造大师 / 炼丹炉售卖商品
- *   数据来源：workshops/.../events/实体交互/物品售卖.list.md（149 种）
- *             workshops/.../events/实体交互/物品售卖.炼丹.list.md（163 种）
- *   由 vue/scripts/gen-shop-goods.mjs 从 markdown 表格自动生成
- *   → src/shop/forgeGoods.ts / src/shop/alchemyGoods.ts
+ * ★ 锻造大师 / 炼丹炉的售卖清单**不在插件里**。
+ *   清单属于各张地图集自己的业务数据（故事包 data/shop.*.json），
+ *   由事件脚本读取后经 ctx.ui.openShopPanel({ goods }) 交给前端渲染；
+ *   购买时前端把该件商品原样带回 sys_shop_buy（见下方 params.good 分支）。
+ *   插件只提供「面板 + 购买/打造/升级/溶解」这些通用能力。
+ *   规范依据：md/curr_design/toonflow-field-survival/maps_help/规范.md
+ *   「严重违规事项：把地图集独有的业务写到插件里」。
  */
-const FORGE_SHOP_GOODS: ShopGood[] = FORGE_GOODS_DATA;
-const ALCHEMY_SHOP_GOODS: ShopGood[] = ALCHEMY_GOODS_DATA;
 
 function normRarity(v: any): string {
   const r = String(v ?? "").toLowerCase().trim();
@@ -5018,13 +5014,28 @@ async function refreshShop(context: PluginGameContext | undefined, s: FieldSurvi
 }
 
 /**
- * ★ 锻造大师 / 炼丹炉的商品清单（供商城页签的子标签页直接购买）
- *   - from="forge_master"   → 🔨 锻造子标签
- *   - from="alchemy_furnace"→ 🔥 炼丹子标签
- *   这些商品始终在售（不随商城 agent 刷新而变），前端按 from 分组显示。
+ * ★ 把前端传上来的商品对象归一成 ShopGood（地图集自带货单的购买通道）。
+ *   货单在故事包里、由事件脚本下发，插件侧没有权威副本可查，
+ *   所以 sys_shop_buy 允许直接带 good 上来；这里只做字段校验与钳制，
+ *   价格必须是正整数（防止 undefined → 白拿）。
  */
-function forgeAlchemyGoods(): ShopGood[] {
-  return [...FORGE_SHOP_GOODS, ...ALCHEMY_SHOP_GOODS];
+function normalizeShopGoodParam(v: any): ShopGood | null {
+  if (!v || typeof v !== "object") return null;
+  const name = str(v.name).trim().slice(0, 40);
+  const price = Math.round(num(v.price, 0));
+  if (!name || !(price > 0)) return null;
+  const kind = KIND_LIST.indexOf(str(v.kind)) >= 0 ? str(v.kind) : guessKind(name);
+  return {
+    id: str(v.id) || `story_${name}`,
+    name,
+    price,
+    kind,
+    rarity: normRarity(v.rarity),
+    heal: Math.max(0, Math.round(num(v.heal, defaultHeal(name, kind)))),
+    desc: str(v.desc).slice(0, 120),
+    from: str(v.from) || "story",
+    cat: str(v.cat) || undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -5327,9 +5338,6 @@ export async function handle_action(
       ensureNpcCards(s, s.levelName || "");
       // ★ game.md 商城：开局即建货源（商城 agent 故事物资 + 插件自带物资），不等第一次 tick
       if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
-      // ★ 锻造/炼丹面板的商品清单（独立于商城货源，始终在售）
-      s.forgeGoods = FORGE_SHOP_GOODS;
-      s.alchemyGoods = ALCHEMY_SHOP_GOODS;
       s.writeback = null;
       s.phase = "playing";
       s.tick = 0;
@@ -5499,13 +5507,6 @@ export async function handle_action(
       if (!s.ring) s.ring = { items: [], skills: [] };
       if (!Array.isArray(s.partyIds)) s.partyIds = [];
       if (!s.shopGoods || !s.shopGoods.length) await refreshShop(context, s);
-      // ★ 锻造/炼丹面板的商品清单（独立于商城货源，始终在售）
-      //   ★ 2026-10-28：必须【始终】用常量覆盖，不能只在「为空」时补。
-      //     旧存档里存的是没有 cat（售卖分类）字段的老清单，若沿用会让
-      //     售卖页的分类子标签全部为空（只有「全部」有货）。
-      //     这份清单是固定配置、不随玩家变化，覆盖无副作用。
-      s.forgeGoods = FORGE_SHOP_GOODS;
-      s.alchemyGoods = ALCHEMY_SHOP_GOODS;
       ensureNpcCards(s, s.levelName || "");
       await persistSys(context, s);
       return okResp("");
@@ -6296,7 +6297,15 @@ export async function handle_action(
     case "sys_shop_buy": {
       const id = str(params?.id);
       const ask = Math.max(1, Math.round(num(params?.count, 1)));
-      const good = (s.shopGoods || []).find((g) => g.id === id) || BUILTIN_SHOP_GOODS.find((g) => g.id === id) || FORGE_SHOP_GOODS.find((g) => g.id === id) || ALCHEMY_SHOP_GOODS.find((g) => g.id === id);
+      // ★ 货源查找顺序：
+      //   ① 本次会话的商城货源（refreshShop 写入的 shopGoods）
+      //   ② 插件自带常备物资（保证商城 agent 挂掉也能买到药）
+      //   ③ ★ 前端随命令带回的 good —— 地图集自带货单（锻造大师/炼丹炉等）
+      //      货单在故事包里，插件侧没有权威副本，只能由前端把该件商品原样带上来。
+      const good =
+        (s.shopGoods || []).find((g) => g.id === id)
+        || BUILTIN_SHOP_GOODS.find((g) => g.id === id)
+        || normalizeShopGoodParam(params?.good);
       if (!good) return okResp("商品不存在");
       const card = (s.playerCard || {}) as Record<string, any>;
       const money = Math.round(num(card.money, 0));

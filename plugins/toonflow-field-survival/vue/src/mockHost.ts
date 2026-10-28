@@ -20,9 +20,8 @@ import {
   snapEnemySpawn,
   type WalkGrid,
 } from "./collision";
-// ★ 锻造/炼丹面板的商品清单（与 entry.ts 同源，从设计文档生成）
-import { FORGE_GOODS } from "../../src/shop/forgeGoods";
-import { ALCHEMY_GOODS } from "../../src/shop/alchemyGoods";
+// ★ 图纸 → 成品解析（用图纸打造时，产物必须是图纸记载的成品，不能是图纸本身）
+import { blueprintProduct, looksLikeBlueprint } from "./eventScripts/forgeCommon";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
 interface TestDataBundle {
@@ -982,9 +981,9 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
       { id: "a_heal_powder", name: "止血散", price: 15, kind: "consumable", rarity: "common", heal: 20, desc: "恢复 20 点生命", from: "alchemy_furnace" },
       { id: "a_big_pill", name: "大还丹", price: 160, kind: "consumable", rarity: "rare", heal: 200, desc: "恢复 200 点生命", from: "alchemy_furnace" },
     ],
-    // ★ 锻造/炼丹面板的完整商品清单（149 + 163 种，来自设计文档生成的 src/shop/*.ts）
-    forgeGoods: FORGE_GOODS,
-    alchemyGoods: ALCHEMY_GOODS,
+    // ★ 锻造/炼丹面板的售卖清单不在这里：它属于地图集的故事包（data/shop.*.json），
+    //   由事件脚本 ctx.story.readJson 读取后经 openShopPanel({ goods }) 交给面板，
+    //   购买时随 sys_shop_buy 的 params.good 回传（见下方 case）。
     skillPage: 0,
     itemPage: 0,
     map: null,
@@ -1776,13 +1775,12 @@ function install(): void {
       }
       if (action === "sys_shop_buy") {
         // ★ 对齐 entry.js case "sys_shop_buy":扣 money（playerCard）+ 入背包（ItemSlot + 参数卡条目）
-        //   ★ 锻造/炼丹面板的商品在 state.forgeGoods / state.alchemyGoods 里，
-        //   不在 shopGoods（那是商城货源）→ 三个来源都要查。
+        //   货源：① 商城货源 shopGoods ② 前端随命令带回的 good（地图集自带货单）
         const good = ((state as any).shopGoods || []).find((g: any) => g.id === params?.id)
-          || ((state as any).forgeGoods || []).find((g: any) => g.id === params?.id)
-          || ((state as any).alchemyGoods || []).find((g: any) => g.id === params?.id);
+          || (params?.good && typeof params.good === "object" && (params.good as any).name ? params.good : null);
         if (!good) {
           state.events.push("[mock] 商品不存在");
+          (state as any).response = "商品不存在";
           push();
           return;
         }
@@ -1792,6 +1790,7 @@ function install(): void {
         const cost = Math.round(Number(good.price) || 0) * ask;
         if (money < cost) {
           state.events.push(`[mock] 金钱不足：需要 ${cost}，现有 ${money}`);
+          (state as any).response = `金钱不足：需要 ${cost}，现有 ${money}`;
           push();
           return;
         }
@@ -1810,6 +1809,8 @@ function install(): void {
         }
         arr.push(base > 1 ? `${good.name}×${base}` : good.name);
         state.events.push(`[mock] 购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
+        // ★ 回执：前端 sendSysCmdAwait 靠它判断成功（否则要等 8 秒超时）
+        (state as any).response = `购买 ${good.name}×${ask}`;
         push();
         return;
       }
@@ -1833,6 +1834,7 @@ function install(): void {
         }
         arr.push(base > 1 ? `${nm}×${base}` : nm);
         state.events.push(`[mock] 获得 ${nm}×${ask}`);
+        (state as any).response = `获得 ${nm}×${ask}`;
         push();
         return;
       }
@@ -1844,6 +1846,7 @@ function install(): void {
         const money = Math.round(Number(pc.money) || 0);
         if (money < 10) {
           state.events.push("[mock] 金钱不足：需要 10 金钱");
+          (state as any).response = "金钱不足：打造需要 10 金钱";
           push();
           return;
         }
@@ -1862,11 +1865,16 @@ function install(): void {
         const names = isForge
           ? ["粗制剑", "精锻刀", "寒铁枪", "疾风弓", "烈焰杖", "雷霆甲", "暗影靴", "圣光盾", "陨星戒指", "龙骨护符"]
           : ["九转丹", "清心丸", "回春散", "凝神膏", "聚气露", "还魂液", "霸王丹", "金刚丸", "回天丹", "悟道丹"];
-        const nm = aiObj?.name
+        // ★ 图纸：使用后消耗 1 张，产物必须是图纸记载的成品（对齐 entry.ts）
+        const blueprintName = String(params?.blueprint || "").trim().slice(0, 20);
+        let nm = aiObj?.name
           ? String(aiObj.name).slice(0, 20)
           : (input
             ? (isForge ? input.slice(0, 12) : (input.slice(0, 10) + (/[丹丸散膏露液]/.test(input) ? "" : "丹")))
             : names[Math.floor(Math.random() * names.length)]);
+        if (looksLikeBlueprint(nm)) {
+          nm = blueprintProduct(nm) || blueprintProduct(blueprintName) || (isForge ? "无名器物" : "无名丹药");
+        }
         const heal = isForge ? 0 : Math.max(0, Math.round(Number(aiObj?.heal) || (20 + Math.floor(Math.random() * 60))));
         pc.money = money - 10;
         const slot = (state.items || []).find((x: any) => x.name === nm);
@@ -1887,7 +1895,23 @@ function install(): void {
           arr.splice(old, 1);
         }
         arr.push(base > 1 ? `${nm}×${base}` : nm);
-        state.events.push(`[mock] ${isForge ? "锻造" : "炼丹"}获得 ${nm}`);
+        // ★ 图纸/药方是消耗品：成功后扣 1 张（前端不再扣，避免双重扣除）
+        if (blueprintName) {
+          const idxBp = arr.findIndex((x) => clean(x) === clean(blueprintName));
+          if (idxBp >= 0) {
+            const mBp = arr[idxBp].match(/[×xX*]\s*(\d+)/);
+            const haveBp = mBp ? Number(mBp[1]) : 1;
+            if (haveBp > 1) arr[idxBp] = `${blueprintName}×${haveBp - 1}`;
+            else arr.splice(idxBp, 1);
+          }
+          const slotBp = (state.items || []).find((x: any) => x.name === blueprintName);
+          if (slotBp) {
+            slotBp.count -= 1;
+            if (slotBp.count <= 0) (state.items || []).splice((state.items || []).indexOf(slotBp), 1);
+          }
+        }
+        state.events.push(`[mock] ${isForge ? "锻造" : "炼丹"}获得 ${nm}${blueprintName ? `（消耗图纸「${blueprintName}」）` : ""}`);
+        (state as any).response = `${isForge ? "锻造" : "炼丹"}完成！获得「${nm}」`;
         push();
         return;
       }
@@ -1914,6 +1938,7 @@ function install(): void {
           if (slot.count <= 0) (state.items || []).splice((state.items || []).indexOf(slot), 1);
         }
         state.events.push(`[mock] 失去 ${rmName}×${rmCount}`);
+        (state as any).response = `已移除 ${rmName}×${rmCount}`;
         push();
         return;
       }
@@ -1959,6 +1984,7 @@ function install(): void {
         else (state.items || []).push({ name: newName, count: 1, heal: 0, mp: 0, type: "atk" });
         arr.push(newName);
         state.events.push(`[mock] 升级装备：${oldName} → ${newName}`);
+        (state as any).response = `升级完成！获得「${newName}」`;
         push();
         return;
       }
@@ -2009,6 +2035,7 @@ function install(): void {
           given.push(`${k}×${n}`);
         }
         state.events.push(`[mock] 溶解 ${dName} → ${given.join("、") || "无返还"}`);
+        (state as any).response = `溶解完成，获得 ${given.join("、") || "无返还"}`;
         push();
         return;
       }

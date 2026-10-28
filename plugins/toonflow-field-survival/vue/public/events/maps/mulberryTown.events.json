@@ -5,90 +5,286 @@
     {
       "id": "E01_bind_system",
       "comment": "phase_1 开局：进图自动触发系统绑定过场",
-      "trigger": { "type": "enter_map" },
+      "trigger": {
+        "type": "enter_map"
+      },
       "conditions": [
-        { "type": "flag_check", "key": "phase_1_done", "op": "missing" },
-        { "type": "flag_check", "key": "phase_1_active", "op": "missing" }
+        {
+          "type": "flag_check",
+          "key": "phase_1_done",
+          "op": "missing"
+        },
+        {
+          "type": "flag_check",
+          "key": "phase_1_active",
+          "op": "missing"
+        }
       ],
       "actions": [
-        { "type": "run_script", "script": "E01_bind_system" }
+        {
+          "type": "run_script",
+          "script": "E01_bind_system"
+        }
       ]
     },
     {
       "id": "E02_broom_pickup",
       "comment": "phase_1 节拍1「扫帚与石阶」：进入祖师堂区域即拾起扫帚（扫帚是装饰物无实体，故用区域触发）",
-      "trigger": { "type": "area_enter", "zone": "祖师堂" },
+      "trigger": {
+        "type": "area_enter",
+        "zone": "祖师堂"
+      },
       "conditions": [
-        { "type": "flag_check", "key": "phase_1_active", "value": true },
-        { "type": "flag_check", "key": "broom_picked", "op": "missing" }
+        {
+          "type": "flag_check",
+          "key": "phase_1_active",
+          "value": true
+        },
+        {
+          "type": "flag_check",
+          "key": "broom_picked",
+          "op": "missing"
+        }
       ],
       "actions": [
-        { "type": "run_script", "script": "E02_broom_pickup" }
+        {
+          "type": "run_script",
+          "script": "E02_broom_pickup"
+        }
       ]
     },
     {
       "id": "E03_xuanchen_bainian",
       "comment": "phase_1 节拍2「系统绑定完成→讨个说法」：与玄尘长老对话完成拜师",
-      "trigger": { "type": "interact", "uid": "225" },
+      "trigger": {
+        "type": "interact",
+        "uid": "225"
+      },
       "conditions": [
-        { "type": "flag_check", "key": "phase_1_active", "value": true },
-        { "type": "flag_check", "key": "broom_picked", "value": true }
+        {
+          "type": "flag_check",
+          "key": "phase_1_active",
+          "value": true
+        },
+        {
+          "type": "flag_check",
+          "key": "broom_picked",
+          "value": true
+        }
       ],
       "actions": [
-        { "type": "run_script", "script": "E03_xuanchen_bainian" }
+        {
+          "type": "run_script",
+          "script": "E03_xuanchen_bainian"
+        }
       ]
     },
     {
       "id": "E05_open_forest",
       "comment": "phase_1 收尾：拜师后山门牌坊解锁 → 传青云竹海",
-      "trigger": { "type": "interact", "uid": "219" },
+      "trigger": {
+        "type": "interact",
+        "uid": "219"
+      },
       "conditions": [
-        { "type": "flag_check", "key": "phase_1_done", "value": true }
+        {
+          "type": "flag_check",
+          "key": "phase_1_done",
+          "value": true
+        }
       ],
       "actions": [
-        { "type": "toast", "text": "【收徒系统】山门已开，可前往青云竹海历练。", "color": "gold" },
-        { "type": "teleport", "map": "Mulberry Forest", "x": 1, "y": 25 }
+        {
+          "type": "toast",
+          "text": "【收徒系统】山门已开，可前往青云竹海历练。",
+          "color": "gold"
+        },
+        {
+          "type": "teleport",
+          "map": "Mulberry Forest",
+          "x": 1,
+          "y": 25
+        }
       ]
     },
     {
       "id": "E10_fishing_at",
       "comment": "走进喷水池：弹窗确认垂钓，按概率得鱼或空钩",
-      "trigger": { "type": "area_enter", "zone": "喷水池", "ai": { "gather": "fish" } },
+      "trigger": {
+        "type": "area_enter",
+        "zone": "喷水池",
+        "ai": {
+          "gather": "fish"
+        }
+      },
       "repeat": true,
       "actions": [
-        { "type": "run_script", "script": "E10_fishing_at" }
+        {
+          "type": "run_script",
+          "script": "E10_fishing_at"
+        }
       ]
     },
     {
       "id": "E11_herb_at",
       "comment": "走进农田：弹窗确认采药，按概率得药材或空手",
-      "trigger": { "type": "area_enter", "zone": "农田", "ai": { "gather": "herb" } },
+      "trigger": {
+        "type": "area_enter",
+        "zone": "农田",
+        "ai": {
+          "gather": "herb"
+        }
+      },
       "repeat": true,
       "actions": [
-        { "type": "run_script", "script": "E11_herb_at" }
+        {
+          "type": "run_script",
+          "script": "E11_herb_at"
+        }
       ]
     },
     {
       "id": "E12_wood_at",
       "comment": "走到木材堆：弹窗确认取木，按概率得松木/沉香/朽木",
-      "trigger": { "type": "area_enter", "zone": "木材堆", "ai": { "gather": "wood" } },
+      "trigger": {
+        "type": "area_enter",
+        "zone": "木材堆",
+        "ai": {
+          "gather": "wood"
+        }
+      },
       "repeat": true,
       "actions": [
-        { "type": "run_script", "script": "E12_wood_at" }
+        {
+          "type": "run_script",
+          "script": "E12_wood_at"
+        }
       ]
     },
     {
-      "id": "E13_quest_done_advance",
-      "comment": "★ 任务完成 → 剧情推进（通用示范）：任何带 flags.done 的委托交付后（q06_done 由任务板交付时写入 player_flags），用 flag_check 串起后续剧情节拍",
-      "trigger": { "type": "enter_map" },
-      "conditions": [
-        { "type": "flag_check", "key": "q06_done", "op": "exists" },
-        { "type": "flag_check", "key": "quest_advance_seen", "op": "missing" }
-      ],
+      "id": "E50_forge_master",
+      "comment": "走近锻造大师：走进即弹「锻造」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "256",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "锻造",
+        "icon": "🔨",
+        "hint": "走近锻造大师"
+      },
+      "repeat": true,
       "actions": [
-        { "type": "toast", "text": "【委托完成】你带回的消息被人认真记下了。", "color": "gold" },
-        { "type": "event_log", "text": "委托完成 → 剧情推进" },
-        { "type": "set_flag", "key": "quest_advance_seen", "value": true }
+        {
+          "type": "run_script",
+          "script": "E50_forge_master"
+        }
+      ]
+    },
+    {
+      "id": "E60_alchemy_furnace",
+      "comment": "走近炼丹炉：走进即弹「炼丹」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "257",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "炼丹",
+        "icon": "🔥",
+        "hint": "走近炼丹炉"
+      },
+      "repeat": true,
+      "actions": [
+        {
+          "type": "run_script",
+          "script": "E60_alchemy_furnace"
+        }
+      ]
+    },
+    {
+      "id": "E70_dummy_1",
+      "comment": "走近练习假人1：走进即弹「对打」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "251",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "对打",
+        "icon": "⚔",
+        "hint": "走近练习假人1"
+      },
+      "repeat": true,
+      "actions": [
+        {
+          "type": "run_script",
+          "script": "E70_training_dummy"
+        }
+      ]
+    },
+    {
+      "id": "E70_dummy_2",
+      "comment": "走近练习假人2：走进即弹「对打」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "252",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "对打",
+        "icon": "⚔",
+        "hint": "走近练习假人2"
+      },
+      "repeat": true,
+      "actions": [
+        {
+          "type": "run_script",
+          "script": "E70_training_dummy"
+        }
+      ]
+    },
+    {
+      "id": "E70_dummy_3",
+      "comment": "走近练习假人3：走进即弹「对打」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "253",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "对打",
+        "icon": "⚔",
+        "hint": "走近练习假人3"
+      },
+      "repeat": true,
+      "actions": [
+        {
+          "type": "run_script",
+          "script": "E70_training_dummy"
+        }
+      ]
+    },
+    {
+      "id": "E70_dummy_4",
+      "comment": "走近练习假人4：走进即弹「对打」按钮",
+      "trigger": {
+        "type": "proximity",
+        "uid": "254",
+        "radius": 2.8
+      },
+      "proximity": {
+        "label": "对打",
+        "icon": "⚔",
+        "hint": "走近练习假人4"
+      },
+      "repeat": true,
+      "actions": [
+        {
+          "type": "run_script",
+          "script": "E70_training_dummy"
+        }
       ]
     }
   ]

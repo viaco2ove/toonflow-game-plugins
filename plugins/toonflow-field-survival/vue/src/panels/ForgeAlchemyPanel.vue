@@ -185,7 +185,7 @@ function buy(g: any): void {
           <button class="fap-buy" :disabled="gold < g.price" @click="buy(g)">购买</button>
         </div>
       </div>
-      <div v-if="!sellGoods.length" class="fap-empty">暂无商品。</div>
+      <div v-if="!sellGoods.length" class="fap-empty">暂无商品（该地图集未提供货单 data/shop.*.json）。</div>
     </div>
 
     <!-- ② 物品打造 / 开始炼丹（交给脚本逻辑） -->

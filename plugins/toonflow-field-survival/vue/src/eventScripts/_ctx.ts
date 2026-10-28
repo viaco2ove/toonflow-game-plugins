@@ -23,6 +23,23 @@ export interface Entity {
   [key: string]: unknown;
 }
 
+/** ★ 售卖面板的一件商品（由地图集的故事包 data/shop.*.json 提供）
+ *  cat 是售卖页的子标签分类（材料/武器/防具/饰品/图纸/技能/丹药/药草/药方…），
+ *  由地图集自己决定取值，插件只按 cat 分组渲染。 */
+export interface ShopGood {
+  id: string;
+  name: string;
+  price: number;
+  kind: "consumable" | "material" | "equipment" | "skill_book" | "quest";
+  rarity: "common" | "fine" | "rare" | "epic" | "legend";
+  heal?: number;
+  desc?: string;
+  /** 货源标记（forge_master / alchemy_furnace …，地图集自定义） */
+  from?: string;
+  /** 售卖子标签分类 */
+  cat?: string;
+}
+
 /** 事件脚本上下文 */
 export interface Ctx {
   /** 玩家实体引用（只读快照，改数值用 save/level API） */
@@ -82,10 +99,21 @@ export interface Ctx {
      *  ★ ctx.actor.ai 时引擎自动 resolve(空串)，不弹窗打断玩家。 */
     prompt(opts: { title: string; detail?: string; placeholder?: string; defaultValue?: string }): Promise<string | null>;
     /** ★ 打开锻造/炼丹多标签面板。
-     *  mode: "forge"（锻造：售卖/打造/升级/溶解）| "alchemy"（炼丹：售卖/炼丹/溶解）
-     *  tab:  初始标签（默认 "sell"）
+     *  mode:  "forge"（锻造：售卖/打造/升级/溶解）| "alchemy"（炼丹：售卖/炼丹/溶解）
+     *  tab:   初始标签（默认 "sell"）
+     *  goods: ★ 售卖清单——由地图集自己提供（故事包 data/shop.*.json），
+     *         插件本体不存任何商品数据，只负责渲染与购买落账。
+     *         省略时该面板售卖页为空（不会去插件里找兜底数据）。
      *  ★ ctx.actor.ai 时自动忽略（AI 不开面板）。 */
-    openShopPanel(opts: { mode: "forge" | "alchemy"; tab?: string }): void;
+    openShopPanel(opts: { mode: "forge" | "alchemy"; tab?: string; goods?: ShopGood[] }): void;
+  };
+
+  /** ★ 故事包只读访问（安装后读 map_visual .tbg 内的条目；dev 读 /story-data）
+   *  路径相对故事根目录，例："data/shop.forge.json"、"maps/mulberryTown.json"。
+   *  ★ 地图集自己的配置/数据一律从这里读，不要塞进插件源码。 */
+  story: {
+    /** 读故事包内任意 JSON；不存在 / 解析失败返回 null（脚本自行兜底）。 */
+    readJson<T = unknown>(path: string): Promise<T | null>;
   };
 
   /** ★ AI 生成（对接大模型）

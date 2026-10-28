@@ -49,8 +49,12 @@ export interface EventHooks {
   select(opts: { title: string; detail?: string; options: Array<{ label: string; value: string; desc?: string }> }): Promise<string | null>;
   /** ★ 文本输入：resolve(输入文本)，取消 resolve(null) */
   prompt(opts: { title: string; detail?: string; placeholder?: string; defaultValue?: string }): Promise<string | null>;
-  /** ★ 打开锻造/炼丹多标签面板 */
-  openShopPanel?(opts: { mode: "forge" | "alchemy"; tab?: string }): void;
+  /** ★ 打开锻造/炼丹多标签面板（goods = 地图集自带的售卖清单） */
+  openShopPanel?(opts: { mode: "forge" | "alchemy"; tab?: string; goods?: Array<Record<string, unknown>> }): void;
+  /** ★ 读故事包内任意 JSON（相对故事根目录，如 "data/shop.forge.json"）。
+   *  安装后读 map_visual .tbg 内的条目；dev-host 读 /story-data 实时文件。
+   *  地图集自己的配置/数据必须走这条通道，插件源码里不放业务数据。 */
+  readStoryJson?(path: string): Promise<unknown | null>;
   /** ★ AI agent 调用：返回纯文本（通常是 JSON），失败返回空串 */
   agentRun(agentName: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string>;
   /** ★ 读取玩家背包（返回 Promise） */
@@ -259,6 +263,18 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR): Ctx {
           return;
         }
         hooks?.openShopPanel?.(opts);
+      },
+    },
+    // ★ 故事包只读访问：地图集自己的数据（data/*.json）从这里读，插件不存业务数据
+    story: {
+      readJson: async <T,>(path: string): Promise<T | null> => {
+        if (!hooks?.readStoryJson) return null;
+        try {
+          return (await hooks.readStoryJson(path)) as T | null;
+        } catch (e) {
+          hooks.eventLog(`读取故事包 ${path} 失败：${String((e as any)?.message || e)}`);
+          return null;
+        }
       },
     },
     // ★ AI 生成（对接大模型）

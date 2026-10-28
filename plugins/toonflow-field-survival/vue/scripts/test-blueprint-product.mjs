@@ -141,7 +141,11 @@ const appSrc = readFileSync(join(vueSrc, "App.vue"), "utf-8");
 const entrySrc = readFileSync(join(vueSrc, "..", "..", "entry.ts"), "utf-8");
 
 check("forgeOps 用 blueprintProduct 解析产物", forgeOps.includes("input = blueprintProduct(picked)"));
-check("forgeOps 打造成功后消耗图纸", forgeOps.includes("if (blueprint) await deps.bagRemove(blueprint, 1)"));
+// 图纸消耗只由后端做（前端再扣一次 = 双重扣除，实测 2 张图纸打一件归零）
+check("前端不重复扣图纸（交给后端）", !forgeOps.includes("await deps.bagRemove(blueprint, 1)"));
+check("blueprint 参数传给后端", forgeOps.includes("blueprint,"));
+check("后端 sys_forge_create 扣图纸", entrySrc.includes("if (fBlueprint) removeFromPlayerBag(s, fBlueprint, 1)"));
+check("mockHost 也扣图纸（standalone 调试）", readFileSync(join(vueSrc, "mockHost.ts"), "utf-8").includes("blueprintName"));
 check("forgeOps 拦 AI 返回图纸名", forgeOps.includes("if (looksLikeBlueprint(final.name))"));
 check("提示词含图纸约束", commonSrc.includes("【按图纸制造】") && commonSrc.includes("【按药方炼制】"));
 check("后端有 blueprintProductName", entrySrc.includes("function blueprintProductName("));

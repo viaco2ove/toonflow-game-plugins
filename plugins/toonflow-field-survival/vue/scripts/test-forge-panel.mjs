@@ -17,28 +17,37 @@ function check(name, cond, detail) {
   else { fail++; console.log(`  ✗ ${name}${detail ? " → " + detail : ""}`); }
 }
 
-/* 1. 商品数据文件（从设计文档生成） */
-console.log("\n=== 商品数据（自动生成） ===");
-const forgeTs = readFileSync(join(pluginRoot, "src/shop/forgeGoods.ts"), "utf-8");
-const alchemyTs = readFileSync(join(pluginRoot, "src/shop/alchemyGoods.ts"), "utf-8");
-const countGoods = (ts) => (ts.match(/id: "/g) || []).length;
-check("锻造商品 ≥140 种（文档 149）", countGoods(forgeTs) >= 140, String(countGoods(forgeTs)));
-check("炼丹商品 ≥160 种（文档 163）", countGoods(alchemyTs) >= 160, String(countGoods(alchemyTs)));
+/* 1. 商品数据文件（★ 属于地图集的故事包，插件本体不许存） */
+console.log("\n=== 商品数据（地图集故事包 data/shop.*.json） ===");
+const storyDataDir = join(repoRoot, "workshops/toonflow-field-survival/map_design/通天传授-收徒系统/data");
+const forgeJsonPath = join(storyDataDir, "shop.forge.json");
+const alchemyJsonPath = join(storyDataDir, "shop.alchemy.json");
+check("锻造货单在故事包 data/shop.forge.json", existsSync(forgeJsonPath));
+check("炼丹货单在故事包 data/shop.alchemy.json", existsSync(alchemyJsonPath));
+const forgeJson = existsSync(forgeJsonPath) ? JSON.parse(readFileSync(forgeJsonPath, "utf-8")) : { goods: [] };
+const alchemyJson = existsSync(alchemyJsonPath) ? JSON.parse(readFileSync(alchemyJsonPath, "utf-8")) : { goods: [] };
+const forgeGoodsArr = Array.isArray(forgeJson) ? forgeJson : forgeJson.goods || [];
+const alchemyGoodsArr = Array.isArray(alchemyJson) ? alchemyJson : alchemyJson.goods || [];
+check("锻造商品 ≥140 种（文档 149）", forgeGoodsArr.length >= 140, String(forgeGoodsArr.length));
+check("炼丹商品 ≥160 种（文档 163）", alchemyGoodsArr.length >= 160, String(alchemyGoodsArr.length));
 // ★ 售卖子标签页：cat 分类字段
-const catCount = (ts) => (ts.match(/cat: "/g) || []).length;
-check("锻造商品全部带 cat 分类", catCount(forgeTs) >= 140, String(catCount(forgeTs)));
-check("炼丹商品全部带 cat 分类", catCount(alchemyTs) >= 160, String(catCount(alchemyTs)));
+check("锻造商品全部带 cat 分类", forgeGoodsArr.every((g) => !!g.cat), `${forgeGoodsArr.filter((g) => !g.cat).length} 件缺 cat`);
+check("炼丹商品全部带 cat 分类", alchemyGoodsArr.every((g) => !!g.cat), `${alchemyGoodsArr.filter((g) => !g.cat).length} 件缺 cat`);
+const forgeCats = new Set(forgeGoodsArr.map((g) => g.cat));
+const alchemyCats = new Set(alchemyGoodsArr.map((g) => g.cat));
 check("锻造 7 分类齐全（材料/武器/防具/饰品/图纸/技能/特殊）",
-  ["材料", "武器", "防具", "饰品", "图纸", "技能", "特殊"].every((c) => forgeTs.includes(`cat: "${c}"`)));
+  ["材料", "武器", "防具", "饰品", "图纸", "技能", "特殊"].every((c) => forgeCats.has(c)), [...forgeCats].join("/"));
 check("炼丹 7 分类齐全（药草/辅料/材料/丹药/药方/器具/套装）",
-  ["药草", "辅料", "材料", "丹药", "药方", "器具", "套装"].every((c) => alchemyTs.includes(`cat: "${c}"`)));
-check("锻造 from=forge_master", forgeTs.includes('from: "forge_master"'));
-check("炼丹 from=alchemy_furnace", alchemyTs.includes('from: "alchemy_furnace"'));
-check("含铁剑（锻造代表）", forgeTs.includes("铁剑"));
-check("含天问剑（legend 品）", forgeTs.includes("天问剑"));
-check("含人参（炼丹代表）", alchemyTs.includes("人参"));
-check("含不死药（legend 品）", alchemyTs.includes("不死药"));
+  ["药草", "辅料", "材料", "丹药", "药方", "器具", "套装"].every((c) => alchemyCats.has(c)), [...alchemyCats].join("/"));
+check("锻造 from=forge_master", forgeGoodsArr.every((g) => g.from === "forge_master"));
+check("炼丹 from=alchemy_furnace", alchemyGoodsArr.every((g) => g.from === "alchemy_furnace"));
+check("含铁剑（锻造代表）", forgeGoodsArr.some((g) => g.name.includes("铁剑")));
+check("含天问剑（legend 品）", forgeGoodsArr.some((g) => g.name.includes("天问剑")));
+check("含人参（炼丹代表）", alchemyGoodsArr.some((g) => g.name.includes("人参")));
+check("含不死药（legend 品）", alchemyGoodsArr.some((g) => g.name.includes("不死药")));
 check("生成脚本存在", existsSync(join(pluginRoot, "vue/scripts/gen-shop-goods.mjs")));
+// ★ 违规回归：插件本体不许再出现商品数据文件
+check("插件内无 src/shop/ 商品数据", !existsSync(join(pluginRoot, "src/shop/forgeGoods.ts")) && !existsSync(join(pluginRoot, "src/shop/alchemyGoods.ts")));
 
 /* 2. 多标签面板组件 */
 console.log("\n=== ForgeAlchemyPanel 组件 ===");
@@ -83,33 +92,42 @@ check("opDissolve 溶解（装备/丹药双模式）", ops.includes("isPill"));
 check("AI 回退随机兜底", ops.includes("randomForgeItem") && ops.includes("randomPill"));
 check("锻造扣 10 金", ops.includes("FORGE_COST = 10"));
 
-/* 5. 事件脚本（打开面板） */
+/* 5. 事件脚本（读故事包货单 + 打开面板） */
 console.log("\n=== 事件脚本 ===");
 const forgeScript = readFileSync(join(vueSrc, "eventScripts/E50_forge_master.ts"), "utf-8");
 const alchemyScript = readFileSync(join(vueSrc, "eventScripts/E60_alchemy_furnace.ts"), "utf-8");
-check("锻造脚本打开面板(mode=forge)", forgeScript.includes('openShopPanel({ mode: "forge", tab: "sell" })'));
-check("炼丹脚本打开面板(mode=alchemy)", alchemyScript.includes('openShopPanel({ mode: "alchemy", tab: "sell" })'));
+check("锻造脚本读 data/shop.forge.json", forgeScript.includes('readJson<') && forgeScript.includes('"data/shop.forge.json"'));
+check("炼丹脚本读 data/shop.alchemy.json", alchemyScript.includes('readJson<') && alchemyScript.includes('"data/shop.alchemy.json"'));
+check("锻造脚本打开面板(mode=forge)并带货单", forgeScript.includes('mode: "forge"') && forgeScript.includes("goods"));
+check("炼丹脚本打开面板(mode=alchemy)并带货单", alchemyScript.includes('mode: "alchemy"') && alchemyScript.includes("goods"));
 
-/* 6. entry.ts / mockHost 数据接入 */
+/* 6. entry.ts / mockHost 数据接入（★ 插件侧不留商品数据） */
 console.log("\n=== 数据接入 ===");
 const entry = readFileSync(join(pluginRoot, "entry.ts"), "utf-8");
-check("entry import FORGE_GOODS", entry.includes('from "./src/shop/forgeGoods"'));
-check("entry import ALCHEMY_GOODS", entry.includes('from "./src/shop/alchemyGoods"'));
-check("state 有 forgeGoods 字段", entry.includes("forgeGoods?: ShopGood[]"));
-check("start 时写入 forgeGoods", entry.includes("s.forgeGoods = FORGE_SHOP_GOODS"));
-check("sys_shop_buy 查 forge 表", entry.includes("ALCHEMY_SHOP_GOODS.find"));
+check("entry 不再 import 商品数据", !entry.includes("./src/shop/forgeGoods") && !entry.includes("./src/shop/alchemyGoods"));
+check("entry 不再有 forgeGoods 状态字段", !entry.includes("forgeGoods?: ShopGood[]"));
+check("entry 不再无条件覆盖货单", !entry.includes("s.forgeGoods = FORGE_SHOP_GOODS"));
+check("sys_shop_buy 接受前端回传的 good", entry.includes("normalizeShopGoodParam(params?.good)"));
+check("normalizeShopGoodParam 校验价格为正", entry.includes("function normalizeShopGoodParam") && entry.includes("!(price > 0)"));
 const mock = readFileSync(join(vueSrc, "mockHost.ts"), "utf-8");
-check("mockHost 三源查找商品", mock.includes("forgeGoods || []).find"));
-check("mockHost 写入完整商品", mock.includes("forgeGoods: FORGE_GOODS"));
+check("mockHost 不再 import 商品数据", !mock.includes('from "../../src/shop/'));
+check("mockHost 购买走 params.good 回传", mock.includes("params?.good && typeof params.good"));
 
-/* 7. ctx.ui.openShopPanel API */
+/* 7. ctx.ui.openShopPanel / ctx.story.readJson API */
 console.log("\n=== 引擎 API ===");
 const ctxTs = readFileSync(join(vueSrc, "eventScripts/_ctx.ts"), "utf-8");
 check("Ctx 有 openShopPanel", ctxTs.includes("openShopPanel(opts:"));
+check("openShopPanel 支持 goods", ctxTs.includes("goods?: ShopGood[]"));
+check("Ctx 有 story.readJson", ctxTs.includes("readJson<T = unknown>(path: string)"));
 const engine = readFileSync(join(vueSrc, "eventEngine.ts"), "utf-8");
 check("EventHooks 有 openShopPanel", engine.includes("openShopPanel?(opts:"));
+check("EventHooks 有 readStoryJson", engine.includes("readStoryJson?(path: string)"));
 check("makeCtx 实现 openShopPanel", engine.includes("hooks?.openShopPanel?.(opts)"));
+check("makeCtx 实现 story.readJson", engine.includes("hooks.readStoryJson(path)"));
 check("App 注册 openShopPanel hook", app.includes('openShopPanel: (opts) => openForgeAlchemyPanel'));
+check("App 注册 readStoryJson hook", app.includes("readStoryJson: (path: string) => readStoryJson(path)"));
+check("storyMap 提供 readStoryJson（.tbg + /story-data 双通道）",
+  readFileSync(join(vueSrc, "storyMap.ts"), "utf-8").includes("export async function readStoryJson"));
 
 /* 8. ★ 结果弹窗（购买/打造/升级/溶解成功） */
 console.log("\n=== 结果弹窗 ===");
