@@ -14,11 +14,17 @@
  *
  *   假人4（uid=254）：等级永远比玩家高 5 级（实体生成时 App.vue 已按 playerCard.level+5 算）
  *
- * ★ 触发方式：interact 事件（nearChat 点「💬 聊天」）。假人是 side=neutral，
+ * ★ 触发方式：proximity 事件（走近弹出「⚔对打」按钮）。假人是 side=neutral，
  *   所以 updateNearChat 会把它算进候选 → 点击触发本脚本。
  *
+ * ★ 目标假人怎么确定（2026-10-28 改用 ctx.event.uid）：
+ *   以前靠「写死 uids=[251,252,253,254] 再找最近的一个」猜 —— 四个假人挨得近时
+ *   会选错对象。现在引擎把触发实体的 uid 透传给脚本（ctx.event.uid），
+ *   直接用它定位，**新增第 5 个假人只改事件不改脚本**。
+ *   ctx.event.uid 为空时（脚本被别处调用 / 非 proximity 触发）→ 退回旧的「找最近」兜底。
+ *
  * ★ 模式切换机制：
- *   - 写 flag `dummy_mode_<tiledId>`（stand/duel），实体由本脚本直接改（运行时状态）
+ *   - 实体字段 dummyMode（stand/duel）由本脚本直接改（运行时状态，宿主 AI 会读它）
  *   - 站桩回血：setInterval 每秒回 5% hp（本会话内），脚本退出时清理
  *   - 模拟实战摧毁：entry.ts damage() 检测 trainingDummy + mode!==stand → 写 flag
  *     `dummy_destroyed_<实体id>`。实体 id 带世代时间戳（mapmob_<uid>_<ts>），
@@ -30,12 +36,10 @@ import type { Ctx } from "./_ctx";
 const standTimers = new Map<string, ReturnType<typeof setInterval>>();
 
 export default async function main(ctx: Ctx): Promise<void> {
-  // ── 从触发上下文取假人 uid ──
-  // 事件引擎 fireInteractEvent 按 tiledId 匹配；本脚本被 251~254 四个事件共用
-  // （events.json 里 4 条事件都指向本脚本），但脚本本身拿不到 uid ——
-  // 所以用 ctx.npc.byUid 不可行，改为：菜单里让玩家选哪个假人（或自动找最近的）。
-  // ★ 简化：nearChat 已锁定最近的实体，ctx.player 旁边 2.5m 内找 trainingDummy。
-  const dummy = findNearbyDummy(ctx);
+  // ── 定位目标假人 ──
+  // ★ 优先用引擎透传的 ctx.event.uid（proximity 触发时 = 被靠近的那个假人的 Tiled 对象 id）
+  //   → 不用再「写死 uid 列表 + 找最近的一个」猜，多个假人挨得近也不会选错。
+  const dummy = findTriggeredDummy(ctx) || findNearbyDummy(ctx);
   if (!dummy) {
     ctx.ui.toast("附近没有练习假人。", "white");
     return;
@@ -62,13 +66,35 @@ export default async function main(ctx: Ctx): Promise<void> {
   }
 }
 
-/** 找玩家 2.5m 内最近的练习假人（与 nearChat 半径一致） */
-function findNearbyDummy(ctx: Ctx): { id: string; tiledId: string; name: string; level: number; ent: any } | null {
+/** 目标假人的统一结构 */
+type DummyRef = { id: string; tiledId: string; name: string; level: number; ent: any };
+
+/** ★ 引擎透传的目标假人（ctx.event.uid）—— 首选路径。
+ *  proximity 事件触发时 uid = 被靠近的那个假人的 Tiled 对象 id，
+ *  引擎直接把「玩家点的到底是哪个」告诉脚本，不必再猜。 */
+function findTriggeredDummy(ctx: Ctx): DummyRef | null {
+  const uid = ctx.event?.uid;
+  if (!uid) return null;
+  const ent: any = ctx.npc.byUid(String(uid));
+  if (!ent || ent.alive === false) return null;
+  return {
+    id: String(ent.id),
+    tiledId: String(uid),
+    name: String(ent.name || "练习假人"),
+    level: Math.round(ent.level || 1),
+    ent,
+  };
+}
+
+/** 兜底：找玩家 3m 内最近的练习假人。
+ *  ★ 只在 ctx.event.uid 为空时用（脚本被非 proximity 路径调用 / 手动调用）。
+ *    这里仍写死了四个 uid —— 但它只是兜底，主路径已不依赖它。 */
+function findNearbyDummy(ctx: Ctx): DummyRef | null {
   // 实体 id 形如 mapmob_<tiledId>_<ts> / mapnpc_<tiledId>
-  // 用 ctx.npc.byUid 逐个探测四个已知 uid（引擎的 entityByTiledId 认这两种前缀）。
+  // 用 ctx.npc.byUid 逐个探测（引擎的 entityByTiledId 认这两种前缀）。
   const uids = ["251", "252", "253", "254"];
   const me = ctx.player as any;
-  let best: { id: string; tiledId: string; name: string; level: number; ent: any } | null = null;
+  let best: DummyRef | null = null;
   let bestDist = 3.0;
   for (const uid of uids) {
     const ent: any = ctx.npc.byUid(uid);
@@ -94,7 +120,7 @@ function patchDummy(ctx: Ctx, tiledId: string, patch: Record<string, unknown>): 
 /* ─────────────────────────────────────────────────────────
    站桩模式
    ───────────────────────────────────────────────────────── */
-async function startStandMode(ctx: Ctx, dummy: { id: string; tiledId: string; name: string; level: number; ent: any }): Promise<void> {
+async function startStandMode(ctx: Ctx, dummy: DummyRef): Promise<void> {
   // 1) 阵营变敌对 + 血条变红（side=enemy 才会被伤害飘字/血条渲染为敌对色）
   //    ★ 走 setField 改 state 里的可变引用（byUid 返回的快照改了没用）
   if (!patchDummy(ctx, dummy.tiledId, { side: "enemy", dummyMode: "stand" })) {
@@ -150,7 +176,7 @@ async function startStandMode(ctx: Ctx, dummy: { id: string; tiledId: string; na
 /* ─────────────────────────────────────────────────────────
    模拟实战模式
    ───────────────────────────────────────────────────────── */
-async function startDuelMode(ctx: Ctx, dummy: { id: string; tiledId: string; name: string; level: number; ent: any }): Promise<void> {
+async function startDuelMode(ctx: Ctx, dummy: DummyRef): Promise<void> {
   // 已被摧毁过（本会话内）→ 提示并返回
   const destroyed = await ctx.save.getFlag(`dummy_destroyed_${dummy.id}`);
   if (destroyed) {

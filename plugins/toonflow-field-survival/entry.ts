@@ -1856,6 +1856,19 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
     ex.homeY = home.y;
     ex.aiState = "idle";
     ex.wanderTimer = 0;
+    //  ★ fix（练习假人）：必须把 trainingDummy / dummyMode 一起带过来 ——
+    //   前端上报的实体里有这两个字段（switchLevel 注入时打的），
+    //   但重建走的是 makeEntity（只认 id/name/hp/level 等固定字段），
+    //   不显式透传就丢了 → 宿主侧 damage() 的
+    //   `if (target.trainingDummy === true)` 永远不成立 →
+    //     ① 假人被击碎时不写 `dummy_destroyed_<实体id>` flag
+    //        （事件脚本轮询这个 flag 发经验 → 击碎永远没奖励）；
+    //     ② 假人被当普通野怪结算 → 击杀计数/金钱/掉落全错。
+    //   dummyMode 决定是「站桩」（不写 flag，脚本自己回血）还是「模拟实战」（写 flag）。
+    if ((raw as any).trainingDummy === true) {
+      ex.trainingDummy = true;
+      ex.dummyMode = str((raw as any).dummyMode, "") || undefined;
+    }
     if ((raw as any).bounty && typeof (raw as any).bounty === "object") ex.bounty = { ...(raw as any).bounty };
     //  ★ fix：`dropTable` 必须一起带过来 —— 地图 `enemy_archetypes[].dropTable`
     //   是「这张图的怪掉什么」的权威配置（如走廊层 BOSS 必掉暗核）。
@@ -2190,6 +2203,15 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   //          → 超出 12 米（MOB_DISENGAGE_M）脱战 → 归位巢点并在 8 米内游荡
   enemies.forEach((e) => {
     const ex = e as any;
+    //  ★ 练习假人「站桩模式」：站桩 = 站着挨打，**不追击、不攻击**。
+    //   dummyMode 由前端事件脚本设置（stand/duel），宿主 AI 必须认它 ——
+    //   否则站桩假人也会冲过来打玩家（实测：选「站桩模式」后假人照样扑上来）。
+    //   模拟实战（duel / 未设置）→ 走正常敌人 AI，会追击会攻击。
+    if (ex.trainingDummy === true && String(ex.dummyMode || "") === "stand") {
+      e.vx = 0; e.vy = 0;
+      ex.aiState = "idle";
+      return;
+    }
     const prey = [player, ...allies].filter((t) => t.alive)
       .reduce<Entity | null>((best, t) => (!best || dist(e, t) < dist(e, best) ? t : best), null);
     const home = { x: num(ex.homeX, e.x), y: num(ex.homeY, e.y) };   // 巢点（无则取当前位）

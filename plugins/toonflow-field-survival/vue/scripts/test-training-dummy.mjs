@@ -91,6 +91,56 @@ check("entry.ts：假人不给经验（独立分支）", entry.includes("散架�
 check("entry.ts：实战击碎写 flag", entry.includes("dummy_destroyed_"));
 check("entry.ts：sys_dummy_reward 已实现", entry.includes('case "sys_dummy_reward"'));
 
+/* 4b. ★ 假人打不动 / 假人不攻击（宿主侧 + 合并策略） */
+console.log("\n=== ★ 假人掉血与反击（2026-10-28 修） ===");
+// ★ 坑1：宿主重建实体走 makeEntity（只认固定字段）→ trainingDummy/dummyMode 全丢
+//   → damage() 的 `target.trainingDummy === true` 永不成立 → 击碎不写 flag（没经验）
+check("entry.ts：重建实体时透传 trainingDummy", /ex\.trainingDummy = true/.test(entry));
+check("entry.ts：重建实体时透传 dummyMode", /ex\.dummyMode = str\(\(raw as any\)\.dummyMode/.test(entry));
+// ★ 坑2：站桩模式假人也会扑上来打玩家（宿主 AI 不认 dummyMode）
+check("entry.ts：站桩模式不追击不攻击", /trainingDummy === true && String\(ex\.dummyMode \|\| ""\) === "stand"/.test(entry));
+check("entry.ts：站桩分支清速度并置 idle", /ex\.aiState = "idle";\s*return;/.test(entry));
+// ★ 坑3：假人是「客户端权威实体」→ 无脑覆盖把宿主的 hp 改回满血 → 看不到掉血
+check("App.vue：假人 hp/alive 以宿主为准", /hostDummyStates/.test(appVue) && /hp: hostSame\.hp/.test(appVue));
+check("App.vue：先取宿主假人快照再剔除", /hostDummyStates[\s\S]{0,400}incomingClientIds\.size/.test(appVue));
+check("App.vue：side/dummyMode 仍以客户端为准（未被覆盖）",
+  /hp: hostSame\.hp[\s\S]{0,200}alive: hostSame\.alive/.test(appVue) &&
+  !/hp: hostSame\.hp[\s\S]{0,300}side: hostSame\.side/.test(appVue));
+check("App.vue：伤害只在宿主结算（前端无本地伤害）",
+  !/ent\.hp = Math\.max\(0, ent\.hp -/.test(appVue) && !/e\.hp = Math\.max\(0, e\.hp -/.test(appVue));
+check("App.vue：假人仍可被点击攻击", appVue.includes('(e as any).trainingDummy === true'));
+
+/* 4c. ★ 用 ctx.event.uid 定位目标假人（不再猜） */
+console.log("\n=== ★ ctx.event.uid 定位目标（2026-10-28 改） ===");
+const e70 = readFileSync(join(pluginRoot, "vue/src/eventScripts/E70_training_dummy.ts"), "utf-8");
+check("有 findTriggeredDummy（ctx.event.uid 主路径）", e70.includes("function findTriggeredDummy("));
+check("findTriggeredDummy 读 ctx.event.uid", /ctx\.event\?\.uid/.test(e70));
+check("主路径用 findTriggeredDummy", /findTriggeredDummy\(ctx\) \|\| findNearbyDummy\(ctx\)/.test(e70));
+check("ctx.event.uid 为空时退回兜底", e70.includes("findNearbyDummy(ctx)"));
+check("兜底仍保留（uid 为空场景）", e70.includes('const uids = ["251", "252", "253", "254"]'));
+check("兜底注释说明已非主路径", e70.includes("只在 ctx.event.uid 为空时用"));
+check("不再注释「脚本本身拿不到 uid」", !e70.includes("脚本本身拿不到 uid"));
+check("不再注释「用 ctx.npc.byUid 不可行」", !e70.includes("用 ctx.npc.byUid 不可行"));
+check("统一 DummyRef 类型", e70.includes("type DummyRef = {") && e70.includes("dummy: DummyRef"));
+check("DummyRef 被两处模式函数使用", (e70.match(/dummy: DummyRef/g) || []).length >= 2);
+// 引擎侧：run_script 必须透传 trigger.uid
+const engine = readFileSync(join(pluginRoot, "vue/src/eventEngine.ts"), "utf-8");
+check("引擎 run_script 透传 trigger.uid", /uid: \(ev\.trigger as any\)\?\.uid != null \? String\(\(ev\.trigger as any\)\.uid\) : undefined/.test(engine));
+check("引擎有 EventCtxInfo.uid 字段", /export interface EventCtxInfo[\s\S]{0,200}uid\?: string/.test(engine));
+check("makeCtx 填充 event.uid", /event: \{ id: info\.id, uid: info\.uid, args: info\.args \|\| \{\} \}/.test(engine));
+// 事件配置：4 条 proximity 事件都带 uid（uid 是 ctx.event.uid 的来源）
+try {
+  const evJson = JSON.parse(readFileSync(join(wsRoot, "events/maps/mulberryTown.events.json"), "utf-8"));
+  const dummyEvents = (evJson.events || []).filter((e) => e.id && String(e.id).startsWith("E70_dummy"));
+  check("4 条假人事件都存在", dummyEvents.length === 4, String(dummyEvents.length));
+  check("假人事件都用 proximity 触发", dummyEvents.every((e) => e.trigger?.type === "proximity"));
+  check("假人事件都带 trigger.uid（ctx.event.uid 的来源）",
+    dummyEvents.every((e) => e.trigger?.uid != null && String(e.trigger.uid) !== ""),
+    dummyEvents.map((e) => e.trigger?.uid).join("/"));
+  check("假人事件都指向同一脚本", dummyEvents.every((e) =>
+    (e.actions || []).some((a) => a.type === "run_script" && a.script === "E70_training_dummy")));
+} catch (err) { check("假人事件配置可读", false, String(err)); }
+
 /* 5. workshops 同步 */
 console.log("\n=== workshops 同步 ===");
 try {

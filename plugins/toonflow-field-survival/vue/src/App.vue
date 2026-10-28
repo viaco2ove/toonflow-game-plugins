@@ -7916,13 +7916,39 @@ onMounted(async () => {
       );
       const keptNpcs = localNpcs.filter((e: any) => e.alive !== false);
       if (keptNpcs.length) {
+        //  ★ fix（练习假人打不动 / 不掉血）：**hp 与 alive 必须以宿主为准**。
+        //   伤害是在宿主侧 entry.ts 的 damage() 里结算的（前端不做本地伤害），
+        //   假人又是「客户端权威实体」（本地Npcs 分支）→ 无脑覆盖会把宿主的
+        //   hp 改回客户端旧值（满血）→ 玩家打了半天看不到掉血，表现为「站桩没效果」。
+        //   但 side / dummyMode 要保留客户端的 —— 那是事件脚本 setField 改的
+        //   （站桩/实战模式），以宿主为准会被每 tick 打回 neutral。
+        //   规则：**hp/alive 跟宿主（伤害结算方），side/dummyMode 跟客户端（脚本改的）**。
+        //   ⚠️ 必须在剔除 incoming 同 id 实体**之前**取宿主那份快照（下面要按 id 找）。
+        const hostDummyStates = new Map<string, any>();
+        for (const h of incoming.entities) {
+          if (typeof h?.id === "string" && (h as any).trainingDummy === true) {
+            hostDummyStates.set(h.id, h);
+          }
+        }
         // 覆盖：先剔除 incoming 的同 id 客户端实体，再回补客户端权威版
         if (incomingClientIds.size) {
           incoming.entities = incoming.entities.filter(
             (e: any) => !(typeof e?.id === "string" && incomingClientIds.has(e.id)),
           );
         }
-        incoming.entities = [...incoming.entities, ...keptNpcs];
+        const keptMerged = keptNpcs.map((e: any) => {
+          if ((e as any).trainingDummy !== true) return e;
+          const hostSame = hostDummyStates.get(String(e.id));
+          if (!hostSame) return e;
+          return {
+            ...e,
+            hp: hostSame.hp,
+            maxHp: hostSame.maxHp,
+            alive: hostSame.alive,
+            deathMs: hostSame.deathMs,
+          };
+        });
+        incoming.entities = [...incoming.entities, ...keptMerged];
       }
     }
   // ★ 敌人碰撞收口（在 state.value 赋值之前就地改写 incoming 的敌怪坐标）
@@ -9430,11 +9456,13 @@ body {
 
 /* ★ HUD 级提示条（睡眠恢复 / 关键结果）：居中偏上，暖金高亮，点击关闭 */
 .hud-toast {
-  position: absolute;
+  position: fixed;
   top: 14%;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 40;
+  /* ★ 必须在所有面板之上（.forge-panel=9998），
+     否则「材料不足」这类飘字会被面板盖住 → 玩家看不到任何提示 */
+  z-index: 10001;
   max-width: 78%;
   padding: 8px 16px;
   border: 2px solid #ffd479;
@@ -9456,11 +9484,15 @@ body {
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
-/* ★ 事件系统确认对话框（采集/交互确认） */
+/* ★ 事件系统确认对话框（采集/交互确认）
+   ★ z-index 必须是**最高层**：锻造/炼丹面板(.forge-panel) 是 9998，
+     而升级/打造/溶解都会先关面板再弹确认框 —— 若弹窗层级低于面板，
+     弹窗会被面板盖住，玩家看到的就是「点了升级只有面板关闭，没有任何反应」。
+     统一提到 10000+ 这一档，保证任何面板都压不住模态弹窗。 */
 .ev-confirm-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 10000;
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   align-items: center;

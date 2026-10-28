@@ -53,7 +53,10 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
     用途：购买/打造成功这类「不能只用 toast（会飘走）」的结果反馈。
   - `ctx.event = { id, uid?, args }` → 事件上下文。`id`=事件 id；`uid`=触发实体（Tiled 对象 id，
     **仅 interact/proximity 有**，enter_map/area_enter/interval 为 undefined）；`args`=run_script 透传参数（**非对象归一为 {}**）。
-    → 地图集侧**不再需要「找最近实体」猜目标**（如 E70 训练假人）。
+    → 地图集侧**不再需要「找最近实体」猜目标**。
+    ★ **已落地用法**（E70 训练假人，2026-10-28）：主路径 `findTriggeredDummy(ctx)` 读 `ctx.event?.uid`
+    → `ctx.npc.byUid(uid)`；uid 为空才退回旧的「找最近」兜底。
+    收益：多个同类对象挨得近不会选错；**新增同类对象只加事件、不改脚本**（事件里写 trigger.uid 即可）。
   - `ctx.playerCard = { level, money, hp, maxHp }` → 玩家卡**只读快照**（AI 拿到的也是玩家卡）；
     取不到时 `{level:1,money:0,hp:0,maxHp:0}`。改数值仍要 `ctx.cmd`/`ctx.save`。
   - 三者已进 `validate_events.mjs` 的 CTX_API 白名单。
@@ -127,12 +130,30 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
   同步 `vue/public/events/maps` + `ui/events/maps`（这两目录**全故事共享**，同时只放一个故事，校验非当前故事时报「副本缺文件」是预期的）。
 - `_ctx.ts` 四份副本（插件侧 + 三故事 shared）必须 md5 一致，改接口先统一再改签名。
 - 练习假人：地图属性 `training_dummy=true` + `camp=neutral`（写 hostile 会主动打人，站桩失效）→ mapConfig 特批进 mobs；
-  脚本用 `ctx.npc.setField(uid, patch)` 改 side/hp。状态合并必须**客户端权威优先**，否则事件脚本改的实体会被每 tick 回滚。
+  脚本用 `ctx.npc.setField(uid, patch)` 改 side/hp。
+  ★ **字段权威方必须分清**（2026-10-28 修「站桩不掉血/实战不来打我」）：
+  - **客户端权威**（脚本改的）：`side` / `dummyMode` / 位置 / 标签 → 以前端为准，
+    否则事件脚本改的实体会被每 tick 回滚（side=enemy 1s 内被打回 neutral）。
+  - **宿主权威**（结算方）：`hp` / `alive` / 伤害 / 经验 / 金钱 / 掉落 → 以宿主为准，
+    否则**前端无脑覆盖会把宿主 damage() 掉的血改回满血 → 打了没反应**。
+  - 合并实现：App.vue `onHostState` 里先取宿主假人快照（`hostDummyStates`），
+    再剔除 incoming 同 id，最后 `{...前端版, hp/alive/maxHp/deathMs: 宿主版}`。
+  - ★ **宿主重建实体（entry.ts `applyLocalEnemies` 走 makeEntity）会丢自定义字段** ——
+    新增实体字段（trainingDummy/dummyMode）必须在重建处显式透传，否则前端有、宿主没有
+    → `damage()` 的 `target.trainingDummy===true` 永不成立 → 击碎不写 flag（没经验）。
+  - 站桩模式假人**不追击不攻击**：宿主敌怪 AI 开头要判 `trainingDummy && dummyMode==="stand"` 直接 return。
 
 ### 三条硬规矩（实战踩出来）
 1. **消耗类只能扣一次**：图纸/药方/材料由**后端**在命令 case 里扣，前端只传参数（`blueprint`）；前后端都扣 = 双重扣除（实测 2 张图纸打一件归零）。
 2. **三处同步**：`entry.ts`（真宿主）/ `mockHost.ts`（standalone）/ `vue/src`；mockHost 常有一套平行实现，漏改只在 mock 模式下错。
 3. **mockHost 不回推 `state.response`** → `sendSysCmdAwait` 等满超时；mock 分支要显式 `(state as any).response = ...`。
+4. ★ **UI 层级约定（App.vue）**：模态层必须高于所有面板。
+   `.ev-confirm-overlay`（确认/多选/输入/结果/拾取 5 类弹窗共用）= **10000 / fixed**，
+   `.hud-toast`（飘字）= **10001 / fixed**，面板层一律 ≤9998
+   （forge-panel/sys-btn 9998、sys-panel/quest-panel 9997、chat-panel 9996）。
+   根容器 `.fs` 是 `position:relative` 且无 z-index → **不产生层叠上下文**，
+   子元素 z-index 会跨父容器直接比大小 → 面板的 9998 会压住弹窗的 50。
+   症状：面板里点按钮「只有面板关闭，没有任何反应」。改层级后跑 `vue/scripts/check-zindex.mjs` 核对。
 - 反馈分级：`showToast` 飘字（过程）+ `evNotice` 模态框（购买/打造/升级/溶解的最终结果，必须点确认）；判定成功要用后端 response，不能只看前端乐观值。
 - 用图纸打造：`blueprintProduct(图纸名)` 剥后缀得成品名，`looksLikeBlueprint` 拦 AI 把图纸当产物；三处都要有兜底。
 

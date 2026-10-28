@@ -198,5 +198,39 @@ check("closeForgeAlchemyPanel 只置 false", /function closeForgeAlchemyPanel\(\
 check("聊天面板 header 无拖拽（对照）", app.includes("class=\"chat-panel__header\"") && !/class="chat-panel__header"[^>]*@pointerdown/.test(app));
 check("任务板 header 无拖拽（对照）", app.includes("class=\"quest-panel__header\"") && !/class="quest-panel__header"[^>]*@pointerdown/.test(app));
 
+/* 11. ★ 模态层级：升级/打造/溶解的弹窗必须在面板之上 */
+console.log("\n=== 模态层级（z-index） ===");
+// ★ 根因：升级会先关面板再弹确认框，但 .ev-confirm-overlay 原本 z-index:50，
+//   远低于 .forge-panel 的 9998 → 弹窗被盖住 → 「点了升级只有面板关闭，没有任何反应」。
+function zIndexOf(sel) {
+  const re = new RegExp("\\." + sel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*\\{[^}]*?z-index:\\s*(\\d+)", "s");
+  const m = app.match(re);
+  return m ? Number(m[1]) : null;
+}
+const zOverlay = zIndexOf("ev-confirm-overlay");
+const zToast = zIndexOf("hud-toast");
+const zForge = zIndexOf("forge-panel");
+const zSys = zIndexOf("sys-panel");
+const zSysBtn = zIndexOf("sys-btn");
+const zQuest = zIndexOf("quest-panel");
+const zChat = zIndexOf("chat-panel");
+check("能读到 ev-confirm-overlay 的 z-index", zOverlay !== null);
+check("能读到 forge-panel 的 z-index", zForge !== null);
+check("模态弹窗层高于锻造面板", zOverlay !== null && zForge !== null && zOverlay > zForge, `overlay=${zOverlay} forge=${zForge}`);
+check("飘字层高于锻造面板", zToast !== null && zForge !== null && zToast > zForge, `toast=${zToast} forge=${zForge}`);
+check("模态弹窗层高于系统面板", zOverlay !== null && zSys !== null && zOverlay > zSys, `overlay=${zOverlay} sys=${zSys}`);
+check("飘字层高于系统按钮", zToast !== null && zSysBtn !== null && zToast > zSysBtn, `toast=${zToast} sysbtn=${zSysBtn}`);
+check("飘字层高于任务板/聊天面板", zToast !== null && zQuest !== null && zChat !== null && zToast > zQuest && zToast > zChat, `toast=${zToast} quest=${zQuest} chat=${zChat}`);
+check("遮罩用 position:fixed（覆盖整个视口）", /\.ev-confirm-overlay\s*\{[^}]*position:\s*fixed/s.test(app));
+check("飘字用 position:fixed（跟随视口）", /\.hud-toast\s*\{[^}]*position:\s*fixed/s.test(app));
+// 5 个弹窗共用同一个 overlay 类 → 一处修复全部覆盖
+const overlayCount = (app.match(/class="ev-confirm-overlay"/g) || []).length;
+check("确认/多选/输入/结果/拾取 5 类弹窗共用 overlay（≥5 处）", overlayCount >= 5, String(overlayCount));
+// 升级流程：先关面板 → 弹确认框 → finally 重开面板
+check("升级入口先关面板再执行", /function onForgeUpgradeItem[\s\S]{0,120}forgePanelOpen\.value = false/.test(app));
+check("升级走 opUpgrade", app.includes("await opUpgrade(deps, arg)"));
+check("升级有确认框", forgeOpsSrc.includes("title: \"升级确认\""));
+check("升级有材料检查提示", forgeOpsSrc.includes("材料不足"));
+
 console.log(`\n结果：${pass} 通过 / ${fail} 失败\n`);
 process.exit(fail > 0 ? 1 : 0);
