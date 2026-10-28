@@ -22,6 +22,6 @@ export default async function main(ctx: Ctx): Promise<void> {
   }, 2600);
 
   setTimeout(() => {
-    ctx.ui.save.setFlag("phase_6_done", true);
+    void ctx.save.setFlag("phase_6_done", true);   // ★ 原来误挂在 ui 命名空间下（ui 没有 save 方法，运行时抛 TypeError → flag 永不写入）
   }, 5200);
 }

@@ -21,7 +21,8 @@
  *   - 写 flag `dummy_mode_<tiledId>`（stand/duel），实体由本脚本直接改（运行时状态）
  *   - 站桩回血：setInterval 每秒回 5% hp（本会话内），脚本退出时清理
  *   - 模拟实战摧毁：entry.ts damage() 检测 trainingDummy + mode!==stand → 写 flag
- *     `dummy_destroyed_<实体id>`，下次进图 mapConfig 按 flag 重置
+ *     `dummy_destroyed_<实体id>`。实体 id 带世代时间戳（mapmob_<uid>_<ts>），
+ *     下次进图 ts 换新 → 旧 flag 不再命中，假人自然满血复活
  */
 import type { Ctx } from "./_ctx";
 

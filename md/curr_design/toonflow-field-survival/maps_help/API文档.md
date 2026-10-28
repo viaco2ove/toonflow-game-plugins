@@ -407,8 +407,8 @@ const goods = Array.isArray(raw) ? raw : Array.isArray(raw?.goods) ? raw.goods :
 | `sys_shop_buy` | `id, count, good?` | 购买。`good` 是**地图集自带货单**那一件商品（插件侧没有权威副本，必须带上来），后端校验 `name` 非空 + `price>0` |
 | `sys_forge_create` | `input, level, aiJson?, blueprint?` | 锻造打造（扣 10 金；`blueprint` 由后端扣 1 张，产物按图纸记载） |
 | `sys_alchemy_create` | `input, level, aiJson?, blueprint?` | 炼丹（同上，药方） |
-| `sys_item_upgrade` | `name, aiJson?` | 升级装备 |
-| `sys_item_dissolve` | `name` | 溶解返还材料 |
+| `sys_item_upgrade` | `oldName, cost, aiJson` | 升级装备（旧件换新件；前端已扣铁矿石/灵石碎屑） |
+| `sys_item_dissolve` | `name, rarity, lv, heal, isPill` | 溶解返还材料（装备返还铁矿石/灵石碎屑，丹药返还草药） |
 | `sys_dummy_reward` | `exp, name` | 练习假人击碎奖励（发经验） |
 | `sys_quest_board` / `sys_quest_accept` / `sys_quest_turnin` | — | 任务板 |
 | `sys_rest` / `sys_teleport` / `sys_party` / `sys_use_item` | — | 休息/传送/组队/使用物品 |
@@ -524,7 +524,7 @@ node .cache/validate_events.mjs [collection_dir]
 | 4 | run_script 的 .ts 在 events/scripts/ 存在 | ✗ error |
 | 5 | flag key 被写入多种类型 | ⚠ warn |
 | 6 | TS 脚本 `ctx.*` 调用在白名单（CTX_API）+ 禁 while(true)/for(;;) | ✗ error |
-| 7 | 副本一致性：events/scripts ↔ vue/src/eventScripts；events/maps ↔ vue/public/events/maps 和 ui/events/maps（对比时把 `../shared/_ctx` 归一成 `./_ctx`） | ⚠ warn |
+| 7 | 副本一致性：events/scripts ↔ vue/src/eventScripts；events/maps ↔ vue/public/events/maps 和 ui/events/maps（对比时把 `../shared/_ctx` 归一成 `./_ctx`、行尾 CRLF/LF 归一） | ⚠ warn |
 
 CTX_API 白名单（当前）：
 
@@ -537,10 +537,13 @@ bag.give/list/remove
 story.readJson
 level.switchTo/setLocked
 audio.play   llm.speak   registerAction
+actor.roleId/ai/name
 ```
 
 退出码：有 ✗ → exit 1。**写完/改完事件必跑，跑到 0 error 再同步、再打 .tbg。**
 ⚠️ 项要看：副本不一致通常意味着「插件里跑的是旧脚本」，dev 看不出来、真机一定出问题。
+但 `vue/public/events/maps`、`ui/events/maps` 是**全故事共享目录**（同时只放一个故事），
+校验非当前故事时的「副本缺文件」是预期的。
 
 ---
 
