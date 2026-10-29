@@ -3025,11 +3025,18 @@ function localEnemiesPayload(): { epoch: number; bounds: { lx: number; ly: numbe
   //   会被再上报 → 后端重建 → 反复切图怪越积越多（城镇也出现森林怪）。
   //   zone_/localmob_ 仍按前缀（它们不在 mapmob 世代体系内，但同样可能被回流——
   //   一并在切图过渡期由 switchingLevel 分支丢弃，见 onHostState）。
+  //   ★ fix（模拟实战假人不攻击）：**练习假人无论 side 必须上报** ——
+  //   假人平时 side=neutral，若只报 side==="enemy"，宿主敌怪表里根本没有假人：
+  //   ① 玩家攻击走宿主 case "attack" 的 trainingDummy 特判 → 目标不在表里 → 打不到；
+  //   ② 脚本 setField(side:"enemy") 后 epoch 不变 → 宿主永远收不到这份更新
+  //     → 「模拟实战」假人不追击不攻击（实测：duel 假人站着不动）。
+  //   假人进宿主表后：stand 模式由宿主 AI 守卫原地不动；duel 模式走正常敌人 AI。
   const list = ((state.value?.entities || []) as Array<any>).filter(
     (e) =>
-      e?.side === "enemy" &&
       typeof e?.id === "string" &&
-      (isCurrentMapMob(e.id) || e.id.startsWith("localmob_") || e.id.startsWith("zone_")),
+      ((e as any)?.trainingDummy === true ||
+        (e?.side === "enemy" &&
+          (isCurrentMapMob(e.id) || e.id.startsWith("localmob_") || e.id.startsWith("zone_")))),
   );
   // ★ 修复（bounds 恒为 0）：此前写的是 clampToMapBounds(0, 0) —— 那是把「点 (0,0)」
   //   夹进边界后返回的点，永远是 {x:0,y:0}，于是上报的 bounds 恒为 {lx:0,ly:0}，
@@ -3411,7 +3418,13 @@ async function switchLevel(levelName: string): Promise<boolean> {
     currentMapMobTs = String(Date.now());
     if (s && next.mobs?.length) {
       injectMapMobsToState(s, next);
-      state.value.events.push(`[${next.name}] 发现 ${next.mobs.length} 只敌怪！`);
+      // ★ 练习假人不算「敌怪」——城镇只放假人时提示「发现 4 只敌怪」会误导玩家
+      const realMobN = next.mobs.filter((m: any) => m.trainingDummy !== true).length;
+      const dummyN = next.mobs.length - realMobN;
+      const parts: string[] = [];
+      if (realMobN > 0) parts.push(`${realMobN} 只敌怪`);
+      if (dummyN > 0) parts.push(`${dummyN} 个练习假人`);
+      if (parts.length) state.value.events.push(`[${next.name}] 发现 ${parts.join("、")}！`);
     }
     // ★ 从 Tiled 地图 Actors 层加载中立 NPC（mulberryTown 的 Mayor Leonard / Bar / NPC 等）。
     //   之前仅作为 kind=npc 装饰物 → 不在 entities 里 → updateNearChat() 找不到 → 不能对话。
@@ -3594,9 +3607,15 @@ function spawnLocalMobsIfNeeded(): void {
   if (!me) return;
 
   // ★ 修复②（兜底补怪受地图校验约束）：兜底补怪只允许在"当前地图本身有野怪数据源"
-  //   的图上启用。城镇 / 安全图（mulberryTown、overworld 等 mobs 数量为 0）绝不允许
+  //   的图上启用。城镇 / 安全图（mulberryTown、overworld 等真野怪数量为 0）绝不允许
   //   凭空补怪 —— 这是"所有地图都有野怪"的第二条来源。
-  if (!mapCfg.value || !(mapCfg.value.mobs?.length)) return;
+  //   ★ fix（城镇凭空刷野怪）：**练习假人不算「野怪数据源」** ——
+  //   mulberryTown 放了 4 个 training_dummy（假人必须进 mobs 才有血条/能被攻击，
+  //   见 mapConfig.ts），若按 mobs.length 判定，城镇会被误判为"有野怪的图"
+  //   → 兜底刷怪每 60 秒在城镇里凭空刷 5 只哥布林/狼/蝙蝠（localmob_*）。
+  //   判据应为「非假人的 mob 数量」：只有假人的图 = 演武场，不是野区。
+  const realMobCount = (mapCfg.value?.mobs ?? []).filter((m: any) => m.trainingDummy !== true).length;
+  if (!mapCfg.value || realMobCount === 0) return;
 
   const zones = resolvedZones();
   const currentZone = zones.find((z) => {
@@ -4794,21 +4813,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   ctx.restore();
 
   // 血条 - 紧贴 sprite 下边缘（屏幕像素）
-  const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
-  const barX = px - barW / 2;
-  const barY = py + 8; // 在脚底
-  ctx.save();
-  // 边框
-  ctx.fillStyle = "rgba(0,0,0,.85)";
-  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
-  // 背景
-  ctx.fillStyle = "#3a0d0d";
-  ctx.fillRect(barX, barY, barW, barH);
-  // 前景
-  const hpRatio = Math.max(0, e.hp / e.maxHp);
-  ctx.fillStyle = e.side === "enemy" ? "#d63b3b" : "#4ec74e";
-  ctx.fillRect(barX, barY, barW * hpRatio, barH);
-  ctx.restore();
+  //   ★ 血条实际绘制被挪到 drawHpBarsOverlay()（VFX 层之后），
+  //     这里只记录位置，由 render() 在特效画完后统一补画 → 特效不再遮住血条。
+  recordHpBar(e, px, py + 8, Math.max(24, Math.round(dw) + 2), e.side === "enemy" ? "#d63b3b" : "#4ec74e");
 
   // ★ 关闭死亡淡出的 ctx.save()（if 块内打开的）
   if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
@@ -4911,17 +4918,8 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   ctx.restore();
 
   // 血条
-  const barW = Math.max(24, Math.round(dw) + 2), barH = 4;
-  const barX = px - barW / 2;
-  const barY = dy - 6;
-  ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,.85)";
-  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
-  ctx.fillStyle = "#3a0d0d";
-  ctx.fillRect(barX, barY, barW, barH);
-  ctx.fillStyle = "#d63b3b";
-  ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
-  ctx.restore();
+  //   ★ 血条实际绘制被挪到 drawHpBarsOverlay()（VFX 层之后），这里只记录位置。
+  recordHpBar(e, px, dy - 6, Math.max(24, Math.round(dw) + 2), "#d63b3b");
 
   // ★ 关闭死亡淡出的 ctx.save()
   if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
@@ -4931,7 +4929,62 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
    VFX 粒子层（战斗特效）
    ============================================================ */
 
+/**
+ * ★ 血条缓冲（2026-10-29）
+ *   需求：打击特效（斩击弧 / 火花 / 爆炸）会把怪和血条盖得严严实实，
+ *        玩家看不到血掉到哪了。做法：**血条从实体层挪到 VFX 层之后单独画**。
+ *   实体绘制时只调 recordHpBar() 记下位置，真正绘制在 drawHpBarsOverlay()。
+ */
+type HpBarRec = { hp: number; maxHp: number; x: number; y: number; w: number; color: string };
+/** 本帧待绘制的血条（每次 render 开始时清空） */
+let hpBarBuffer: HpBarRec[] = [];
+
+/** 记录一条血条（实体绘制阶段调用，不立即画） */
+function recordHpBar(e: any, x: number, y: number, w: number, color: string): void {
+  const hp = Number(e?.hp ?? 0);
+  const maxHp = Number(e?.maxHp ?? 0);
+  if (!maxHp || maxHp <= 0) return;
+  hpBarBuffer.push({ hp, maxHp, x, y, w, color });
+}
+
+/** ★ 在 VFX 层之后统一补画血条 —— 保证特效再浓也能看清血量 */
+function drawHpBarsOverlay(ctx: CanvasRenderingContext2D): void {
+  if (!hpBarBuffer.length) return;
+  const barH = 4;
+  ctx.save();
+  for (const b of hpBarBuffer) {
+    const barX = b.x - b.w / 2;
+    const barY = b.y;
+    const ratio = Math.max(0, Math.min(1, b.hp / b.maxHp));
+    // 边框
+    ctx.fillStyle = "rgba(0,0,0,.9)";
+    ctx.fillRect(barX - 1, barY - 1, b.w + 2, barH + 2);
+    // 背景
+    ctx.fillStyle = "#3a0d0d";
+    ctx.fillRect(barX, barY, b.w, barH);
+    // 前景（血量）—— 血少时转橙，血尽转红
+    ctx.fillStyle = ratio > 0.35 ? b.color : (ratio > 0.15 ? "#ff8a3a" : "#ff3b3b");
+    ctx.fillRect(barX, barY, b.w * ratio, barH);
+  }
+  ctx.restore();
+  hpBarBuffer = [];
+}
+
 /** 渲染所有 VFX 粒子（屏幕像素空间） */
+/**
+ * ★ VFX 整体透明度系数（2026-10-29 调整）
+ *   问题：打击特效（斩击弧 / 火花 / 爆炸）不透明度过高，**完全盖住怪和血条**，
+ *         玩家看不到自己打到了什么、血掉到哪了（站桩练习时尤其明显）。
+ *   做法：整个 VFX 层统一乘一个系数，保留打击感但让底下的实体透出来。
+ *   调整方式：只改这一个常量即可全局微调。
+ */
+const VFX_ALPHA_SCALE = 0.45;
+
+/** ★ 把特效自身算出的 alpha 乘上全局系数（各特效内部会写绝对值，外层 globalAlpha 会被覆盖） */
+function vfxA(alpha: number): number {
+  return Math.max(0, Math.min(1, alpha * VFX_ALPHA_SCALE));
+}
+
 function drawVfxLayer(
   ctx: CanvasRenderingContext2D,
   vfx: any[] | undefined,
@@ -4939,6 +4992,8 @@ function drawVfxLayer(
   wz2py: (y: number) => number,
 ): void {
   if (!vfx || vfx.length === 0) return;
+  // ★ 整层 save/restore：保证不影响后续图层
+  ctx.save();
   for (const p of vfx) {
     // ★ 跟随移动：vfx 存了 entityId（通常是玩家）→ 每帧用玩家当前 x/y 渲染，
     //   否则特效永远留在创建时的位置，玩家走了就脱离身体。
@@ -4978,6 +5033,7 @@ function drawVfxLayer(
       drawIconBurst(ctx, p.icon, px, py, progress, p.color || "#fff");
     }
   }
+  ctx.restore();
 }
 
 /* ============================================================
@@ -5153,7 +5209,7 @@ function drawClickFxLayer(
 function drawSlashArc(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, angleDeg = 0, color = "#ffffff"): void {
   ctx.save();
   const r = 26 + p * 12;     // 弧半径
-  const alpha = Math.max(0, 1 - p * 1.1);
+  const alpha = vfxA(Math.max(0, 1 - p * 1.1));
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
   ctx.lineWidth = 6;
@@ -5183,7 +5239,7 @@ function drawFireballPx(ctx: CanvasRenderingContext2D, px: number, py: number, t
   const dx = tx - px, dy = ty - py;
   const e = p;
   const ax = px + dx * e, ay = py + dy * e;
-  const alpha = Math.max(0, 1 - p * 0.9);
+  const alpha = vfxA(Math.max(0, 1 - p * 0.9));
   // 拖尾（3 个粒子）
   for (let i = 1; i <= 3; i++) {
     const t = Math.max(0, e - i * 0.06);
@@ -5213,7 +5269,7 @@ function drawFireballPx(ctx: CanvasRenderingContext2D, px: number, py: number, t
 function drawHealRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
   ctx.save();
   const r = 8 + p * 32;
-  const alpha = Math.max(0, 1 - p * 1.1);
+  const alpha = vfxA(Math.max(0, 1 - p * 1.1));
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
   ctx.lineWidth = 3;
@@ -5234,7 +5290,7 @@ function drawHealRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: 
 function drawBuffRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
   ctx.save();
   const r = 14 + p * 8;
-  const alpha = Math.max(0, 1 - p);
+  const alpha = vfxA(Math.max(0, 1 - p));
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
   ctx.lineWidth = 2.5;
@@ -5255,7 +5311,7 @@ function drawBuffRing(ctx: CanvasRenderingContext2D, px: number, py: number, p: 
 /** 爆炸：3 圈扩散 */
 function drawExplosion(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
   ctx.save();
-  const alpha = Math.max(0, 1 - p * 0.95);
+  const alpha = vfxA(Math.max(0, 1 - p * 0.95));
   for (let i = 0; i < 3; i++) {
     const r = 10 + p * (40 + i * 14);
     ctx.globalAlpha = alpha * (1 - i / 4);
@@ -5283,7 +5339,7 @@ function drawExplosion(ctx: CanvasRenderingContext2D, px: number, py: number, p:
 /** 火花/小亮点 */
 function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, color: string): void {
   ctx.save();
-  const alpha = Math.max(0, 1 - p * 1.5);
+  const alpha = vfxA(Math.max(0, 1 - p * 1.5));
   ctx.globalAlpha = alpha;
   ctx.fillStyle = color;
   ctx.shadowColor = color;
@@ -5334,7 +5390,7 @@ function drawIconBurst(
   // 同色光环（图标未加载时也有反馈）
   ctx.save();
   const ringR = 10 + p * 20;
-  ctx.globalAlpha = Math.max(0, 1 - p) * 0.7;
+  ctx.globalAlpha = vfxA(Math.max(0, 1 - p) * 0.7);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2.5;
   ctx.shadowColor = color;
@@ -5347,7 +5403,7 @@ function drawIconBurst(
   // 图标：0.7× → 1.5× 放大，前 70% 时间显示
   const scale = 0.7 + p * 0.8;
   const size = 26 * scale;
-  const alpha = Math.max(0, 1 - p * 1.2);
+  const alpha = vfxA(Math.max(0, 1 - p * 1.2));
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -5770,6 +5826,9 @@ function render() {
   }
 
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
+  //   ★ 血条缓冲先清空：实体绘制阶段只 recordHpBar() 记位置，
+  //     真正绘制在 VFX 层之后（drawHpBarsOverlay）→ 特效不再遮住血条。
+  hpBarBuffer = [];
   const roleIds = new Set(s.roles.map((r) => r.id));
   const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const dtSec = Math.max(0.001, Math.min(0.1, lastRenderAt ? (_nowMs - lastRenderAt) / 1000 : 0.016));
@@ -5813,6 +5872,9 @@ function render() {
 
   // —— VFX 粒子层（在飘字之前、实体之后）——
   drawVfxLayer(ctx, s.vfx, wx2px, wz2py);
+
+  // —— ★ 血条补画层（在 VFX 之后）——保证打击特效下也能看清血量 ——
+  drawHpBarsOverlay(ctx);
 
   // —— ★ 点击寻路可视化：A* 路径虚线 + 目标标记 + 点击涟漪 ——
   drawClickFxLayer(ctx, wx2px, wz2py, sx);
@@ -6636,7 +6698,8 @@ async function runForgeOp(kind: "craft" | "upgrade" | "dissolve", arg: any): Pro
     }
   } catch (e: any) {
     console.warn("[forgeOps] 操作失败：", e);
-    showToast("操作失败：" + String(e?.message || e), "red");
+    // ★ 第二参是毫秒不是颜色（同 forgeOpsDeps.toast 的坑）
+    showToast("操作失败：" + String(e?.message || e));
   } finally {
     // ★ 打造入口会先关面板（避免遮挡输入/选择弹窗），操作结束后回到面板，
     //   否则玩家每打一件东西都要重新走过去找 NPC。
@@ -6652,7 +6715,12 @@ function forgeOpsDeps(): ForgeOpsDeps {
     aiGenerate: (agent, prompt, timeoutMs) => eventAgentRun(agent, prompt, { timeoutMs }),
     bagList: async () => eventBagList(),
     bagRemove: async (name, count) => eventBagRemove(name, count),
-    toast: (text, color) => showToast(text, color),
+    // ★ fix（升级无反应）：showToast 第二参是【毫秒】，不是颜色 ——
+    //   原来 `showToast(text, color)` 把 "white"/"red" 当 setTimeout 的 ms →
+    //   setTimeout(fn, "white") = 0ms → toast 在下一帧渲染前就被清空 →
+    //   「材料不足」等提示一闪即逝（实测 DOM 从未出现 .hud-toast）→
+    //   玩家点升级只看到面板关闭，没有任何反馈。
+    toast: (text, _color) => showToast(text),
     subtitle: (text, ms) => {
       showToast(text);
       if (state.value) state.value.events.push(`[字幕] ${text}`);
@@ -7528,7 +7596,28 @@ onMounted(async () => {
         return id.startsWith(`mapnpc_${tiledId}_`) || id.startsWith(`mapnpc_${tiledId}`)
           || id.startsWith(`mapmob_${tiledId}_`) || id.startsWith(`mapmob_${tiledId}`);
       });
-      return (e as any) || null;
+      if (!e) return null;
+      // ★ fix（模拟实战假人不攻击）：脚本改「阵营/模式」时 bump 上报世代 ——
+      //   宿主按 epoch 变化才重建敌怪表，脚本 setField(side:"enemy") 不 bump 的话
+      //   宿主永远看不到这份更新（假人在宿主表里根本不存在/还是旧状态）
+      //   → duel 假人不追击不攻击。
+      // ★ 只对 side / dummyMode bump，**hp / alive 不 bump**：
+      //   ① hp/alive 是**宿主权威**字段（伤害在 entry.ts damage() 结算后回推），
+      //      前端合并时用宿主那份（见 onHostState 的 hostDummyStates 合并），
+      //      不依赖 epoch 重建；
+      //   ② 站桩回血定时器每秒改 hp、每次受击也改 hp → 若 bump 会让宿主
+      //      **每 tick 重建整张敌怪表**（实测 376 tick 里刷了 35 条
+      //      「当前关卡敌怪已接入宿主 AI（4 只）」→ 事件日志被污染 + 无谓重建开销）。
+      const proxy = new Proxy(e as any, {
+        set(target, prop, value) {
+          target[prop] = value;
+          if (prop === "side" || prop === "dummyMode") {
+            bumpLocalMobsEpoch();
+          }
+          return true;
+        },
+      });
+      return proxy;
     },
     toast: (text: string, color?: string) => showToast(text),
     subtitle: (text: string, durationMs?: number) => {
@@ -7940,12 +8029,31 @@ onMounted(async () => {
           if ((e as any).trainingDummy !== true) return e;
           const hostSame = hostDummyStates.get(String(e.id));
           if (!hostSame) return e;
+          //   ★ fix（模拟实战假人不追人）：**duel 假人的位置必须以宿主为准**。
+          //   宿主 enemy AI（entry.ts step()）在 chase 态每 tick moveTowards 移动
+          //   宿主侧的假人副本——但上面这条合并只回填 hp/alive，x/y 仍用客户端
+          //   旧快照 → 宿主明明在追，前端每 tick 把它钉回原地（实测：duel 假人
+          //   会攻击玩家却坐标 500ms 采样 100+ 帧纹丝不动）。
+          //   规则补充：**站桩/中立 → 位置跟客户端（假人不该动）；
+          //   duel 开打（side=enemy）→ x/y/facing 跟宿主（AI 在驱动它）**。
+          const hostDrives = e.side === "enemy" && (e as any).dummyMode === "duel";
+          // ★ fix（2026-10-29 下午误加又撤回）：**所有假人的 hp 一律以宿主为准**。
+          //   假人的 hp 是**宿主权威**字段 —— 伤害在 entry.ts damage() 里结算，
+          //   站桩回血也在宿主做（entry.ts standDummyRegen，1 秒回 5%）。
+          //   ★ 曾经的错法：「stand 假人 hp 以客户端为准」+ 前端 E70 脚本回血 →
+          //     宿主 damage() 打到 113 → 前端合并用自己的 185 覆盖 → 上报又把 185
+          //     写回宿主 → **伤害被完全抹掉**（实测连打 3 刀血量恒 185 不动）。
+          //   ★ 曾经的另一个错法：「epoch 相同时把前端 hp 同步进宿主」→ 同样抹掉伤害。
+          //   ★ 教训：**伤害与回血必须同源**，否则两边各记一份账永远对不上。
           return {
             ...e,
             hp: hostSame.hp,
             maxHp: hostSame.maxHp,
             alive: hostSame.alive,
             deathMs: hostSame.deathMs,
+            ...(hostDrives
+              ? { x: hostSame.x, y: hostSame.y, facing: hostSame.facing }
+              : {}),
           };
         });
         incoming.entities = [...incoming.entities, ...keptMerged];

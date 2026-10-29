@@ -1316,6 +1316,54 @@ function dropKillChest(s: FieldSurvivalState, target: Entity): void {
   pushEvent(s, `${target.name} 掉落了一个宝箱`);
 }
 
+/**
+ * ★ 站桩假人回血（宿主侧，2026-10-29 新增/修）
+ * ======================================
+ * 「站桩模式」的设计：假人站着挨打，血条自动回复，**不还手、不给经验**。
+ *
+ * ★ 为什么必须放在宿主（而不是前端 E70 脚本的 setInterval）：
+ *   假人的 hp 是**宿主权威**字段 —— 玩家打它的伤害在 entry.ts `damage()` 里结算。
+ *   若「伤害在宿主、回血在前端」，两边各记一份账，永远对不上：
+ *     宿主 damage() 185 → 113，回推给前端；
+ *     前端合并时用自己的 185 覆盖 → 下一次上报又把 185 写回宿主 → **伤害被完全抹掉**。
+ *   （实测：连打 3 刀，事件日志「普攻命中 伤害 72」×3，血量恒 185 不动。）
+ *   ★ 伤害与回血**同源**（都在宿主）→ 账才对得上，前端只需做「模式切换 + UI」。
+ *
+ * 回血规则（与原 E70 前端实现一致，保持玩家可见的行为不变）：
+ *   - 频率：每 1 秒（10 tick）一次
+ *   - 血量：最大血量的 5%（至少 1 点），不超过 maxHp
+ *   - 被打到 0 血 → 原地复活（满血）
+ */
+const STAND_REGEN_TICKS = 10;             // 每 10 tick（= 1 秒）回一次
+const STAND_REGEN_RATIO = 0.05;           // 每次回 5%
+/** 每 tick 递减的回血计时器（挂在实体上，不污染 Entity 类型） */
+const STAND_REGEN_TIMER = "__standRegenTimer";
+
+function standDummyRegen(s: FieldSurvivalState): void {
+  for (const e of s.entities) {
+    const ex = e as any;
+    if (ex.trainingDummy !== true) continue;
+    if (String(ex.dummyMode || "") !== "stand") continue;
+    if (e.alive === false) continue;
+    // 计时器递减
+    let t = Math.max(0, num(ex[STAND_REGEN_TIMER], 0) - 1);
+    // 被打到 0 血（死亡淡出期）→ 原地复活（满血）
+    if (e.hp <= 0) {
+      e.hp = Math.max(1, Math.round(num(e.maxHp, e.hp) || 1));
+      (ex as any).deathMs = undefined;
+      t = 0;
+    } else if (t <= 0) {
+      // 到点回血：5%（至少 1 点）
+      const maxHp = Math.max(1, Math.round(num(e.maxHp, e.hp) || 1));
+      if (e.hp < maxHp) {
+        e.hp = Math.min(maxHp, e.hp + Math.max(1, Math.round(maxHp * STAND_REGEN_RATIO)));
+      }
+      t = STAND_REGEN_TICKS;
+    }
+    ex[STAND_REGEN_TIMER] = t;
+  }
+}
+
 function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity) {
   // ★ AI 托管：玩家战斗状态打点（damage 是所有伤害的唯一入口 —— 普攻/技能/AI 攻击/怪物攻击都走这里）
   //   玩家参与（挨打或出手）即视为进入交战 → engaged。
@@ -1384,8 +1432,12 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
       if (dummyMode !== "stand") {
         const dummyFlagKey = `dummy_destroyed_${target.id}`;
         void setPlayerFlag(ctxRef?.(), dummyFlagKey, true);
+        pushEvent(s, `${target.name} 散架了`);
+      } else {
+        // ★ 站桩模式：假人被打到 0 血不是「散架」，而是**原地复活**（standDummyRegen 负责回满）。
+        //   文案要区分，否则玩家会以为站桩假人被永久打死了。
+        pushEvent(s, `${target.name} 重新立了起来`);
       }
-      pushEvent(s, `${target.name} 散架了`);
     } else if (target.side === "enemy") {
       s.kills += 1;
       // 优先地图 archetype 的赏金（map-gener agent 产出）
@@ -1807,6 +1859,14 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
     //   此后前端永远发同一 epoch，后端永远 return 0 → 敌怪表死锁为空、AI 空跑
     //   （实测：tick 正常推进、events 显示"接入 11 只"但 entities 0 敌人）。
     //   怪还在 → 正常忽略回推；怪丢了 → fallthrough 幂等重建（1120 行先清残留再建）。
+    //
+    // ★★ 2026-10-29 下午误加又撤回的「同步 stand 假人 hp 到宿主」：
+    //   当时为了让「站桩回血」传到宿主，在 epoch 相同时把前端上报的 hp 写回宿主。
+    //   **这是错的** —— 前端上报的 hp 是**合并产物**（含前端的 clientOwnsHp 优先规则），
+    //   不是权威值。宿主 damage() 扣的血（185→113）会被前端上报的 185 直接覆盖回去
+    //   → **伤害被完全抹掉**（实测：连打 3 刀「普攻命中 伤害 72」，血量恒 185 不动）。
+    //   ★ 正确口径：**hp 全程归宿主管**（伤害结算方），回血也必须在宿主做（见 step() 的
+    //     standDummyRegen），前端只负责「站桩/实战」模式切换与 UI。
     const alive = s.entities.filter((e) => e.side === "enemy" && isLocalEnemyId(e.id)).length;
     if (alive > 0) return 0;
   }
@@ -1816,7 +1876,10 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
   if (lx > 0 && ly > 0) s.mapBounds = { lx, ly };
   const list: any[] = Array.isArray((payload as any).list) ? (payload as any).list : [];
   // ② 清旧（幂等：重建前先清，避免跨图 / 跨世代残留）
-  s.entities = s.entities.filter((e) => !(e.side === "enemy" && isLocalEnemyId(e.id)));
+  //   ★ 假人无论 side 都按 id 清 —— 否则中立假人（side=neutral）绕过过滤，
+  //   每次 epoch 重建都再 push 一份 → 假人越积越多（实测 4 个变 12 个）。
+  s.entities = s.entities.filter((e) =>
+    !((e.side === "enemy" || (e as any).trainingDummy === true) && isLocalEnemyId(e.id)));
   // ②b 清掉「宿主自行在世界野区（240~480 m）刷出的怪」：
   //     前端上报了 bounds（小地图关卡）→ 前端权威清单代表当前关卡的敌怪，
   //     宿主 mob_ 怪必须**全清**（不能只清界外——野区半径 240m、边缘可延伸到 0，
@@ -1835,7 +1898,11 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
   for (const raw of list) {
     if (!raw || typeof raw !== "object") continue;
     const side = str((raw as any).side);
-    if (side && side !== "enemy") continue;                          // 只接管敌怪
+    // ★ 练习假人无论 side 都要接管（stand=neutral 站桩 / duel+enemy 实战）；
+    //   重建后 side 以前端为准 —— 不能强制 side="enemy"，否则中立假人被宿主
+    //   当敌怪（AI 会追击玩家），站桩模式直接失效。
+    const isDummy = (raw as any).trainingDummy === true;
+    if (!isDummy && side && side !== "enemy") continue;              // 只接管敌怪（假人例外）
     if ((raw as any).alive === false) continue;                      // 已阵亡的不重建
     const id = str((raw as any).id);
     if (!id) continue;
@@ -1844,6 +1911,9 @@ function applyLocalEnemies(s: FieldSurvivalState, payload: any): number {
     const at = clampToBound(s, num((raw as any).x, 0), num((raw as any).y, 0));
     const e = makeEntity({ id, name: str((raw as any).name, "野怪"), hp: maxHp, level: lv }, "enemy", at.x, at.y, built);
     const ex = e as any;
+    // ★ 假人：side 以前端为准（neutral=站桩没开打 / enemy=脚本已让实战开打）。
+    //   makeEntity 只能造 enemy，这里覆写回来；宿主 AI 读 dummyMode 决定站桩不动。
+    if (isDummy) e.side = (side === "ally" || side === "neutral" || side === "enemy") ? side as any : "neutral";
     e.hp = clamp(Math.round(num((raw as any).hp, maxHp)), 1, maxHp);  // 保留前端当前血量
     e.maxHp = maxHp;
     e.atk = Math.max(1, Math.round(num((raw as any).atk, e.atk)));
@@ -2201,6 +2271,11 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
 
   // ★ v4 敌人 AI：探测半径 10 米（MOB_DETECT_M）→ 追击 → 2 米攻击
   //          → 超出 12 米（MOB_DISENGAGE_M）脱战 → 归位巢点并在 8 米内游荡
+  // ★ 站桩假人回血（2026-10-29 修）：**回血与伤害必须同源（都在宿主）**，
+  //   否则两边永远对不上账。之前的做法是「伤害在宿主、回血在前端 E70 脚本」，
+  //   结果：宿主 damage() 把血打到 113，前端合并时用自己的 185 覆盖回来 →
+  //   **伤害被完全抹掉**（实测连打 3 刀「伤害 72」，血量恒 185）。
+  standDummyRegen(s);
   enemies.forEach((e) => {
     const ex = e as any;
     //  ★ 练习假人「站桩模式」：站桩 = 站着挨打，**不追击、不攻击**。
@@ -5427,7 +5502,21 @@ export async function handle_action(
       syncQuestArriveAuto(s);
       checkQuestTimeouts(s);
       buildQuestView(s);
-      if (localBuilt > 0) pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
+      // ★ fix（事件日志被污染）：**只在「敌怪表真的变了」时报一次**，不要每 tick 报。
+      //   前端 localEnemies 清单每 tick 都带（epoch 相同则宿主忽略），
+      //   若这里无条件 pushEvent → 事件日志每秒刷一条「当前关卡敌怪已接入宿主 AI（N 只）」，
+      //   把真正的战斗事件冲掉（实测 376 tick 里刷了 35 条）。
+      //   判定：本次重建的只数与上次不同，或本地敌怪世代号变了 → 才算「变了」。
+      if (localBuilt > 0) {
+        const _lb = (s as any)._lastLocalBuilt ?? -1;
+        const _le = num(s.localMobsEpoch, 0);
+        const _lpe = (s as any)._lastLocalEpoch ?? -1;
+        if (_lb !== localBuilt || _lpe !== _le) {
+          (s as any)._lastLocalBuilt = localBuilt;
+          (s as any)._lastLocalEpoch = _le;
+          pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
+        }
+      }
       return okResp("");
     }
 

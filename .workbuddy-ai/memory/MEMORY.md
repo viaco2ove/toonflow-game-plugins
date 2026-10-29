@@ -66,6 +66,13 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
   ④ 空实现未标 `@deprecated`。
 - 业务数据必须走 `ctx.story.readJson("data/x.json")`（按 path 缓存一局；安装态读 `.tbg`）；**`import` 数据会被编进 `ui/game.html`** = 头号严重违规。
 
+- ★ **城镇凭空刷野怪的根因**（2026-10-28 修）：兜底刷怪守卫 `mobs.length>0` 被「练习假人进 mobs」破坏
+  （城镇放假人 → mobs.length=4 → 守卫失效 → 每 60s 凭空刷 5 只 localmob_*）。
+  修：守卫按**非假人 mob 数**判定 `filter(m=>m.trainingDummy!==true).length`。
+  **教训**：给集合加新成员时必须 grep 所有 `.length` 消费点 —— 只有兜底刷怪这处的语义是「有真野怪」。
+- ★ 野怪 id 前缀出处速查：`zone_<区名>_` = 区域刷怪（地图 zones 配置）；
+  `localmob_<ts>_` = **兜底刷怪**（城镇本不该有）；`mapmob_<uid>_<ts>` = 地图 Actors 层 Tiled 对象（野怪+练习假人）。
+
 ## AI 托管（toonflow-field-survival）
 - 链路：`brain.ts` → `sendTick("sys_brain")` → `entry.ts case "sys_brain"` → `ctx.tsApi.agent.run("field-survival-ai-brain",…)`
   → `s.chatResult{reqId,ok,text}` → persistSys。systemPrompt 用 entry.ts 顶部常量（宿主 `promptHelper` 只查 `def.prompts.ts`）；
@@ -142,11 +149,38 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
     新增实体字段（trainingDummy/dummyMode）必须在重建处显式透传，否则前端有、宿主没有
     → `damage()` 的 `target.trainingDummy===true` 永不成立 → 击碎不写 flag（没经验）。
   - 站桩模式假人**不追击不攻击**：宿主敌怪 AI 开头要判 `trainingDummy && dummyMode==="stand"` 直接 return。
+  - ★ **击碎奖励不发的真根因 = eventEngine 的 flagCache**（2026-10-29 ego-browser 实测）：
+    `entry.ts damage()` 击碎假人时写 flag `dummy_destroyed_<实体id>`，
+    E70 脚本用 `ctx.save.getFlag()` 轮询它 —— 但 `eventEngine.ts` 的 `flagCache`
+    是会话内缓存，只在「切图/重载事件/面板写 flag」才 invalidate，
+    **战斗中的写入没有任何显式失效时机** → 脚本轮询永远读到旧快照 → **经验永不发**
+    （现象：假人正常扣血、正常「散架了」，但 exp 纹丝不动）。
+    修法（eventEngine.ts）：`FLAG_CACHE_TTL_MS=1000` + `flagCacheAt` 时间戳（缓存过期自动重读）
+    + `getFlag` 改**强制重读** `loadFlags(true)` + `saveFlags` 落库后刷新 `flagCacheAt`。
+    ★ 排查手法：dev 模式可 `iframe.contentWindow.eval("import('/src/eventEngine.ts')")`
+    调 `reloadFlags()` 对比 `getFlag()` —— 强制重读能拿到、getFlag 拿不到 = 缓存问题。
 
 ### 三条硬规矩（实战踩出来）
+0. ★ **「点了没反应」必须先 BrowserSkill 浏览器复现再改代码**（2026-10-28 铁律）：
+   曾凭静态阅读断言「z-index 压住弹窗」，实测发现**弹窗链路根本没触发**（真根因是 color 被当 ms）。
+   调试通道：bsk evaluate → iframe.contentWindow → canvas.__vueParentComponent 向上找根 →
+   `root.setupState`（全部 ref 可读写）；发命令用 `parent.postMessage({type:'tf_plugin_tick',action,params},'*')`。
+   ★ **两套浏览器方案都能用，按需求选**：
+   - **bsk（browser-skill）**：CLI 直接可用，`bsk session start --json` → `bsk navigate/observe/evaluate/screenshot`。
+     ★ 读**宿主真实 state** 靠拦 iframe 的 `postMessage`（`__devHostPluginState()` 不给 x/y/aiState）。
+     ★ 截图用 `--out`（不是 `--path`）。
+   - **ego-browser**：命令是 **`ego-browser`**（不是 `ego`！`which ego` 找不到极易误判成"没装"）；
+     Git Bash 下 **`-e` 模式静默失败**（exit 0 无输出），**必须 `ego-browser nodejs < file.mjs`**；
+     PowerShell 下 `-e` 反而正常。前置条件：ego lite 应用进程在跑。
+     详细排查记录见 `C:\Users\viaco\.workbuddy-ai\skills\ego-browser\references\usage-notes-2026-10-29.md`。
 1. **消耗类只能扣一次**：图纸/药方/材料由**后端**在命令 case 里扣，前端只传参数（`blueprint`）；前后端都扣 = 双重扣除（实测 2 张图纸打一件归零）。
-2. **三处同步**：`entry.ts`（真宿主）/ `mockHost.ts`（standalone）/ `vue/src`；mockHost 常有一套平行实现，漏改只在 mock 模式下错。
+2. **四处同步**：`entry.ts`（真宿主 + dev-host 优先路径）/ `vue/vite.config.ts` 内嵌 dev-host stub（entry.js 失败时回退）/ `mockHost.ts`（standalone）/ `vue/src`——
+   **stub 是第四份平行实现**（自带敌怪 AI/攻击/伤害），改战斗逻辑漏它只在回退模式下错。
 3. **mockHost 不回推 `state.response`** → `sendSysCmdAwait` 等满超时；mock 分支要显式 `(state as any).response = ...`。
+   ★ **showToast(msg, ms) 第二参是毫秒不是颜色**（2026-10-28 实测）：传 "white" → setTimeout 0ms →
+   toast 在 Vue 渲染前被清空 →「提示一闪不见/完全看不见」。deps 适配层不得转传 color。
+   ★ **宿主 epoch 机制**：前端实体集合变化必须 `bumpLocalMobsEpoch()` 宿主才重建敌怪表；
+   entityRef（App.vue）已加 Proxy set 守卫：改 side/dummyMode/hp/alive 自动 bump。
 4. ★ **UI 层级约定（App.vue）**：模态层必须高于所有面板。
    `.ev-confirm-overlay`（确认/多选/输入/结果/拾取 5 类弹窗共用）= **10000 / fixed**，
    `.hud-toast`（飘字）= **10001 / fixed**，面板层一律 ≤9998
@@ -154,6 +188,15 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
    根容器 `.fs` 是 `position:relative` 且无 z-index → **不产生层叠上下文**，
    子元素 z-index 会跨父容器直接比大小 → 面板的 9998 会压住弹窗的 50。
    症状：面板里点按钮「只有面板关闭，没有任何反应」。改层级后跑 `vue/scripts/check-zindex.mjs` 核对。
+5. ★ **画布图层顺序（App.vue render()）**：迷雾 → 实体(含血条) → **VFX** → 飘字/点击特效。
+   打击特效（斩击弧/火花/爆炸）原本完全不透明，**把怪和血条盖得死死的**（用户反馈）。
+   修法（两条一起，缺一不可）：
+   - **VFX 降透明度**：`const VFX_ALPHA_SCALE = 0.45` + `vfxA(alpha)` 辅助函数，
+     斩击弧/火花/爆炸/火球/治疗环/Buff环/图标**逐个**套 `vfxA()`。
+     ★ 外层 `ctx.globalAlpha` 会被各特效内部的绝对赋值覆盖，**只设外层无效**。
+   - **血条挪到 VFX 之后画**：实体绘制时只调 `recordHpBar()` 记位置，
+     VFX 后由 `drawHpBarsOverlay()` 统一补画（血少时前景转橙/红）。
+   静态回归锁在 `vue/scripts/test-training-dummy.mjs`（4h 段，8 条断言）。
 - 反馈分级：`showToast` 飘字（过程）+ `evNotice` 模态框（购买/打造/升级/溶解的最终结果，必须点确认）；判定成功要用后端 response，不能只看前端乐观值。
 - 用图纸打造：`blueprintProduct(图纸名)` 剥后缀得成品名，`looksLikeBlueprint` 拦 AI 把图纸当产物；三处都要有兜底。
 
@@ -163,3 +206,42 @@ python -m toon_plugins plugins -i toonflow-field-survival   # build vue + 重编
 - **tiles-maps-editor**（`.workbuddy-ai/skills/`）：串 cognitive-tiles-maps（认知）+ tile-style-change（换皮）+ map-editor（UI）。
   scripts：`elements.py`（像素判材质/道路/建筑/活物）、`actors.py`（对象层 CRUD，坐标是像素）、`make_tiles.py`（程序化瓦片，id>=12900 空白段）。
   API：`POST /api/collections/{name}/maps/{map}` 保存（备份固定名会覆盖）；`POST /api/tile-style/override` 换格贴图（改图集本体，gid 不变）。
+
+## 练习假人（2026-10-29 实测，三项行为全部通过）
+- ✅ **站桩模式全项通过（16:00 bsk 复测，宿主回血版本）**：
+  初始 185 HP → 一刀 -72 → 113；**每次回 +9**（185×5%=9.25→9）；
+  **频率严格每 10 个宿主 tick**（dHostTick=10/10/10）；玩家 HP 恒定不还手；
+  打死 → **原地复活至满血** + 事件「骷髅兵 重新立了起来」；**exp 不发**；
+  **`dummy_destroyed_*` flag 不写**（stand 与 duel 奖励彻底隔离）。
+  ★ 站桩回血在**宿主**（entry.ts `standDummyRegen`），前端 E70 只管模式切换+UI（伤害与回血必须同源）。
+- ★ **测按 tick 计的频率必须用宿主 tick 差值，不能用墙钟**：
+  iframe 内 rAF 被浏览器节流到 **~1Hz**（顶层 60fps，iframe 1.08fps）→ 游戏 tick 实际 1 次/秒
+  → 「10 tick 一次」在墙钟上是 10 秒。**看到「回血 10 秒一次」不是 bug，是节流**。
+  宿主 tick 取法：`window.__devHostPluginState().tick` 或拦截 iframe postMessage 读 `tf_plugin_state`。
+- ✅ **duel 假人会追击**（原"MEMORY 里记的『不追击是 bug』已推翻，是采样方法错）：
+  拦截 iframe 的 postMessage 看**宿主真实 state**：aiState=`chase`、vx>0、距离递减、玩家掉血。
+  ★ 上午误判原因：① 只看了前端合并后的 entities（x/y 要靠 `hostDrives` 判定是否采用宿主值）；
+  ② **玩家早已被打死 → phase=over → 前端 loop 停发 tick → 采样窗口冻结**，
+  看到的是"假人已贴到 1m 攻击圈所以 vx=0"（贴身后本来就不动了）。
+  ★ **采样前必须先看 phase**（玩家一死就冻结，极易误判成"AI 没跑"）。
+- ✅ 脱离回原地：玩家逃远后 aiState `return`→`idle`，坐标回 home（distHome 0.31m < 拴绳 4m）。
+- ✅ stand 站桩：坐标钉死、aiState=idle、玩家 HP 恒定（不追不打）。
+- ✅ 等级显示：`e.side === "enemy" && e.level`（App.vue ~4805）—— enemy 头顶红字 Lv20，neutral 无 Lv。
+- ⚠️ **4m 边缘"抽搐"是设计不是 bug**：`MOB_DETECT_M = MOB_DISENGAGE_M = 4`（entry.ts ~729，注释明说"无迟滞带"），
+  玩家在 4m 边缘时 chase↔return 反复切换；且追击速度只 0.72 倍 → 4m 外看着像"往回走"。
+- ★ **epoch bump 字段只留 side/dummyMode**（App.vue entityRef Proxy）：hp/alive 是**宿主权威**
+  （伤害在 entry.ts damage() 结算后回推），带上它们会让站桩回血每秒触发 → 宿主每 tick 重建敌怪表。
+- ★ **假人 hp 归属按模式分流**（App.vue 合并 + entry.ts applyLocalEnemies，两处配套）：
+  **duel 假人 hp 跟宿主**（伤害在宿主结算，前端覆盖会抹掉伤害）；
+  **stand 假人 hp 跟客户端**（站桩血条由 E70 脚本每秒回 5%，宿主只会因伤害下降、不会回血
+  → 无脑用宿主 hp 会让血量在 50/59 之间**震荡**；实测修好后单调升 86→185）。
+  entry.ts 侧：epoch 相同（不重建）时把 stand 假人的 hp/alive 同步进宿主实体。
+- ★ **entry.ts 的「当前关卡敌怪已接入宿主 AI（N 只）」只在真变化时才 pushEvent**
+  （`_lastLocalBuilt`/`_lastLocalEpoch`）—— 否则事件日志被刷屏（实测 376 tick 刷 35 条，战斗事件被冲掉）。
+- 调试：复活 `setupState.reviveGame()`；玩家瞬移改 `state.entities` 的 player x/y（前端权威），
+  ★ 但**绕过 entityRef Proxy → epoch 不 bump → 宿主不重建**（宿主 side 仍是 neutral → AI 不跑）；
+  测「脚本改 side」必须走正规 UI 路径（点「⚔对打」→「模拟实战」）。玩家血量也是宿主权威，前端改会被覆盖。
+- 调试宿主侧：拦截 iframe 的 `postMessage`（`__devHostPluginState()` 不给 x/y/aiState）。
+- ★ **防误判铁律**：采样前先看 `phase`！玩家一死前端 loop 就停发 tick → 采样窗口冻结成"AI 没动"
+  （上午曾据此误判"duel 假人不追击"，下午拦截宿主 state 后证伪）。
+- 游戏是 canvas 渲染 → 查 DOM 找不到「Lv20」，只能截图目视；随机事件弹窗（如「采药」）会挡视野，先点「离去」。

@@ -131,23 +131,23 @@ async function startStandMode(ctx: Ctx, dummy: DummyRef): Promise<void> {
   ctx.ui.toast(`${dummy.name} 摆好了架势——站桩开始！随便打。`, "blue");
   ctx.ui.event(`站桩训练开始：${dummy.name}`);
 
-  // 2) 站桩回血：假人每秒回 5%（轮询可变引用直接改 hp）
+  // 2) 站桩回血：**已挪到宿主侧**（entry.ts standDummyRegen，每秒回 5%）。
+  //    ★ 为什么不能留在这里（2026-10-29 实测踩坑）：
+  //      假人 hp 是宿主权威字段 —— 玩家打它的伤害在 entry.ts damage() 里结算。
+  //      「伤害在宿主、回血在前端」= 两边各记一份账，永远对不上：
+  //      宿主 damage() 185→113，回推给前端；前端合并时用自己的 185 覆盖回来；
+  //      上报清单又把 185 写回宿主 → **伤害被完全抹掉**
+  //      （实测：连打 3 刀「普攻命中 伤害 72」×3，血量恒 185 不动）。
+  //    ★ 伤害与回血必须同源（都在宿主）→ 账才对得上。
+  //    本脚本只保留「模式切换 / 结束站桩 / 站桩结束复位」这类 UI 职责。
   const key = dummy.id;
   if (standTimers.has(key)) clearInterval(standTimers.get(key)!);
+  // 站桩期间只做一件事：假人被打到 0 血时提示（复活由宿主 standDummyRegen 负责）
   const timer = setInterval(() => {
     const ent: any = ctx.npc.byUid(dummy.tiledId);
     if (!ent) { clearInterval(timer); standTimers.delete(key); return; }
-    // 假人被击碎（stand 模式不该发生）→ 原地复活
     if (ent.alive === false || (ent.hp ?? 0) <= 0) {
-      patchDummy(ctx, dummy.tiledId, { hp: ent.maxHp ?? 100, alive: true });
       ctx.ui.toast(`${dummy.name} 重新立了起来。`, "blue");
-      return;
-    }
-    // 假人回血 5%/s
-    const hp = Number(ent.hp) || 0;
-    const maxHp = Number(ent.maxHp) || hp || 100;
-    if (hp < maxHp) {
-      patchDummy(ctx, dummy.tiledId, { hp: Math.min(maxHp, hp + Math.max(1, Math.round(maxHp * 0.05))) });
     }
   }, 1000);
   standTimers.set(key, timer);

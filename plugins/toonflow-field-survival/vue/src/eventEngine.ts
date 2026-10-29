@@ -84,22 +84,53 @@ export interface EventHooks {
 const FLAG_KEY = "player_flags";
 let flagCache: Record<string, unknown> | null = null;
 let flagDirty = false;
+/**
+ * ★ 缓存有效期（毫秒）。
+ *
+ * 为什么需要 TTL（2026-10-29 实测踩坑）：
+ *   flag 是「事件引擎（Vue 侧）」与「插件后端（entry.js）」共用的同一份
+ *   t_plugin_session_data。后端在**战斗结算里**写的 flag（如练习假人被击碎时
+ *   entry.ts damage() 写的 `dummy_destroyed_<实体id>`）**绕过本模块缓存** →
+ *   事件脚本用 `ctx.save.getFlag()` 轮询时一直读到缓存里的旧快照 →
+ *   脚本的 setInterval 轮询 1200ms 永远返回 null → **奖励永远不发放**。
+ *
+ *   原来只有「切图 / 重载事件 / 面板写 flag」这些显式时机才 invalidateFlagCache()，
+ *   但战斗中的 flag 写入没有任何显式时机能覆盖到。
+ *
+ * 修法：缓存加 TTL —— 超过 TTL 自动重读库。
+ *   · 事件条件判定（高频、每次进图读几十个 flag）不受影响（TTL 内仍命中缓存）
+ *   · 脚本轮询（间隔 1.2s）只要 TTL ≤ 1.2s 就能读到外部写入
+ *   · 选 1000ms：比脚本最短轮询间隔（1200ms）短，保证不漏
+ */
+const FLAG_CACHE_TTL_MS = 1000;
+/** 缓存写入时刻（ms）——用于 TTL 判定 */
+let flagCacheAt = 0;
 
-async function loadFlags(): Promise<Record<string, unknown>> {
-  if (flagCache) return flagCache;
+async function loadFlags(force = false): Promise<Record<string, unknown>> {
+  // ★ TTL 判定：缓存过期自动重读（force=true 时无条件重读）
+  const fresh = flagCache !== null && Date.now() - flagCacheAt < FLAG_CACHE_TTL_MS;
+  if (!force && fresh) return flagCache as Record<string, unknown>;
   try {
     const raw = await hooks?.pluginData.get(FLAG_KEY);
-    flagCache = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    // ★ 只在没有本地未落库的改动时才用库里的值覆盖缓存（否则会丢 setFlag 的结果）
+    if (!flagDirty) {
+      flagCache = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      flagCacheAt = Date.now();
+    }
   } catch {
-    flagCache = {};
+    if (!flagCache) flagCache = {};
+    flagCacheAt = Date.now();
   }
-  return flagCache;
+  return flagCache as Record<string, unknown>;
 }
 
 async function saveFlags(): Promise<void> {
   if (!flagCache || !hooks) return;
   await hooks.pluginData.set(FLAG_KEY, flagCache);
   flagDirty = false;
+  // ★ 落库后刷新缓存时刻 —— 否则 TTL 判定会用「上一次读库」的时间戳，
+  //   刚写完就可能因过期而被库里的旧值覆盖（写-读竞态）。
+  flagCacheAt = Date.now();
 }
 
 /** ★ 清空会话内 flag 缓存（不落库）。
@@ -109,12 +140,14 @@ async function saveFlags(): Promise<void> {
  *  凡「可能已被外部改动」的时机（切图 / 重载事件 / 面板写 flag）都应先清缓存。 */
 export function invalidateFlagCache(): void {
   flagCache = null;
+  flagCacheAt = 0;
 }
 
 /** ★ 强制重读 flag（返回最新值），供系统面板「重载事件」等使用 */
 export async function reloadFlags(): Promise<Record<string, unknown>> {
   flagCache = null;
-  return await loadFlags();
+  flagCacheAt = 0;
+  return await loadFlags(true);
 }
 
 /** ★ 走事件引擎自身通道写 flag：保证缓存与库一致（避免外部直写造成的不一致） */
@@ -215,7 +248,12 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR, info: EventCtxInfo = EMPTY_EV
     playerCard: hooks?.playerCard?.() || { level: 1, money: 0, hp: 0, maxHp: 0 },
     save: {
       getFlag: async <T,>(key: string): Promise<T | null> => {
-        const f = await loadFlags();
+        // ★ 强制重读（2026-10-29 修）：**每次都从库里取最新值**。
+        //   getFlag 的主要用途是「事件脚本轮询宿主刚写的 flag」
+        //   （如练习假人击碎后 entry.ts damage() 写的 dummy_destroyed_<id>），
+        //   读缓存会永远拿到旧快照 → 脚本的轮询 setInterval 拿不到 true → 奖励不发。
+        //   flag 读取本身是低频的（事件条件判定 + 脚本轮询），一次网络往返可接受。
+        const f = await loadFlags(true);
         return (f[key] ?? null) as T | null;
       },
       setFlag: async (key: string, value: unknown): Promise<void> => {
