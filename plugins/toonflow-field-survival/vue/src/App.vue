@@ -55,7 +55,24 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
-import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand } from "./ai";
+import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand, wakeAiForPlayerSms } from "./ai";
+// ★ 通信(短信)：状态管理（唯一数据源）
+import {
+  load as loadSms,
+  flushSave as flushSmsSave,
+  listConversations,
+  sendPlayerMessage,
+  setActiveConversation,
+  startPrivateChat,
+  removeConversation,
+  renameConversation,
+  createGroupConversation,
+  markRead,
+  totalUnread,
+  smsView,
+  debugSms,
+} from "./sms/store";
+import type { SmsContact } from "./sms/SmsNewGroupModal.vue";
 // ★ AI 托管运行时配置（系统 → AI 页签可调，落库 t_plugin_session_data）
 import {
   getAISettings,
@@ -251,6 +268,114 @@ function onSysBtnClick(e: MouseEvent) {
     return;
   }
   showSystemPanel.value = !showSystemPanel.value;
+}
+
+/* ============================================================
+   ★ 通信(短信)
+   ============================================================
+   接线点（设计文档 通信(短信).design.md §8.3）：
+     1. 系统按钮角标 / tab 角标  ← totalUnread（computed，唯一数据源）
+     2. 玩家发短信               ← onSysSmsSend
+     3. AI 决策里的 message      ← ai/index.ts 的 dispatchSmsDecision
+     4. 加载 / 强制落库          ← onSmsInit / flushSmsSave
+   ============================================================ */
+
+/** ★ 通信会话列表（响应式 → 从 store 取，保持单一数据源） */
+const sysSmsConversations = computed(() => listConversations());
+/** ★ 总未读数（系统按钮 + tab 角标共用） */
+const sysSmsUnread = computed(() => totalUnread.value);
+/** ★ 通讯录：AI 托管角色 ∪ 场上存活的 ally（设计文档 §7.2） */
+const sysSmsContacts = computed<SmsContact[]>(() => {
+  const s = state.value as any;
+  const out = new Map<string, SmsContact>();
+  // ① npcCards（场外的角色卡）
+  for (const c of ((s?.npcCards || []) as any[])) {
+    if (!c?.id) continue;
+    if (String(c?.side) === "player") continue;
+    out.set(String(c.id), { id: String(c.id), name: String(c.name || c.id), managed: isAIEnabled(String(c.id)) });
+  }
+  // ② 场上实体
+  for (const e of (s?.entities || []) as any[]) {
+    if (!e?.id || e.side === "player") continue;
+    if (e.side === "enemy") continue;
+    const id = String(e.id);
+    const prev = out.get(id);
+    out.set(id, { id, name: String(e.name || id), managed: isAIEnabled(id) || !!prev?.managed });
+  }
+  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name, "zh"));
+});
+
+/** ★ 短信存储是否已加载 */
+const smsReady = ref(false);
+
+/** 通信 tab 切换（同步 store 的视图态 → 未读的实时已读判断依赖它） */
+function onSysSmsTabChange(tab: string): void {
+  smsView.activeTab = tab;
+  if (tab === "sms" && smsView.activeConvId) markRead(smsView.activeConvId);
+}
+
+/** 选中会话（进入即清未读） */
+function onSysSmsSelect(convId: string): void {
+  setActiveConversation(convId);
+}
+
+/**
+ * ★ 玩家从通讯录点某人 → 主动发起单聊
+ *   会话立即建出来并打开，右半屏立刻能打字。
+ *   （与「AI 主动发消息才建会话」是两条路：后者是消息驱动，这里是玩家驱动）
+ */
+function onSysSmsStartChat(roleId: string): void {
+  const contact = sysSmsContacts.value.find((c) => c.id === roleId);
+  const conv = startPrivateChat(roleId, contact?.name || roleId);
+  setActiveConversation(conv.id);
+  console.info(`[sms] 玩家发起单聊 → ${conv.name}`);
+}
+
+/** ★ 玩家发短信 → 落库 + 立即唤醒目标 AI（P0） */
+async function onSysSmsSend(convId: string, text: string): Promise<void> {
+  const msg = sendPlayerMessage(convId, text);
+  if (!msg) return;
+  console.info(`[sms] 玩家发送 → ${convId}: ${text.slice(0, 40)}`);
+  // ★ 唤醒目标 AI（不等 20s 心跳）
+  try {
+    await wakeAiForPlayerSms(convId, text, state.value as any);
+  } catch (e) {
+    console.warn("[sms] 唤醒 AI 失败:", e);
+  }
+}
+
+/** 新建群聊 */
+function onSysSmsCreateGroup(payload: { name: string; memberIds: string[] }): void {
+  const names: Record<string, string> = {};
+  for (const c of sysSmsContacts.value) names[c.id] = c.name;
+  const conv = createGroupConversation(payload.name, payload.memberIds, names);
+  setActiveConversation(conv.id);
+  console.info(`[sms] 新建群聊「${conv.name}」成员 ${payload.memberIds.length} 人`);
+}
+
+/** 删除会话 */
+function onSysSmsRemove(convId: string): void {
+  removeConversation(convId);
+}
+
+/** 群聊改名 */
+function onSysSmsRename(convId: string, name: string): void {
+  renameConversation(convId, name);
+}
+
+/**
+ * ★ 短信数据加载（在收到 init 状态、worldName 就绪后调用）
+ */
+async function onSmsInit(): Promise<void> {
+  const wn = String((state.value as any)?.worldName || "");
+  if (!wn) return;   // 故事名还没就绪 → 等下一次 init
+  try {
+    await loadSms(wn);
+    smsReady.value = true;
+    console.info("[sms] 短信数据已加载:", debugSms());
+  } catch (e) {
+    console.warn("[sms] 加载失败:", e);
+  }
 }
 
 /* ----------------- 系统面板数据（v6：全部来自插件 state / 参数卡） ----------------- */
@@ -1639,6 +1764,10 @@ watch(showSystemPanel, (on) => {
   if (on) {
     sysNotice.value = "";
     reportLevels();
+  } else {
+    // ★ 通信(短信)：面板关掉 → 通信 tab 不可见了
+    //   → 清掉视图态，之后 AI 发来的消息要标未读（角标重新亮起来）
+    smsView.activeTab = "";
   }
 });
 
@@ -3490,6 +3619,13 @@ async function afterMapSwitchForEvents(mapFile: string): Promise<void> {
     broadcastAINewMap(mapFile);
   } catch (e) {
     console.warn("[field-survival] 广播 AI new_map 事件失败:", e);
+  }
+
+  // ★ 通信(短信)：切图时强制落库（防抖窗口内的消息丢失）
+  try {
+    await flushSmsSave();
+  } catch (e) {
+    console.warn("[sms] 切图落库失败:", e);
   }
 }
 /** 关卡名 → 地图文件名（levelNameToFile 的本地包装，失败返回 ""；中文关卡名走 LEVEL_FILES 权威表） */
@@ -8073,6 +8209,11 @@ onMounted(async () => {
   state.value = incoming;
     ready.value = true;
 
+    // ★ 通信(短信)：worldName 就绪后加载短信数据（按故事隔离的 dataKey）
+    if (!smsReady.value) {
+      void onSmsInit();
+    }
+
     // ★ 收到 init/init_start 时，强制重置所有选择状态
     // 这样第二次进入游戏时能正确显示选人面板
     // ★ 关键修复：仅在"阶段真正切换到 select"时重置（prevPhase !== "select"）。
@@ -8221,6 +8362,8 @@ onMounted(async () => {
   });
   window.addEventListener("keydown", onKeyDown);
   window.addEventListener("keyup", onKeyUp);
+  // ★ 通信(短信)：页面隐藏时强制落库
+  window.addEventListener("pagehide", onSmsPageHide);
   // ★ fix④：按持久化的像素风开关初始化画布采样方式
   applyCanvasSmoothing();
   raf = requestAnimationFrame(loop);
@@ -8234,8 +8377,20 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeyDown);
   window.removeEventListener("keyup", onKeyUp);
   window.removeEventListener("resize", fitCanvas);
+  window.removeEventListener("pagehide", onSmsPageHide);
+  // ★ 通信(短信)：卸载前强制落库（防抖窗口内的消息别丢）
+  void flushSmsSave();
   cancelAnimationFrame(raf);
 });
+
+/**
+ * ★ 通信(短信)：页面隐藏 / 关闭前强制落库
+ *   beforeunload 里发异步请求不可靠（浏览器会直接杀掉），
+ *   所以用 pagehide + keepalive 语义更稳，这里至少保证请求发出去了。
+ */
+function onSmsPageHide(): void {
+  void flushSmsSave();
+}
 
 watch(() => state.value?.phase, (p) => {
   if (p === "playing") {
@@ -8774,6 +8929,10 @@ watch(() => state.value?.phase, (p) => {
       title="系统菜单"
     >
       ⚙
+      <!-- ★ 通信未读角标（红色只留在这里） -->
+      <span v-if="sysSmsUnread > 0" class="sys-btn__badge">
+        {{ sysSmsUnread > 99 ? "99+" : sysSmsUnread }}
+      </span>
     </div>
 
     <!-- 系统面板 -->
@@ -8808,6 +8967,10 @@ watch(() => state.value?.phase, (p) => {
         :quest-view="questView"
         :ai-settings="sysAISettings"
         :ai-managed-count="sysAIManagedCount"
+        :sms-conversations="sysSmsConversations"
+        :sms-active-id="smsView.activeConvId"
+        :sms-unread="sysSmsUnread"
+        :sms-contacts="sysSmsContacts"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"
@@ -8840,6 +9003,13 @@ watch(() => state.value?.phase, (p) => {
         @ai-settings-save="onSysAISettingsSave"
         @ai-settings-reset="onSysAISettingsReset"
         @open-appearance="onOpenAppearance"
+        @sms-tab-change="onSysSmsTabChange"
+        @sms-select="onSysSmsSelect"
+        @sms-start-chat="onSysSmsStartChat"
+        @sms-send="onSysSmsSend"
+        @sms-create-group="onSysSmsCreateGroup"
+        @sms-remove="onSysSmsRemove"
+        @sms-rename="onSysSmsRename"
         @close="showSystemPanel = false"
       />
 
@@ -8921,8 +9091,24 @@ body {
   background: rgba(60, 61, 61, 0.95);
   transform: scale(1.05);
 }
-.sys-btn:active {
-  transform: scale(0.95);
+.sys-btn:active {  transform: scale(0.95);
+}
+/* ★ 通信未读角标 —— 红色只留在这里（描边避免和 ⚙ 叠在一起看不清） */
+.sys-btn__badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #e04a4a;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+  box-shadow: 0 0 0 2px rgba(30, 31, 31, 0.92);
+  pointer-events: none;
 }
 
 .sys-panel {

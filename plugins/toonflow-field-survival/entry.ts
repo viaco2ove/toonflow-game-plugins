@@ -6921,13 +6921,22 @@ export async function handle_action(
           systemPrompt: PROMPT_FIELD_SURVIVAL_AI_BRAIN,
           userPrompt,
         });
+        // ★ 宿主有两种返回形态：
+        //   ① output.text = 原始文本（老路径 / 文本类 agent）
+        //   ② output      = 已解析的对象（AI 大脑：runPluginAgent 里 extractJson 后直通）
+        //   两种都要能取到决策 JSON —— 只读 output.text 会永远拿到 undefined。
+        const out = (result as any)?.output;
+        let raw = "";
+        if (out && typeof out === "object") {
+          raw = typeof out.text === "string" ? out.text : JSON.stringify(out);
+        } else if (typeof out === "string") {
+          raw = out;
+        }
         // 模型常把内容包进 ```json 围栏 → 先剥围栏（brain.ts 的正则已能容忍，这里再兜一层）
-        const raw = result?.ok && result?.output?.text
-          ? String(result.output.text)
-              .replace(/^\s*```[a-zA-Z]*\s*/, "")
-              .replace(/\s*```\s*$/, "")
-              .trim()
-          : "";
+        raw = raw
+          .replace(/^\s*```[a-zA-Z]*\s*/, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
         if (!raw) return fail(String(result?.error || "LLM 返回空"));
         s.chatResult = { reqId, ok: true, text: raw };
         persistSys(context, s);

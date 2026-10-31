@@ -1038,6 +1038,36 @@ function buildEntryCtx() {
                 return { ok: false, error: errMsg };
               }
             }
+            if (n.indexOf("ai-brain") >= 0 || n === "field-survival-ai-brain") {
+              // ★ AI 托管大脑（短信回复/决策）：与 speaker/quest 同路——
+              //   由后端 /plugin/agentRun 代跑 runPluginAgent（field-survival-ai-brain）。
+              //   2026-10-31 修复：之前漏了这个分支 → 落到末尾 throw → sys_brain 必失败
+              //   → 玩家发短信永远「等待对方回复…」。
+              try {
+                const headers = { "Content-Type": "application/json" };
+                if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+                  headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+                }
+                const r = await fetch("/toon-api/plugin/agentRun", {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({ agentName: "field-survival-ai-brain", input: args || {}, aiConfigKey: "storyMiniGameModel" }),
+                });
+                const j = await r.json();
+                if (j && j.code === 200 && j.data) {
+                  const okFlag = j.data.ok ? "✓" : "✗";
+                  log(okFlag + " AI大脑 agent(真LLM) → " + (j.data.ok ? "决策JSON " + JSON.stringify(j.data.output).slice(0, 80) : "失败 " + (j.data.error || "")));
+                  return j.data;
+                }
+                const msg = (j && (j.msg || j.message)) || "后端 agentRun 返回异常";
+                log("! AI大脑 agent 调用失败：" + msg);
+                return { ok: false, error: String(msg) };
+              } catch (err) {
+                const msg = String((err && err.message) || err);
+                log("! AI大脑 agent 请求异常：" + msg);
+                return { ok: false, error: msg };
+              }
+            }
             if (n.indexOf("shop") >= 0) {
               await new Promise((r) => setTimeout(r, 240)); // 拟真网络 + 推理耗时
               return runMockShopAgent(args);

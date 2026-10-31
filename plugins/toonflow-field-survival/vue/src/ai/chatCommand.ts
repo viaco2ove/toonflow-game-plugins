@@ -28,6 +28,8 @@ import { getOrCreateAIState, setAIEnabled } from "./brain";
 import { executeAction, isActionComplete } from "./spine";
 import { updatePerception } from "./sensor";
 import { sendTick } from "../bridge";
+// ★ 通信(短信)：#ai 指令的 LLM 响应里也可能带 message
+import { dispatchSmsDecision } from "../sms/dispatch";
 
 export interface AIChatOutcome {
   /** 角色对玩家说的话（中文短句） */
@@ -275,6 +277,9 @@ export async function issueAIChatCommand(
     const decision = await callBrainForCommand(entity, state, cmd, perception);
     if (decision) {
       const result = executeAction(entity, decision.action, state);
+      // ★ 通信(短信)：#ai 指令的这次 LLM 响应里也可能带 message → 一并分发
+      //   （复用同一次响应，不另开 LLM 调用）
+      void dispatchSmsDecision(decision.decision, entity);
       return {
         say: result.success ? `好的。${decision.action.context || "我去办。"}` : `（执行失败：${result.message}）`,
         action: decision.action,
@@ -302,12 +307,12 @@ async function callBrainForCommand(
   state: GameState,
   cmd: string,
   perception: any,
-): Promise<{ action: AIAction; reasoning: string } | null> {
+): Promise<{ action: AIAction; reasoning: string; decision: any } | null> {
   // 复用 brain.ts 的 LLM 调用器
   const { callBrain } = await import("./brain");
   const decision = await callBrain(entity, state);
   if (!decision) return null;
-  return { action: decision.action, reasoning: decision.reasoning };
+  return { action: decision.action, reasoning: decision.reasoning, decision };
 }
 
 /** 兜底决策 */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import BagPanel from "./panels/BagPanel.vue";
 import RingPanel from "./panels/RingPanel.vue";
 import ShopPanel from "./panels/ShopPanel.vue";
@@ -9,11 +9,14 @@ import RolePanel from "./panels/RolePanel.vue";
 import EventPanel from "./panels/EventPanel.vue";
 import QuestLogPanel from "./panels/QuestLogPanel.vue";
 import AIPanel from "./panels/AIPanel.vue";
+import SmsPanel from "./sms/SmsPanel.vue";
+import type { SmsContact } from "./sms/SmsNewGroupModal.vue";
+import type { Conversation } from "./sms/types";
 import { getLevelDisplayName } from "./mapConfig";
 import type { AISettings } from "./ai/aiConfig";
 import { DEFAULT_AI_SETTINGS } from "./ai/aiConfig";
 
-type TabId = "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest" | "ai";
+type TabId = "sms" | "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest" | "ai";
 
 const props = defineProps<{
   player: any;
@@ -44,11 +47,21 @@ const props = defineProps<{
   aiSettings?: AISettings;
   /** 当前托管角色数（用于估算请求频率） */
   aiManagedCount?: number;
+  /** ★ 通信(短信)：会话列表 */
+  smsConversations?: Conversation[];
+  /** ★ 通信(短信)：当前打开的会话ID */
+  smsActiveId?: string;
+  /** ★ 通信(短信)：未读总数（tab 角标） */
+  smsUnread?: number;
+  /** ★ 通信(短信)：通讯录（新建群聊选人） */
+  smsContacts?: SmsContact[];
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
 
 const tabs: { id: TabId; label: string; icon: string }[] = [
+  // ★ 通信放第一位 —— 未读消息是高频入口，应该最容易被看到
+  { id: "sms", label: "通信", icon: "💬" },
   { id: "bag", label: "背包", icon: "🎒" },
   { id: "ring", label: "纳戒", icon: "💍" },
   { id: "shop", label: "商城", icon: "🏪" },
@@ -60,7 +73,24 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: "ai", label: "AI", icon: "🤖" },
 ];
 
-const activeTab = ref<TabId>("bag");
+const activeTab = ref<TabId>("sms");
+
+/** ★ 通信 tab 角标：未读数（其它 tab 恒为 0） */
+function badgeOf(tabId: TabId): number {
+  if (tabId !== "sms") return 0;
+  return Math.max(0, Number(props.smsUnread || 0));
+}
+
+/** 角标文本（>99 → 99+） */
+function badgeText(n: number): string {
+  return n > 99 ? "99+" : String(n);
+}
+
+/** ★ 切到通信 tab 时同步 store 的当前视图态（未读的实时已读判断依赖它）
+ *  immediate —— 组件挂载时 activeTab 已是 "sms"，不 immediate 就漏了首次同步 */
+watch(activeTab, (t) => {
+  emit("sms-tab-change", t);
+}, { immediate: true });
 
 /** AI 配置缺省值（父组件未就绪时用默认值兜底） */
 const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
@@ -86,10 +116,23 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         @click="activeTab = t.id"
       >
         <span class="sp-tab__icon">{{ t.icon }}</span>{{ t.label }}
+        <span v-if="badgeOf(t.id) > 0" class="sp-tab__badge">{{ badgeText(badgeOf(t.id)) }}</span>
       </button>
     </div>
 
-    <div class="sp-body">
+    <div class="sp-body" :class="{ 'sp-body--flush': activeTab === 'sms' }">
+      <SmsPanel
+        v-if="activeTab === 'sms'"
+        :conversations="smsConversations || []"
+        :active-id="smsActiveId || ''"
+        :contacts="smsContacts || []"
+        @select="(id: string) => emit('sms-select', id)"
+        @start-chat="(id: string) => emit('sms-start-chat', id)"
+        @send="(id: string, text: string) => emit('sms-send', id, text)"
+        @create-group="(p: any) => emit('sms-create-group', p)"
+        @remove="(id: string) => emit('sms-remove', id)"
+        @rename="(id: string, name: string) => emit('sms-rename', id, name)"
+      />
       <BagPanel
         v-if="activeTab === 'bag'"
         :items="bagItems"
@@ -195,9 +238,28 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
 .sp-map { color: #9fd0ff; }
 .sp-close { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 4px; color: #cfd8e3; font-size: 15px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; z-index: 10; }
 .sp-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
-.sp-tab { flex: 1 1 30%; padding: 6px 4px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: #cfd8e3; cursor: pointer; font-size: 12px; }
+/* ★ position: relative —— 未读角标要绝对定位在 tab 右上角 */
+.sp-tab { position: relative; flex: 1 1 30%; padding: 6px 4px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: #cfd8e3; cursor: pointer; font-size: 12px; }
 .sp-tab--on { background: #2f6fd0; border-color: #5a9bff; color: #fff; }
 .sp-tab__icon { margin-right: 3px; }
+/* ★ 未读角标 —— 红色只留在这里 */
+.sp-tab__badge {
+  position: absolute;
+  top: -5px;
+  right: -3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: #e04a4a;
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
 .sp-body { flex: 1 1 auto; overflow: auto; padding: 8px; }
+/* ★ 通信 tab：短信面板自己管滚动 → 关掉外层滚动，避免双滚动条 */
+.sp-body--flush { overflow: hidden; padding: 6px; }
 .sp-foot { padding: 6px 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); color: #93a2b3; font-size: 11px; min-height: 24px; }
 </style>

@@ -192,6 +192,13 @@ export interface LLMDecision {
   reasoning: string;
   goal: string;
   action: AIAction;
+  /**
+   * ★ 通信(短信)：AI 主动给玩家发短信的意图（可选）
+   *   - text: 短信正文
+   *   - to:   "player"（发到与该角色的单聊）| "group:<groupId>"（发到群聊）
+   *   解析见 brain.ts 的 parseLLMResponse；消费见 App.vue（唯一接线点）。
+   */
+  message?: { text: string; to: string };
 }
 
 /** AI 事件（触发大脑决策） */

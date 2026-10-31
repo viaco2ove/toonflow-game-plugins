@@ -23,6 +23,7 @@ import { checkEmergency, updatePerception } from "./sensor";
 import { readMapKnowledge } from "./mapKnowledge";
 import { readMapIntervalOverride } from "./mapInterval";
 import { getRuntimeBrainConfig, getRuntimeIntervals } from "./aiConfig";
+import { buildSmsContext } from "../sms/store";
 import type { Entity, GameState } from "../types";
 
 /** AI 大脑状态 */
@@ -204,14 +205,35 @@ function combatLevelText(level?: string): string {
 }
 
 /** 构建 User Prompt（当前状态 + 决策请求） */
-function buildUserPrompt(state: AIState, perception: AIPerception): string {
+function buildUserPrompt(state: AIState, perception: AIPerception, entityId: string): string {
   const recentMemory = state.memory.slice(-3).map((m) => {
     const ago = Math.round((Date.now() - m.timestamp) / 1000);
     const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago / 60)}分钟前`;
     return `- ${m.description} (${agoText})`;
   }).join("\n");
 
-  return `## 当前情况
+  // ★ 通信(短信)：注入短信往来（单聊 + 群聊都要注入）
+  //   否则玩家在单聊里发的消息 AI 根本看不到 —— 聊天会退化成单向广播。
+  //   ★ 标★ 的行表示"玩家的消息还没被回复"，AI 必须回。
+  let smsBlock = "";
+  try {
+    smsBlock = buildSmsContext(entityId);
+  } catch (e) {
+    console.warn("[ai-brain] 构建短信上下文失败:", e);
+  }
+  const smsSection = smsBlock ? `\n${smsBlock}\n` : "";
+
+  // ★ 角色身份块：sys_brain 通道的 systemPrompt 是「输出格式契约」（插件常量），
+  //   不含「你是谁」—— 身份必须随 userPrompt 传入，否则 LLM 会自造名字
+  //   （实测自称 "Agnes"）。
+  const identityBlock = `## 你的身份
+- 名字：${state.characterName || entityId}（所有回复/短信都以这个角色的身份，禁止自称其他名字）
+- 等级：Lv.${state.characterLevel}
+- 性格：${state.personality || "普通"}
+`;
+
+  return `${identityBlock}
+## 当前情况
 
 ### 环境感知
 - 周围敌人：${perception.nearby.enemies.length}只${perception.nearby.enemies.length ? " (" + perception.nearby.enemies.slice(0, 3).map((e) => `${e.name} HP:${e.hp}/${e.maxHp} 距${e.distance}米`).join(", ") + ")" : ""}
@@ -233,7 +255,7 @@ ${(perception.world?.playerCombatLevel || "none") !== "none" ? "- ★ 玩家正�
 
 ### 角色记忆（最近3件事）
 ${recentMemory || "- 暂无"}
-
+${smsSection}
 ### 当前目标
 ${state.goal}
 
@@ -248,6 +270,10 @@ ${state.goal}
     "type": "动作类型",
     "target": {"id": "目标ID", "x": 0, "y": 0, "name": "目标名"},
     "context": "执行此动作的原因"
+  },
+  "message": {
+    "text": "要给玩家发的短信（可选，不需要发就省略）",
+    "to": "player 或 group:<群ID>"
   }
 }
 \`\`\`
@@ -278,11 +304,30 @@ function parseLLMResponse(raw: string): LLMDecision | null {
         priority: obj.action.priority || 50,
         context: String(obj.action.context || obj.reasoning || ""),
       },
+      // ★ 通信(短信)：解析 AI 的发短信意图（可选字段）
+      message: parseSmsIntent(obj.message),
     };
   } catch (e) {
     console.warn("[ai-brain] LLM响应解析失败:", e);
     return null;
   }
+}
+
+/**
+ * ★ 解析 LLM 返回的短信意图（可选字段）
+ * 校验：text 非空、to 合法（"player" 或 "group:<id>"）。
+ * 非法 → 返回 undefined（不发短信），宁缺毋滥。
+ */
+function parseSmsIntent(raw: any): { text: string; to: string } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const text = String(raw.text || "").trim();
+  if (!text) return undefined;
+  const to = String(raw.to || "player").trim() || "player";
+  if (to !== "player" && !to.startsWith("group:")) {
+    console.warn("[ai-brain] 短信收件目标非法，丢弃:", to);
+    return undefined;
+  }
+  return { text, to };
 }
 
 /** 兜底决策（LLM 失败时） */
@@ -395,13 +440,77 @@ export function evaluateBrainTrigger(entity: Entity, state: GameState): BrainTri
   };
 }
 
-/** ★ v6 阶段二：真正调用 LLM 决策（由调度器逐个调用，全局单槽位） */
+/**
+ * ★ callBrain 的调用选项
+ */
+export interface BrainCallOptions {
+  /**
+   * 只取「回复短信」，不动角色的行动决策。
+   * ★ 场景：玩家发短信叫醒 AI 只想让它回消息，
+   *   不该因为回个消息就把角色的当前动作（采集/战斗）打断或替换。
+   */
+  replyOnly?: boolean;
+  /**
+   * 同上：保留当前动作，不覆盖 aiState.currentAction / goal / lastBrainTick。
+   */
+  keepAction?: boolean;
+  /**
+   * ★ 允许未托管角色调用（短信被动回复场景）。
+   * 产品语义：玩家主动发短信给角色 → 角色必须能回复，**不需要开 AI 托管**；
+   * AI 托管只管「角色主动决策」（自己寻路/战斗/主动发消息）。
+   * 短信回复是「玩家点名 → 角色应答」，与托管无关。
+   */
+  allowUnmanaged?: boolean;
+}
+
+/** ★ callBrainDetailed 的详细版：额外告诉调用方「这次是不是真的拿到了 LLM 响应」 */
+export interface BrainCallResult {
+  decision: LLMDecision | null;
+  /** true = 真的拿到了 LLM 的 JSON 响应；false = 走了程序化兜底 */
+  gotLLM: boolean;
+  /**
+   * ★ 失败原因细分（`gotLLM=false` 时才有意义）：
+   *   - "gate"    = 闸门被占 / 通道不可用 → **可以重试**（稍后再试就能拿到）
+   *   - "parse"   = 拿到了响应但解析失败   → 重试也未必好，但可以再试一次
+   *   - "empty"   = LLM 返回空字符串        → 通道问题，等下次心跳
+   *   - "emergency" = 紧急层接管（没走 LLM）
+   */
+  failReason?: "gate" | "parse" | "empty" | "emergency";
+}
 export async function callBrain(
   entity: Entity,
   state: GameState,
+  opts?: BrainCallOptions,
 ): Promise<LLMDecision | null> {
+  const r = await callBrainDetailed(entity, state, opts);
+  return r.decision;
+}
+
+/** ★ callBrain 的详细版：额外告诉调用方「这次是不是真的拿到了 LLM 响应」 */
+export interface BrainCallResult {
+  decision: LLMDecision | null;
+  /** true = 真的拿到了 LLM 的 JSON 响应；false = 走了程序化兜底 */
+  gotLLM: boolean;
+}
+
+/**
+ * ★ 详细版 brain 调用
+ *
+ * 为什么要区分 gotLLM：
+ *   短信回复场景下，"闸门被占导致没拿到 LLM"和"LLM 真的没写 message"
+ *   是两种完全不同的处理 —— 前者应该重试，后者应该保留待回复登记等下次心跳。
+ *   如果不区分，闸门一挡就会误以为"AI 不想回"，玩家永远收不到回复。
+ */
+export async function callBrainDetailed(
+  entity: Entity,
+  state: GameState,
+  opts?: BrainCallOptions,
+): Promise<BrainCallResult> {
   const aiState = getOrCreateAIState(entity);
-  if (!aiState.enabled) return null;
+  // ★ allowUnmanaged：短信被动回复不受托管闸门限制（玩家点名应答 ≠ 托管决策）。
+  //   未托管角色照样走完 LLM 决策拿 message，只是不写 currentAction/lastBrainTick（keepAction 已保证）。
+  if (!aiState.enabled && !opts?.allowUnmanaged) return { decision: null, gotLLM: false };
+  const keepAction = !!opts?.keepAction;
 
   // 1. 收集感知
   const perception = updatePerception(entity, state);
@@ -410,10 +519,17 @@ export async function callBrain(
   const emergency = checkEmergency(entity, perception);
   aiState.emergency = emergency.flags;
   if (emergency.shouldOverride && emergency.action) {
-    aiState.mode = "emergency";
-    aiState.currentAction = emergency.action;
+    // ★ keepAction 模式（短信回复）不打断正在执行的动作
+    if (!keepAction) {
+      aiState.mode = "emergency";
+      aiState.currentAction = emergency.action;
+    }
     addMemory(aiState, "system", `紧急：${emergency.action.context}`);
-    return { reasoning: "紧急响应", goal: aiState.goal, action: emergency.action };
+    return {
+      decision: { reasoning: "紧急响应", goal: aiState.goal, action: emergency.action },
+      gotLLM: false,
+      failReason: "emergency",
+    };
   }
 
   // 3. 事件触发（阶段一已消费队列，这里从 pendingTriggerReason 读回）
@@ -424,30 +540,49 @@ export async function callBrain(
 
   // 4. 调用 LLM
   aiState.mode = "brain";
-  aiState.lastBrainTick = Date.now();
+  // ★ keepAction 模式不推进心跳计时 —— 否则一次短信回复会把动作决策推迟一整轮
+  if (!keepAction) aiState.lastBrainTick = Date.now();
 
   try {
     const systemPrompt = buildSystemPrompt(aiState, perception);
-    const userPrompt = buildUserPrompt(aiState, perception);
+    const userPrompt = buildUserPrompt(aiState, perception, entity.id);
 
     // ★ 复用 eventEngine 的 llm.speak 接口
     //    实际通过 aiTalkToLLM 桥接（避免与现有聊天通道冲突）
     const raw = await callLLM(entity.name, systemPrompt, userPrompt);
-    if (!raw) throw new Error("LLM 返回空（可能被调度器闸门拒绝或通道不可用）");
-    const decision = parseLLMResponse(raw) || fallbackDecision(perception);
+    if (!raw) {
+      // ★ 空响应 = 闸门被占 / 通道不可用 → 可重试
+      const decision = fallbackDecision(perception);
+      if (!keepAction) {
+        aiState.goal = decision.goal;
+        aiState.currentAction = decision.action;
+      }
+      return { decision, gotLLM: false, failReason: "gate" };
+    }
+    const parsed = parseLLMResponse(raw);
+    // ★ 解析失败也走兜底，但 gotLLM=false —— 短信不该发
+    const decision = parsed || fallbackDecision(perception);
+    // ★ 短信只在真正拿到 LLM 响应时才发 —— fallbackDecision 不带 message，
+    //   避免"程序化兜底却发出一条机械短信"。
 
     // 5. 应用决策
-    aiState.goal = decision.goal;
-    aiState.currentAction = decision.action;
+    if (!keepAction) {
+      aiState.goal = decision.goal;
+      aiState.currentAction = decision.action;
+    }
     addMemory(aiState, decision.action.type as any, decision.action.context);
 
-    return decision;
+    return parsed
+      ? { decision, gotLLM: true }
+      : { decision, gotLLM: false, failReason: "parse" };
   } catch (e) {
     console.warn("[ai-brain] LLM调用失败:", e);
     const decision = fallbackDecision(perception);
-    aiState.goal = decision.goal;
-    aiState.currentAction = decision.action;
-    return decision;
+    if (!keepAction) {
+      aiState.goal = decision.goal;
+      aiState.currentAction = decision.action;
+    }
+    return { decision, gotLLM: false, failReason: "gate" };
   }
 }
 

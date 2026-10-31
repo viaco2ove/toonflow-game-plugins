@@ -568,6 +568,15 @@ function currentTheme(): "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null {
   return "RUINS";
 }
 
+/**
+ * 宽松取数：非数字/NaN → 用默认值 d
+ * ★ 这里必须本地定义一份（mapConfig.ts 里也有一份，但那是模块私有的，没导出）。
+ */
+function num(v: unknown, d = 0): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : d;
+}
+
 /** 把 entity_types.json 一条 enemy 转成我们 Entity 对象 */
 function makeEnemyFromEntityType(
   rs: any, x: number, y: number, lv: number,
