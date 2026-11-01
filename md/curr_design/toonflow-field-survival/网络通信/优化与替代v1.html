@@ -1,0 +1,90 @@
+<html style="margin:0;padding:0;">
+<title>插件通信方案选型总览</title>
+<div style="width:100%;box-sizing:border-box;background:#0f1526;color:#dfe6f2;font-family:'Microsoft YaHei',sans-serif;padding:20px;border-radius:10px;">
+
+  <div style="border-bottom:2px solid #2b3a5e;padding-bottom:12px;margin-bottom:16px;">
+    <div style="font-size:20px;font-weight:700;color:#f0f4ff;">插件通信方案选型总览</div>
+    <div style="font-size:13px;color:#8fa3c8;margin-top:4px;">结论：实时动作保留 tick + 增量优化；回合制用指令-结算；挂机/AI短信用事件推送。优化顺序：语义 → 持久化 → 传输。</div>
+  </div>
+
+  <!-- 三层方案空间 -->
+  <div style="font-size:15px;font-weight:700;color:#7fb3ff;margin:8px 0 8px;">三层方案空间（可自由组合）</div>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;">
+
+    <!-- 通道层 -->
+    <div style="flex:1;min-width:240px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#7fb3ff;margin-bottom:8px;">① 传输通道层（字节怎么送）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">T1 HTTP 短轮询 <b style="color:#2ecc71;">✅ 保留</b>（现状通道）</div>
+        <div style="background:#241a2e;border-left:4px solid #e74c3c;padding:6px 8px;border-radius:4px;">T2 HTTP 长轮询 <b style="color:#e74c3c;">❌ 不推荐</b>（收益被 O1 覆盖）</div>
+        <div style="background:#241f12;border-left:4px solid #f1c40f;padding:6px 8px;border-radius:4px;">T3 WebSocket <b style="color:#f1c40f;">🟡 中期可选</b>（断线体验）</div>
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">T4 SSE <b style="color:#2ecc71;">✅ 短信/通知推荐</b>（单向推送）</div>
+      </div>
+    </div>
+
+    <!-- 语义层 -->
+    <div style="flex:1;min-width:240px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#7fb3ff;margin-bottom:8px;">② 协议语义层（装什么、何时发）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+        <div style="background:#241a2e;border-left:4px solid #e67e22;padding:6px 8px;border-radius:4px;">S1 高频全量镜像 <b style="color:#e67e22;">⚠️ 唯一通道=错</b></div>
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">S2 增量/脏检查镜像 <b style="color:#2ecc71;">✅ 第一优先</b>（48KB→0）</div>
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">S3 指令-结算(RPC) <b style="color:#2ecc71;">✅ 回合制标准</b>（tick 归零）</div>
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">S4 事件推送+低频拉取 <b style="color:#2ecc71;">✅ 通知/AI短信标准</b></div>
+        <div style="background:#241a2e;border-left:4px solid #e74c3c;padding:6px 8px;border-radius:4px;">S5 本地优先+权威同步 <b style="color:#e74c3c;">❌ 红线</b>（丢防作弊）</div>
+      </div>
+    </div>
+
+    <!-- 格式层 -->
+    <div style="flex:1;min-width:240px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#7fb3ff;margin-bottom:8px;">③ 传输格式层（字节怎么编码）</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;">
+        <div style="background:#12301f;border-left:4px solid #2ecc71;padding:6px 8px;border-radius:4px;">F1 JSON 明文 <b style="color:#2ecc71;">✅ 现状</b>（增量后体积非问题）</div>
+        <div style="background:#241f12;border-left:4px solid #f1c40f;padding:6px 8px;border-radius:4px;">F2 二进制+压缩 <b style="color:#f1c40f;">🟡 远期</b>（破坏宿主零理解）</div>
+        <div style="background:#16203a;padding:6px 8px;border-radius:4px;color:#8fa3c8;">组合示例：短信 = T4 SSE + S4 事件推送 + F1</div>
+        <div style="background:#16203a;padding:6px 8px;border-radius:4px;color:#8fa3c8;">动作游戏 = T1 + S2 增量 + O2/O3 + F1</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 选型决策 -->
+  <div style="font-size:15px;font-weight:700;color:#7fb3ff;margin:8px 0 8px;">按插件形态选型（决策表）</div>
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:18px;">
+    <div style="flex:1;min-width:230px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#e8c46a;margin-bottom:6px;">实时动作型</div>
+      <div style="font-size:13px;color:#c9d6ee;line-height:1.7;">野外生存 · 假人对打 · 射击走位</div>
+      <div style="font-size:13px;color:#7fb3ff;margin-top:6px;">→ S1+S2+O2+O3</div>
+      <div style="font-size:12px;color:#8fa3c8;">tick 10Hz 活跃档 / 挂机 0.5-1s / 后台 0</div>
+    </div>
+    <div style="flex:1;min-width:230px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#e8c46a;margin-bottom:6px;">回合/指令型</div>
+      <div style="font-size:13px;color:#c9d6ee;line-height:1.7;">卡牌 · 经营 · 种田 · RPG 选段</div>
+      <div style="font-size:13px;color:#7fb3ff;margin-top:6px;">→ S3 指令-结算</div>
+      <div style="font-size:12px;color:#8fa3c8;">通信量 = 玩家操作次数 · tick 归零</div>
+    </div>
+    <div style="flex:1;min-width:230px;background:#16203a;border:1px solid #2b3a5e;border-radius:8px;padding:12px;">
+      <div style="font-size:14px;font-weight:700;color:#e8c46a;margin-bottom:6px;">挂机/通知型</div>
+      <div style="font-size:13px;color:#c9d6ee;line-height:1.7;">宠物养成 · 离线收益 · <b style="color:#ff9aa8;">AI 主动短信</b></div>
+      <div style="font-size:13px;color:#7fb3ff;margin-top:6px;">→ S4 事件推送 + T4 SSE</div>
+      <div style="font-size:12px;color:#8fa3c8;">AI 决策在后端定时器跑，前端 30s+ 拉取</div>
+    </div>
+  </div>
+
+  <!-- 落地顺序 -->
+  <div style="font-size:15px;font-weight:700;color:#7fb3ff;margin:8px 0 8px;">推荐落地顺序（先语义 → 再持久化 → 最后传输）</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;font-size:13px;">
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>1</b><br>O2 写库降频<br><span style="color:#8fa3c8;font-size:11px;">写库 -90%</span></div>
+    <div style="align-self:center;color:#2b3a5e;">→</div>
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>2</b><br>O1 增量回传<br><span style="color:#8fa3c8;font-size:11px;">带宽 → ~0</span></div>
+    <div style="align-self:center;color:#2b3a5e;">→</div>
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>3</b><br>O3 动态降频<br><span style="color:#8fa3c8;font-size:11px;">请求 -80%</span></div>
+    <div style="align-self:center;color:#2b3a5e;">→</div>
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>4</b><br>O4 快慢锁拆<br><span style="color:#8fa3c8;font-size:11px;">LLM 不堵帧</span></div>
+    <div style="align-self:center;color:#2b3a5e;">→</div>
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>5</b><br>P2/P3 分流<br><span style="color:#8fa3c8;font-size:11px;">新插件选型</span></div>
+    <div style="align-self:center;color:#2b3a5e;">→</div>
+    <div style="flex:1;min-width:120px;background:#12301f;border-radius:6px;padding:8px;text-align:center;"><b>6</b><br>短信接 S4+T4<br><span style="color:#8fa3c8;font-size:11px;">AI 主动消息</span></div>
+  </div>
+
+  <div style="font-size:12px;color:#6b7ea5;margin-top:14px;border-top:1px solid #2b3a5e;padding-top:8px;">红线：不搬逻辑回前端(S5)、不用 WS 全量重写、diff 不引入新协议负担、AI 主动消息不挂 tick、不强制二进制。</div>
+</div>
+</html>
