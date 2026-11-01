@@ -520,7 +520,14 @@ export async function callBrainDetailed(
   const perception = updatePerception(entity, state);
 
   // 2. 紧急检查（覆盖 LLM 决策）—— 阶段一已处理过，这里再兜一次（防止直连调用）
-  const emergency = checkEmergency(entity, perception);
+  //   ★ keepAction（短信回复）场景整体跳过紧急覆盖：
+  //     短信只取 message，紧急动作（撤退/喝药/等待）对「回短信」毫无意义——
+  //     反而会把回复挡掉（实测：地图 NPC 实体 MP 偏低 → lowMp →「蓝量不足」
+  //     → 陈南璇永远不回短信，用户视角就是「等待对方回复…」卡死）。
+  //   ★ 短信幽灵实体（mapName="__sms_ghost__"）同理跳过：感知全是占位数据。
+  const emergency = keepAction || (entity as any).mapName === "__sms_ghost__"
+    ? { flags: aiState.emergency, shouldOverride: false, action: null }
+    : checkEmergency(entity, perception);
   aiState.emergency = emergency.flags;
   if (emergency.shouldOverride && emergency.action) {
     // ★ keepAction 模式（短信回复）不打断正在执行的动作

@@ -35,6 +35,17 @@ import {
   clearPendingReply,
 } from "../sms/dispatch";
 import { listPendingReplyRoleIds, listConversations as listSmsConversations } from "../sms/store";
+import { toonflowJsApi } from "../toonflowJsApi";
+
+/** ★ 短信回复链路诊断（宿主 /plugin/data op=get dataKey=brain_diag 可读）：
+ *  5175 下 iframe 跨域 → console 抓不到，只能靠插件数据通道暴露阶段。 */
+async function diagSms(stage: string, extra?: Record<string, unknown>): Promise<void> {
+  try {
+    await toonflowJsApi.pluginData.set("brain_diag", { stage, ...(extra || {}), at: Date.now() });
+  } catch {
+    /* ignore */
+  }
+}
 
 /** ★ 正在补回短信的角色（防重入：心跳每 tick 都扫，不能反复发起同一角色的 LLM 调用） */
 const brainReplyInflight = new Set<string>();
@@ -438,6 +449,7 @@ export async function wakeAiForPlayerSms(
     //    replyToPlayerSms 内部用 allowUnmanaged 调 LLM，托管与否都能回。
     //    ★ 登记 inflight：避免心跳兜底在首次调用还在飞的时候插进来抢闸门
     //      （chatResult 是单槽位，两个并发必然互相覆盖 → 首次被判 "gate" 白重试）。
+    void diagSms("wake_start", { roleId, entityName: entity.name, ghost: entity.mapName === "__sms_ghost__" });
     brainReplyInflight.add(roleId);
     void replyToPlayerSms(entity, state).finally(() => {
       brainReplyInflight.delete(roleId);
@@ -455,6 +467,7 @@ async function replyToPlayerSms(entity: Entity, state: GameState): Promise<void>
   let attempt = 0;
   while (Date.now() < deadline) {
     attempt++;
+    void diagSms("reply_attempt", { attempt, entity: entity.name });
     try {
       const { decision, gotLLM, failReason } = await callBrainDetailed(entity, state, {
         keepAction: true,
@@ -462,11 +475,19 @@ async function replyToPlayerSms(entity: Entity, state: GameState): Promise<void>
       });
       if (!decision) {
         // 拿不到决策（不在场等）→ 清登记，等下一次心跳兜底
+        void diagSms("no_decision", { attempt, entity: entity.name });
         clearPendingReply(entity.id);
         return;
       }
       // ★ 没拿到 LLM 响应 → 不发短信，也不清登记
       if (!gotLLM) {
+        void diagSms("no_llm:" + String(failReason || "unknown"), {
+          attempt,
+          entity: entity.name,
+          emergency: JSON.stringify(getOrCreateAIState(entity).emergency || {}),
+          hp: entity.hp, maxHp: entity.maxHp, mp: entity.mp, maxMp: entity.maxMp,
+          ghost: (entity as any).mapName === "__sms_ghost__",
+        });
         // 紧急层接管 → 别重试（重试也没用，紧急层优先）
         if (failReason === "emergency") {
           console.info(`[sms] ${entity.name} 处于紧急状态，本轮不回复短信`);
@@ -488,6 +509,7 @@ async function replyToPlayerSms(entity: Entity, state: GameState): Promise<void>
         return;
       }
       const sent = dispatchSmsDecision(decision, entity);
+      void diagSms(sent ? "replied" : "dispatch_no", { entity: entity.name, hasMsg: !!decision.message });
       if (sent) return;
       // 拿到了 LLM 响应但没有 message → AI 这次不想回
       //   → 保留待回复登记，等下一次心跳兜底（玩家那条 ★ 还在 prompt 里）

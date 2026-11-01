@@ -377,11 +377,14 @@ async function onSysSmsSend(convId: string, text: string): Promise<void> {
   const msg = sendPlayerMessage(convId, text);
   if (!msg) return;
   console.info(`[sms] 玩家发送 → ${convId}: ${text.slice(0, 40)}`);
+  // ★ 诊断：记录「已进入 onSysSmsSend」→ 后续各阶段会覆盖 stage
+  void persistBrainDiag("sms_send:" + convId);
   // ★ 唤醒目标 AI（不等 20s 心跳）
   try {
     await wakeAiForPlayerSms(convId, text, state.value as any);
   } catch (e) {
     console.warn("[sms] 唤醒 AI 失败:", e);
+    void persistBrainDiag("wake_throw:" + String((e as any)?.message || e).slice(0, 120));
   }
 }
 
@@ -7127,6 +7130,27 @@ const brainResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; time
  *  故同一时刻只允许一个 brain 请求在途；拿不到闸门的角色直接返回空串走程序化兜底
  *  （brain.ts fallbackDecision），不发起请求也不占用时间。 */
 let brainBusy = false;
+/** ★ 诊断计数器（暴露到 __FS_DEBUG__.brain，短信回复链路排障用）：
+ *  calls = 进入 callBrainLLM 的次数；sent = 实际 sendTick("sys_brain") 次数；
+ *  busySkips = 因 brainBusy=true 被闸门挡掉的次数。sent=0 且 calls>0 → 闸门问题；
+ *  calls=0 → 上游（replyToPlayerSms/callBrainDetailed）没走到这里。 */
+const brainDiag = { calls: 0, sent: 0, busySkips: 0, lastCallAt: 0 };
+
+/** ★ 把 brain 诊断写到插件数据（宿主 /plugin/data op=get dataKey=brain_diag 可读）——
+ *  5175 下 iframe 跨域，console 抓不到；这是唯一能把「前端到底走到哪一步」暴露出来的通道。 */
+async function persistBrainDiag(stage: string): Promise<void> {
+  try {
+    await toonflowJsApi.pluginData.set("brain_diag", {
+      stage,
+      ...brainDiag,
+      busy: brainBusy,
+      waiters: brainResultWaiters.length,
+      at: Date.now(),
+    });
+  } catch {
+    /* ignore */
+  }
+}
 function waitBrainResult(reqId: string, timeoutMs = 8000): Promise<any> {
   return new Promise((resolve) => {
     const timer = window.setTimeout(() => {
@@ -7207,20 +7231,32 @@ async function callBrainLLM(
   systemPrompt: string,
   userPrompt: string,
 ): Promise<string> {
-  if (brainBusy) return "";
+  brainDiag.calls++;
+  brainDiag.lastCallAt = Date.now();
+  if (brainBusy) {
+    brainDiag.busySkips++;
+    console.warn("[ai] brain 闸门被占（busySkips=", brainDiag.busySkips, "）");
+    void persistBrainDiag("busy_skip");
+    return "";
+  }
   brainBusy = true;
   const reqId = `brain_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   try {
+    brainDiag.sent++;
+    console.info("[ai] brain sendTick sys_brain reqId=", reqId, "entity=", entityName);
+    void persistBrainDiag("sent:" + reqId);
     sendTick("sys_brain", { reqId, entityName, systemPrompt, userPrompt });
     const res = await waitBrainResult(reqId);
     if (!res?.ok) {
       console.warn("[ai] brain LLM 失败：", res?.error);
+      void persistBrainDiag("fail:" + String(res?.error || ""));
       return "";
     }
     // 期望 res.text 是 JSON 字符串
     return String(res.text || "");
   } catch (e: any) {
     console.warn("[ai] brain LLM 异常：", e);
+    void persistBrainDiag("throw:" + String(e?.message || e).slice(0, 120));
     return "";
   } finally {
     brainBusy = false;
@@ -7873,6 +7909,8 @@ onMounted(async () => {
   (window as any).__FS_DEBUG__ = {
     get state() { return state.value; },
     get mapCfg() { return mapCfg.value; },
+    /** ★ 短信回复链路诊断：calls/sent/busySkips（见 brainDiag 注释） */
+    get brain() { return { ...brainDiag, busy: brainBusy, waiters: brainResultWaiters.length }; },
     /**
      * ★ 对话 E2E 巡检入口（bsk / 浏览器控制台）：
      *   __FS_DEBUG__.chat.open("<entityId>", "<名字>") → 发起一轮真实大模型对话
