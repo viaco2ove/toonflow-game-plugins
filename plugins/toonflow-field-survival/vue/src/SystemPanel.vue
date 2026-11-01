@@ -16,7 +16,7 @@ import { getLevelDisplayName } from "./mapConfig";
 import type { AISettings } from "./ai/aiConfig";
 import { DEFAULT_AI_SETTINGS } from "./ai/aiConfig";
 
-type TabId = "sms" | "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest" | "ai";
+type TabId = "sms" | "bag" | "ring" | "shop" | "skill" | "map" | "role" | "event" | "quest" | "ai" | "config";
 
 const props = defineProps<{
   player: any;
@@ -55,6 +55,10 @@ const props = defineProps<{
   smsUnread?: number;
   /** ★ 通信(短信)：通讯录（新建群聊选人） */
   smsContacts?: SmsContact[];
+  /** ★ 通信(短信)：roleId → 头像 URL */
+  smsAvatarMap?: Record<string, string>;
+  /** ★ 通信(短信)：玩家自己的头像 URL */
+  smsPlayerAvatar?: string;
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
@@ -70,7 +74,7 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: "role", label: "角色", icon: "👥" },
   { id: "event", label: "事件", icon: "⚡" },
   { id: "quest", label: "任务", icon: "📜" },
-  { id: "ai", label: "AI", icon: "🤖" },
+  { id: "config", label: "设置", icon: "🤖" },
 ];
 
 const activeTab = ref<TabId>("sms");
@@ -126,6 +130,8 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         :conversations="smsConversations || []"
         :active-id="smsActiveId || ''"
         :contacts="smsContacts || []"
+        :avatar-map="smsAvatarMap || {}"
+        :player-avatar="smsPlayerAvatar || ''"
         @select="(id: string) => emit('sms-select', id)"
         @start-chat="(id: string) => emit('sms-start-chat', id)"
         @send="(id: string, text: string) => emit('sms-send', id, text)"
@@ -218,7 +224,7 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         @abandon="(id: string) => emit('quest-abandon', id)"
       />
       <AIPanel
-        v-else-if="activeTab === 'ai'"
+        v-else-if="activeTab === 'config'"
         :settings="aiSettings || defaultSettings"
         :managed-count="aiManagedCount || 0"
         @save="(s: AISettings) => emit('ai-settings-save', s)"

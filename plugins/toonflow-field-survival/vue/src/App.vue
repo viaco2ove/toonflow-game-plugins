@@ -55,7 +55,7 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
-import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, notifyAICombat, notifyAILoot, issueAIChatCommand, wakeAiForPlayerSms } from "./ai";
+import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, registerMapNpcResolver, notifyAICombat, notifyAILoot, issueAIChatCommand, wakeAiForPlayerSms } from "./ai";
 // ★ 通信(短信)：状态管理（唯一数据源）
 import {
   load as loadSms,
@@ -302,7 +302,48 @@ const sysSmsContacts = computed<SmsContact[]>(() => {
     const prev = out.get(id);
     out.set(id, { id, name: String(e.name || id), managed: isAIEnabled(id) || !!prev?.managed });
   }
+  // ③ ★ 地图 NPC 全集（cfg.npcs → mapnpc_<id>）：场上实体只注入玩家 50m 内的，
+  //    玩家走远后通讯录里该 NPC 会消失（已建的会话也成了「孤儿」）→
+  //    补进通讯录，保证玩家随时能给任何具名地图 NPC 发短信。
+  for (const n of ((mapCfg.value?.npcs || []) as any[])) {
+    const id = `mapnpc_${n.id}`;
+    if (out.has(id)) continue;
+    const name = String(n.displayName || n.name || id);
+    if (!name || n.unnamed) continue; // 无名镇民/动物不进通讯录
+    out.set(id, { id, name, managed: isAIEnabled(id) });
+  }
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name, "zh"));
+});
+
+/** ★ 短信头像映射：roleId → 头像 URL（npcCards/entities 的 avatarPath，经 resolveAssetPath 解析） */
+const sysSmsAvatarMap = computed<Record<string, string>>(() => {
+  const s = state.value as any;
+  const out: Record<string, string> = {};
+  const pick = (id: string, p: any) => {
+    const path = String(p || "").trim();
+    if (!path || out[id]) return;
+    try { out[id] = resolveAssetPath(path); } catch { /* ignore */ }
+  };
+  for (const c of ((s?.npcCards || []) as any[])) {
+    if (!c?.id) continue;
+    pick(String(c.id), c.avatarPath);
+  }
+  for (const e of ((s?.entities || []) as any[])) {
+    if (!e?.id) continue;
+    pick(String(e.id), (e as any).avatarPath);
+  }
+  return out;
+});
+
+/** ★ 玩家自己的头像 URL（玩家消息气泡用；空串则回退 emoji） */
+const sysPlayerAvatar = computed<string>(() => {
+  const s = state.value as any;
+  const me =
+    ((s?.npcCards || []) as any[]).find((c) => String(c?.side) === "player") ||
+    (s?.entities || []).find((e: any) => e.side === "player");
+  const path = String(me?.avatarPath || "").trim();
+  if (!path) return "";
+  try { return resolveAssetPath(path); } catch { return ""; }
 });
 
 /** ★ 短信存储是否已加载 */
@@ -7814,6 +7855,16 @@ onMounted(async () => {
   });
   // ★ AI 托管系统 LLM 调用器（v0.2：走宿主 agent 通道）
   registerAILLM(callBrainLLM);
+  // ★ 短信回复的地图 NPC 解析器：会话 members 里存的是 mapnpc_<tiledId>，
+  //   该 NPC 不在玩家 50m 内时不会注入 entities → findEntityById 需要
+  //   从地图配置表还原（否则玩家给远处 NPC 发短信永远石沉大海）。
+  registerMapNpcResolver((id: string) => {
+    if (!String(id).startsWith("mapnpc_")) return null;
+    const tiledId = Number(String(id).slice("mapnpc_".length));
+    const npc = (mapCfg.value?.npcs || []).find((n) => Number(n.id) === tiledId);
+    if (!npc) return null;
+    return { name: npc.displayName || npc.name, level: 1, hp: 50, maxHp: 50 };
+  });
   // ★ AI 托管运行时配置（用户可调，落库 t_plugin_session_data）
   //   必须在 AI 开始工作前加载，否则开局头几轮用默认间隔跑。
   await loadUserAISettings();
@@ -8971,6 +9022,8 @@ watch(() => state.value?.phase, (p) => {
         :sms-active-id="smsView.activeConvId"
         :sms-unread="sysSmsUnread"
         :sms-contacts="sysSmsContacts"
+        :sms-avatar-map="sysSmsAvatarMap"
+        :sms-player-avatar="sysPlayerAvatar"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"

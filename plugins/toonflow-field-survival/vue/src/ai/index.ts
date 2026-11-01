@@ -34,7 +34,7 @@ import {
   getPendingReplyTarget,
   clearPendingReply,
 } from "../sms/dispatch";
-import { listPendingReplyRoleIds } from "../sms/store";
+import { listPendingReplyRoleIds, listConversations as listSmsConversations } from "../sms/store";
 
 /** ★ 正在补回短信的角色（防重入：心跳每 tick 都扫，不能反复发起同一角色的 LLM 调用） */
 const brainReplyInflight = new Set<string>();
@@ -204,7 +204,8 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
   void consumeGatherArrivals(state);
 
   // ★ 通信(短信)心跳兜底：发短信那一刻角色不在场/闸门被占 → 保留待回复登记。
-  //   这里每 tick 扫一遍登记表，角色可见（在场上或角色卡里）就补回一次。
+  //   这里每 tick 扫一遍登记表，角色可见（在场上/角色卡/地图配置）就补回一次；
+  //   都找不到也**不放弃**——用会话名构造幽灵实体纯短信回复（玩家点名必回）。
   //   被动回复不需要托管（allowUnmanaged），每角色防重入，发完清登记。
   //   ★ 防抖 30s：首次直连调用（wakeAiForPlayerSms）deadline 是 25s，
   //     兜底必须等它彻底放弃后才接管，否则两个并发抢 chatResult 单槽位互相覆盖。
@@ -214,8 +215,23 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
       if (brainReplyInflight.has(roleId)) continue;      // 首次/上次还在飞 → 不插手
       const first = brainReplyFirstSeen.get(roleId) || 0;
       if (now - first < 30_000) continue;                // 30s 防抖（见上注释）
-      const entity = findEntityById(state, roleId);
-      if (!entity) continue;                             // 不在场也不在角色卡 → 等下次
+      let entity = findEntityById(state, roleId);
+      if (!entity) {
+        const target = getPendingReplyTarget(roleId);
+        const conv = target
+          ? listSmsConversations().find((c) => c.id === target.convId)
+          : undefined;
+        const ghostName = conv?.type === "private" ? conv.name : roleId;
+        if (!ghostName) continue;
+        entity = {
+          id: roleId,
+          name: ghostName,
+          side: "neutral",
+          x: 0, y: 0, hp: 50, maxHp: 50, mp: 30, maxMp: 30,
+          level: 1, atk: 10, def: 5, alive: true,
+          mapName: "__sms_ghost__",
+        } as any;
+      }
       brainReplyFirstSeen.set(roleId, now);
       brainReplyInflight.add(roleId);
       void replyToPlayerSms(entity, state).finally(() => {
@@ -386,10 +402,30 @@ export async function wakeAiForPlayerSms(
     notifyAIEvent(roleId, "dialog", `收到玩家短信：${text}`);
 
     // ★ 未托管角色也能回复短信（产品语义：被动应答不需要托管，托管只管主动决策）。
-    const entity = findEntityById(state, roleId);
+    let entity = findEntityById(state, roleId);
     if (!entity) {
-      console.info(`[sms] 角色 ${roleId} 不在场（角色卡里也没有），无法回复`);
-      continue;
+      // ★ 会话存档里的角色（如陈南璇是另一张图上的地图 NPC mapnpc_163，
+      //   当前图 cfg.npcs 里没有）—— 但**会话名就是角色名**：
+      //   构造「幽灵实体」继续回复（只用于拼 prompt，不参与移动/战斗）。
+      //   产品语义：玩家点名必回，找不到实体不是拒绝回复的理由。
+      const ghostName = conv.type === "private" ? conv.name : roleId;
+      console.info(`[sms] 角色 ${roleId}（${ghostName}）不在场，用幽灵实体回复（纯短信，不做动作）`);
+      entity = {
+        id: roleId,
+        name: ghostName,
+        side: "neutral",
+        x: 0,
+        y: 0,
+        hp: 50,
+        maxHp: 50,
+        mp: 30,
+        maxMp: 30,
+        level: 1,
+        atk: 10,
+        def: 5,
+        alive: true,
+        mapName: "__sms_ghost__", // ★ 标记：buildUserPrompt 会声明「不在场，忽略环境数据」
+      } as any;
     }
 
     // ② 已托管 → 置 P0，让调度器也知道（未托管角色没有 aiState.enabled，跳过这步）
@@ -470,7 +506,19 @@ async function replyToPlayerSms(entity: Entity, state: GameState): Promise<void>
   console.info(`[sms] 等待 ${entity.name} 回复超时（尝试 ${attempt} 次），留待下一次心跳`);
 }
 
-/** 从 state 里找实体 */
+/**
+ * ★ 地图 NPC 解析器（App.vue 注册）：id → { name, level, hp, maxHp } | null。
+ * 短信场景：玩家可以给「不在玩家 50m 内」的地图 NPC 发短信（通讯录来自 entities，
+ * 会话存档里的 members 是 mapnpc_*；切图/距离过远后实体被清掉）——
+ * 回复链路必须还能把 mapnpc_<id> 还原成实体，否则 findEntityById 返回 null → 静默不回。
+ */
+let mapNpcResolver: ((id: string) => { name?: string; level?: number; hp?: number; maxHp?: number } | null) | null = null;
+
+export function registerMapNpcResolver(fn: NonNullable<typeof mapNpcResolver>): void {
+  mapNpcResolver = fn;
+}
+
+/** 从 state 里找实体（entities → npcCards → 地图 NPC 配置表） */
 function findEntityById(state: GameState, id: string): Entity | null {
   const ents = (state?.entities || []) as Entity[];
   let hit = ents.find((e) => e.id === id) || null;
@@ -495,8 +543,36 @@ function findEntityById(state: GameState, id: string): Entity | null {
       alive: true,
       mapName: card.mapName || (state as any).levelName || "",
     } as any;
+    return hit;
   }
-  return hit;
+  // ★ 地图 NPC（mapnpc_*）：不在场/不在角色卡 → 从地图配置表还原（被动短信回复专用，
+  //   只用于拼 prompt，不参与移动/战斗）。
+  if (mapNpcResolver) {
+    try {
+      const npc = mapNpcResolver(id);
+      if (npc) {
+        return {
+          id,
+          name: npc.name || id,
+          side: "neutral",
+          x: 0,
+          y: 0,
+          hp: npc.hp || 50,
+          maxHp: npc.maxHp || 50,
+          mp: 30,
+          maxMp: 30,
+          level: npc.level || 1,
+          atk: 10,
+          def: 5,
+          alive: true,
+          mapName: (state as any).levelName || "",
+        } as any;
+      }
+    } catch (e) {
+      console.warn("[sms] 地图 NPC 解析失败:", id, e);
+    }
+  }
+  return null;
 }
 
 /**

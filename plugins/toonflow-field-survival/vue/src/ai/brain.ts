@@ -226,10 +226,14 @@ function buildUserPrompt(state: AIState, perception: AIPerception, entityId: str
   // ★ 角色身份块：sys_brain 通道的 systemPrompt 是「输出格式契约」（插件常量），
   //   不含「你是谁」—— 身份必须随 userPrompt 传入，否则 LLM 会自造名字
   //   （实测自称 "Agnes"）。
+  //   ★ 幽灵实体（mapName="__sms_ghost__"）：角色不在玩家所在地图，纯短信回复——
+  //     环境感知全是占位数据，明确告诉 LLM 别拿它当真。
+  const isSmsGhost = (state as any).mapName === "__sms_ghost__";
   const identityBlock = `## 你的身份
 - 名字：${state.characterName || entityId}（所有回复/短信都以这个角色的身份，禁止自称其他名字）
 - 等级：Lv.${state.characterLevel}
 - 性格：${state.personality || "普通"}
+${isSmsGhost ? "\n⚠ 你当前**不在玩家所在的地方**（可能是另一座城/另一张地图），你无法感知周围环境。下面「当前情况」里的环境数据都是无效占位——忽略它们，**只根据短信往来和你对这个角色的理解来回复**。动作一律用 {\"type\":\"wait\",\"duration\":2000}。\n" : ""}
 `;
 
   return `${identityBlock}

@@ -6907,9 +6907,12 @@ export async function handle_action(
       const entityName = str(params?.entityName, "???");
       const userPrompt = str(params?.userPrompt, "");
       // ★ 异常也必须写回包，否则前端 brainResultWaiters 会一直 pending 到超时
-      const fail = (err: string) => {
+      // ★ persistSys 必须 await：fire-and-forget 的 pluginData.set 会在 handle_action
+      //   返回后才执行，实测（2026-11-01 5175 探针 probe_4：LLM success 但 chatResult
+      //   永远落不了库）写丢失 → 前端 waitBrainResult 8s 超时 → 「等待对方回复…」永不消失。
+      const fail = async (err: string) => {
         s.chatResult = { reqId, ok: false, error: err };
-        persistSys(context, s);
+        await persistSys(context, s);
         return okResp(JSON.stringify({ error: err }));
       };
       if (!reqId) return fail("缺少 reqId");
@@ -6939,7 +6942,7 @@ export async function handle_action(
           .trim();
         if (!raw) return fail(String(result?.error || "LLM 返回空"));
         s.chatResult = { reqId, ok: true, text: raw };
-        persistSys(context, s);
+        await persistSys(context, s);
         return okResp("brain ok");
       } catch (e) {
         console.warn("[field-survival] sys_brain agent call failed:", e);
