@@ -1,0 +1,26 @@
+{
+  "id": "com.toonflow.minigame-turn-based-template",
+  "name": "回合制模板",
+  "version": "1.0.0",
+  "author": "Toonflow Team",
+  "description": "P2 回合/指令型插件模板：零 tick 轮询，玩家出招时才与后端通信。",
+  "main": "entry.ts",
+  "entry": "entry.js",
+  "contributes": {
+    "minigame": {
+      "type": "turn_based_template",
+      "title": "回合制模板",
+      "width": 480,
+      "height": 640,
+      "entry": "ui/game.html",
+      "interaction": "turn-based"
+    },
+    "sidebar": [
+      {
+        "id": "turn-based-template-cmd",
+        "label": "回合制模板",
+        "command": "#回合制模板"
+      }
+    ]
+  }
+}

@@ -39,6 +39,33 @@ function isConnMode(): boolean {
   return false;
 }
 
+/**
+ * ★ P2 协议分流（2026-11-01，网络通信机制 v2 §4）：
+ *   宿主按 manifest.contributes.minigame.interaction 把协议形态拼进 iframe src：
+ *     ?interaction=turn-based → 回合/指令型：**不发 tick**，只在玩家出招时发 action
+ *     （缺省或 realtime）      → 实时动作型：保持 10Hz tick（+ O1-O4 优化）
+ *   插件端读 location.search 判定；判定结果缓存，避免每帧读 URL。
+ */
+let interactionModeCache: string | null = null;
+
+export function interactionMode(): string {
+  if (interactionModeCache !== null) return interactionModeCache;
+  let v = "realtime";
+  try {
+    if (typeof location !== "undefined" && location.search) {
+      const m = /[?&]interaction=([^&]+)/.exec(location.search);
+      if (m && m[1]) v = decodeURIComponent(m[1]);
+    }
+  } catch { /* ignore */ }
+  interactionModeCache = v || "realtime";
+  return interactionModeCache;
+}
+
+/** 是否回合/指令型（不发 tick） */
+export function isTurnBased(): boolean {
+  return interactionMode() === "turn-based";
+}
+
 export function sendToHost(action: string, params: Record<string, unknown> = {}): void {
   postSafely({ type: "tf_plugin_action", action, params });
 }

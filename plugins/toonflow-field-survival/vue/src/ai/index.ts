@@ -35,6 +35,7 @@ import {
   clearPendingReply,
 } from "../sms/dispatch";
 import { listPendingReplyRoleIds, listConversations as listSmsConversations } from "../sms/store";
+import { registerProactiveWake } from "../sms/proactivePoller";
 import { toonflowJsApi } from "../toonflowJsApi";
 
 /** ★ 短信回复链路诊断（宿主 /plugin/data op=get dataKey=brain_diag 可读）：
@@ -457,6 +458,77 @@ export async function wakeAiForPlayerSms(
     });
   }
 }
+
+/**
+ * ★ P3 事件推送（2026-11-01，网络通信机制 v2 §4）：后端「唤醒事件」→ AI 主动发短信
+ *
+ * 与 wakeAiForPlayerSms（被动回复）的区别：
+ *   - 被动回复：玩家发了消息在等 → prompt 里有"待回复消息"，AI 必须回；
+ *   - 主动唤醒：后端判定"该角色到了主动说话的时间"（编排器/定时器 push 的
+ *     wake_sms 事件）→ 无待回复登记，AI 自由决策——想说话就发 message，
+ *     不想说就静默（dispatchSmsDecision 对无 message 的决策天然安全）。
+ *
+ * AI 状态（性格/记忆/感知）全在插件前端（v2 §4 方案 A，不迁移后端）——
+ * 后端事件只是"该动了"的提示，决策质量与既有托管链路完全同源。
+ */
+export async function wakeAiForProactiveSms(
+  roleId: string,
+  state: GameState,
+  hint?: string,
+): Promise<void> {
+  if (brainReplyInflight.has(roleId)) return; // 该角色已有短信决策在飞 → 不叠加
+
+  // 构造决策实体：优先在场实体；不在场用幽灵（与被动回复同规则——地图 NPC 也能主动发）
+  let entity = findEntityById(state, roleId);
+  if (!entity) {
+    const conv = listSmsConversations().find(
+      (c) => c.type === "private" && c.members.includes(roleId),
+    );
+    const ghostName = conv?.name || roleId;
+    if (!ghostName) return;
+    entity = {
+      id: roleId,
+      name: ghostName,
+      side: "neutral",
+      x: 0, y: 0, hp: 50, maxHp: 50, mp: 30, maxMp: 30,
+      level: 1, atk: 10, def: 5, alive: true,
+      mapName: "__sms_ghost__",
+    } as any;
+  }
+
+  // ★ 主动消息语境：写进记忆（会进入 prompt 的「角色记忆」块）。
+  //   hint 来自事件的 payload（编排器可带场景提示，如"刚进地图打个招呼"）；
+  //   没有 hint 给通用语境。明确告诉 LLM「这次决策的重点是短信意图」，
+  //   否则输出格式契约里 message 是可选项，LLM 会倾向省略（实测 3 次 silent）。
+  const hintLine = hint ? `场景提示：${hint}` : "若你恰好有想告诉玩家的事（见闻/提醒/关心），就用 message 发一条短信；实在没有就保持安静。";
+  notifyAIEvent(roleId, "dialog", `（系统）系统提示你现在可以主动联系玩家。${hintLine}如果要发，把内容写进输出的 message 字段。`);
+
+  void diagSms("p3_proactive_start", { roleId, entityName: entity.name });
+  brainReplyInflight.add(roleId);
+  try {
+    const { decision, gotLLM } = await callBrainDetailed(entity, state, {
+      keepAction: true,
+      allowUnmanaged: true, // 主动消息也不要求托管（与被动回复同语义）
+      proactiveSms: true,   // ★ P3：把 message 提升为本次决策的主要产出
+    });
+    if (gotLLM && decision) {
+      const sent = dispatchSmsDecision(decision, entity);
+      void diagSms(sent ? "p3_proactive_sent" : "p3_proactive_silent", {
+        entity: entity.name, hasMsg: !!decision.message,
+        reasoning: decision.reasoning,
+      });
+      // ★ 只消费短信意图，不执行动作：幽灵实体不在场，executeAction 无意义；
+      //   在场实体的动作决策留给既有 tick 调度器（避免双通道抢动作）。
+    } else {
+      void diagSms("p3_proactive_no_llm", { entity: entity.name });
+    }
+  } finally {
+    brainReplyInflight.delete(roleId);
+  }
+}
+
+/** ★ 把 P3 唤醒处理函数接到轮询器（模块加载即生效；App.vue 只需启停轮询器） */
+registerProactiveWake(wakeAiForProactiveSms);
 
 /**
  * ★ 立即为玩家的一条短信发起一次 LLM 决策（只取 message，不动动作）

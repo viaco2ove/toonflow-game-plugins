@@ -205,7 +205,12 @@ function combatLevelText(level?: string): string {
 }
 
 /** 构建 User Prompt（当前状态 + 决策请求） */
-function buildUserPrompt(state: AIState, perception: AIPerception, entityId: string): string {
+function buildUserPrompt(
+  state: AIState,
+  perception: AIPerception,
+  entityId: string,
+  opts?: { proactiveSms?: boolean },
+): string {
   const recentMemory = state.memory.slice(-3).map((m) => {
     const ago = Math.round((Date.now() - m.timestamp) / 1000);
     const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago / 60)}分钟前`;
@@ -236,7 +241,20 @@ function buildUserPrompt(state: AIState, perception: AIPerception, entityId: str
 ${isSmsGhost ? "\n⚠ 你当前**不在玩家所在的地方**（可能是另一座城/另一张地图），你无法感知周围环境。下面「当前情况」里的环境数据都是无效占位——忽略它们，**只根据短信往来和你对这个角色的理解来回复**。动作一律用 {\"type\":\"wait\",\"duration\":2000}。\n" : ""}
 `;
 
-  return `${identityBlock}
+  // ★ P3 主动短信模式（2026-11-01）：后端事件唤醒的主动发消息决策。
+  //   把 message 从"可选项"提升为本次决策的主要产出——否则 LLM 倾向保守省略
+  //   （实测 3 连 silent：keepAction + ghost 的双重保守语境压过了主动发信意图）。
+  const proactiveBlock = opts?.proactiveSms
+    ? `\n## ★ 本次决策任务：主动短信
+系统判定现在是你可以**主动联系玩家**的时机（不是回复，玩家没有在等你）。
+请以「${state.characterName || entityId}」的身份，结合你的性格、与玩家的近期短信往来和上面的场景提示，决定要不要发一条主动短信：
+- 有自然想说的事（提醒/见闻/关心/吐槽/邀约）→ **必须**在输出的 message.text 里写出来（这是本次决策的主要产出，不要省略）；
+- 确实完全无话可说 → message 字段省略，reasoning 里写"暂无消息"。
+动作一律 {"type":"wait","duration":2000}。
+`
+    : "";
+
+  return `${identityBlock}${proactiveBlock}
 ## 当前情况
 
 ### 环境感知
@@ -465,6 +483,15 @@ export interface BrainCallOptions {
    * 短信回复是「玩家点名 → 角色应答」，与托管无关。
    */
   allowUnmanaged?: boolean;
+  /**
+   * ★ P3 主动短信模式（2026-11-01，网络通信机制 v2 §4）：
+   * 后端事件推送唤醒的「AI 主动发消息」决策。与 replyOnly 的区别：
+   *   - replyOnly：玩家在等回复，prompt 引导"回复收到的消息"；
+   *   - proactiveSms：没有待回复消息，prompt 引导"评估是否要主动发一条"，
+   *     并把 message 提升为本次决策的**主要产出**（否则 LLM 倾向省略可选字段，
+   *     实测 3 连 silent）。动作仍输出 wait（ghost/keepAction 语义不变）。
+   */
+  proactiveSms?: boolean;
 }
 
 /** ★ callBrainDetailed 的详细版：额外告诉调用方「这次是不是真的拿到了 LLM 响应」 */
@@ -556,7 +583,9 @@ export async function callBrainDetailed(
 
   try {
     const systemPrompt = buildSystemPrompt(aiState, perception);
-    const userPrompt = buildUserPrompt(aiState, perception, entity.id);
+    const userPrompt = buildUserPrompt(aiState, perception, entity.id, {
+      proactiveSms: !!opts?.proactiveSms,
+    });
 
     // ★ 复用 eventEngine 的 llm.speak 接口
     //    实际通过 aiTalkToLLM 桥接（避免与现有聊天通道冲突）

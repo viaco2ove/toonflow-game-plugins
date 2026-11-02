@@ -18,7 +18,8 @@ declare global {
  *   - zoom ∈ [10, 30]：zoom 越大 → 视野越小（放大看脚下）
  */
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
-import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable } from "./bridge";
+import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable, isTurnBased } from "./bridge";
+import { startProactivePoller, stopProactivePoller } from "./sms/proactivePoller";
 import { toonflowJsApi } from "./toonflowJsApi";
 import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext, readStoryJson } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
@@ -6645,6 +6646,35 @@ let lastMinimapAt = 0;
 let lastFrameAt = 0;
 const TICK_MS = 100;
 
+/* ---------------- ★ O3 动态降频（网络通信机制 v2 §3.3） ----------------
+ * 活跃度三档：上报频率随玩家活跃度自适应（后端 O1 已把无变化帧压到 112B，
+ * 但"有变化的帧仍回 48KB 全量"——挂机时野怪微动会让变化帧持续出现，
+ * 请求次数本身就是成本，所以在前端把挂机档的上报频率直接降下来）。
+ *   ACTIVE  100ms（移动端 200ms）：有移动输入 / moveTo 寻路中
+ *   IDLE    1000ms：3 秒无输入且无寻路（挂机）
+ * 切换规则：进入 IDLE 需持续 3s 无输入；任何输入立刻回 ACTIVE（本帧即发）。
+ */
+const SEND_IDLE_MS = 1000;
+const IDLE_ENTER_MS = 3000;
+let lastInputAt = 0;
+let wasActive = true;
+
+/** 当前应使用的上报间隔（ms） */
+function currentSendMs(ts: number): number {
+  const s = state.value as any;
+  const active = !!(s && (s.phase === "playing")
+    && (input.value.dx !== 0 || input.value.dy !== 0 || input.value.moveTo));
+  if (active) {
+    lastInputAt = ts;
+    if (!wasActive) { wasActive = true; lastSendAt = 0; } // 回活跃档：立即发一帧
+    return SEND_MS;
+  }
+  // 无输入：挂机判定要等 IDLE_ENTER_MS（避免停手瞬间掉帧感）
+  if (ts - lastInputAt < IDLE_ENTER_MS) return SEND_MS;
+  if (wasActive) { wasActive = false; }
+  return SEND_IDLE_MS;
+}
+
 /* ---------------- ★ game.md 床碰撞 → 睡眠按钮 ---------------- */
 /** 玩家是否紧邻床铺（tileset description=bed 的 blocked 格），随 tick 10Hz 刷新 */
 const nearBed = ref(false);
@@ -7449,7 +7479,10 @@ function loop(ts: number) {
     // ★ 任务目的地：10Hz 刷新「到达」浮动按钮的显隐
     updateQuestArriveBtn();
     // ★ fix①（性能）：上报单独限频（移动端 5Hz），宿主只镜像玩家位姿，不影响判定
-    if (ts - lastSendAt >= SEND_MS) {
+    // ★ O3 动态降频：活跃档 SEND_MS / 挂机档 1000ms（见 currentSendMs 注释）
+    // ★ P2 协议分流：回合/指令型（interaction=turn-based）**不发 tick**——
+    //   状态只在玩家出招时变化，通信量 = 玩家操作次数（见网络通信机制 v2 §4）。
+    if (ts - lastSendAt >= currentSendMs(ts) && !isTurnBased()) {
       lastSendAt = ts;
       // ★ 修复③：本地敌怪集合发生结构性变化时（切图 / 补怪 / 兜底补怪），
       //   把整份清单随本帧 tick 上报宿主，由宿主重建敌怪表并统一跑 AI/结算。
@@ -8453,6 +8486,9 @@ onMounted(async () => {
   window.addEventListener("keyup", onKeyUp);
   // ★ 通信(短信)：页面隐藏时强制落库
   window.addEventListener("pagehide", onSmsPageHide);
+  // ★ P3 事件推送（网络通信机制 v2 §4）：短信事件轮询器（30s 低频拉取，
+  //   AI 主动消息不再依赖 tick 心跳；页面隐藏自动降到 5 分钟）
+  startProactivePoller(() => state.value);
   // ★ fix④：按持久化的像素风开关初始化画布采样方式
   applyCanvasSmoothing();
   raf = requestAnimationFrame(loop);
@@ -8469,6 +8505,8 @@ onBeforeUnmount(() => {
   window.removeEventListener("pagehide", onSmsPageHide);
   // ★ 通信(短信)：卸载前强制落库（防抖窗口内的消息别丢）
   void flushSmsSave();
+  // ★ P3：停掉短信事件轮询器
+  stopProactivePoller();
   cancelAnimationFrame(raf);
 });
 

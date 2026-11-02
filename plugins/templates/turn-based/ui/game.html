@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>回合制模板</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 14px; font: 14px/1.6 system-ui, -apple-system, "PingFang SC", sans-serif;
+    background: #14161c; color: #e8eaf0;
+  }
+  h1 { font-size: 16px; margin: 0 0 10px; }
+  .card { background: #1c1f27; border: 1px solid #2b3040; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .hp { height: 10px; background: #2b3040; border-radius: 6px; overflow: hidden; margin-top: 4px; }
+  .hp > i { display: block; height: 100%; background: linear-gradient(90deg, #e05252, #f0a35c); transition: width .2s; }
+  .log { font-size: 12px; color: #9aa3b5; max-height: 160px; overflow: auto; }
+  .log p { margin: 2px 0; }
+  .bar { display: flex; gap: 8px; }
+  button {
+    flex: 1; padding: 9px 12px; font-size: 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid #39405a; background: #262b38; color: #e8eaf0;
+  }
+  button:hover:not(:disabled) { background: #303747; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #3d5afe; border-color: #3d5afe; }
+  .tag { font-size: 11px; color: #7f8899; margin-top: 8px; }
+  .tag b { color: #58c98a; font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>回合制模板（P2 · 零 tick 轮询）</h1>
+
+  <div class="card">
+    <div class="row"><span id="pName">—</span><span id="pHp">—</span></div>
+    <div class="hp"><i id="pBar" style="width:0%"></i></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span id="eName">—</span><span id="eHp">—</span></div>
+    <div class="hp"><i id="eBar" style="width:0%"></i></div>
+  </div>
+
+  <div class="card bar">
+    <button id="btnStart" class="primary">开始</button>
+    <button id="btnAttack" disabled>攻击</button>
+    <button id="btnReset" disabled>再来一局</button>
+  </div>
+
+  <div class="card log" id="log"></div>
+  <div class="tag">通信形态：<b id="mode">—</b> · 每一次按钮点击 = 一次 /plugin/tick 往返（无心跳、无轮询）</div>
+
+<script>
+(function () {
+  // ── 宿主通信桥（与 toonflow-field-survival 的 bridge.ts 同协议） ──
+  var pending = null;
+
+  function readQuery(name) {
+    try {
+      var m = new RegExp("[?&]" + name + "=([^&]+)").exec(location.search);
+      return m ? decodeURIComponent(m[1]) : "";
+    } catch (e) { return ""; }
+  }
+
+  var interaction = readQuery("interaction") || "realtime";
+  document.getElementById("mode").textContent =
+    interaction === "turn-based" ? "turn-based（manifest 声明）" : interaction;
+
+  function isTurnBased() { return interaction === "turn-based"; }
+
+  function send(action, params) {
+    var msg = { type: "tf_plugin_tick", action: action, params: params || {} };
+    try {
+      if (window.parent === window) {
+        window.dispatchEvent(new MessageEvent("message", { data: msg }));
+      } else {
+        window.parent.postMessage(msg, "*");
+      }
+    } catch (e) { console.warn("[turn-based] postMessage 失败", e); }
+  }
+
+  // 宿主回推状态
+  window.addEventListener("message", function (ev) {
+    var d = ev.data || {};
+    if (d.type === "tf_plugin_state" && d.state) applyState(d.state);
+    else if (d.type === "tf_plugin_loaded" || d.type === "tf_plugin_state") {
+      // 首帧：主动拉一次状态（仍然是一次请求，不是轮询）
+      send("tick", { bootstrap: true });
+    }
+  });
+
+  // 兜底：宿主未接上时本地自娱（仅演示，不影响真实链路）
+  var local = null;
+  function localHandle(action) {
+    if (!local) {
+      local = { version: 1, phase: "select", player: { name: "你", hp: 100, maxHp: 100 },
+                enemy: { name: "对手", hp: 100, maxHp: 100 }, log: [], turn: 0, result: "" };
+    }
+    if (action === "start") {
+      local = { version: 1, phase: "playing", player: { name: "你", hp: 100, maxHp: 100 },
+                enemy: { name: "对手", hp: 100, maxHp: 100 }, log: ["对决开始"], turn: 1, result: "" };
+    } else if (action === "attack" && local.phase === "playing") {
+      var hit = Math.random() < 0.6;
+      var dmg = Math.round(12 + Math.random() * 10);
+      if (hit) { local.enemy.hp = Math.max(0, local.enemy.hp - dmg); local.log.push("命中，造成 " + dmg + " 伤害"); }
+      else local.log.push("攻击被闪开");
+      if (local.enemy.hp <= 0) { local.phase = "over"; local.result = "win"; local.log.push("你赢了！"); }
+      else {
+        var cd = Math.round(8 + Math.random() * 8);
+        local.player.hp = Math.max(0, local.player.hp - cd);
+        local.log.push("反击，你受到 " + cd + " 伤害");
+        if (local.player.hp <= 0) { local.phase = "over"; local.result = "lose"; local.log.push("你倒下了"); }
+        else local.turn++;
+      }
+    }
+    applyState(local);
+  }
+
+  // ── 渲染 ──
+  function applyState(s) {
+    if (!s) return;
+    var p = s.player || {}, e = s.enemy || {};
+    document.getElementById("pName").textContent = p.name || "—";
+    document.getElementById("pHp").textContent = (p.hp != null ? p.hp : "—") + " / " + (p.maxHp || 100);
+    document.getElementById("pBar").style.width = (p.maxHp ? (p.hp / p.maxHp) * 100 : 0) + "%";
+    document.getElementById("eName").textContent = e.name || "—";
+    document.getElementById("eHp").textContent = (e.hp != null ? e.hp : "—") + " / " + (e.maxHp || 100);
+    document.getElementById("eBar").style.width = (e.maxHp ? (e.hp / e.maxHp) * 100 : 0) + "%";
+
+    var logBox = document.getElementById("log");
+    logBox.innerHTML = "";
+    (Array.isArray(s.log) ? s.log : []).forEach(function (m) {
+      var p2 = document.createElement("p");
+      p2.textContent = "· " + m;
+      logBox.appendChild(p2);
+    });
+
+    var playing = s.phase === "playing";
+    document.getElementById("btnStart").disabled = playing;
+    document.getElementById("btnAttack").disabled = !playing;
+    document.getElementById("btnReset").disabled = s.phase === "select";
+  }
+
+  // ── 交互：每次点击 = 一次往返 ──
+  document.getElementById("btnStart").onclick = function () { send("start", {}); setTimeout(function(){ localHandle("start"); }, 300); };
+  document.getElementById("btnAttack").onclick = function () { send("attack", {}); setTimeout(function(){ localHandle("attack"); }, 300); };
+  document.getElementById("btnReset").onclick = function () { send("reset", {}); setTimeout(function(){ localHandle("start"); }, 300); };
+
+  // 通知宿主已加载（宿主据此回推初始状态）
+  try {
+    if (window.parent === window) window.dispatchEvent(new MessageEvent("message", { data: { type: "tf_plugin_loaded" } }));
+    else window.parent.postMessage({ type: "tf_plugin_loaded" }, "*");
+  } catch (e) {}
+})();
+</script>
+</body>
+</html>
