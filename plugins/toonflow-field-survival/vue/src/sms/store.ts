@@ -286,15 +286,20 @@ function safeParse(s: string): any {
 }
 
 /**
- * ★ 归并历史遗留的重复单聊（roleId 跨会话不稳定导致的「一屏同名会话」）。
- * 策略：type=private 且同名的会话 → 保留消息最多的那个，其余的消息按时间并入后删除。
+ * ★ 归并历史遗留的重复会话（2026-11-02 扩展到群聊）。
+ *  - 单聊：同名（roleId 跨会话不稳定导致的「一屏同名会话」）；
+ *  - 群聊：**成员集合相同**（用户重复点「创建」/ 双击提交会建出 N 个同成员群，
+ *    列表里一屏同名「宗门」就是这种——预览/时间完全一致）。
+ * 策略：保留消息最多的那个，其余的消息按时间并入后删除。
  * 返回归并掉的数量（0 = 没有脏数据）。
  */
 function mergeLegacyDuplicatePrivates(): number {
   const groups = new Map<string, Conversation[]>();
   for (const c of conversations) {
-    if (c.type !== "private") continue;
-    const key = c.name;
+    // 单聊按名字归并；群聊按成员集合归并（排序后的 members join，与顺序无关）
+    const key = c.type === "private"
+      ? `p:${c.name}`
+      : `g:${[...c.members].sort().join("|")}`;
     const arr = groups.get(key) || [];
     arr.push(c);
     groups.set(key, arr);
@@ -315,7 +320,9 @@ function mergeLegacyDuplicatePrivates(): number {
         if (have.has(m.id)) continue;
         keep.messages.push(m);
       }
-      keep.messages.sort((a, b) => a.ts - b.ts);
+      // ★ fix(2026-11-02)：字段名是 timestamp 不是 ts —— 旧写法 a.ts 全 undefined，
+      //   相减得 NaN，排序静默失效（消息顺序乱）。
+      keep.messages.sort((a, b) => a.timestamp - b.timestamp);
       if (dup.updatedAt > keep.updatedAt) keep.updatedAt = dup.updatedAt;
       const idx = conversations.indexOf(dup);
       if (idx >= 0) {
@@ -435,6 +442,22 @@ export function createGroupConversation(
   memberIds: string[],
   memberNames: Record<string, string> = {},
 ): Conversation {
+  // ★ 同成员集合的群直接复用（2026-11-02）：微信同款语义——同样的几个人再"建群"
+  //   不会建出第二个群。防的是双击提交 / 事件重放把列表刷成一屏同名群。
+  const fingerprint = [...new Set(memberIds)].sort().join("|");
+  const existing = conversations.find(
+    (c) => c.type === "group" && [...c.members].sort().join("|") === fingerprint,
+  );
+  if (existing) {
+    // 名字不为空时顺带采纳新名（用户重进弹窗往往就是想改名）
+    if (name && name.trim() && existing.name !== name.trim()) {
+      existing.name = name.trim().slice(0, 30);
+    }
+    existing.updatedAt = Date.now();
+    scheduleSave();
+    return existing;
+  }
+
   const now = Date.now();
   const conv: Conversation = {
     id: genId("c"),

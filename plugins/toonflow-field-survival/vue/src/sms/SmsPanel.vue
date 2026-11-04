@@ -57,6 +57,13 @@ const showNewGroup = ref(false);
 const renaming = ref(false);
 const renameText = ref("");
 
+/**
+ * ★ 左侧会话列表折叠开关（2026-11-02）：
+ * 聊天时列表固定占 240px 宽，窄面板下聊天区太挤 —— 折叠后列表收起，
+ * 聊天区占满整行；点把手再展开。折叠态下选中会话自动收起（选完就该看聊天）。
+ */
+const listCollapsed = ref(false);
+
 /** 当前会话的消息（按时间升序） */
 const messages = computed<Message[]>(() => current.value?.messages || []);
 
@@ -141,9 +148,16 @@ function commitRename(): void {
 </script>
 
 <template>
-  <div class="sms">
-    <!-- 左侧：会话列表（顶部带通讯录选择器） -->
+  <div class="sms" :class="{ 'sms--collapsed': listCollapsed }">
+    <!-- 左侧：会话列表（顶部带通讯录选择器）—— 折叠时只留一条把手 -->
+    <button
+      class="list-handle"
+      :title="listCollapsed ? '展开会话列表' : '折叠会话列表'"
+      @click="listCollapsed = !listCollapsed"
+    >{{ listCollapsed ? "☰" : "‹" }}</button>
+
     <SmsConversationList
+      v-show="!listCollapsed"
       :conversations="conversations"
       :active-id="activeId"
       :contacts="contacts"
@@ -166,6 +180,13 @@ function commitRename(): void {
 
       <template v-else>
         <div class="chat-head">
+          <!-- ★ 折叠态：头部放展开把手 + 当前会话名（点名字也能展开列表） -->
+          <button
+            v-if="listCollapsed"
+            class="chat-head__expand"
+            title="展开会话列表"
+            @click="listCollapsed = false"
+          >☰</button>
           <template v-if="renaming">
             <input
               v-model="renameText"
@@ -264,6 +285,43 @@ function commitRename(): void {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
 }
+
+/* ---------- 左栏折叠（2026-11-02） ---------- */
+/* ★ 折叠把手：贴在左缘的窄竖条；展开态显示 ‹（收起），折叠态显示 ☰（展开） */
+.list-handle {
+  width: 18px;
+  align-self: stretch;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.05);
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  color: #93a2b3;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.list-handle:hover { background: rgba(255, 255, 255, 0.1); color: #e8eef5; }
+/* ★ 折叠态：聊天区占满（列表 v-show 隐藏后 flex:1 自动铺满，这里只改把手视觉） */
+.sms--collapsed .list-handle { border-right-color: rgba(255, 255, 255, 0.06); }
+/* ★ 折叠态聊天头部的展开按钮 */
+.chat-head__expand {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #cfd8e3;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.chat-head__expand:hover { background: rgba(255, 255, 255, 0.12); }
 
 /* ---------- 右侧聊天窗口 ---------- */
 .chat {

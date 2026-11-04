@@ -59,6 +59,8 @@ const props = defineProps<{
   smsAvatarMap?: Record<string, string>;
   /** ★ 通信(短信)：玩家自己的头像 URL */
   smsPlayerAvatar?: string;
+  /** ★ 全屏状态（由宿主 minigame.setFullscreen 驱动；控制头部按钮图标） */
+  fullscreenOn?: boolean;
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
@@ -101,11 +103,18 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
 </script>
 
 <template>
-  <div class="sp">
+  <div class="sp" :class="{ 'sp--fullscreen': fullscreenOn }">
     <div class="sp-head" @pointerdown="emit('drag-start', $event)">
       <span class="sp-title">系统v3.1 · {{ player?.name || "玩家" }}</span>
       <span class="sp-gold">💰{{ gold }}</span>
       <span class="sp-map">{{ getLevelDisplayName(currentMap) }}</span>
+      <!-- ★ 全屏切换：系统面板自身 80% ↔ 100% 铺满游戏视口（@pointerdown.stop 防止触发拖动） -->
+      <button
+        class="sp-fs"
+        :title="fullscreenOn ? '退出全屏' : '全屏显示'"
+        @pointerdown.stop
+        @click="emit('toggle-fullscreen')"
+      >{{ fullscreenOn ? "◱" : "⛶" }}</button>
       <!-- ★ 必须 @pointerdown.stop：否则 pointerdown 冒泡到 .sp-head 触发 setPointerCapture，
            浏览器把后续 pointerup 重定向到 head → 不在按钮上合成 click → 关闭按钮点了没反应。 -->
       <button class="sp-close" @pointerdown.stop @click="emit('close')" title="关闭">×</button>
@@ -238,12 +247,23 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
 
 <style scoped>
 .sp { display: flex; flex-direction: column; height: 100%; color: #e8eef5; font-size: 13px; }
+/* ★ 全屏态（2026-11-04）：外层 .sys-panel--fullscreen 负责铺满视口，这里只取消
+   标题栏拖拽手型（全屏时没有可拖动空间）。 */
+.sp.sp--fullscreen .sp-head { cursor: default; }
 .sp-head { position: relative; display: flex; align-items: center; gap: 8px; padding: 8px 44px 8px 10px; background: rgba(255, 255, 255, 0.06); cursor: move; user-select: none; }
 .sp-title { font-weight: 700; }
 .sp-gold { margin-left: auto; color: #ffd76a; }
 .sp-map { color: #9fd0ff; }
 .sp-close { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 4px; color: #cfd8e3; font-size: 15px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; z-index: 10; }
 .sp-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+/* ★ 全屏切换按钮：紧贴关闭按钮左侧 */
+.sp-fs {
+  position: absolute; right: 40px; top: 50%; transform: translateY(-50%);
+  background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); border-radius: 4px;
+  color: #cfd8e3; font-size: 14px; width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; z-index: 10;
+}
+.sp-fs:hover { background: rgba(255,255,255,0.18); }
 /* ★ position: relative —— 未读角标要绝对定位在 tab 右上角 */
 .sp-tab { position: relative; flex: 1 1 30%; padding: 6px 4px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.12); background: rgba(255, 255, 255, 0.04); color: #cfd8e3; cursor: pointer; font-size: 12px; }
 .sp-tab--on { background: #2f6fd0; border-color: #5a9bff; color: #fff; }

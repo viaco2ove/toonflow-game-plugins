@@ -165,6 +165,12 @@ const debugMode = ref(
 
 /* ----------------- 系统按钮（与 DebugPanel 拖拽一致） ----------------- */
 const showSystemPanel = ref(false);
+/** ★ 系统面板自身全屏（2026-11-04 修正语义）：⛶ = 面板 80% 浮窗 ↔ 铺满游戏视口，
+ *  纯面板内部布局切换，**不调宿主 setFullscreen**（那是 iframe 整体全屏，两回事）。 */
+const sysFullscreen = ref(false);
+function onSysToggleFullscreen(): void {
+  sysFullscreen.value = !sysFullscreen.value;
+}
 const sysBtnPos = ref({ x: 16, y: 16 });
 const sysPanelPos = ref({ x: 70, y: 16 });
 const SYS_DRAG_THRESHOLD = 6;
@@ -9066,7 +9072,8 @@ watch(() => state.value?.phase, (p) => {
     <div
       v-if="showSystemPanel"
       class="sys-panel"
-      :style="{ left: sysPanelPos.x + 'px', top: sysPanelPos.y + 'px' }"
+      :class="{ 'sys-panel--fullscreen': sysFullscreen }"
+      :style="sysFullscreen ? {} : { left: sysPanelPos.x + 'px', top: sysPanelPos.y + 'px' }"
       @pointerdown.stop
     >
       <SystemPanel
@@ -9100,6 +9107,7 @@ watch(() => state.value?.phase, (p) => {
         :sms-contacts="sysSmsContacts"
         :sms-avatar-map="sysSmsAvatarMap"
         :sms-player-avatar="sysPlayerAvatar"
+        :fullscreen-on="sysFullscreen"
         @drag-start="onSysPanelDragStart"
         @sell="onSysSellItem"
         @use-item="onSysUseItem"
@@ -9139,7 +9147,8 @@ watch(() => state.value?.phase, (p) => {
         @sms-create-group="onSysSmsCreateGroup"
         @sms-remove="onSysSmsRemove"
         @sms-rename="onSysSmsRename"
-        @close="showSystemPanel = false"
+        @toggle-fullscreen="onSysToggleFullscreen"
+        @close="() => { sysFullscreen = false; showSystemPanel = false; }"
       />
 
     </div>
@@ -9253,6 +9262,20 @@ body {
   flex-direction: column;
   user-select: none;
   font-family: system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+}
+
+/* ★ 系统面板自身全屏（2026-11-04）：⛶ 点击后面板 80% 浮窗 → 铺满整个游戏视口。
+   内联 left/top 在全屏时由模板条件置空，这里补齐 100% 尺寸并压过基础样式。 */
+.sys-panel--fullscreen {
+  left: 0 !important;
+  top: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  max-width: none;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  z-index: 9998;
 }
 
 /* ★ 锻造 / 炼丹 多标签面板 */
