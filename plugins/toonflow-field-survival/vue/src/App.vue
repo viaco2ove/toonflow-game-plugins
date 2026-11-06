@@ -21,7 +21,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable, isTurnBased } from "./bridge";
 import { startProactivePoller, stopProactivePoller } from "./sms/proactivePoller";
 import { toonflowJsApi } from "./toonflowJsApi";
-import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext, readStoryJson } from "./storyMap";
+import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext, readStoryJson, envInfo, mapPackState } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
@@ -2051,6 +2051,33 @@ function roleAvatar(r: RoleOption): string {
 }
 
 const starting = ref(false);
+
+/* ============================================================
+   ★ 运行环境 + 地图集安装状态（2026-11-06）
+   插件一打开就能感知：跑在宿主还是 debug、哪个故事、地图集装没装。
+   mapPack 是个浅响应式快照（phase/levelCount/reason），由 pollMapPack 定期同步。
+   ============================================================ */
+const env = reactive(envInfo());
+const mapPack = reactive({ phase: "idle" as string, levelCount: 0, reason: "" });
+/** 同步一次环境/安装态到响应式对象（故事名就绪后会变，故每次都重读） */
+function pollMapPack(): void {
+  const e = envInfo();
+  env.runtime = e.runtime;
+  env.storyName = e.storyName;
+  env.storyId = e.storyId;
+  env.sessionId = e.sessionId;
+  const st = mapPackState();
+  mapPack.phase = st.phase;
+  mapPack.levelCount = st.levelCount;
+  mapPack.reason = st.reason;
+}
+/** 状态轮询定时器（地图集 17MB，预取可能几秒；选人页每 1s 刷一次安装态） */
+let mapPackTimer: number | null = null;
+function startMapPackWatch(): void {
+  pollMapPack();
+  if (mapPackTimer != null) window.clearInterval(mapPackTimer);
+  mapPackTimer = window.setInterval(pollMapPack, 1000);
+}
 /** ★ 上传地图：file input 引用与状态 */
 const mapFileInput = ref<HTMLInputElement | null>(null);
 const mapUploading = ref(false);
@@ -8013,6 +8040,9 @@ onMounted(async () => {
   //   数秒白屏。改为后台加载：进入 playing 时另有 force=true 的强制重读 + 切图兜底
   //   （见下方 start 成功分支），选人阶段晚一点拿到包完全无感。
   void loadStoryMapBundle().catch((e) => console.warn("[field-survival] 地图包后台加载失败:", e));
+  // ★ 启动环境/安装态监视（选人页状态条每 1s 刷新；进 playing 后状态条随 section 隐藏，
+  //   轮询器开销极小，不专门停）。
+  startMapPackWatch();
   // ★ 图集来源（2026-10-22）：
   //   dev → 已在 assets.ts 里指向本地地图集 URL（workshops 最新），这里不动；
   //   生产（已安装插件）→ 数据库 map_visual 包内的 images/compiled_tileset_32x32.png 是权威图集，
@@ -8333,6 +8363,25 @@ onMounted(async () => {
     const wn = (incoming as any).worldName;
     const wid = (incoming as any).worldId;
     if (wn || wid != null) setStoryContext(String(wn || ""), wid);
+    // ★ 故事名就绪即拉地图集（2026-11-06）：此前只有 onMounted 后台那一次加载，
+    //   竞态下故事名还没就绪 → 拿空 dataKey 查询 → miss 被缓存 → 点开始游戏后
+    //   仍命中旧 miss 缓存直接兜底默认图。现在 init 一到（worldName 权威来源）
+    //   就补一次加载；storyMap 内部对「故事名变化」会自动作废旧 miss 缓存。
+    //   选人阶段预取完成后，点开始游戏的"加载中"基本瞬时（包已在手）。
+    if (wn) {
+      void (async () => {
+        try {
+          const st = mapPackState();
+          // 只在「还没就绪」时补拉：ready 不重复拉（17MB 包很贵），fail/miss/idle 都值得再试
+          if (st.phase !== "ready") {
+            const b = await loadStoryMapBundle();
+            if (b) console.info(`[field-survival] init 预取地图集完成：${Object.keys(b.mapFiles || {}).length} 关卡`);
+          }
+        } catch (e) {
+          console.warn("[field-survival] init 预取地图集失败（进 playing 会再试）:", e);
+        }
+      })();
+    }
   }
   state.value = incoming;
     ready.value = true;
@@ -8407,7 +8456,15 @@ onMounted(async () => {
         mapReloading.value = true;
         try {
           const b = await loadStoryMapBundle(true);
-          if (!b || Object.keys(b.files).length === 0) return;
+          pollMapPack();
+          if (!b || Object.keys(b.files).length === 0) {
+            // ★ 确诊未装 / 读取失败：不静默兜底，明确告知（状态条与遮罩已显示原因）。
+            //   miss → 用默认地图（本来就没装，无从选择）；fail → 下次切图会自动重试。
+            console.info(
+              `[field-survival] 进入 playing 仍未拿到故事视觉包（${mapPackState().phase}）：${mapPackState().reason} → 沿用默认地图`,
+            );
+            return;
+          }
           let lv = currentLevelName.value;
           const fm = getStoryFirstMap();
           if (fm) {
@@ -8586,6 +8643,26 @@ watch(() => state.value?.phase, (p) => {
       <header class="select__head">
         <h2>🌲 野外生存</h2>
         <p>选择友方 / 观战 / 敌对角色，然后点击开始游戏</p>
+        <!-- ★ 运行环境 + 地图集安装状态（2026-11-06）：插件一打开就感知
+             ① 跑在宿主还是 debug ② 哪个故事 ③ 地图集装没装（关卡数）——
+             不再等点开始才临时发现「地图集没装→兜底默认图」。 -->
+        <div class="env-bar" :class="'env-bar--' + mapPack.phase">
+          <span class="env-bar__item">
+            <b>{{ env.runtime === 'host' ? '宿主' : 'Debug' }}</b>
+            <i>{{ env.storyName || '故事未就绪' }}</i>
+          </span>
+          <span class="env-bar__item">
+            <b>地图集</b>
+            <i v-if="mapPack.phase === 'ready'">已安装（{{ mapPack.levelCount }} 关）</i>
+            <i v-else-if="mapPack.phase === 'loading'">加载中…</i>
+            <i v-else-if="mapPack.phase === 'miss'">未安装</i>
+            <i v-else-if="mapPack.phase === 'fail'">读取失败</i>
+            <i v-else>待检测</i>
+          </span>
+          <span v-if="mapPack.phase === 'miss' || mapPack.phase === 'fail'" class="env-bar__hint">
+            {{ mapPack.phase === 'miss' ? '将使用兜底默认地图' : '进入游戏时自动重试' }}
+          </span>
+        </div>
       </header>
 
       <div class="select__group">
@@ -8942,10 +9019,16 @@ watch(() => state.value?.phase, (p) => {
       </div>
 
       <!-- 🗺 地图加载中遮罩：portal 切图 / 传送跨图 / 开局视觉包接管共用。
-           纯视觉（pointer-events:none），不挡摇杆与按钮操作 -->
+           纯视觉（pointer-events:none），不挡摇杆与按钮操作。
+           ★ 文案按安装态区分（2026-11-06）：ready=直接用已安装包；
+             loading=还在拉 17MB 包；miss=确诊未装（提示兜底）；fail=传输故障重试中 -->
       <div v-if="mapLoadingVisible" class="map-loading" aria-live="polite">
         <span class="map-loading__spinner"></span>
-        <span class="map-loading__text">地图加载中…</span>
+        <span v-if="mapPack.phase === 'ready'" class="map-loading__text">地图加载中…（已安装地图集 · {{ mapPack.levelCount }} 关）</span>
+        <span v-else-if="mapPack.phase === 'loading'" class="map-loading__text">地图加载中…（正在拉取已安装的地图集）</span>
+        <span v-else-if="mapPack.phase === 'miss'" class="map-loading__text">地图加载中…（该故事未安装地图集，使用默认地图）</span>
+        <span v-else-if="mapPack.phase === 'fail'" class="map-loading__text">地图加载中…（地图集读取失败，重试中）</span>
+        <span v-else class="map-loading__text">地图加载中…</span>
       </div>
 
       <div class="events">
@@ -9348,6 +9431,33 @@ body {
   font-size: 13px;
   color: #9aa0a6;
 }
+
+/* ★ 运行环境 + 地图集安装状态条（2026-11-06） */
+.env-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 auto 14px;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  max-width: 560px;
+}
+.env-bar__item { display: inline-flex; align-items: center; gap: 5px; }
+.env-bar__item b { color: #ffe79e; font-weight: 600; }
+.env-bar__item i { font-style: normal; color: #cfd8e3; }
+.env-bar__hint { color: #ff9c9c; font-size: 11px; }
+/* 状态色：ready 绿 / loading 蓝 / miss 橙 / fail 红 */
+.env-bar--ready { border-color: rgba(94, 200, 120, 0.55); }
+.env-bar--ready .env-bar__item:nth-child(2) i { color: #7fe0a3; }
+.env-bar--loading { border-color: rgba(90, 155, 255, 0.55); }
+.env-bar--loading .env-bar__item:nth-child(2) i { color: #9fc4ff; }
+.env-bar--miss { border-color: rgba(255, 170, 80, 0.6); }
+.env-bar--miss .env-bar__item:nth-child(2) i { color: #ffc98a; }
+.env-bar--fail { border-color: rgba(224, 74, 74, 0.6); }
 
 .select__group {
   margin-bottom: 14px;

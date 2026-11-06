@@ -58,6 +58,59 @@ export interface StoryMapBundle {
 let bundle: StoryMapBundle | null = null;
 let loaded = false;
 
+/**
+ * ★ 加载状态机（2026-11-06，用户需求「插件一打开就该知道地图集装没装」）：
+ *   idle   = 还没开始拉（故事名未就绪）
+ *   loading = 拉取中（选人页就应有此状态，开始游戏的加载中遮罩可直接引用）
+ *   ready  = 已安装且可用（bundle 就绪）
+ *   miss   = 确诊未安装（数据不存在；换故事名会自动失效重读）
+ *   fail   = 传输故障（超时/异常；数据可能存在，切图/进 playing 会自动重试）
+ */
+export type MapPackPhase = "idle" | "loading" | "ready" | "miss" | "fail";
+let _packPhase: MapPackPhase = "idle";
+let _packReason = "";
+/** miss 结论按 dataKey 记忆：故事名从空→就绪、或切换故事时自动失效重读（修旧版
+ *  「选人阶段拿空 key 查询 → miss 被缓存 → 就绪后再也不拉」的卡死路径）。 */
+let _missKey = "";
+
+/** 运行环境感知：host = 真宿主 iframe / debug = standalone 直开或 dev-host 桩 */
+export type RuntimeKind = "host" | "debug";
+
+export interface EnvInfo {
+  runtime: RuntimeKind;
+  /** 故事名（多级来源融合后的结果，空串=尚未就绪） */
+  storyName: string;
+  storyId: string;
+  sessionId: string;
+}
+
+/** 插件一打开就能调：当前跑在宿主还是 debug、哪个故事、哪个会话 */
+export function envInfo(): EnvInfo {
+  const ctx = (toonflowJsApi as any)?.ctx || {};
+  let urlStory = "", urlWorldId = "", urlSessionId = "";
+  try {
+    const sp = new URLSearchParams(location.search);
+    urlStory = sp.get("story") || "";
+    urlWorldId = sp.get("worldId") || "";
+    urlSessionId = sp.get("sessionId") || "";
+  } catch { /* ignore */ }
+  return {
+    runtime: inIframe() ? "host" : "debug",
+    storyName: String(_stateStoryName || ctx.worldName || urlStory || (window as any).__STORY__ || ""),
+    storyId: String(_stateStoryId || ctx.storyId || ctx.worldId || urlWorldId || ""),
+    sessionId: String(_stateSessionId || ctx.sessionId || urlSessionId || ""),
+  };
+}
+
+/** 当前地图包安装状态（选人页 / 加载遮罩 / 日志都能引用） */
+export function mapPackState(): { phase: MapPackPhase; levelCount: number; reason: string } {
+  return {
+    phase: _packPhase,
+    levelCount: bundle ? Object.keys(bundle.mapFiles || {}).length : 0,
+    reason: _packReason,
+  };
+}
+
 /** 缓存从 tf_plugin_state.state 里取到的故事名/id（init 后由 App.vue 写入） */
 let _stateStoryName = "";
 let _stateStoryId = "";
@@ -247,6 +300,18 @@ if (v.files && (typeof v.files === "object")) {
 export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle | null> {
   if (loaded && !force) return bundle;
 
+  // ★ miss 缓存按 dataKey 记忆（2026-11-06）：故事名变化（空→就绪 / 切故事）时，
+  //   旧 miss 结论自动作废重读。修「选人阶段故事名未就绪拿空 key 查询 → miss 缓存
+  //   → 就绪后 loadStoryMapBundle 幂等短路 → 永远兜底默认图」。
+  const _ctx0 = (toonflowJsApi as any)?.ctx || {};
+  let _kStory = "";
+  try { _kStory = new URLSearchParams(location.search).get("story") || ""; } catch { /* ignore */ }
+  const keyStory = String(_stateStoryName || _ctx0.worldName || _kStory || (window as any).__STORY__ || "");
+  if (!force && loaded && _missKey && keyStory && keyStory !== _missKey) {
+    loaded = false; // 故事名变了，旧 miss 不再可信
+  }
+  if (loaded && !force) return bundle;
+
 // ── 调试输出：故事 / 地图集来源（用户要求打印的字段） ──
   // 故事名来源链（按可靠性从高到低）：
   //   ① plugin_state 里透出的 worldName（与角色列表同源，最稳）
@@ -288,6 +353,9 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
     // 独立预览（standalone / 本地 dev 直开）：无宿主数据通道，按「无包」缓存结论后回退
     loaded = true;
     bundle = null;
+    _packPhase = "miss";
+    _packReason = "debug/standalone 环境：无宿主数据通道，地图集不在数据库里（走本地/公共资源）";
+    _missKey = keyStory;
     return null;
   }
 
@@ -364,15 +432,19 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   // 不浪费「无视觉包」故事的开局时间
   const attempts = force ? 1 + MAP_READ_RETRY_TIMES : 1;
   let lastMiss = false;
+  _packPhase = "loading"; // ★ 状态机：拉取中（选人页/加载遮罩可感知）
+  _packReason = "";
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const r = await tryReadOnce();
     if (r.ok) {
       bundle = r.nb;
       break;
     }
-    lastMiss = r.miss;
-    _fallbackReason = r.reason;
-    if (r.miss || attempt >= attempts) break;
+    // ★ 防御式读取（不依赖 TS 窄化）：失败分支必带 miss/reason
+    const fr = r as { ok: false; miss: boolean; reason: string };
+    lastMiss = fr.miss;
+    _fallbackReason = fr.reason;
+    if (fr.miss || attempt >= attempts) break;
     console.info(
       `[field-survival] 地图包读取第 ${attempt}/${attempts} 次失败（传输故障），${MAP_READ_RETRY_DELAY_MS}ms 后重试…`,
     );
@@ -407,6 +479,8 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
     }
     // 只有真正拿到包才缓存「已加载」结论
     loaded = true;
+    _packPhase = "ready"; // ★ 状态机：地图集已安装且可用
+    _packReason = "";
   } else {
     // 失败两种结局要区分缓存策略：
     //  - 确诊 miss（数据确实不存在）：缓存「无包」结论，后续非 force 调用不再重复拉取；
@@ -414,6 +488,15 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
     //    切图 / 后续流程可自动重试——修复旧实现「一次超时 → loaded=true → 整局锁死默认图」。
     loaded = lastMiss;
     bundle = null;
+    // ★ 状态机收口：miss = 确诊未安装；fail = 传输故障（允许后续重试）
+    if (lastMiss) {
+      _packPhase = "miss";
+      _packReason = _fallbackReason || "地图集未安装（数据库里没有该故事的视觉包）";
+      _missKey = keyStory;
+    } else {
+      _packPhase = "fail";
+      _packReason = _fallbackReason || "地图集读取失败（传输故障，可重试）";
+    }
   }
   // ── 调试总结：成功/失败 + 退路回默认 ──
   if (_getOk && bundle) {
