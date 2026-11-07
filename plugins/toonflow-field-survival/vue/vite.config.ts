@@ -273,6 +273,12 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
             res.setHeader("Content-Length", String(buf.length));
             // ★ 不缓存：编辑器改完图集后刷新页面必须拿到最新字节
             res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+            // ★ .tbg 附带包文件 mtime（dev-host seedStoryVisualMap 据此判断「磁盘包已更新，
+            //   localStorage 里的旧播种必须重打」——旧实现见 key 存在就跳过，地图改了
+            //   重打包后 dev 里永远用旧包，表现为「新加的假人/地图内容不出现」）。
+            if (/\.tbg$/i.test(filePath)) {
+              try { res.setHeader("X-Tbg-Mtime", String(Math.round(statSync(readPath).mtimeMs))); } catch { /* ignore */ }
+            }
             res.end(buf);
           } catch (e) {
             res.statusCode = 500;
@@ -801,8 +807,35 @@ async function seedStoryVisualMap() {
   const tplKey = "map_visual:" + STORY;
   const scopes = new Set(["all"]);
   if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
+  const pdKeyOf = (sc) => window.__pdKey(ENTRY_PLUGIN_ID, sc, tplKey);
+  // ★ 旧播种的新鲜度检查（2026-11-07）：localStorage 里已播种的包不一定是当前磁盘包——
+  //   地图改过 + 重新打包后，旧实现「见 key 存在就跳过」会让 dev 里永远用旧包
+  //   （表现为「地图 JSON 加了假人/新物件，游戏里就是不出现」）。
+  //   /story-data 响应带 X-Tbg-Mtime（磁盘包文件 mtime）；播种记录里存上一次的 mtime，
+  //   两者不一致 → 把旧播种整个删掉重播。
+  let diskMtime = "";
+  try {
+    const head = await fetch(cands_url_first(), { method: "HEAD" });
+    diskMtime = head.headers.get("x-tbg-mtime") || "";
+  } catch { /* ignore：拿不到 mtime 就按「无旧包」走 */ }
+  function cands_url_first() {
+    return "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + ".tbg";
+  }
+  if (diskMtime) {
+    for (const sc of scopes) {
+      const old = window.__pdGet(pdKeyOf(sc));
+      const ov = old && old.value;
+      // 过期判定：① 播种时记录的 mtime 与当前磁盘 mtime 不一致；
+      //           ② 旧播种根本没有 mtime 记录（2026-11-07 之前播的）→ 无法证明新鲜，一律重播。
+      const stale = ov && (!ov.__seededFromMtime || String(ov.__seededFromMtime) !== diskMtime);
+      if (stale) {
+        window.__pdRemove(pdKeyOf(sc));
+        log("↻ 磁盘 .tbg 已更新（seeded=" + (ov.__seededFromMtime || "无记录") + " → disk=" + diskMtime + "），清除旧播种重播");
+      }
+    }
+  }
   for (const sc of scopes) {
-    if (window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sc, tplKey))) { log("✓ 视觉地图模板已存在，跳过播种: " + tplKey); return; }
+    if (window.__pdGet(pdKeyOf(sc))) { log("✓ 视觉地图模板已存在（磁盘包未变化），跳过播种: " + tplKey); return; }
   }
   const cands = [
     "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + ".tbg",
@@ -818,7 +851,11 @@ async function seedStoryVisualMap() {
       for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
       const b64 = btoa(bin);
       const value = { format: "tbg", encoding: "base64+zip", data: b64, story: STORY };
-      for (const sc of scopes) window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sc, tplKey), value);
+      // ★ 记录磁盘包 mtime（下次启动对比，变了就重播——见上方新鲜度检查）
+      if (diskMtime) value.__seededFromMtime = diskMtime;
+      // 播种时间（排查用）
+      value.__seededAt = new Date().toISOString();
+      for (const sc of scopes) window.__pdSet(pdKeyOf(sc), value);
       log("✓ 视觉地图模板已播种：" + u + " → " + tplKey + "（" + bytes.length + "B → base64 " + b64.length + "，scope: " + [...scopes].join(",") + "）");
       return;
     } catch (e) { log("! 视觉地图模板播种失败 " + u + ": " + (e && e.message ? e.message : e)); }

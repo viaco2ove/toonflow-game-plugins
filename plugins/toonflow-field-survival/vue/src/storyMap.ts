@@ -72,8 +72,27 @@ let _packReason = "";
 /** miss 结论按 dataKey 记忆：故事名从空→就绪、或切换故事时自动失效重读（修旧版
  *  「选人阶段拿空 key 查询 → miss 被缓存 → 就绪后再也不拉」的卡死路径）。 */
 let _missKey = "";
+/** miss 结论的落定时刻（ms）。dev-host 桩的 map_visual 播种是异步的（要等
+ *  tf_plugin_loaded → loadStoryData → seedStoryVisualMap），插件挂载瞬间的首次查询
+ *  必然 miss；把这种「seed 还没跑完」的 miss 永久缓存会锁死整局（状态条永远
+ *  「未安装」、readStoryJson 拿空货架、地图面板关卡列表为空）。因此 miss 带 TTL：
+ *  过期后下一次 loadStoryMapBundle() 自动重查（命中即翻正为 ready）。 */
+let _missAt = 0;
+/** dev-host 下 miss 缓存的存活时长（毫秒）。桩播种 + 17MB tbg base64 化需要数秒，
+ *  3s 太短会频繁重查刷日志，60s 太长会卡死选人页状态——8s 覆盖桩播种的典型耗时。 */
+const MISS_TTL_DEV_MS = 8000;
+/** 真宿主下 miss 缓存存活时长。真宿主模板由 CLI 一次性写入数据库，开局后不会
+ *  凭空出现；短 TTL 仅用于防御「进游戏瞬间 init 尚未注入会话 map_visual」的窗口。 */
+const MISS_TTL_HOST_MS = 15000;
 
-/** 运行环境感知：host = 真宿主 iframe / debug = standalone 直开或 dev-host 桩 */
+/** 当前 miss 缓存是否仍可信（未过期） */
+function missCacheFresh(): boolean {
+  if (!_missKey) return false;
+  const ttl = isDevHostStub() ? MISS_TTL_DEV_MS : MISS_TTL_HOST_MS;
+  return Date.now() - _missAt < ttl;
+}
+
+/** 运行环境感知：host = 真宿主 iframe / debug = standalone 直开或 dev-host 桩（--conn） */
 export type RuntimeKind = "host" | "debug";
 
 export interface EnvInfo {
@@ -82,6 +101,23 @@ export interface EnvInfo {
   storyName: string;
   storyId: string;
   sessionId: string;
+}
+
+/**
+ * dev-host 桩（npm run debug -- --story xxx --conn）的标记：
+ * 桩拼的 iframe src 是 /?__inner=1&pluginId=…&sessionId=dev-host&story=…；
+ * 真宿主的 iframe src 是 /plugin/getAsset?pluginId=…&token=…&story=…&sessionId=<真实会话>，
+ * 两者都不会出现的参数只有 __inner=1 / sessionId=dev-host —— 用它们区分。
+ * ★ 不能用 __CONN__ 判定：生产构建脚本 `cross-env CONN=1 vite build` 会把
+ *   __CONN__="1" 烤进 game.html（那是给 dev-host 中间件用的开关，不是运行时标记）。
+ */
+function isDevHostStub(): boolean {
+  try {
+    const sp = new URLSearchParams(location.search);
+    if (sp.get("sessionId") === "dev-host") return true;
+    if (sp.get("__inner") === "1") return true;
+  } catch { /* ignore */ }
+  return false;
 }
 
 /** 插件一打开就能调：当前跑在宿主还是 debug、哪个故事、哪个会话 */
@@ -95,7 +131,10 @@ export function envInfo(): EnvInfo {
     urlSessionId = sp.get("sessionId") || "";
   } catch { /* ignore */ }
   return {
-    runtime: inIframe() ? "host" : "debug",
+    // ★ 2026-11-06 修复：--conn（dev-host 桩）也是 iframe，旧实现 inIframe() 一刀切
+    //   把它判成「宿主」——状态条显示错误。dev-host 下地图集来自本地 workshops
+    //   （桩经 /story-data 播种），必须归为 debug。
+    runtime: !inIframe() || isDevHostStub() ? "debug" : "host",
     storyName: String(_stateStoryName || ctx.worldName || urlStory || (window as any).__STORY__ || ""),
     storyId: String(_stateStoryId || ctx.storyId || ctx.worldId || urlWorldId || ""),
     sessionId: String(_stateSessionId || ctx.sessionId || urlSessionId || ""),
@@ -298,17 +337,44 @@ if (v.files && (typeof v.files === "object")) {
  * @param force 强制重读（上传新地图后刷新缓存 / 进入 playing 时刷新用）
  */
 export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle | null> {
+  // ★ 并发去重（2026-11-06）：onMounted 后台加载、init 预取、进 playing force 重读
+  //   可能撞在同一时刻（17MB 读取一次数秒），并发只会白白叠加传输/解包开销，
+  //   还会让 probePluginData 的超时窗口互相挤占。同 force 级别进行中的调用直接复用。
+  if (_inFlight) return _inFlight;
+  if (loaded && !force) return bundle;
+  _inFlight = (async () => {
+    try {
+      return await loadStoryMapBundleInner(force);
+    } finally {
+      _inFlight = null;
+    }
+  })();
+  return _inFlight;
+}
+
+/** 进行中的加载 Promise（并发去重用） */
+let _inFlight: Promise<StoryMapBundle | null> | null = null;
+
+async function loadStoryMapBundleInner(force = false): Promise<StoryMapBundle | null> {
   if (loaded && !force) return bundle;
 
   // ★ miss 缓存按 dataKey 记忆（2026-11-06）：故事名变化（空→就绪 / 切故事）时，
   //   旧 miss 结论自动作废重读。修「选人阶段故事名未就绪拿空 key 查询 → miss 缓存
   //   → 就绪后 loadStoryMapBundle 幂等短路 → 永远兜底默认图」。
+  // ★ 2026-11-06 二修：miss 缓存再加 TTL。--conn（dev-host）下桩播种 map_visual 是
+  //   异步的（等 tf_plugin_loaded → 桩 loadStoryData → seedStoryVisualMap），
+  //   插件挂载瞬间的首查必然 miss；旧实现把这个 miss 永久缓存（故事名不变就永不失效），
+  //   init 预取分支因缓存短路拿不到包 → 状态条「未安装」、地图面板/商城 JSON 全空。
   const _ctx0 = (toonflowJsApi as any)?.ctx || {};
   let _kStory = "";
   try { _kStory = new URLSearchParams(location.search).get("story") || ""; } catch { /* ignore */ }
   const keyStory = String(_stateStoryName || _ctx0.worldName || _kStory || (window as any).__STORY__ || "");
-  if (!force && loaded && _missKey && keyStory && keyStory !== _missKey) {
-    loaded = false; // 故事名变了，旧 miss 不再可信
+  if (!force && loaded && _missKey && (!missCacheFresh() || (keyStory && keyStory !== _missKey))) {
+    loaded = false; // 故事名变了 / miss 已过期（dev-host 播种可能已完成）→ 旧 miss 不再可信
+    if (_packPhase === "miss") {
+      _packPhase = "loading"; // 状态条从「未安装」翻回「加载中…」，避免误导
+      _packReason = "";
+    }
   }
   if (loaded && !force) return bundle;
 
@@ -338,7 +404,8 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   // 调试日志加会话id（便于排插桩/查数据落库归属）
   const _sessionId = String(_stateSessionId || _ctx.sessionId || _urlSessionId || "未知");
   // [field-survival] version,暂时手动编写版本日志
-  console.info(`[field-survival] version:1.0.25`);
+  console.info(`[field-survival] version:1.0.26`);
+  console.info(`[field-survival] 运行环境: ${envInfo().runtime === "host" ? "宿主（真宿主 iframe，地图集走数据库）" : "Debug（standalone / --conn dev-host 桩，地图集走本地 workshops）"}`);
   console.info(`[field-survival] 故事名: ${_storyName}`);
   console.info(`[field-survival] 故事id: ${_storyId}`);
    console.info(`[field-survival] sessionid: ${_sessionId}`);
@@ -356,6 +423,7 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
     _packPhase = "miss";
     _packReason = "debug/standalone 环境：无宿主数据通道，地图集不在数据库里（走本地/公共资源）";
     _missKey = keyStory;
+    _missAt = Date.now();
     return null;
   }
 
@@ -493,6 +561,7 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
       _packPhase = "miss";
       _packReason = _fallbackReason || "地图集未安装（数据库里没有该故事的视觉包）";
       _missKey = keyStory;
+      _missAt = Date.now();
     } else {
       _packPhase = "fail";
       _packReason = _fallbackReason || "地图集读取失败（传输故障，可重试）";
@@ -683,7 +752,8 @@ export function getStoryEntityTypes(): any | null {
  * 无 bundle（未加载 / 非 iframe / 故事无 map_visual）→ 返回 []。
  */
 export function getStoryLevelNames(): string[] {
-  console.info(`[field-survival] getStoryLevelNames: ${bundle.mapFiles ? Object.keys(bundle.mapFiles).length : 0} 张`);
+  const n = bundle?.mapFiles ? Object.keys(bundle.mapFiles).length : 0;
+  console.info(`[field-survival] getStoryLevelNames: ${n} 张`);
   if (!bundle || !bundle.mapFiles) return [];
   return Object.keys(bundle.mapFiles);
 }

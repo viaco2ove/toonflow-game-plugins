@@ -8368,13 +8368,18 @@ onMounted(async () => {
     //   仍命中旧 miss 缓存直接兜底默认图。现在 init 一到（worldName 权威来源）
     //   就补一次加载；storyMap 内部对「故事名变化」会自动作废旧 miss 缓存。
     //   选人阶段预取完成后，点开始游戏的"加载中"基本瞬时（包已在手）。
-    if (wn) {
+    //   ★ --conn 下桩推送的 select state 可能不带 worldName（entry 未接管的老桩路径），
+    //     但 URL ?story= 恒有值 → 用 envInfo().storyName 兜底判定。
+    const effStory = String(wn || envInfo().storyName || "").trim();
+    if (effStory) {
       void (async () => {
         try {
           const st = mapPackState();
-          // 只在「还没就绪」时补拉：ready 不重复拉（17MB 包很贵），fail/miss/idle 都值得再试
+          // ★ force 拉取（2026-11-06 二修）：挂载瞬间的首查在 dev-host 播种完成前跑，
+          //   miss 结论已被缓存；这里非 force 调用会被缓存短路、永远拿不到包。
+          //   ready 不重复拉（17MB 包很贵），fail/miss/idle 都 force 再试一次。
           if (st.phase !== "ready") {
-            const b = await loadStoryMapBundle();
+            const b = await loadStoryMapBundle(true);
             if (b) console.info(`[field-survival] init 预取地图集完成：${Object.keys(b.mapFiles || {}).length} 关卡`);
           }
         } catch (e) {
@@ -8648,19 +8653,19 @@ watch(() => state.value?.phase, (p) => {
              不再等点开始才临时发现「地图集没装→兜底默认图」。 -->
         <div class="env-bar" :class="'env-bar--' + mapPack.phase">
           <span class="env-bar__item">
-            <b>{{ env.runtime === 'host' ? '宿主' : 'Debug' }}</b>
+            <b>{{ env.runtime === 'host' ? '宿主' : 'Debug(--conn)' }}</b>
             <i>{{ env.storyName || '故事未就绪' }}</i>
           </span>
           <span class="env-bar__item">
             <b>地图集</b>
-            <i v-if="mapPack.phase === 'ready'">已安装（{{ mapPack.levelCount }} 关）</i>
+            <i v-if="mapPack.phase === 'ready'">{{ env.runtime === 'host' ? '已安装（' + mapPack.levelCount + ' 关）' : '本地 workshops（' + mapPack.levelCount + ' 关）' }}</i>
             <i v-else-if="mapPack.phase === 'loading'">加载中…</i>
-            <i v-else-if="mapPack.phase === 'miss'">未安装</i>
+            <i v-else-if="mapPack.phase === 'miss'">{{ env.runtime === 'host' ? '未安装' : '未打包（.tbg 缺失）' }}</i>
             <i v-else-if="mapPack.phase === 'fail'">读取失败</i>
             <i v-else>待检测</i>
           </span>
           <span v-if="mapPack.phase === 'miss' || mapPack.phase === 'fail'" class="env-bar__hint">
-            {{ mapPack.phase === 'miss' ? '将使用兜底默认地图' : '进入游戏时自动重试' }}
+            {{ mapPack.phase === 'miss' ? (env.runtime === 'host' ? '将使用兜底默认地图' : '将使用本地 workshops 地图') : '进入游戏时自动重试' }}
           </span>
         </div>
       </header>
@@ -10968,13 +10973,13 @@ body {
 /* 中段屏（iframe < 480px）：进一步缩 */
 @media (max-height: 480px) {
   .hud { font-size: 10px; line-height: 9px; }
-  .hp { width: 5rem; height: 6px; }
-  .mp { width: 5rem; height: 5px; }
-  .exp { width: 5rem; height: 4px; }
+  .hp { width: 8.5vw; height: 6px; }
+  .mp { width: 8.5vw; height: 5px; }
+  .exp { width: 8.5vw; height: 4px; }
   .hud__left { min-width: 5rem; }
   .events { top: 75px; font-size: 6px; padding: 3px 5px; max-width: 180px; }
   .btn--rotate { top: 80px; width: 28px; height: 28px; font-size: 14px; }
-  .right-col { top: 95px; }
+  .right-col { top: 34vh; }
   .minimap { width: 80px; }
   .minimap__cv { width: 80px; height: 80px; }
   .coord-box { min-width: 56px; padding: 3px 6px; font-size: 5px; }
@@ -10991,9 +10996,9 @@ body {
   .minimap__cv { width: 60px; height: 60px; }
   .btn--rotate { top: 70px; width: 24px; height: 24px; font-size: 12px; }
   .hud { font-size: 9px; }
-  .hp { width: 4rem; height: 5px; }
-  .mp { width: 4rem; height: 4px; }
-  .exp { width: 4rem; height: 4px; }
-  .hud__left { min-width: 4rem; }
+  .hp { width: 8vw; height: 5px; }
+  .mp { width: 8vw; height: 4px; }
+  .exp { width: 8vw; height: 4px; }
+  .hud__left { min-width: 8vw; }
 }
 </style>
