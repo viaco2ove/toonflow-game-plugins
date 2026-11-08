@@ -14,7 +14,7 @@
  */
 import { ref } from "vue";
 import { assetUrl } from "./assets";
-import type { Ctx, EventsFile, EventDef } from "./eventScripts/_ctx";
+import type { Ctx, EventsFile, EventDef } from "../../../../.cache/toonflow-field-survival/maps/eventScripts/_ctx";
 
 // ─── 运行时状态 ───
 const loadedEvents = ref<EventsFile | null>(null);

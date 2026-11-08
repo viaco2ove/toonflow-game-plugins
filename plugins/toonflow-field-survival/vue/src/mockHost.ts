@@ -21,7 +21,7 @@ import {
   type WalkGrid,
 } from "./collision";
 // ★ 图纸 → 成品解析（用图纸打造时，产物必须是图纸记载的成品，不能是图纸本身）
-import { blueprintProduct, looksLikeBlueprint } from "./eventScripts/forgeCommon";
+import { blueprintProduct, looksLikeBlueprint } from "../../../../.cache/toonflow-field-survival/maps/eventScripts/forgeCommon";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
 interface TestDataBundle {

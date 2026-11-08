@@ -49,7 +49,7 @@
 |------|------|
 | `plugins/toonflow-field-survival/vue/src/mapConfig.ts` | Tiled JSON → MapConfig 解析、对象属性白名单、关卡名映射 |
 | `plugins/toonflow-field-survival/vue/src/eventEngine.ts` | 事件运行时（加载/触发/ctx 构造/interval 定时器/proximity 点位） |
-| `plugins/toonflow-field-survival/vue/src/eventScripts/_ctx.ts` | ctx API 类型契约（唯一权威） |
+| `../../../../.cache/toonflow-field-survival/maps/eventScripts/_ctx.ts` | ctx API 类型契约（唯一权威） |
 | `plugins/toonflow-field-survival/vue/src/storyMap.ts` | 故事视觉地图包加载 + `readStoryJson`（data/*.json 读取） |
 | `plugins/toonflow-field-survival/vue/src/panels/ForgeAlchemyPanel.vue` | 锻造/炼丹面板（售卖分类子标签/打造/升级/溶解） |
 | `plugins/toonflow-field-survival/vue/src/forgeOps.ts` | 面板操作逻辑（调后端命令 + AI 生成 + 结果弹窗） |

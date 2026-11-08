@@ -12,7 +12,7 @@
  *   - 单个事件「手动 fire」按钮（绕过 zone 检测，直接走引擎）
  */
 import { computed, ref } from "vue";
-import type { EventDef } from "../eventScripts/_ctx";
+import type { EventDef } from "../../../../../.cache/toonflow-field-survival/maps/eventScripts/_ctx";
 
 const props = defineProps<{
   mapName: string;

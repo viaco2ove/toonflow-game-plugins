@@ -14,7 +14,7 @@ import {
   randomForgeItem, randomPill, returnsToText, RARITY_ZH,
   blueprintProduct, looksLikeBlueprint,
   type BagEntry, type GeneratedItem,
-} from "./eventScripts/forgeCommon";
+} from "../../../../.cache/toonflow-field-survival/maps/eventScripts/forgeCommon";
 
 const AGENT_FORGE = "field-survival-forge-item";
 const AGENT_ALCHEMY = "field-survival-alchemy-pill";
