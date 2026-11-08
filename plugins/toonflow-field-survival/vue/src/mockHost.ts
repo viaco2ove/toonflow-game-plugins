@@ -121,6 +121,14 @@ function mockQuestView(state: any): void {
     return {
       id: String(d.id), title: String(d.title || d.id), type: String(d.type || "kill"),
       giver: String(d.giver || "任务板"), desc: String(d.desc || ""),
+      /** ★ 来源标记 / 主线标识（对齐 entry.ts buildQuestView） */
+      from: String((d as any).from || ""),
+      isChain: String((d as any).from || "").startsWith("chain:"),
+      chainId: (() => {
+        const tag = String((d as any).from || "");
+        if (!tag.startsWith("chain:")) return "";
+        return tag.split(":")[1] || "";
+      })(),
       level: Math.max(1, Math.round(Number(d.level) || 1)), status,
       repeat: d.repeat === true, objectives, reward: d.reward || { exp: 0, money: 0, items: [] },
       canTurnIn: status === "done",
@@ -141,6 +149,8 @@ function mockQuestView(state: any): void {
     else if (st === "turned") { if (d.repeat) groups.available.push(row(d, "available")); else groups.turned.push(row(d, "turned")); }
     else {
       const dm = String(d.map || "");
+      // ★ 链任务（from=chain:…）不进「可接」页——只在主线页签展示
+      if (String((d as any).from || "").startsWith("chain:")) continue;
       if (!dm || !state.levelName || dm === String(state.levelName)) groups.available.push(row(d, "available"));
       else groups.available.push(row(d, "away"));
     }
@@ -161,6 +171,32 @@ function mockQuestTimeout(state: any): void {
     if (!p || p.status !== "active") continue;
     const at = Math.round(Number(p.acceptedTick) || now);
     if (now - at < tl) continue;
+    // ★ 链任务超时 → 走链的失败分支（onFail），而不是普通委托的「超时失败」
+    const fromTag = String((d as any).from || "");
+    if (fromTag.startsWith("chain:")) {
+      const parts = fromTag.split(":");            // chain:<chainId>:<nodeId>
+      const cdef = (Array.isArray(state.chainBoard) ? state.chainBoard : [])
+        .find((c: any) => String(c.id) === parts[1]);
+      const nid = parts[2] || "";
+      if (cdef && nid) {
+        const cst = mockChainStateOf(state, cdef);
+        const cnst = cst.nodes[nid];
+        if (cnst && cnst.status === "active") {
+          cnst.status = "failed";
+          cnst.failReason = "timeout";
+          mockRemoveChainQuest(state, String(d.id));
+          const nd = mockChainNode(cdef, nid);
+          for (const nx of (nd?.onFail || [])) {
+            if (cst.nodes[nx]) cst.nodes[nx].status = "selectable";
+          }
+          mockRefreshChainStatus(state, cdef);
+          state.questNotice = `主线任务超时失败：${d.title || d.id}`;
+          state.events.push("[mock] 主线任务超时失败：" + (d.title || d.id));
+          changed = true;
+          continue;
+        }
+      }
+    }
     p.status = "failed";
     p.failReason = "timeout";
     p.cargoId = "";
@@ -169,6 +205,225 @@ function mockQuestTimeout(state: any): void {
     changed = true;
   }
   if (changed) mockQuestView(state);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ★ 主线任务链（mock 侧精简实现，对齐 entry.ts 的链引擎）
+   ─────────────────────────────────────────────────────────────
+   与 entry.ts 的差异（mock 无 agent / 无宿主持久化，只保证玩法闭环）：
+     · 不做 pluginData 落库，链状态只留在内存 state.chainState
+     · 链节点的 kill/gather/talk 进度复用 mock 现有的 quests 进度结构
+     · 超时失败、放弃失败、分支推进等状态机与 entry.ts 保持一致
+   ───────────────────────────────────────────────────────────── */
+
+/** 归一化一条链定义（结构与 main-quests.json 同构） */
+function normMockChainDef(raw: any): any {
+  if (!raw || typeof raw !== "object") return null;
+  const id = String(raw.id || "").trim();
+  const nodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+  if (!id || !nodes.length) return null;
+  const outNodes: any[] = [];
+  for (const n of nodes) {
+    const nid = String(n?.id || "").trim();
+    const q = n?.quest;
+    if (!nid || !q || !q.id) continue;
+    outNodes.push({
+      id: nid,
+      quest: normMockQuestDef(q),
+      onSuccess: Array.isArray(n.onSuccess) ? n.onSuccess.map((x: any) => String(x).trim()).filter(Boolean) : [],
+      onFail: Array.isArray(n.onFail) ? n.onFail.map((x: any) => String(x).trim()).filter(Boolean) : [],
+      failEndsChain: n.failEndsChain === true,
+    });
+  }
+  if (!outNodes.length) return null;
+  return {
+    id,
+    title: String(raw.title || id),
+    chapter: String(raw.chapter || ""),
+    desc: String(raw.desc || ""),
+    giver: String(raw.giver || "任务板"),
+    order: Math.round(Number(raw.order) || 99),
+    lockedBy: Array.isArray(raw.lockedBy) ? raw.lockedBy.map((x: any) => String(x).trim()).filter(Boolean) : [],
+    side: raw.side === true,
+    nodes: outNodes,
+  };
+}
+
+/** 链状态容器（id → {id,status,nodes:{nid:{id,status}}}） */
+function mockChainStates(state: any): Record<string, any> {
+  if (!state.chainState || typeof state.chainState !== "object") state.chainState = {};
+  return state.chainState;
+}
+/** 取/建链状态 */
+function mockChainStateOf(state: any, def: any): any {
+  const cs = mockChainStates(state);
+  if (!cs[def.id]) {
+    const nodes: Record<string, any> = {};
+    for (const n of def.nodes) nodes[n.id] = { id: n.id, status: "locked" };
+    cs[def.id] = { id: def.id, status: "locked", nodes };
+  }
+  return cs[def.id];
+}
+/** 链是否解锁（lockedBy 全部 completed） */
+function mockChainUnlocked(state: any, def: any): boolean {
+  const need = Array.isArray(def.lockedBy) ? def.lockedBy : [];
+  if (!need.length) return true;
+  const cs = mockChainStates(state);
+  return need.every((cid: string) => cs[cid] && cs[cid].status === "completed");
+}
+/** 链节点定义 */
+function mockChainNode(def: any, nid: string): any {
+  return (def.nodes || []).find((n: any) => String(n.id) === String(nid)) || null;
+}
+/** 节点是否是「终点」：onSuccess 为空（成功到这儿链就收尾） */
+function mockChainNodeIsTerminal(def: any, nid: string): boolean {
+  const nd = mockChainNode(def, nid);
+  return !!nd && !(nd.onSuccess || []).length;
+}
+/** 重算链状态：locked/running/awaiting_choice/failed/completed */
+function mockRefreshChainStatus(state: any, def: any): void {
+  const st = mockChainStateOf(state, def);
+  if (st.status === "locked" && !mockChainUnlocked(state, def)) return;
+  const nodes = Object.values(st.nodes) as any[];
+  const doneCnt = nodes.filter((n) => n.status === "done").length;
+  const failed = nodes.filter((n) => n.status === "failed");
+  const terminalFail = failed.find((n) => {
+    const nd = mockChainNode(def, n.id);
+    return nd ? (!(nd.onFail || []).length || nd.failEndsChain === true) : false;
+  });
+  if (terminalFail) { st.status = "failed"; st.finishedTick = Math.round(Number(state.tick) || 0); return; }
+  // ★ 完成判定：走完任意一条路径到终点即完成（分支链不能要求「全部节点都 done」）
+  const reachedTerminal = nodes.some((n) => n.status === "done" && mockChainNodeIsTerminal(def, n.id));
+  if (reachedTerminal) { st.status = "completed"; st.finishedTick = Math.round(Number(state.tick) || 0); return; }
+  if (doneCnt >= def.nodes.length) { st.status = "completed"; st.finishedTick = Math.round(Number(state.tick) || 0); return; }
+  const hasPending = nodes.some((x) => x.status === "selectable" || x.status === "active" || x.status === "paused");
+  if (!hasPending) {
+    for (const dn of nodes.filter((n) => n.status === "done")) {
+      const nd = mockChainNode(def, dn.id);
+      if (!nd) continue;
+      const opts = (nd.onSuccess || []).filter((nid: string) => st.nodes[nid] && st.nodes[nid].status === "locked");
+      if (opts.length >= 1) { st.status = "awaiting_choice"; return; }
+    }
+  }
+  // ★ 还没开始过（无任何节点被接受）且已解锁 → available（任务板可接的新主线）
+  const started = nodes.some((x) => x.status === "active" || x.status === "paused" || x.status === "done" || x.status === "failed");
+  if (!started) { st.status = "available"; return; }
+  st.status = "running";
+  if (!st.startedTick) st.startedTick = Math.round(Number(state.tick) || 0);
+}/** 待抉择：刚完成的节点及其 onSuccess 候选 */
+function mockChainAwaitChoice(def: any, st: any): any {
+  if (st.status !== "awaiting_choice") return null;
+  let lastId = String(st.lastDone || "");
+  if (!lastId || !st.nodes[lastId]) {
+    const doneNodes = Object.values(st.nodes).filter((n: any) => n.status === "done") as any[];
+    if (!doneNodes.length) return null;
+    lastId = doneNodes[doneNodes.length - 1].id;
+  }
+  const nd = mockChainNode(def, lastId);
+  if (!nd) return null;
+  const options = (nd.onSuccess || []).filter((nid: string) => st.nodes[nid] && st.nodes[nid].status === "locked");
+  if (!options.length) return null;
+  return { from: lastId, options };
+}
+/** 把链节点 quest 注入委托板（from=chain:<chainId>:<nodeId>） */
+function mockInjectChainQuest(state: any, def: any, nid: string): void {
+  const nd = mockChainNode(def, nid);
+  if (!nd) return;
+  const qid = String(nd.quest.id);
+  if (!Array.isArray(state.questBoard)) state.questBoard = [];
+  if (state.questBoard.some((q: any) => String(q.id) === qid)) return;
+  state.questBoard.push({ ...nd.quest, from: `chain:${def.id}:${nid}` });
+}
+/** 摘除链节点任务定义 + 进度 */
+function mockRemoveChainQuest(state: any, qid: string): void {
+  if (Array.isArray(state.questBoard)) {
+    state.questBoard = state.questBoard.filter((q: any) => String(q.id) !== String(qid));
+  }
+  if (state.quests && state.quests[String(qid)]) delete state.quests[String(qid)];
+}
+/** 重算 state.chainView —— 对齐 entry.ts buildChainView（前端只读） */
+function mockChainView(state: any): void {
+  const board: any[] = Array.isArray(state.chainBoard) ? state.chainBoard : (state.chainBoard = []);
+  const quests: Record<string, any> = state.quests && typeof state.quests === "object" ? state.quests : {};
+  const me = (state.entities || []).find((e: any) => e.side === "player");
+  const need = (o: any) => Math.max(1, Math.round(Number(o?.count) || 1));
+  const have = (o: any, p: any) => {
+    if (!p) return 0;
+    if (o.kind === "kill") return Number((p.kill || {})[String(o.target)] || 0);
+    if (o.kind === "gather") return Number((p.gather || {})[String(o.target)] || 0);
+    if (o.kind === "talk") return Number((p.talked || {})[String(o.uid || o.target)] || 0);
+    if (o.kind === "arrive" || o.kind === "explore") return p.arrived ? 1 : 0;
+    return 0;
+  };
+  const chains = board
+    .slice()
+    .sort((a: any, b: any) => (Number(a.order) || 99) - (Number(b.order) || 99))
+    .map((def: any) => {
+      const st = mockChainStateOf(state, def);
+      mockRefreshChainStatus(state, def);
+      const nodes = def.nodes.map((nd: any) => {
+        const nst = st.nodes[nd.id] || { id: nd.id, status: "locked" };
+        const qdef = nd.quest;
+        const p = quests[String(qdef.id)];
+        const objectives = (qdef.objectives || []).map((o: any) => ({
+          kind: o.kind, target: String(o.target || ""), have: have(o, p), need: need(o),
+          confirm: o.confirm === true, map: String(o.map || ""), x: o.x, y: o.y, radius: o.radius,
+        }));
+        const met = (qdef.objectives || []).length > 0
+          && (qdef.objectives || []).every((o: any) => have(o, p) >= need(o));
+        const tl = Math.round(Number(qdef.timeLimitTicks) || 0);
+        let remainTicks = -1;
+        if (tl > 0 && p && p.status === "active") {
+          const now = Math.round(Number(state.tick) || 0);
+          const at = Math.round(Number(p.acceptedTick) || now);
+          remainTicks = Math.max(0, tl - (now - at));
+        }
+        const destObj = (qdef.objectives || []).find((o: any) => o.kind === "arrive" || o.kind === "explore");
+        return {
+          id: nd.id,
+          questId: String(qdef.id),
+          title: String(qdef.title || ""),
+          type: String(qdef.type || "kill"),
+          desc: String(qdef.desc || ""),
+          status: String(nst.status),
+          failReason: String(nst.failReason || ""),
+          objectives,
+          reward: qdef.reward || { exp: 0, money: 0, items: [] },
+          met,
+          canTurnIn: nst.status === "active" && !!p && p.status === "done",
+          remainTicks,
+          onSuccess: nd.onSuccess || [],
+          onFail: nd.onFail || [],
+          destMapRaw: destObj ? String(destObj.map || "") : "",
+          destX: destObj ? destObj.x : undefined,
+          destY: destObj ? destObj.y : undefined,
+        };
+      });
+      return {
+        id: def.id,
+        title: def.title,
+        chapter: def.chapter,
+        desc: def.desc,
+        side: def.side === true,
+        order: def.order,
+        status: st.status,
+        unlocked: mockChainUnlocked(state, def) && st.status !== "locked",
+        lockedBy: def.lockedBy || [],
+        progressDone: nodes.filter((n: any) => n.status === "done").length,
+        progressTotal: nodes.length,
+        nodes,
+        awaitChoice: mockChainAwaitChoice(def, st),
+      };
+    });
+  state.chainView = {
+    chains,
+    playerLevel: Math.max(1, Math.round(Number(me?.level) || 1)),
+    currentMap: String(state.levelName || ""),
+    mainDone: chains.filter((c: any) => !c.side && c.status === "completed").length,
+    mainTotal: chains.filter((c: any) => !c.side).length,
+    sideDone: chains.filter((c: any) => c.side && c.status === "completed").length,
+    sideTotal: chains.filter((c: any) => c.side).length,
+  };
 }
 
 /* ─────────────────────────────────────────────────────────────
@@ -1765,6 +2020,235 @@ function install(): void {
           if (p && p.status === "active" && met(d, p)) { p.status = "done"; qs.questNotice = `「${d.title}」已完成，回任务板交任务`; }
         }
         view();
+        push();
+        return;
+      }
+      // ── ★ 主线任务链（对齐 entry.ts 的 sys_chain_* 命令族）────────────────────
+      if (action.startsWith("sys_chain_")) {
+        const cs = state as any;
+        if (!Array.isArray(cs.chainBoard)) cs.chainBoard = [];
+        const chains: any[] = cs.chainBoard;
+        const cid = String(params?.id || "").trim();
+        const nid = String(params?.node || "").trim();
+        const def = cid ? chains.find((c: any) => String(c.id) === cid) : null;
+        const chainState = () => def ? mockChainStateOf(state, def) : null;
+        const quests: Record<string, any> = cs.quests && typeof cs.quests === "object" ? cs.quests : (cs.quests = {});
+        const me = (state.entities || []).find((e: any) => e.side === "player");
+        // 接受一个 selectable 节点：注入委托板 + 建进度
+        const acceptNode = (d: any, nodeId: string): string => {
+          const st = mockChainStateOf(state, d);
+          const nst = st.nodes[nodeId];
+          const nd = mockChainNode(d, nodeId);
+          if (!nst || !nd) return "没有这个节点";
+          if (nst.status !== "selectable") return nst.status === "active" ? "任务已在进行中" : "这个节点现在不可接";
+          const qdef = nd.quest;
+          mockInjectChainQuest(state, d, nodeId);
+          quests[String(qdef.id)] = {
+            id: String(qdef.id), status: "active", kill: {}, gather: {}, talked: {},
+            arrived: false, acceptedTick: Math.round(Number(state.tick) || 0), acceptedMap: String((state as any).levelName || ""),
+          };
+          nst.status = "active";
+          mockRefreshChainStatus(state, d);
+          state.events.push("[mock] 主线接取：" + qdef.title);
+          return `已接受「${qdef.title}」`;
+        };
+        // 节点失败（放弃 / 超时）：走 onFail 分支，无分支则链失败
+        const failNode = (d: any, nodeId: string, reason: string): string => {
+          const st = mockChainStateOf(state, d);
+          const nst = st.nodes[nodeId];
+          const nd = mockChainNode(d, nodeId);
+          if (!nst || !nd) return "没有这个节点";
+          nst.status = "failed";
+          nst.failReason = reason;
+          // 摘除委托板上的节点任务 + 进度
+          mockRemoveChainQuest(state, String(nd.quest.id));
+          // ★ 开启失败分支（onFail）—— 不开的话链会卡死
+          const nexts = nd.onFail || [];
+          for (const nx of nexts) {
+            if (st.nodes[nx]) st.nodes[nx].status = "selectable";
+          }
+          let msg = `「${nd.quest.title}」${reason === "abandon" ? "已放弃（视为失败）" : "超时失败"}`;
+          if (nexts.length) {
+            msg += `，主线转向失败分支`;
+          } else {
+            msg += `，主线失败`;
+          }
+          mockRefreshChainStatus(state, d);
+          return msg;
+        };
+        // 节点交付：发奖 + 推进 onSuccess 分支
+        const turninNode = (d: any, nodeId: string): string => {
+          const st = mockChainStateOf(state, d);
+          const nst = st.nodes[nodeId];
+          const nd = mockChainNode(d, nodeId);
+          if (!nst || !nd) return "没有这个节点";
+          const qdef = nd.quest;
+          const p = quests[String(qdef.id)];
+          if (nst.status !== "active" || !p || p.status !== "done") return `「${qdef.title}」还没完成`;
+          const exp = Math.round(Number(qdef.reward?.exp) || 0);
+          const money = Math.round(Number(qdef.reward?.money) || 0);
+          if (me && exp) me.exp = Number(me.exp || 0) + exp;
+          cs.playerCard = cs.playerCard || {};
+          cs.playerCard.money = Number(cs.playerCard.money || 0) + money;
+          p.status = "turned";
+          nst.status = "done";
+          st.lastDone = nodeId;
+          // ★ 开启成功后继：1 个 → 直接开（线性）；多个 → 保持 locked 等玩家抉择
+          const nexts = nd.onSuccess || [];
+          if (nexts.length === 1 && st.nodes[nexts[0]]) st.nodes[nexts[0]].status = "selectable";
+          mockRefreshChainStatus(state, d);
+          state.events.push("[mock] 主线交付：" + qdef.title);
+          let msg = `「${qdef.title}」已交付，获得 ${exp}exp、${money}金`;
+          if (nexts.length > 1) msg += `，接下来有 ${nexts.length} 条分支可选`;
+          return msg;
+        };
+
+        if (action === "sys_chain_pool") {
+          const arr = Array.isArray(params?.chains) ? params.chains
+            : Array.isArray(params?.defs) ? params.defs : [];
+          let added = 0;
+          for (const raw of arr) {
+            const d = normMockChainDef(raw);
+            if (!d) continue;
+            const i = chains.findIndex((x: any) => String(x.id) === d.id);
+            if (i >= 0) chains[i] = d; else chains.push(d);
+            added++;
+          }
+          mockChainView(state);
+          cs.response = `链池已更新（共 ${chains.length} 条，本次 ${added} 条）`;
+          push();
+          return;
+        }
+        if (action === "sys_chain_board" || action === "sys_chain_view") {
+          mockChainView(state);
+          const v = cs.chainView;
+          if (!v || !v.chains.length) cs.response = "主线页：本故事没有配置任务链";
+          else {
+            const running = v.chains.filter((c: any) => c.status === "running" || c.status === "awaiting_choice").length;
+            cs.response = `主线：进行中 ${running} · 已完成 ${v.mainDone}/${v.mainTotal} · 支线 ${v.sideDone}/${v.sideTotal}`;
+          }
+          push();
+          return;
+        }
+        if (action === "sys_chain_start") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          if (st.status === "locked" && !mockChainUnlocked(state, def)) {
+            const need = (def.lockedBy || []).filter((c: string) => !mockChainStates(state)[c] || mockChainStates(state)[c].status !== "completed")
+              .map((c: string) => (chains.find((x: any) => String(x.id) === c) || {}).title || c).join("、");
+            cs.response = `「${def.title}」还未解锁（先完成：${need || "前置主线"}）`;
+            push(); return;
+          }
+          if (st.status === "completed") { cs.response = `「${def.title}」已完成`; push(); return; }
+          if (st.status === "failed") { cs.response = `「${def.title}」已失败，请先在主线页「从头再来」`; push(); return; }
+          const first = def.nodes.find((n: any) => st.nodes[n.id] && st.nodes[n.id].status === "selectable")
+            || def.nodes.find((n: any) => {
+              const ns = st.nodes[n.id];
+              return ns && ns.status !== "done" && ns.status !== "failed" && ns.status !== "locked";
+            });
+          if (!first) {
+            const ch = mockChainAwaitChoice(def, st);
+            cs.response = ch ? `「${def.title}」正等你选择下一步，去任务板「主线」页选一条分支。` : "这条链没有可接受的节点";
+            push(); return;
+          }
+          st.nodes[first.id].status = "selectable";
+          mockRefreshChainStatus(state, def);
+          cs.response = acceptNode(def, first.id);
+          mockChainView(state);
+          push();
+          return;
+        }
+        if (action === "sys_chain_choose") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          const nst = st.nodes[nid];
+          if (!nst || nst.status !== "locked") { cs.response = "这个分支不可选"; push(); return; }
+          const ch = mockChainAwaitChoice(def, st);
+          if (!ch || ch.options.indexOf(nid) < 0) { cs.response = "这个分支不在当前待抉择列表里"; push(); return; }
+          nst.status = "selectable";
+          mockRefreshChainStatus(state, def);
+          cs.response = acceptNode(def, nid);
+          mockChainView(state);
+          push();
+          return;
+        }
+        if (action === "sys_chain_node_accept") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          const nst = st.nodes[nid];
+          if (!nst || nst.status !== "selectable") { cs.response = "这个节点现在不可接"; push(); return; }
+          cs.response = acceptNode(def, nid);
+          mockChainView(state);
+          push();
+          return;
+        }
+        if (action === "sys_chain_turnin") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          cs.response = turninNode(def, nid);
+          mockChainView(state);
+          push();
+          return;
+        }
+        if (action === "sys_chain_pause") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          const nst = st.nodes[nid];
+          if (!nst || nst.status !== "active") { cs.response = "只有进行中的任务能暂停"; push(); return; }
+          nst.status = "paused";
+          const nd = mockChainNode(def, nid);
+          const p = nd ? quests[String(nd.quest.id)] : null;
+          if (p) p._pausedAtTick = Math.round(Number(state.tick) || 0);
+          mockChainView(state);
+          cs.response = `已暂停「${nd?.quest.title || nid}」（进度保留，计时冻结）`;
+          push();
+          return;
+        }
+        if (action === "sys_chain_resume") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          const nst = st.nodes[nid];
+          if (!nst || nst.status !== "paused") { cs.response = "只有已暂停的任务能继续"; push(); return; }
+          nst.status = "active";
+          const nd = mockChainNode(def, nid);
+          const p = nd ? quests[String(nd.quest.id)] : null;
+          if (p) {
+            const at = Math.round(Number(p._pausedAtTick) || 0);
+            if (at > 0) {
+              p.acceptedTick = Math.round(Number(p.acceptedTick) || 0) + (Math.round(Number(state.tick) || 0) - at);
+              p._pausedAtTick = 0;
+            }
+          }
+          mockChainView(state);
+          cs.response = `已继续「${nd?.quest.title || nid}」`;
+          push();
+          return;
+        }
+        if (action === "sys_chain_abandon") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          const nst = st.nodes[nid];
+          if (!nst || (nst.status !== "active" && nst.status !== "paused")) {
+            cs.response = "只有进行中/已暂停的任务能放弃"; push(); return;
+          }
+          if (nst.status === "paused") nst.status = "active";
+          cs.response = failNode(def, nid, "abandon");
+          mockChainView(state);
+          push();
+          return;
+        }
+        if (action === "sys_chain_retry") {
+          if (!def) { cs.response = "没有这条主线"; push(); return; }
+          const st = chainState()!;
+          if (st.status !== "failed") { cs.response = "只有失败的主线能重置"; push(); return; }
+          for (const n of def.nodes) mockRemoveChainQuest(state, String(n.quest.id));
+          delete mockChainStates(state)[def.id];
+          mockChainStateOf(state, def);
+          mockChainView(state);
+          cs.response = `「${def.title}」已重置，从头开始（已领过的奖励不回收）`;
+          push();
+          return;
+        }
+        cs.response = "未知的链命令：" + action;
         push();
         return;
       }

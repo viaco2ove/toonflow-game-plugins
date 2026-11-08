@@ -69,6 +69,20 @@ function objText(o: any): string {
   }
   return `${KIND_LABEL[o.kind] || o.kind} ${t} ${o.have}/${o.need}`;
 }
+/** ★ 主线标识：链任务的 from 形如 "chain:<chainId>:<nodeId>"（entry.ts buildQuestView 给出）。
+ *  isChain 为便捷布尔字段（后端直接算好），这里做双保险。 */
+function isChainQuest(q: any): boolean {
+  if (!q) return false;
+  if (q.isChain === true) return true;
+  return String(q.from || "").startsWith("chain:");
+}
+/** 主线链 id（MC1 / MS1…）；非主线返回空 */
+function chainIdOf(q: any): string {
+  if (!isChainQuest(q)) return "";
+  if (q.chainId) return String(q.chainId);
+  const parts = String(q.from || "").split(":");
+  return parts[1] || "";
+}
 function statusBadge(q: any): { text: string; cls: string } {
   if (q.status === "failed") {
     return q.failReason === "timeout"
@@ -137,6 +151,7 @@ function hasNavigableDest(q: any): boolean {
           <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
           <span class="ql-title">{{ q.title }}</span>
           <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+          <span v-if="isChainQuest(q)" class="ql-badge ql-badge--chain" :title="`主线任务链 ${chainIdOf(q)}`">★ 主线</span>
           <span v-if="timerText(q)" class="ql-timer" :class="{ 'ql-timer--low': timerLow(q) }">{{ timerText(q) }}</span>
           <span v-if="q.level > v.playerLevel + 2" class="ql-warn">⚠ 偏高</span>
         </div>
@@ -171,6 +186,7 @@ function hasNavigableDest(q: any): boolean {
           <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
           <span class="ql-title">{{ q.title }}</span>
           <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+          <span v-if="isChainQuest(q)" class="ql-badge ql-badge--chain" :title="`主线任务链 ${chainIdOf(q)}`">★ 主线</span>
         </div>
         <div v-if="q.desc" class="ql-desc">{{ q.desc }}</div>
         <div class="ql-giver">发布：{{ q.giver }} · 奖励 {{ rewardText(q) }}</div>
@@ -190,6 +206,7 @@ function hasNavigableDest(q: any): boolean {
           <span class="ql-type">{{ TYPE_ICON[q.type] || "📋" }}{{ TYPE_LABEL[q.type] || q.type }}</span>
           <span class="ql-title">{{ q.title }}</span>
           <span class="ql-badge" :class="statusBadge(q).cls">{{ statusBadge(q).text }}</span>
+          <span v-if="isChainQuest(q)" class="ql-badge ql-badge--chain" :title="`主线任务链 ${chainIdOf(q)}`">★ 主线</span>
         </div>
         <div class="ql-giver">发布：{{ q.giver }} · 奖励 {{ rewardText(q) }}</div>
       </div>
@@ -224,6 +241,8 @@ function hasNavigableDest(q: any): boolean {
 .ql-badge--fail { color: #ef5350; border-color: rgba(239,83,80,0.5); }
 .ql-badge--turned { color: #93a2b3; }
 .ql-badge--away { color: #93a2b3; }
+/* ★ 主线任务标识（金色描边，和普通委托区分开） */
+.ql-badge--chain { color: #ffd76a; border-color: rgba(212,161,62,0.7); background: rgba(212,161,62,0.14); font-weight: 600; }
 .ql-desc { font-size: 11px; color: #9fb0c1; margin-top: 2px; }
 .ql-giver { font-size: 10px; color: #7f8f9f; margin-top: 1px; }
 

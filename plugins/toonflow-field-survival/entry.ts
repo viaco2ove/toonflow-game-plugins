@@ -484,6 +484,20 @@ export interface FieldSurvivalState {
     turned: Array<Record<string, any>>;
     playerLevel: number;
   };
+  /** ★ 任务链（主线/支线）：链定义池（chain_defs 下发，含节点 quest） */
+  chainBoard?: StoryChainDef[];
+  /** ★ 任务链：玩家链进度（宿主侧权威，key = 链 id；另存 pluginData["chain_state"]） */
+  chainState?: Record<string, ChainState>;
+  /** ★ 任务链：前端渲染视图（buildChainView 重算，前端只读） */
+  chainView?: {
+    chains: Array<Record<string, any>>;
+    playerLevel: number;
+    currentMap: string;
+    mainDone: number;
+    mainTotal: number;
+    sideDone: number;
+    sideTotal: number;
+  };
   // 用户参数卡派生
   skills: SkillSlot[];
   items: ItemSlot[];
@@ -3477,6 +3491,22 @@ function checkQuestTimeouts(s: FieldSurvivalState): void {
     p.failReason = "timeout";
     p.cargoId = "";
     removeQuestCargo(s, p);
+    // ★ 链任务超时 → 走链的失败分支（onFail），而不是普通委托的「超时失败」
+    const fromTag = str((def as any).from);
+    if (fromTag.startsWith("chain:")) {
+      const parts = fromTag.split(":");           // chain:<chainId>:<nodeId>
+      const cdef = chainById(s, parts[1] || "");
+      const nid = parts[2] || "";
+      if (cdef && nid) {
+        const cst = chainStateOf(s, cdef);
+        const cnst = cst.nodes[nid];
+        if (cnst && cnst.status === "active") {
+          chainFailNode(s, cdef, nid, "timeout");
+          buildChainView(s);
+          continue;
+        }
+      }
+    }
     s.questNotice = `任务超时失败：${def.title}（限时 ${(tl / 10).toFixed(0)} 秒）`;
     pushEvent(s, `任务超时失败：${def.title}`);
   }
@@ -3722,6 +3752,18 @@ function buildQuestView(s: FieldSurvivalState): void {
       level: Math.max(1, Math.round(num(def.level, 1))),
       status,
       repeat: def.repeat === true,
+      /** ★ 来源标记（前端只读）：链任务为 "chain:<chainId>:<nodeId>"，普通委托为空。
+       *  系统「任务」页据此显示「主线」徽章；普通委托保持原样。 */
+      from: str((def as any).from),
+      /** ★ 是否主线任务（便捷字段，前端直接判断用） */
+      isChain: str((def as any).from).startsWith("chain:"),
+      /** ★ 所属主线链 id（isChain 时有值：MC1 / MC2 …；支线为 MS1 / MS2） */
+      chainId: (() => {
+        const tag = str((def as any).from);
+        if (!tag.startsWith("chain:")) return "";
+        const parts = tag.split(":");
+        return str(parts[1]);
+      })(),
       /** ★ 限时任务：剩余 tick（-1 = 不限时 / 非进行中）；前端据此显示倒计时 */
       timeLimitTicks: Math.max(0, Math.round(num(def.timeLimitTicks, 0))),
       remainTicks: (() => {
@@ -3782,12 +3824,537 @@ function buildQuestView(s: FieldSurvivalState): void {
       if (def.repeat) available.push(mapRow(def, "available"));
       else turned.push(mapRow(def, "turned"));
     } else {
+      // ★ 链任务（from=chain:…）不进「可接」页——只在主线页签展示
+      if (str((def as any).from).startsWith("chain:")) continue;
       if (!def.map || !lv || questMapKey(def.map) === questMapKey(lv)) available.push(mapRow(def, "available"));
       else available.push(mapRow(def, "away"));
     }
   }
   (s as any).questView = { available, active, done, turned, playerLevel: Math.max(1, Math.round(num(me?.level, 1))) };
 }
+
+/* ════════════════════════════════════════════════════════════
+   ★ 任务链系统（主线/支线）——通用引擎，业务在故事包 chain_defs
+   spec：故事包 event/主线任务/主线任务链.设计.md
+   节点任务复用委托系统全套进度钩子（kill/gather/talk/arrive），
+   引擎只管：分支抉择、失败分支、暂停/继续、放弃=失败、链间 lockedBy。
+   ════════════════════════════════════════════════════════════ */
+
+/** 链节点定义 */
+interface ChainNodeDef {
+  id: string;
+  quest: QuestDef;
+  /** 成功后开放的节点（多个 = 分支，玩家任务板抉择） */
+  onSuccess: string[];
+  /** 失败后开放的节点；空 = 整链失败 */
+  onFail: string[];
+  /** true = 该节点失败即链终局（不给重试） */
+  failEndsChain?: boolean;
+}
+/** 链定义（main-quests.json 的 chains[] 元素） */
+interface StoryChainDef {
+  id: string;
+  title: string;
+  chapter?: string;
+  desc?: string;
+  giver?: string;
+  order?: number;
+  /** 需全部完成的链 id；空 = 开局可选 */
+  lockedBy?: string[];
+  /** true = 支线（主线页支线区，统计分开） */
+  side?: boolean;
+  nodes: ChainNodeDef[];
+}
+/** 节点运行时状态 */
+interface ChainNodeState {
+  id: string;
+  status: "selectable" | "active" | "paused" | "done" | "failed";
+  /** 失败原因：timeout=限时超时 / abandon=玩家放弃（放弃=失败） */
+  failReason?: "timeout" | "abandon";
+  /** 分支抉择区：该节点被玩家选中待接受 */
+  chosen?: boolean;
+}
+/** 链运行时状态 */
+interface ChainState {
+  id: string;
+  status: "locked" | "available" | "awaiting_choice" | "running" | "failed" | "completed";
+  nodes: Record<string, ChainNodeState>;
+  /** ★ 最近完成/失败的节点 id —— 待抉择时用它定位分支来源（比「数组最后一个 done」可靠） */
+  lastDone?: string;
+  startedTick?: number;
+  finishedTick?: number;
+}
+
+/** 规范化链定义（宽松校验：id/nodes/quest.id 必须在，其余给缺省） */
+function normalizeChainDef(raw: any): StoryChainDef | null {
+  const id = str(raw?.id).trim();
+  const nodesArr = Array.isArray(raw?.nodes) ? raw.nodes : [];
+  if (!id || !nodesArr.length) return null;
+  const nodes: ChainNodeDef[] = [];
+  for (const n of nodesArr) {
+    const nid = str(n?.id).trim();
+    const qraw = n?.quest;
+    const qid = str(qraw?.id).trim();
+    if (!nid || !qid) continue;
+    const q = normalizeQuestDef(qraw, 0);
+    if (!q) continue;
+    nodes.push({
+      id: nid,
+      quest: q,
+      onSuccess: Array.isArray(n?.onSuccess) ? n.onSuccess.map((x: any) => str(x).trim()).filter(Boolean) : [],
+      onFail: Array.isArray(n?.onFail) ? n.onFail.map((x: any) => str(x).trim()).filter(Boolean) : [],
+      failEndsChain: n?.failEndsChain === true,
+    });
+  }
+  if (!nodes.length) return null;
+  return {
+    id,
+    title: str(raw.title).trim() || id,
+    chapter: str(raw.chapter).trim(),
+    desc: str(raw.desc).trim().slice(0, 200),
+    giver: str(raw.giver).trim() || "任务板",
+    order: Math.round(num(raw.order, 99)),
+    lockedBy: Array.isArray(raw?.lockedBy) ? raw.lockedBy.map((x: any) => str(x).trim()).filter(Boolean) : [],
+    side: raw?.side === true,
+    nodes,
+  };
+}
+
+/** 载入链定义（pluginData["chain_defs"]，结构与 main-quests.json 同构） */
+async function ensureChainDefs(ctx: PluginGameContext | undefined, s: FieldSurvivalState): Promise<number> {
+  const chainState = (s as any).chainState;
+  if (chainState && typeof chainState === "object" && Object.keys(chainState).length > 0) return 0;
+  const get = ctx?.tsApi?.pluginData?.get;
+  if (!get) return 0;
+  try {
+    const raw = await get("chain_defs");
+    const arr = Array.isArray(raw) ? raw
+      : Array.isArray((raw as any)?.chains) ? (raw as any).chains
+      : [];
+    const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
+    if (!defs.length) return 0;
+    (s as any).chainBoard = defs;
+    return defs.length;
+  } catch { return 0; }
+}
+
+/** 链任务 id 前缀：链节点 quest 的 id 用它与普通委托区分（「可接」页签过滤用） */
+const CHAIN_QUEST_PREFIX = "MCQ|MSQ";
+
+/** 判断 quest id 是否属于链任务（注入委托系统但不进「可接」页） */
+function isChainQuestId(id: string): boolean {
+  return /^(MCQ|MSQ)/.test(String(id).trim());
+}
+
+/** 找链定义 */
+function chainById(s: FieldSurvivalState, id: string): StoryChainDef | null {
+  const board: StoryChainDef[] = Array.isArray((s as any).chainBoard) ? (s as any).chainBoard : [];
+  return board.find((c) => String(c.id) === String(id).trim()) || null;
+}
+/** 找链内节点 */
+function chainNodeById(c: StoryChainDef, nid: string): ChainNodeDef | null {
+  return c.nodes.find((n) => String(n.id) === String(nid).trim()) || null;
+}
+/** 链状态容器兜底 */
+function chainStates(s: FieldSurvivalState): Record<string, ChainState> {
+  const cs = (s as any).chainState;
+  if (!cs || typeof cs !== "object") { (s as any).chainState = {}; return (s as any).chainState; }
+  return cs;
+}
+/** 取/建链状态 */
+function chainStateOf(s: FieldSurvivalState, def: StoryChainDef): ChainState {
+  const cs = chainStates(s);
+  if (!cs[def.id]) {
+    const nodes: Record<string, ChainNodeState> = {};
+    for (const n of def.nodes) nodes[n.id] = { id: n.id, status: "locked" };
+    cs[def.id] = { id: def.id, status: "locked", nodes };
+  }
+  return cs[def.id];
+}
+/** 链是否解锁（lockedBy 全部 completed） */
+function chainUnlocked(s: FieldSurvivalState, def: StoryChainDef): boolean {
+  const need = def.lockedBy || [];
+  if (!need.length) return true;
+  const cs = chainStates(s);
+  return need.every((cid) => cs[String(cid)]?.status === "completed");
+}
+/** 链进度：已完成节点数/总节点数（当前路径上的） */
+function chainProgress(c: StoryChainDef, st: ChainState): { done: number; total: number } {
+  const done = Object.values(st.nodes).filter((n) => n.status === "done").length;
+  return { done, total: c.nodes.length };
+}
+/** 当前进行中/暂停中的节点（同链至多 1 个） */
+function chainActiveNode(st: ChainState): ChainNodeState | null {
+  const arr = Object.values(st.nodes).filter((n) => n.status === "active" || n.status === "paused");
+  return arr[0] || null;
+}
+/* ══ 分支语义（关键）══════════════════════════════════════════════
+ * 链的节点图允许三种走向：
+ *   ① 线性：onSuccess 恰好 1 个 → 完成后自动开启下一个，无需抉择
+ *   ② 分支：onSuccess 多个     → 完成后进入 awaiting_choice，玩家在任务板选一条
+ *   ③ 终局：onSuccess 为空      → 该节点是终点，链随即完成
+ * 失败走向（onFail）：
+ *   · onFail 非空 → 失败后开启这些节点（失败分支，通常 1 个），链继续
+ *   · onFail 为空 → 失败即链终局（除非该节点 failEndsChain=false 且被别的分支覆盖）
+ * 链完成判定：**任一路径走到终点**即完成 —— 不能用「done 节点数 == 全部节点数」，
+ *   因为 MC2/MC4/MC8 存在二选一的平行分支，走完任一条都算这条主线走完了。 */
+/** 节点是否是「终点」：onSuccess 为空（成功到这儿链就收尾） */
+function chainNodeIsTerminal(c: StoryChainDef, nid: string): boolean {
+  const ndef = chainNodeById(c, nid);
+  return !!ndef && !(ndef.onSuccess || []).length;
+}
+/** 待抉择：awaiting_choice 时返回刚完成的节点及其 onSuccess 候选 */
+function chainAwaitChoice(c: StoryChainDef, st: ChainState): { from: string; options: string[] } | null {
+  if (st.status !== "awaiting_choice") return null;
+  // ★ 优先用 lastDone 定位分支来源；没有则回退到「最后一个 done 节点」
+  let lastId = str(st.lastDone);
+  if (!lastId || !st.nodes[lastId]) {
+    const doneNodes = Object.values(st.nodes).filter((n) => n.status === "done");
+    if (!doneNodes.length) return null;
+    lastId = doneNodes[doneNodes.length - 1].id;
+  }
+  const ndef = chainNodeById(c, lastId);
+  if (!ndef) return null;
+  const options = (ndef.onSuccess || []).filter((nid) => st.nodes[nid] && st.nodes[nid].status === "locked");
+  if (!options.length) return null;
+  return { from: lastId, options };
+}
+/** 重算链状态：由节点状态推导链级状态（running / awaiting_choice / failed / completed） */
+function refreshChainStatus(s: FieldSurvivalState, def: StoryChainDef): void {
+  const st = chainStateOf(s, def);
+  const st0 = st.status;
+  if (st.status === "locked" && !chainUnlocked(s, def)) return; // 保持 locked
+  const nodes = Object.values(st.nodes);
+  const doneCnt = nodes.filter((n) => n.status === "done").length;
+  const failed = nodes.filter((n) => n.status === "failed");
+  // ★ 终局失败：失败节点没有 onFail 后继 → 整链失败
+  const terminalFail = failed.find((n) => {
+    const ndef = chainNodeById(def, n.id);
+    return ndef ? (!(ndef.onFail || []).length || ndef.failEndsChain === true) : false;
+  });
+  if (terminalFail) { st.status = "failed"; st.finishedTick = Math.round(num(s.tick, 0)); return; }
+  // ★ 完成判定：走完任意一条路径到终点（onSuccess 为空的节点）即完成
+  const reachedTerminal = nodes.some((n) => n.status === "done" && chainNodeIsTerminal(def, n.id));
+  if (reachedTerminal) { st.status = "completed"; st.finishedTick = Math.round(num(s.tick, 0)); return; }
+  if (doneCnt >= def.nodes.length) { st.status = "completed"; st.finishedTick = Math.round(num(s.tick, 0)); return; }
+  // 有 done 且其 onSuccess 里有 locked 候选，且没有任何待办节点 → 待抉择
+  const hasPending = nodes.some((x) => x.status === "selectable" || x.status === "active" || x.status === "paused");
+  if (!hasPending) {
+    for (const dn of nodes.filter((n) => n.status === "done")) {
+      const ndef = chainNodeById(def, dn.id);
+      if (!ndef) continue;
+      const opts = (ndef.onSuccess || []).filter((nid) => st.nodes[nid] && st.nodes[nid].status === "locked");
+      if (opts.length >= 1) { st.status = "awaiting_choice"; return; }
+    }
+  }
+  // ★ 还没开始过（没有任何节点被接受）且已解锁 → available（任务板可接的新主线）
+  const started = nodes.some((x) => x.status === "active" || x.status === "paused" || x.status === "done" || x.status === "failed");
+  if (!started) { st.status = "available"; return; }
+  st.status = "running";
+  if (st0 === "locked") { st.startedTick = Math.round(num(s.tick, 0)); }
+}
+
+/** 把节点 quest 注入委托板（from=chain:<chainId>:<nodeId>），并回写 quest_defs 持久化 */
+async function injectChainQuest(context: PluginGameContext | undefined, s: FieldSurvivalState, def: StoryChainDef, nid: string): Promise<void> {
+  const ndef = chainNodeById(def, nid);
+  if (!ndef) return;
+  const qdef = ndef.quest;
+  const marked: QuestDef = { ...qdef, from: `chain:${def.id}:${nid}` };
+  const board = Array.isArray(s.questBoard) ? s.questBoard : [];
+  if (board.some((q) => String(q.id) === String(qdef.id))) return; // 已注入
+  s.questBoard = [...board, marked];
+  // 回写 quest_defs（与 AI 生成同路，按 id 合并既有优先）
+  const api = context?.tsApi?.pluginData;
+  const set = api?.set;
+  if (set) {
+    try {
+      let existing: any[] = [];
+      if (api?.get) {
+        const raw = await api.get("quest_defs");
+        existing = Array.isArray(raw) ? raw
+          : Array.isArray((raw as any)?.quests) ? (raw as any).quests
+          : Array.isArray((raw as any)?.defs) ? (raw as any).defs
+          : [];
+      }
+      if (!existing.some((x: any) => String(x?.id) === String(qdef.id))) {
+        await set("quest_defs", { version: 1, quests: [...existing, marked] });
+      }
+    } catch { /* 落库失败不阻断玩法 */ }
+  }
+}
+
+/** 从委托板摘除链节点任务定义（链重置用；进度记录 s.quests 同步清掉） */
+function removeChainQuestFromBoard(s: FieldSurvivalState, qid: string): void {
+  const board = Array.isArray(s.questBoard) ? s.questBoard : [];
+  s.questBoard = board.filter((q) => String(q.id) !== String(qid));
+  if (s.quests && s.quests[String(qid)]) delete s.quests[String(qid)];
+}
+
+/** 链节点交付（sys_chain_turnin 核心）：扣消耗/发奖/写 flag/推进 onSuccess 分支 */
+async function chainTurninNode(context: PluginGameContext | undefined, s: FieldSurvivalState, def: StoryChainDef, nid: string): Promise<string> {
+  const ndef = chainNodeById(def, nid);
+  const st = chainStateOf(s, def);
+  const nst = st.nodes[nid];
+  if (!ndef || !nst) return "没有这个节点";
+  if (nst.status !== "active") return nid === chainActiveNodeId(st) && nst.status === "paused" ? "节点已暂停，先继续任务" : "节点不在进行中";
+  const qdef = ndef.quest;
+  const p = (s.quests || {})[String(qdef.id)];
+  if (!p || p.status !== "done") return "目标还没达成，先去完成任务";
+  // 交付：扣物品（与 sys_quest_turnin 同规则）
+  const consume = Array.isArray(qdef.consume) && qdef.consume.length
+    ? qdef.consume
+    : (qdef.objectives || []).filter((o) => o.kind === "gather" && str(o.target))
+        .map((o) => ({ name: str(o.target), count: objNeed(o) }));
+  for (const c of consume) {
+    if (!str(c.name)) continue;
+    removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+  }
+  // 发奖
+  const exp = Math.round(num(qdef.reward?.exp, 0));
+  const money = Math.round(num(qdef.reward?.money, 0));
+  if (exp > 0) gainPlayerExp(s, exp);
+  if (money > 0) s.money += money;
+  const got: string[] = [];
+  for (const it of qdef.reward?.items || []) {
+    if (!str(it.name)) continue;
+    addBagItemToCard(s, str(it.name), Math.max(1, Math.round(num(it.count, 1))));
+    got.push(`${it.name}×${Math.max(1, Math.round(num(it.count, 1)))}`);
+  }
+  // 进度落库：turned（链节点复用委托进度容器）
+  p.status = "turned";
+  p.turnedTick = Math.round(num(s.tick, 0));
+  // 写完成 flag（链节点 flags.done → phase flag 联动事件系统）
+  if (qdef.flags?.done) await setPlayerFlag(context, qdef.flags.done, true);
+  nst.status = "done";
+  st.lastDone = nid;
+  // ★ 开启成功后继：
+  //   · 恰好 1 个后继 → 直接开成 selectable（线性推进，玩家去任务板接取即可）
+  //   · 多个后继     → 保持 locked，由 refreshChainStatus 置为 awaiting_choice，
+  //                    玩家在任务板「主线」页选一条（多分支选择卡）
+  const succ = ndef.onSuccess || [];
+  if (succ.length === 1) {
+    if (st.nodes[succ[0]]) st.nodes[succ[0]].status = "selectable";
+  }
+  const rw = [exp > 0 ? `${exp}exp` : "", money > 0 ? `${money}金` : "", got.join("、")].filter(Boolean).join("、");
+  s.questNotice = `【${def.title}】「${qdef.title}」已交付，奖励：${rw || "无"}`;
+  pushEvent(s, `主线交付：${qdef.title}（${rw || "无奖励"}）`);
+  refreshChainStatus(s, def);
+  await persistSys(context, s);
+  // 链完成？
+  if (st.status === "completed") {
+    st.finishedTick = Math.round(num(s.tick, 0));
+    pushEvent(s, `主线完成：${def.title}`);
+    return `【${def.title}】全部节点完成！这条主线到此告一段落。`;
+  }
+  // 待抉择 or 下一个节点待接受
+  const awaitCh = chainAwaitChoice(def, st);
+  if (awaitCh) return `「${qdef.title}」已交付。回到任务板主线页，选择下一步（${awaitCh.options.length} 条分支）。`;
+  return `「${qdef.title}」已交付${rw ? `，获得 ${rw}` : ""}。下一个主线任务已开启，去任务板接受。`;
+}
+
+/** 链当前 active/paused 节点 id */
+function chainActiveNodeId(st: ChainState): string {
+  const n = chainActiveNode(st);
+  return n ? n.id : "";
+}
+
+/** 链节点失败（超时/放弃共用）：走 onFail 分支或整链失败 */
+function chainFailNode(s: FieldSurvivalState, def: StoryChainDef, nid: string, reason: "timeout" | "abandon"): string {
+  const st = chainStateOf(s, def);
+  const nst = st.nodes[nid];
+  const ndef = chainNodeById(def, nid);
+  if (!nst || !ndef || nst.status !== "active") return "节点不在进行中";
+  nst.status = "failed";
+  nst.failReason = reason;
+  const p = (s.quests || {})[String(ndef.quest.id)];
+  if (p && p.status === "active") {
+    p.status = "failed";
+    (p as any).failReason = reason === "timeout" ? "timeout" : "cargo";
+  }
+  // ★ 失败的链节点任务从委托板摘掉 —— 主线页自己展示失败状态，
+  //   留在普通委托「进行中」页会出现一个玩家管不了的僵尸任务。
+  removeChainQuestFromBoard(s, String(ndef.quest.id));
+  const qdef = ndef.quest;
+  pushEvent(s, `主线失败：${qdef.title}（${reason === "timeout" ? "超时" : "放弃"}）`);
+  // ★ 开启失败分支（onFail）—— 不开启的话链会卡死：失败节点再无后继可走
+  const opens = ndef.onFail || [];
+  for (const nx of opens) {
+    if (st.nodes[nx]) st.nodes[nx].status = "selectable";
+  }
+  refreshChainStatus(s, def);
+  if (st.status === "failed") {
+    return `【${def.title}】「${qdef.title}」失败（${reason === "timeout" ? "超时" : "放弃"}），这条主线中断了。可在任务板「从头再来」。`;
+  }
+  return opens.length
+    ? `「${qdef.title}」失败（${reason === "timeout" ? "超时" : "放弃"}）。另一条路已开启：「${(chainNodeById(def, opens[0])?.quest.title) || opens[0]}」。`
+    : `「${qdef.title}」失败。`;
+}
+
+/** 链进度持久化（pluginData["chain_state"]）——链状态/节点状态跨会话保留 */
+async function persistChainState(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
+  const set = context?.tsApi?.pluginData?.set;
+  if (!set) return;
+  try { await set("chain_state", { version: 1, chains: chainStates(s) }); } catch { /* 不阻断玩法 */ }
+}
+
+/** 恢复链进度（pluginData["chain_state"] → s.chainState） */
+async function restoreChainState(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
+  const get = context?.tsApi?.pluginData?.get;
+  if (!get) return;
+  try {
+    const raw = await get("chain_state");
+    const chains = (raw as any)?.chains;
+    if (chains && typeof chains === "object" && Object.keys(chains).length) {
+      (s as any).chainState = chains as Record<string, ChainState>;
+    }
+  } catch { /* 读取失败走默认 */ }
+}
+
+/** 前端渲染视图：s.chainView（每 tick / 每次 sys_chain_* 后重算，前端只读） */
+function buildChainView(s: FieldSurvivalState): void {
+  const board: StoryChainDef[] = Array.isArray((s as any).chainBoard) ? (s as any).chainBoard : [];
+  const cs = chainStates(s);
+  const lv = str(s.levelName);
+  const me = playerEntity(s);
+  const chains = board
+    .slice()
+    .sort((a, b) => Math.round(num(a.order, 99)) - Math.round(num(b.order, 99)))
+    .map((def) => {
+      const st = chainStateOf(s, def);
+      refreshChainStatus(s, def); // 推导 running/awaiting_choice
+      const nodes = def.nodes.map((ndef) => {
+        const nst = st.nodes[ndef.id] || { id: ndef.id, status: "locked" as const };
+        const qdef = ndef.quest;
+        const p = (s.quests || {})[String(qdef.id)];
+        const objectives = (qdef.objectives || []).map((o) => ({
+          kind: o.kind,
+          target: str(o.target),
+          have: p ? objHave(o, p) : 0,
+          need: objNeed(o),
+          confirm: o.confirm === true,
+          map: str(o.map),
+          mapRaw: rawQuestMapKey(str(o.mapRaw) || str(o.map)),
+          x: o.x,
+          y: o.y,
+          radius: o.radius,
+        }));
+        const met = p ? objectivesMet(qdef, p) : false;
+        return {
+          id: ndef.id,
+          questId: String(qdef.id),
+          title: qdef.title,
+          type: qdef.type,
+          desc: str(qdef.desc),
+          status: String(nst.status),
+          failReason: str((nst as any).failReason),
+          objectives,
+          reward: qdef.reward || { exp: 0, money: 0, items: [] },
+          met,
+          canTurnIn: nst.status === "active" && p?.status === "done",
+          remainTicks: (() => {
+            const tl = Math.round(num(qdef.timeLimitTicks, 0));
+            if (!(tl > 0) || !p || p.status !== "active") return -1;
+            return Math.max(0, tl - (Math.round(num(s.tick, 0)) - Math.round(num(p.acceptedTick, 0))));
+          })(),
+          onSuccess: ndef.onSuccess || [],
+          onFail: ndef.onFail || [],
+          destMapRaw: (() => {
+            const o = (qdef.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+            return o ? rawQuestMapKey(str(o.mapRaw) || str(o.map)) : "";
+          })(),
+          destX: (() => {
+            const o = (qdef.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+            return o ? o.x : undefined;
+          })(),
+          destY: (() => {
+            const o = (qdef.objectives || []).find((x) => x.kind === "arrive" || x.kind === "explore");
+            return o ? o.y : undefined;
+          })(),
+        };
+      });
+      const prog = chainProgress(def, st);
+      const awaitCh = chainAwaitChoice(def, st);
+      return {
+        id: def.id,
+        title: def.title,
+        chapter: str(def.chapter),
+        desc: str(def.desc),
+        side: def.side === true,
+        order: Math.round(num(def.order, 99)),
+        status: st.status,
+        unlocked: chainUnlocked(s, def) && st.status !== "locked",
+        lockedBy: def.lockedBy || [],
+        progressDone: prog.done,
+        progressTotal: prog.total,
+        nodes,
+        awaitChoice: awaitCh,
+      };
+    });
+  (s as any).chainView = {
+    chains,
+    playerLevel: Math.max(1, Math.round(num(me?.level, 1))),
+    currentMap: lv,
+    mainDone: chains.filter((c) => !c.side && c.status === "completed").length,
+    mainTotal: chains.filter((c) => !c.side).length,
+    sideDone: chains.filter((c) => c.side && c.status === "completed").length,
+    sideTotal: chains.filter((c) => c.side).length,
+  };
+}
+
+/** 链重置（「从头再来」）：清链状态 + 摘除未交付链任务 + 清进度（已拿奖励不回收） */
+function chainRetryReset(s: FieldSurvivalState, def: StoryChainDef): void {
+  const cs = chainStates(s);
+  for (const n of def.nodes) removeChainQuestFromBoard(s, n.quest.id);
+  delete cs[def.id];
+  chainStateOf(s, def); // 重建全 locked 初始态
+}
+
+/* ── sys_chain_* 命令 ─────────────────────────────────────── */
+
+/** 链系统命令共用前处理：载 defs / 恢复视图 */
+async function chainCmdPre(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
+  if (!Array.isArray((s as any).chainBoard) || !(s as any).chainBoard.length) {
+    await ensureChainDefs(context, s);
+  }
+}
+
+/** 找链任务所属链+节点（从 questBoard 里 chain 标记反查） */
+function chainOfQuestId(s: FieldSurvivalState, qid: string): { def: StoryChainDef; nid: string } | null {
+  for (const def of (Array.isArray((s as any).chainBoard) ? (s as any).chainBoard : []) as StoryChainDef[]) {
+    for (const n of def.nodes) {
+      if (String(n.quest.id) === String(qid).trim()) return { def, nid: n.id };
+    }
+  }
+  return null;
+}
+
+/** 把 selectable 节点变成 active（接受任务：注入委托板开始计数） */
+async function chainAcceptNode(context: PluginGameContext | undefined, s: FieldSurvivalState, def: StoryChainDef, nid: string): Promise<string> {
+  const st = chainStateOf(s, def);
+  const nst = st.nodes[nid];
+  const ndef = chainNodeById(def, nid);
+  if (!nst || !ndef) return "没有这个节点";
+  if (nst.status !== "selectable") return nst.status === "active" ? "任务已在进行中" : "这个节点现在不可接";
+  const qdef = ndef.quest;
+  // 注入委托板 + 建进度（同 sys_quest_accept 的进度结构）
+  await injectChainQuest(context, s, def, nid);
+  if (!s.quests || typeof s.quests !== "object") s.quests = {};
+  s.quests[String(qdef.id)] = {
+    id: String(qdef.id), status: "active", kill: {}, gather: {}, talked: {},
+    arrived: false, acceptedTick: Math.round(num(s.tick, 0)), acceptedMap: str(s.levelName),
+  };
+  if (qdef.flags?.accept) await setPlayerFlag(context, qdef.flags.accept, true);
+  nst.status = "active";
+  refreshChainStatus(s, def);
+  buildChainView(s);
+  await persistChainState(context, s);
+  pushEvent(s, `主线接取：${qdef.title}`);
+  return `已接受「${qdef.title}」${Math.round(num(qdef.timeLimitTicks, 0)) > 0 ? "（限时任务，抓紧）" : ""}`;
+}
+
+/* ══ sys_chain_*：在 handleSysCommand 的任务板区后追加 ══ */
+
+// 占位：sys 命令在下方 handleSysCommand 内注册（见 sys_chain_pool 等 case）
 
 /** 从 pluginData["quest_defs"] 载入任务定义
  *  · 板子为空 → 直接载入（避免覆盖宿主已下发的内容）
@@ -4841,6 +5408,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       // ★ 任务板：任务定义 + 玩家进度（掉线重连按 id 续上）
       questBoard: s.questBoard || [],
       quests: s.quests || {},
+      // ★ 任务链：链进度（节点状态/分支选择），另存 pluginData["chain_state"] 双保险
+      chainState: (s as any).chainState || {},
       // ★ 角色驻留地图：ally/spectator 角色停在别的地图（s.parked）→ 持久化到 t_plugin_session_data
       parked: (s as any).parked || {},
       // ★ 实体形象：生成图库 + 角色绑定（刷新后形象不丢）
@@ -5019,6 +5588,11 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     // ★ 任务进度容器兜底：库里没存过 quests 时保持 {}（否则首次 sys_quest_accept
     //   写 s.quests[id] 会因 undefined 抛错，被宿主当作 entry.js 执行失败）。
     if (!s.quests || typeof s.quests !== "object") s.quests = {};
+    // ★ 任务链进度恢复（sys_state.chainState；pluginData["chain_state"] 由 restoreChainState 兜底）
+    if (d.chainState && typeof d.chainState === "object") {
+      (s as any).chainState = d.chainState as Record<string, ChainState>;
+    }
+    if (!(s as any).chainState || typeof (s as any).chainState !== "object") (s as any).chainState = {};
     // ★ 角色位置权威（ai_story_roles）：上次会话每个角色停在哪张图、哪个坐标。
     //   开局必须按这份数据就位——否则角色会被强行拉回 start_map，上一局的驻留全丢。
     try {
@@ -5241,6 +5815,10 @@ export async function handle_action(
       // ★ 任务板：库里没恢复出任务定义时，读 CLI 上传的 quest_defs（故事包自带任务表）
       await ensureQuestDefs(context, s);
       buildQuestView(s);
+      // ★ 任务链：载入链定义（main-quests.json → pluginData["chain_defs"]）+ 恢复链进度
+      await chainCmdPre(context, s);
+      await restoreChainState(context, s);
+      buildChainView(s);
       // ★ 本局关卡：库里上局 level 优先（按库恢复），其次前端上报，最后兜底 start_map
       const curLv = str(str((params as any)?.levelName) || s.levelName || "", "") || "Mulberry Town";
       s.levelName = curLv;
@@ -5502,6 +6080,8 @@ export async function handle_action(
       syncQuestArriveAuto(s);
       checkQuestTimeouts(s);
       buildQuestView(s);
+      // ★ 任务链：重算链视图（节点进度 / 分支待抉择 / 链完成状态）
+      if (Array.isArray((s as any).chainBoard) && (s as any).chainBoard.length) buildChainView(s);
       // ★ fix（事件日志被污染）：**只在「敌怪表真的变了」时报一次**，不要每 tick 报。
       //   前端 localEnemies 清单每 tick 都带（epoch 相同则宿主忽略），
       //   若这里无条件 pushEvent → 事件日志每秒刷一条「当前关卡敌怪已接入宿主 AI（N 只）」，
@@ -5882,6 +6462,197 @@ export async function handle_action(
       buildQuestView(s);
       await persistSys(context, s);
       return okResp(added > 0 ? `任务板新增 ${added} 条委托` : "AI 没能生成新委托（可稍后再试）");
+    }
+
+    /* ============================================================
+       ★ 任务链系统（主线/支线）——通用引擎，业务在故事包 chain_defs
+       spec：故事包 event/主线任务/主线任务链.设计.md
+       ============================================================ */
+    case "sys_chain_pool": {
+      // 下发链定义（宿主/CLI 上传 chain_defs；事件脚本也可下发）
+      const arr = Array.isArray(params?.chains) ? params.chains : [];
+      const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
+      if (!defs.length) return okResp("链池为空（未提供 chains）");
+      const map = new Map(((Array.isArray((s as any).chainBoard) ? (s as any).chainBoard : []) as StoryChainDef[]).map((c) => [c.id, c]));
+      defs.forEach((d) => map.set(d.id, d));
+      (s as any).chainBoard = Array.from(map.values());
+      buildChainView(s);
+      await persistSys(context, s);
+      return okResp(`链池已更新（共 ${(s as any).chainBoard.length} 条，本次 ${defs.length} 条）`);
+    }
+    case "sys_chain_board": {
+      // 打开主线页：载 defs + 恢复进度 + 重算视图（App.vue onQuestOpen 时与 sys_quest_board 并调）
+      await chainCmdPre(context, s);
+      await restoreChainState(context, s);
+      buildChainView(s);
+      const v = (s as any).chainView;
+      if (!v || !v.chains.length) return okResp("主线页：本故事没有配置任务链");
+      const running = v.chains.filter((c: any) => c.status === "running" || c.status === "awaiting_choice").length;
+      return okResp(`主线：进行中 ${running} · 已完成 ${v.mainDone}/${v.mainTotal} · 支线 ${v.sideDone}/${v.sideTotal}`);
+    }
+    case "sys_chain_start": {
+      // 接受一条新链（首个节点直接接受开始）
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const st = chainStateOf(s, def);
+      if (st.status === "locked" && !chainUnlocked(s, def)) {
+        const need = (def.lockedBy || []).filter((c) => chainStates(s)[String(c)]?.status !== "completed")
+          .map((c) => chainById(s, c)?.title || c).join("、");
+        return okResp(`「${def.title}」还未解锁（先完成：${need || "前置主线"}）`);
+      }
+      if (st.status === "completed") return okResp(`「${def.title}」已完成`);
+      if (st.status === "failed") return okResp(`「${def.title}」已失败，请先在主线页「从头再来」`);
+      // ★ 挑选下一个可接节点的顺序（分支链不能靠顺序猜）：
+      //   ① 已有 selectable 节点 → 直接接它（线性推进后继节点就是 selectable）
+      //   ② 链正卡在待抉择点   → 引导玩家去「主线」页选分支，不替他乱选
+      //   ③ 链刚开、什么都没有 → 接第一个节点
+      let firstOpen = def.nodes.find((n) => st.nodes[n.id]?.status === "selectable");
+      if (!firstOpen) {
+        const ch = chainAwaitChoice(def, st);
+        if (ch) return okResp(`「${def.title}」正等你选择下一步，去任务板「主线」页选一条分支。`);
+        firstOpen = def.nodes.find((n) => {
+          const ns = st.nodes[n.id];
+          return ns && ns.status !== "done" && ns.status !== "failed";
+        });
+      }
+      if (!firstOpen) return okResp("这条链没有可接受的节点");
+      st.nodes[firstOpen.id].status = "selectable";
+      refreshChainStatus(s, def);
+      const msg = await chainAcceptNode(context, s, def, firstOpen.id);
+      await persistSys(context, s);
+      return okResp(msg);
+    }
+    case "sys_chain_choose": {
+      // 待抉择：从候选分支里选一个 → 接受
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const st = chainStateOf(s, def);
+      const nst = st.nodes[nid];
+      if (!nst || nst.status !== "locked") return okResp("这个分支不可选");
+      const ch = chainAwaitChoice(def, st);
+      if (!ch || !ch.options.includes(nid)) return okResp("这个分支不在当前待抉择列表里");
+      nst.status = "selectable";
+      refreshChainStatus(s, def);
+      const msg = await chainAcceptNode(context, s, def, nid);
+      await persistSys(context, s);
+      return okResp(msg);
+    }
+    case "sys_chain_node_accept": {
+      // 接受一个 selectable 节点（下一个主线任务）
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const st = chainStateOf(s, def);
+      const nst = st.nodes[nid];
+      if (!nst || nst.status !== "selectable") return okResp("这个节点现在不可接");
+      const msg = await chainAcceptNode(context, s, def, nid);
+      await persistSys(context, s);
+      return okResp(msg);
+    }
+    case "sys_chain_turnin": {
+      // 交付节点（=提交主线任务）：扣消耗/发奖/写 flag/推进 onSuccess
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const msg = await chainTurninNode(context, s, def, nid);
+      buildChainView(s);
+      await persistSys(context, s);
+      await persistChainState(context, s);
+      return okResp(msg);
+    }
+    case "sys_chain_pause": {
+      // 暂停：active→paused（计时冻结）
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      const st = def ? chainStateOf(s, def) : null;
+      const nst = st ? st.nodes[nid] : null;
+      if (!def || !nst || nst.status !== "active") return okResp("只有进行中的任务能暂停");
+      nst.status = "paused";
+      const ndef = chainNodeById(def, nid);
+      const qid = ndef ? String(ndef.quest.id) : "";
+      const p = qid ? (s.quests || {})[qid] : null;
+      if (p) (p as any)._pausedAtTick = Math.round(num(s.tick, 0));
+      buildChainView(s);
+      await persistChainState(context, s);
+      await persistSys(context, s);
+      pushEvent(s, `主线暂停：${ndef?.quest.title || nid}`);
+      return okResp(`已暂停「${ndef?.quest.title || nid}」（进度保留，计时冻结）`);
+    }
+    case "sys_chain_resume": {
+      // 继续：paused→active；限时任务把暂停时长补偿进 acceptedTick
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      const st = def ? chainStateOf(s, def) : null;
+      const nst = st ? st.nodes[nid] : null;
+      if (!def || !nst || nst.status !== "paused") return okResp("只有已暂停的任务能继续");
+      nst.status = "active";
+      const ndef = chainNodeById(def, nid);
+      const qid = ndef ? String(ndef.quest.id) : "";
+      const p = qid ? (s.quests || {})[qid] : null;
+      if (p) {
+        const at = Math.round(num((p as any)._pausedAtTick, 0));
+        if (at > 0) {
+          p.acceptedTick = Math.round(num(p.acceptedTick, 0)) + (Math.round(num(s.tick, 0)) - at);
+          (p as any)._pausedAtTick = 0;
+        }
+      }
+      buildChainView(s);
+      await persistChainState(context, s);
+      await persistSys(context, s);
+      pushEvent(s, `主线继续：${ndef?.quest.title || nid}`);
+      return okResp(`已继续「${ndef?.quest.title || nid}」`);
+    }
+    case "sys_chain_abandon": {
+      // 放弃节点 = 失败（走 onFail 分支）
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const nid = str(params?.node).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const st = chainStateOf(s, def);
+      const nst = st.nodes[nid];
+      if (!nst || (nst.status !== "active" && nst.status !== "paused")) return okResp("只有进行中/已暂停的任务能放弃");
+      if (nst.status === "paused") nst.status = "active";
+      const msg = chainFailNode(s, def, nid, "abandon");
+      buildChainView(s);
+      await persistSys(context, s);
+      await persistChainState(context, s);
+      return okResp(msg);
+    }
+    case "sys_chain_retry": {
+      // 从头再来：链失败后重置整链（已拿奖励不回收）
+      await chainCmdPre(context, s);
+      const cid = str(params?.id).trim();
+      const def = chainById(s, cid);
+      if (!def) return okResp("没有这条主线");
+      const st = chainStateOf(s, def);
+      if (st.status !== "failed") return okResp("只有失败的主线能重置");
+      chainRetryReset(s, def);
+      buildChainView(s);
+      await persistSys(context, s);
+      await persistChainState(context, s);
+      pushEvent(s, `主线重置：${def.title}`);
+      return okResp(`「${def.title}」已重置，从头开始（已领过的奖励不回收）`);
+    }
+    case "sys_chain_view": {
+      // 调试/宿主查看链视图
+      await chainCmdPre(context, s);
+      buildChainView(s);
+      const v = (s as any).chainView;
+      return okResp(v && v.chains.length ? `链视图：${v.chains.length} 条（主线 ${v.mainDone}/${v.mainTotal}）` : "链视图为空");
     }
 
     /* ============================================================

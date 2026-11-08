@@ -6991,9 +6991,18 @@ const questView = computed<any>(() => (state.value as any)?.questView || { avail
 const questAsking = computed<boolean>(() => !!(state.value as any)?._questAsking);
 const questAiText = computed<string>(() => String((state.value as any)?.questAiText || ""));
 
+/* ---------------- ★ 主线任务链（宿主 state.chainView 权威，前端只读） ----------------
+ * 链视图由 entry.ts 的 buildChainView 每 tick 重算；前端只渲染 + 发 sys_chain_* 命令。
+ * 引擎负责：分支抉择、失败分支、暂停/继续、放弃=失败、链间前置解锁。 */
+const chainView = computed<any>(() => (state.value as any)?.chainView || {
+  chains: [], playerLevel: 1, mainDone: 0, mainTotal: 0, sideDone: 0, sideTotal: 0,
+});
+
 function onQuestOpen(): void {
   if (!nearBoard.value) return;
   runSysCmd("sys_quest_board", {});
+  // ★ 同时拉主线链视图（链定义在 pluginData.chain_defs，引擎侧恢复进度后重算）
+  runSysCmd("sys_chain_board", {});
   questOpen.value = true;
 }
 function onQuestAccept(id: string): void { runSysCmd("sys_quest_accept", { id }); }
@@ -7002,6 +7011,19 @@ function onQuestAbandon(id: string): void { runSysCmd("sys_quest_abandon", { id 
 function onQuestArrive(id: string): void { runSysCmd("sys_quest_arrive", { id }); }
 function onQuestAsk(id: string, question: string): void { runSysCmd("sys_quest_ask", { id, question }); }
 function onQuestGenerate(): void { runSysCmd("sys_quest_generate", { n: 3 }); }
+
+/* ---- 主线链操作 ---- */
+function onChainStart(id: string): void { runSysCmd("sys_chain_start", { id }); }
+function onChainChoose(id: string, node: string): void { runSysCmd("sys_chain_choose", { id, node }); }
+function onChainAccept(id: string, node: string): void { runSysCmd("sys_chain_node_accept", { id, node }); }
+function onChainTurnin(id: string, node: string): void { runSysCmd("sys_chain_turnin", { id, node }); }
+function onChainPause(id: string, node: string): void { runSysCmd("sys_chain_pause", { id, node }); }
+function onChainResume(id: string, node: string): void { runSysCmd("sys_chain_resume", { id, node }); }
+function onChainAbandon(id: string, node: string): void { runSysCmd("sys_chain_abandon", { id, node }); }
+function onChainRetry(id: string): void { runSysCmd("sys_chain_retry", { id }); }
+/** ★ 主线节点寻路：链节点已注入委托系统，questGoToDest 按 questId 就能查到目的地，
+ *  直接复用委托寻路（同图自动走 / 跨图先传送再走）。 */
+function onChainGo(questId: string): void { questGoToDest(questId); }
 
 /* ---------------- ★ game.md 对话功能：靠近角色触发出聊按钮 ---------------- */
 /** 可对话的最近角色（非敌人），随 tick 10Hz 刷新 */
@@ -8809,6 +8831,7 @@ watch(() => state.value?.phase, (p) => {
         <div class="quest-panel__body">
           <QuestPanel
             :view="questView"
+            :chain-view="chainView"
             :asking="questAsking"
             :ai-text="questAiText"
             :current-map="currentLevelName || ''"
@@ -8820,6 +8843,15 @@ watch(() => state.value?.phase, (p) => {
             @recover="questRecoverCargo"
             @ask="(id: string, q: string) => onQuestAsk(id, q)"
             @generate="onQuestGenerate"
+            @chain-start="onChainStart"
+            @chain-choose="onChainChoose"
+            @chain-accept="onChainAccept"
+            @chain-turnin="onChainTurnin"
+            @chain-pause="onChainPause"
+            @chain-resume="onChainResume"
+            @chain-abandon="onChainAbandon"
+            @chain-retry="onChainRetry"
+            @chain-go="onChainGo"
           />
         </div>
       </div>

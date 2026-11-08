@@ -824,6 +824,61 @@ async function seedQuestDefs() {
   }
   log("⚠ 未找到故事任务表 quests.json（任务板为空，可点「AI 生成委托」）");
 }
+/* ★ 拟真宿主：把故事自带的主线任务链播种进插件会话数据（等价于 CLI 上传 chain_defs）
+ *   候选路径优先级：map_design（运行时故事目录）→ map_design_pre（设计目录）。
+ *   真实宿主（安装后）由 CLI 的 plugin_session_data 上传同一份 main-quests.json
+ *   （toon_plugins plugin_session_data --set -k chain_defs），两边口径一致。
+ *   链定义只补不覆盖：同一 chain id 已存在则保留既有（用户 / CLI 手工调整优先）。 */
+async function seedChainDefs() {
+  const scopes = new Set(["all"]);
+  if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
+  const cands = [
+    "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/events/任务事件/main-quests.json",
+    // ★ 设计目录的目录名不统一（有 event/ 单数也有 events/ 复数）——两种都试
+    "/story-data/toonflow-field-survival/map_design_pre/" + encodeURIComponent(STORY) + "/events/任务事件/main-quests.json",
+    "/story-data/toonflow-field-survival/map_design_pre/" + encodeURIComponent(STORY) + "/event/任务事件/main-quests.json",
+  ];
+  for (const u of cands) {
+    try {
+      const r = await fetch(u);
+      if (!r.ok) continue;
+      const j = await r.json();
+      const arr = Array.isArray(j) ? j : Array.isArray(j && j.chains) ? j.chains : [];
+      if (!arr.length) continue;
+      let added = 0;
+      for (const sc of scopes) {
+        const key = window.__pdKey(ENTRY_PLUGIN_ID, sc, "chain_defs");
+        const rec = window.__pdGet(key);
+        const old = rec && typeof rec === "object" && "value" in rec ? rec.value : rec;
+        const oldArr = Array.isArray(old) ? old
+          : Array.isArray(old && old.chains) ? old.chains
+          : Array.isArray(old && old.defs) ? old.defs
+          : [];
+        if (!oldArr.length) {
+          window.__pdSet(key, j);
+          added += arr.length;
+          continue;
+        }
+        // 按 chain id 合并：已存在的链保留（可能已被手工改过），只补缺失的链
+        const seen = new Set(oldArr.map(function (x) { return String((x && x.id) || ""); }));
+        const merged = oldArr.slice();
+        for (const c of arr) {
+          const cid = String((c && c.id) || "");
+          if (!cid || seen.has(cid)) continue;
+          seen.add(cid);
+          merged.push(c);
+          added++;
+        }
+        if (merged.length !== oldArr.length) {
+          window.__pdSet(key, { version: (j && j.version) || 1, chains: merged });
+        }
+      }
+      log("✓ 主线任务链已播种：" + u + "（故事 " + arr.length + " 条链，新增 " + added + "，scope: " + [...scopes].join(",") + "）");
+      return;
+    } catch (e) { log("! 主线任务链播种失败 " + u + ": " + (e && e.message ? e.message : e)); }
+  }
+  log("⚠ 未找到故事主线任务链 main-quests.json（主线页为空）");
+}
 /* ★ 拟真视觉地图包：把 map_design/<story>.tbg 播种成插件模板数据
  *   dataKey = "map_visual:<story>"（sessionId="all"）—— 与真宿主机上
  *   python -m toon_plugins plugin_session_data -u ... -story <story> 写的是同一个 key。
@@ -1575,6 +1630,7 @@ window.addEventListener("message", async (e) => {
     await loadEntityTypes();
     await mergeLocalMaterials(); // ★ 世界书补全：服务端只回 inventory，本地 test_state.json 才是完整物资条录
     await seedQuestDefs();        // ★ 任务表播种：故事目录 quests.json → 插件会话数据 quest_defs
+    await seedChainDefs();        // ★ 主线链播种：故事目录 main-quests.json → 插件会话数据 chain_defs
     await seedStoryVisualMap();   // ★ 视觉地图包播种：map_design/<story>.tbg → 模板 map_visual:<story>
     log("HOST: story+entityTypes loaded, pushing select state");
     // ★ 直接同步推 select state（不用 setTimeout，background tab 上不可靠）
