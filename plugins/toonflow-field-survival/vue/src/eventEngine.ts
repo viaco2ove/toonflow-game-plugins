@@ -14,7 +14,7 @@
  */
 import { ref } from "vue";
 import { assetUrl } from "./assets";
-import type { Ctx, EventsFile, EventDef } from "../../../../.cache/toonflow-field-survival/maps/eventScripts/_ctx";
+import type { Ctx, EventsFile, EventDef } from "./shared/_ctx";
 
 // ─── 运行时状态 ───
 const loadedEvents = ref<EventsFile | null>(null);
@@ -200,9 +200,77 @@ export async function loadMapEvents(mapFile: string): Promise<void> {
 }
 
 // ─── 脚本执行 ───
-// ★ 脚本文件在构建期内联（vue/src/eventScripts/，与 workshops/events/scripts 同步维护——
-//   校验脚本 validate_events.mjs 检查两边一致）。import.meta.glob 限定在 src/ 内，Vite 正常编译。
-const scriptModules = import.meta.glob("./eventScripts/*.ts", { eager: false });
+// ★ 脚本属于地图集业务（规范.md「严重违规事项」），**不从插件构建期取**。
+//   运行时按顺序从三个来源动态加载 `events/scripts/<name>.ts` 的文本并执行：
+//     ① 故事包（.tbg 安装态）—— zip 全量 entries 里 events/scripts/*.ts 存原始 bytes
+//     ② dev-server `/story-data/.../events/scripts/`（直读 workshops 正本）
+//     ③ 兼容旧通道：import.meta.glob 的构建期内联（加载失败时兜底，逐步退役）
+//   脚本侧约束（与校验器一致）：只允许 `import type`（编译后消失）+ `export default main(ctx)`。
+//   引擎把文本转成函数：剥掉 import 行 → new Function("ctx", body) —— 无模块系统依赖，
+//   与 esbuild 产物（game.html）完全解耦；插件本体不再包含任何故事脚本。
+
+import { getStoryFileText } from "./storyMap";
+
+/** 脚本文本缓存（按 <storyKey>:<name>；切故事时随 storyMap 重置） */
+const scriptTextCache = new Map<string, string>();
+
+/** dev 故事名（与 mapConfig.resolveDevStoryName 同源：URL ?story= 或 window.__STORY__） */
+function devStoryName(): string {
+  try {
+    const sp = new URLSearchParams(location.search);
+    const s = sp.get("story") || (window as any).__STORY__ || "";
+    return s ? encodeURIComponent(s) : "";
+  } catch { return ""; }
+}
+
+/** 从故事包/dev 通道取**已转译**的脚本文本；失败返回 null。
+ *  顺序：① 故事包 events/scripts.js/<name>.js（打 .tbg 时预转译，安装态主通道）
+ *        ② dev /story-data events/scripts/<name>.ts（中间件用 esbuild 剥类型后回 JS 文本） */
+async function loadScriptText(name: string): Promise<string | null> {
+  const story = devStoryName();
+  const cacheKey = `${story}:${name}`;
+  const hit = scriptTextCache.get(cacheKey);
+  if (hit !== undefined) return hit;
+
+  // ① 故事包（安装态 .tbg）：预转译 JS
+  try {
+    const text = await getStoryFileText(`events/scripts.js/${name}.js`);
+    if (text != null && text.trim()) {
+      scriptTextCache.set(cacheKey, text);
+      return text;
+    }
+  } catch { /* 无包时走 dev 通道 */ }
+
+  // ② dev-server /story-data（中间件对 .ts 做 strip-types 转译）
+  if (story) {
+    try {
+      const url = `/story-data/toonflow-field-survival/map_design/${story}/events/scripts/${name}.ts`;
+      const r = await fetch(url);
+      if (r.ok) {
+        const text = await r.text();
+        scriptTextCache.set(cacheKey, text);
+        return text;
+      }
+    } catch { /* 下一通道 */ }
+  }
+  return null;
+}
+
+/** 脚本文本 → 可执行函数：剥 import 行（只允许 import type）+ export default 包装。
+ *  输入必须是**已转译**的 JS（无类型标注）；TS 源由中间件（dev）或打包器（.tbg）负责转译。 */
+function compileScript(source: string): (ctx: Ctx) => Promise<void> {
+  let body = source
+    .replace(/import\s+type\s+[\s\S]*?from\s*["'][^"']*["'];?/g, "")  // import type 行（含跨行）
+    .replace(/export\s+default\s+/g, "")                              // export default 前缀
+    .replace(/export\s*\{[^}]*\}\s*;?/g, "");                         // esbuild 的 export { main as default } 汇总块
+  const js = `${body}\nreturn typeof main === "function" ? main : (async () => {});`;
+  // eslint-disable-next-line no-new-func
+  const factory = new Function("ctx", `"use strict";\n${js}`);
+  return async (ctx: Ctx) => {
+    const fn = factory(ctx) as (c: Ctx) => Promise<void>;
+    await fn(ctx);
+  };
+}
 
 /** 执行者：roleId="" 表示玩家自己操作（默认）；非空表示 AI 托管角色触发。
  *  走 fireEvent → runActions → runScript 整条链透传，脚本据此决定
@@ -220,19 +288,33 @@ export interface EventCtxInfo {
 }
 const EMPTY_EVENT_INFO: EventCtxInfo = { id: "", args: {} };
 
+/** 已编译脚本缓存 */
+const compiledCache = new Map<string, (ctx: Ctx) => Promise<void>>();
+
 async function runScript(
   name: string,
   actor: EventActor = PLAYER_ACTOR,
   info: EventCtxInfo = EMPTY_EVENT_INFO,
 ): Promise<void> {
-  const key = Object.keys(scriptModules).find(k => k.endsWith(`/${name}.ts`));
-  if (!key) {
-    console.warn("[eventEngine] run_script 找不到脚本:", name);
+  // ① 主通道：故事包 / dev 通道动态加载
+  let fn = compiledCache.get(name);
+  if (!fn) {
+    const src = await loadScriptText(name);
+    if (src) {
+      try {
+        fn = compileScript(src);
+        compiledCache.set(name, fn);
+      } catch (e) {
+        console.error("[eventEngine] 脚本编译失败:", name, e);
+      }
+    }
+  }
+  if (fn) {
+    const ctx = makeCtx(actor, info);
+    await fn(ctx);
     return;
   }
-  const mod = await scriptModules[key]() as { default: (ctx: Ctx) => Promise<void> };
-  const ctx = makeCtx(actor, info);
-  await mod.default(ctx);
+  console.warn("[eventEngine] run_script 找不到脚本:", name, "（故事包与 dev 通道均未命中）");
 }
 
 // ─── ctx 构造（_ctx.ts 接口的运行时实现） ───

@@ -4,6 +4,7 @@ import { readFileSync, existsSync, statSync, readdirSync, writeFileSync } from "
 import http from "http";
 import { spawnSync } from "child_process";
 import { deflateRawSync } from "node:zlib";
+import { transformSync as esbuildTransformSync } from "esbuild";
 // @ts-ignore
 import vue from "@vitejs/plugin-vue";
 import { viteSingleFile } from "vite-plugin-singlefile";
@@ -217,6 +218,16 @@ function ensureTbgBuilt(tbgPath: string): { ok: boolean; servedPath: string } {
   }
 }
 
+/** esbuild 剥 TS 类型：只转译不打包（import type 行由引擎侧剥除） */
+function transformSyncEsbuild(_unused: unknown, code: string): string {
+  return esbuildTransformSync(code, {
+    loader: "ts",
+    format: "esm",
+    target: "es2020",
+    charset: "utf8",
+  }).code;
+}
+
 /** 故事目录读取中间件：/story-data/<storyName>/... → 读取对应文件 */
 function storyDataPlugin(workshopsRoot: string): Plugin {
   return {
@@ -287,6 +298,23 @@ function storyDataPlugin(workshopsRoot: string): Plugin {
           return;
         }
         try {
+          // ★ .ts 脚本请求（事件引擎 run_script 动态加载）：必须先转译成纯 JS 再回——
+          //   引擎侧用 new Function 执行，浏览器不吃 TS 类型标注（ctx: Ctx 会 SyntaxError）。
+          //   转译 = 仅剥类型（strip-types），不做模块化：import type 行由引擎侧剥除。
+          //   用 esbuild transform（vite 自带依赖）；失败则原样回 .ts（引擎侧会报编译错误）。
+          if (/\.ts$/i.test(filePath)) {
+            try {
+              const src = readFileSync(filePath, "utf-8");
+              const out = transformSyncEsbuild(null, src);
+              res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+              res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+              res.end(out);
+              return;
+            } catch (e) {
+              console.warn("[story-data] .ts 转译失败，回退原文:", filePath, e);
+              // 失败继续走下面的原文分支
+            }
+          }
           const content = readFileSync(filePath, "utf-8");
           res.setHeader("Content-Type", "application/json");
           res.end(content);

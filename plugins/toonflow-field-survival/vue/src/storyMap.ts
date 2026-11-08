@@ -612,6 +612,23 @@ export function getStoryMapEntry(path: string): any | null {
   return null;
 }
 
+/**
+ * 取故事包内**文本文件**的内容（events/scripts/*.ts、data/*.txt 等）。
+ * - .tbg 安装态：zip 全量 entries 里非 JSON 文件存的是原始 bytes（Uint8Array）→ 解码为文本
+ * - 找不到返回 null（调用方自行走 dev 通道兜底）
+ * ★ 引擎 run_script 动态加载故事脚本的主通道：地图集业务脚本只随故事包走，
+ *   不进插件构建（规范.md「严重违规事项」）。
+ */
+export async function getStoryFileText(path: string): Promise<string | null> {
+  const entry = getStoryMapEntry(path);
+  if (entry == null) return null;
+  if (typeof entry === "string") return entry;
+  if (entry instanceof Uint8Array || (entry as any) instanceof ArrayBuffer) {
+    try { return new TextDecoder().decode(new Uint8Array(entry as any)); } catch { return null; }
+  }
+  return null;
+}
+
 /* ============================================================
    ★ 故事包「任意 JSON」读取（地图集自带数据文件）
    ------------------------------------------------------------
