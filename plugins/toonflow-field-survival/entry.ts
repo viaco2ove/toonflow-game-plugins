@@ -3920,7 +3920,27 @@ function normalizeChainDef(raw: any): StoryChainDef | null {
   };
 }
 
-/** 载入链定义（pluginData["chain_defs"]，结构与 main-quests.json 同构） */
+/** ★ 链定义的存储 key（按故事隔离）
+ *  根因（2026-11-09 实测）：原来固定读 pluginData["chain_defs"]（全局单键），
+ *  而每个故事的主线链 id 都从 MC1 开始（MC1..MC6 / MS1 / MS2）——
+ *  同一账号先后装两个故事时，后装的链因 id 已存在被「只补不覆盖」逻辑跳过，
+ *  装出来的插件里跑的是**另一个故事的主线链**（实测：通天传授装好后，
+ *  localStorage 的 chain_defs 里仍是黑塔的 10 条链 MC1..MC8/MS1/MS2）。
+ *  修法：按故事隔离存储（与 map_visual:<故事名> 同一口径），链定义与故事一一对应。
+ *  兼容：老数据（全局 "chain_defs"）仍作为回退读取。
+ */
+function chainDefsKey(worldName: string): string {
+  const wn = str(worldName, "");
+  return wn ? `chain_defs:${wn}` : "chain_defs";
+}
+
+/** 链进度的存储 key（按故事隔离，与链定义同口径） */
+function chainStateKey(context: PluginGameContext | undefined): string {
+  const wn = str((context as any)?.worldName, "");
+  return wn ? `chain_state:${wn}` : "chain_state";
+}
+
+/** 载入链定义（pluginData["chain_defs:<故事名>"]，结构与 main-quests.json 同构） */
 async function ensureChainDefs(ctx: PluginGameContext | undefined, s: FieldSurvivalState): Promise<number> {
   // ★ 绝不能用 chainState 非空当「链定义已载入」的守卫：
   //   chainState 会随 sys_state 存档恢复，chainBoard 却是**运行时字段、不进存档**。
@@ -3930,16 +3950,23 @@ async function ensureChainDefs(ctx: PluginGameContext | undefined, s: FieldSurvi
   if (Array.isArray((s as any).chainBoard) && (s as any).chainBoard.length) return 0;
   const get = ctx?.tsApi?.pluginData?.get;
   if (!get) return 0;
-  try {
-    const raw = await get("chain_defs");
-    const arr = Array.isArray(raw) ? raw
-      : Array.isArray((raw as any)?.chains) ? (raw as any).chains
-      : [];
-    const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
-    if (!defs.length) return 0;
-    (s as any).chainBoard = defs;
-    return defs.length;
-  } catch { return 0; }
+  const worldName = str((ctx as any)?.worldName, "");
+  // ① 故事隔离 key（主通道）
+  // ② 老的全局 key（回退：老安装包 / 无 worldName 时）
+  const keys = worldName ? [chainDefsKey(worldName), "chain_defs"] : ["chain_defs"];
+  for (const k of keys) {
+    try {
+      const raw = await get(k);
+      const arr = Array.isArray(raw) ? raw
+        : Array.isArray((raw as any)?.chains) ? (raw as any).chains
+        : [];
+      const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
+      if (!defs.length) continue;
+      (s as any).chainBoard = defs;
+      return defs.length;
+    } catch { /* 换下一个 key */ }
+  }
+  return 0;
 }
 
 /** 链任务 id 前缀：链节点 quest 的 id 用它与普通委托区分（「可接」页签过滤用） */
@@ -4194,24 +4221,32 @@ function chainFailNode(s: FieldSurvivalState, def: StoryChainDef, nid: string, r
     : `「${qdef.title}」失败。`;
 }
 
-/** 链进度持久化（pluginData["chain_state"]）——链状态/节点状态跨会话保留 */
+/** 链进度持久化（pluginData["chain_state:<故事名>"]）——链状态/节点状态跨会话保留
+ *  ★ 同样按故事隔离（2026-11-09）：与链定义同口径，否则两个故事的链进度会互相覆盖
+ *    （链 id 都是 MC1/MS1 → 通天的进度写到黑塔的 MC1 头上）。 */
 async function persistChainState(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
   const set = context?.tsApi?.pluginData?.set;
   if (!set) return;
-  try { await set("chain_state", { version: 1, chains: chainStates(s) }); } catch { /* 不阻断玩法 */ }
+  try {
+    await set(chainStateKey(context), { version: 1, chains: chainStates(s) });
+  } catch { /* 不阻断玩法 */ }
 }
 
-/** 恢复链进度（pluginData["chain_state"] → s.chainState） */
+/** 恢复链进度（pluginData["chain_state:<故事名>"] → s.chainState） */
 async function restoreChainState(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
   const get = context?.tsApi?.pluginData?.get;
   if (!get) return;
-  try {
-    const raw = await get("chain_state");
-    const chains = (raw as any)?.chains;
-    if (chains && typeof chains === "object" && Object.keys(chains).length) {
-      (s as any).chainState = chains as Record<string, ChainState>;
-    }
-  } catch { /* 读取失败走默认 */ }
+  const keys = [chainStateKey(context), "chain_state"];
+  for (const k of keys) {
+    try {
+      const raw = await get(k);
+      const chains = (raw as any)?.chains;
+      if (chains && typeof chains === "object" && Object.keys(chains).length) {
+        (s as any).chainState = chains as Record<string, ChainState>;
+        return;
+      }
+    } catch { /* 换下一个 key */ }
+  }
 }
 
 /** 前端渲染视图：s.chainView（每 tick / 每次 sys_chain_* 后重算，前端只读） */

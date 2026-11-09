@@ -6896,9 +6896,26 @@ function updateNearBoard(): void {
   let bestDist = BOARD_RADIUS_M;
   for (const e of s.entities) {
     const nm = String(e.name || "");
-    if (!BOARD_NAME_RE.test(nm)) continue;
+    const isBoardEnt = (e as any).board === true || String((e as any).dialog || "") === "BOARD";
+    if (!isBoardEnt && !BOARD_NAME_RE.test(nm)) continue;
     const d = Math.hypot(e.x - me.x, e.y - me.y);
-    if (d < bestDist) { bestDist = d; best = { id: String(e.id), name: nm }; }
+    if (d < bestDist) { bestDist = d; best = { id: String(e.id), name: nm || "任务板" }; }
+  }
+  // ★ 兜底：实体集里没有任务板实体（注入失败/超 50m 注入半径）时，
+  //   直接按地图 cfg 的 npcs 坐标判定——「📜 任务」按钮不再依赖实体注入成败。
+  //   sys_quest_board / sys_chain_board 都是 uid 无关的系统命令，照样能打开面板。
+  if (!best) {
+    for (const n of ((mapCfg.value?.npcs || []) as any[])) {
+      const isBoardNpc =
+        String(n?.dialog || "") === "BOARD" ||
+        BOARD_NAME_RE.test(String(n?.displayName || n?.name || ""));
+      if (!isBoardNpc) continue;
+      const d = Math.hypot(Number(n?.x) - me.x, Number(n?.y) - me.y);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { id: `mapnpc_${n.id}`, name: String(n.displayName || n.name || "任务板") };
+      }
+    }
   }
   if (best?.id !== nearBoard.value?.id) nearBoard.value = best;
   // 走远了自动收起面板
@@ -8684,6 +8701,37 @@ onMounted(async () => {
             chunkSystem.init();
             chunkSystem.updateAroundPlayer(meNow?.x ?? 0, meNow?.y ?? 0, performance.now());
             for (let i = 0; i < 30; i++) chunkSystem.tick();
+            // ★ 2026-11-09 修复「安装态地图集事件/任务板不生效」：
+            //   开局 playing 时 +320ms 的那次 injectMapNpcsToState/Mobs 用的是**回退 ui/maps
+            //   的旧 cfg**（原版浆果镇：没有任务板、没有故事 NPC/假人）——随后故事视觉包到达，
+            //   本「同名关卡内容替换」分支只重建了渲染（mapCfg/烘焙/装饰/碰撞），**实体集没有
+            //   按新 cfg 重建**。后果：
+            //     ① 任务板只剩装饰层的宝箱贴图（gid=58 → tile 57 恰是宝箱图块），
+            //        实体 mapnpc_<id> 不存在 → 靠近不出「📜 任务」按钮、也不画公告板样式；
+            //     ② 事件系统 interact/proximity 的目标 NPC（苏晓 uid=165 等）不在场上
+            //        → 触发类事件全部静默失效（enter_map/area_enter 不受影响，更具迷惑性）。
+            //   修法：与 switchLevel 同口径——清掉旧 mapnpc_* 与本地怪，按新 cfg 重注。
+            {
+              const sRe = state.value;
+              if (sRe) {
+                const beforeN = sRe.entities.length;
+                sRe.entities = sRe.entities.filter(
+                  (e) => e.side !== "enemy" && !String(e.id).startsWith("mapnpc_"),
+                );
+                currentMapMobTs = String(Date.now());
+                injectMapMobsToState(sRe, cfg);
+                injectMapNpcsToState(sRe, cfg, { debugPullFirstNear: true });
+                console.info(
+                  "[field-survival] 同名关卡内容替换：实体集已按故事包重建（清理",
+                  beforeN - sRe.entities.length,
+                  "个回退实体；npc=",
+                  cfg.npcs?.length ?? 0,
+                  "mobs=",
+                  cfg.mobs?.length ?? 0,
+                  "）",
+                );
+              }
+            }
           }
           console.info(
             "[field-survival] playing：已按会话视觉地图包渲染（",

@@ -161,11 +161,13 @@ export async function delEventFlag(key: string): Promise<void> {
 }
 
 // ─── 事件加载 ───
-// ★ 事件文件与地图同源加载：fetch events/maps/<mapFile>.events.json
+// ★ 事件文件与地图同源加载：events/maps/<mapFile>.events.json
 //   - dev（vite dev server）：走 /story-data/ 中间件（vite.config.ts:storyDataPlugin）读 workshops 真实文件
-//   - dev-host / 生产：走 assetUrl("events/maps/")（自动适配 getAsset + token 路径）
+//   - 安装态（宿主 iframe）：**优先走故事包 .tbg**（readStoryJson）——地图集自带的事件
+//   - 兜底：assetUrl("events/maps/")（插件自带 ui/events/maps/，历史内置事件）
 //   - fetch 全部失败 → 本图无事件，静默返回
 import { STORY_EVENT_BASE_DEV } from "./mapConfig";
+import { readStoryJson } from "./storyMap";
 
 export async function loadMapEvents(mapFile: string): Promise<void> {
   loadedEvents.value = null;
@@ -175,6 +177,26 @@ export async function loadMapEvents(mapFile: string): Promise<void> {
   //   跳过该 dev 路径，直接用 assetUrl（getAsset+token）通道。
   // ★ 修复故事串号：dev 前缀必须与 mapConfig 的 STORY_MAP_BASE_DEV 用同一个故事名（?story=），
   //   否则进入「赦夜人第二季」时仍会读到「」下的 events 文件。
+
+  // ★★★ 安装态第一通道：故事包（.tbg）内 events/maps/<mapFile>.events.json ★★★
+  //   根因（2026-11-09 实测）：插件安装包的 ui/events/maps/ 里装的是**某一套故事**（黑塔）的
+  //   内置事件；换故事（通天传授）安装后，事件引擎走 assetUrl("events/maps/") 读到的是
+  //   **别的故事的事件**（HT_E10_school_open…），地图集自己的事件（E01_bind_system…）永不加载
+  //   → 表现：插件和地图集都装好了，但地图集事件「不起效果」。
+  //   修复：安装态先从故事视觉包（.tbg）读同名 entry —— 与地图/图集同一份包，切故事自动隔离。
+  //   （脚本侧 loadScriptText 已走同一条故事包通道，事件与脚本口径一致。）
+  try {
+    const storyData = await readStoryJson(`events/maps/${mapFile}.events.json`);
+    if (storyData && typeof storyData === "object" && Array.isArray((storyData as any).events)) {
+      const data = storyData as EventsFile;
+      if (data.version === 1) {
+        loadedEvents.value = data;
+        console.info("[eventEngine] 已加载事件（故事包 .tbg）:", mapFile, data.events.length, "条");
+        return;
+      }
+    }
+  } catch (e) { console.warn("[eventEngine] 故事包事件读取失败:", mapFile, e); /* try next channel */ }
+
   const isGetAsset = (() => { try { return location.href.includes("getAsset"); } catch { return false; } })();
   const evBases = isGetAsset
     ? [assetUrl("events/maps/"), "events/maps/", "./events/maps/"]

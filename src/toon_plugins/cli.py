@@ -806,7 +806,15 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         if value_inline is None and value_file is None:
             click.secho("[ERR] --set 必须传 --value 或 --value-file", fg="red"); return
         if value_file:
-            if os.path.isdir(value_file) or value_file.lower().endswith((".tbg", ".zip", ".json")):
+            # ★ 2026-11-09 修复：只有**地图/视觉包类** dataKey 才走 tbg 打包。
+            #   旧实现见 .json 就打包 → 写 chain_defs:<故事> 这类普通 JSON 时，
+            #   会被打成 base64+zip 的地图包 → 引擎读 chain_defs 拿到的是 {format:"tbg",...}
+            #   而不是链定义数组 → 主线页空白、链定义永远加载不出来。
+            #   目录 / .tbg / .zip 一律走打包；.json 仅在地图类 key 下才打包。
+            base_key = str(data_key or "").split(":", 1)[0]
+            is_map_key = base_key in ("map_data", "map_visual")
+            is_zip_like = value_file.lower().endswith((".tbg", ".zip"))
+            if os.path.isdir(value_file) or is_zip_like or (is_map_key and value_file.lower().endswith(".json")):
                 # 走 build_tbg_file 统一打包（目录 / 已是 .tbg / 单 .json）
                 import base64
                 try:
@@ -859,8 +867,13 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
         click.secho("[OK] " + _json.dumps(summary or {}, ensure_ascii=False), fg="green")
         # ★ v6：-u 上传视觉地图模板时，同步写一份旧 key map_data:<story>
         #   （entry.ensureStoryVisualMap 的回退模板 key，兼容 2026-10-13 前上传的模板）
+        #   ★ 2026-11-09 修复：只在**写的是地图/视觉包本身**时才同步 legacy key。
+        #     旧实现对任何 --set 都写 map_data:<story> → 写 chain_defs:<story> 这类
+        #     非地图数据时，会把地图槽整个覆盖成那份数据 → 地图集（含 events）当场报废。
         legacy_key = "map_data:" + (story or "default")
-        if legacy_key != data_key:
+        base_key = str(data_key or "").split(":", 1)[0]
+        is_map_payload = base_key in ("map_data", "map_visual") or legacy_key == data_key
+        if legacy_key != data_key and is_map_payload:
             try:
                 client.set_plugin_data(plugin_id, legacy_key, value, session_id=session_id, story=story)
                 click.echo(f"[plugin_data] 兼容模板已同步写入 {legacy_key}")

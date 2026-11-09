@@ -827,11 +827,18 @@ async function seedQuestDefs() {
 /* ★ 拟真宿主：把故事自带的主线任务链播种进插件会话数据（等价于 CLI 上传 chain_defs）
  *   候选路径优先级：map_design（运行时故事目录）→ map_design_pre（设计目录）。
  *   真实宿主（安装后）由 CLI 的 plugin_session_data 上传同一份 main-quests.json
- *   （toon_plugins plugin_session_data --set -k chain_defs），两边口径一致。
+ *   （toon_plugins plugin_session_data --set -k "chain_defs:<故事名>"），两边口径一致。
+ *
+ *   ★★ 存储 key 按故事隔离（2026-11-09 修复）：
+ *     原来固定写全局 "chain_defs"，而每个故事的主线链 id 都从 MC1 开始
+ *     （MC1..MC6 / MS1 / MS2）→ 同一浏览器先后跑两个故事时，
+ *     后播的故事因「链 id 已存在」被「只补不覆盖」跳过 → 跑的是**另一个故事的主线链**。
+ *     改为 "chain_defs:<故事名>"（与 map_visual:<故事名> 同口径），entry.ts 侧同 key 读取。
  *   链定义只补不覆盖：同一 chain id 已存在则保留既有（用户 / CLI 手工调整优先）。 */
 async function seedChainDefs() {
   const scopes = new Set(["all"]);
   if (window.__STORY_SESSION_ID__) scopes.add(window.__STORY_SESSION_ID__);
+  const dataKey = STORY ? "chain_defs:" + STORY : "chain_defs";
   const cands = [
     "/story-data/toonflow-field-survival/map_design/" + encodeURIComponent(STORY) + "/events/任务事件/main-quests.json",
     // ★ 设计目录的目录名不统一（有 event/ 单数也有 events/ 复数）——两种都试
@@ -847,7 +854,7 @@ async function seedChainDefs() {
       if (!arr.length) continue;
       let added = 0;
       for (const sc of scopes) {
-        const key = window.__pdKey(ENTRY_PLUGIN_ID, sc, "chain_defs");
+        const key = window.__pdKey(ENTRY_PLUGIN_ID, sc, dataKey);
         const rec = window.__pdGet(key);
         const old = rec && typeof rec === "object" && "value" in rec ? rec.value : rec;
         const oldArr = Array.isArray(old) ? old
@@ -873,7 +880,7 @@ async function seedChainDefs() {
           window.__pdSet(key, { version: (j && j.version) || 1, chains: merged });
         }
       }
-      log("✓ 主线任务链已播种：" + u + "（故事 " + arr.length + " 条链，新增 " + added + "，scope: " + [...scopes].join(",") + "）");
+      log("✓ 主线任务链已播种：" + u + "（故事 " + arr.length + " 条链，新增 " + added + "，key: " + dataKey + "，scope: " + [...scopes].join(",") + "）");
       return;
     } catch (e) { log("! 主线任务链播种失败 " + u + ": " + (e && e.message ? e.message : e)); }
   }
