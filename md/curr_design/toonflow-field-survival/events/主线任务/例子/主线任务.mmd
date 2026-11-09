@@ -1,0 +1,124 @@
+flowchart TD
+%% 黑塔：从超忆症开始成神 · 主线任务链图
+%% 本文件由 生成主线任务图.py 从 main-quests.json 自动生成，请勿手改
+%% 实线=成功分支(onSuccess) 虚线=失败分支(onFail) 粗线=章节解锁(lockedBy)
+%% 蓝=链首 红=失败分支 绿=终点 黄=支线
+
+  subgraph MC1["一 · 消失的同桌"]
+    direction LR
+    MC1_1["<b>一 MC1_1 早餐与名字</b><br/>💬 对话 妈妈"]
+    MC1_2["<b>一 MC1_2 空着的座位</b><br/>💬 对话 苏晓"]
+    MC1_3["<b>一 MC1_3 花名册第三行</b><br/>🌿 花名册×1 · 📍 mulberryTown<br/>🔓 解锁 二"]
+    MC1_1 --> MC1_2
+    MC1_2 --> MC1_3
+  end
+
+  subgraph MC2["二 · 无人记得的少年"]
+    direction LR
+    MC2_1["<b>二 MC2_1 走廊上没人记得他</b><br/>💬 对话 邻座同学"]
+    MC2_2A["<b>二 MC2_2A 球场边的魏叔</b><br/>💬 对话 魏叔<br/>🔓 解锁 三"]
+    MC2_2B["<b>二 MC2_2B 器材室的登记本</b><br/>🧭 mulberryTown<br/>🔓 解锁 三"]
+    MC2_1 --> MC2_2A
+    MC2_1 --> MC2_2B
+  end
+
+  subgraph MC3["三 · 不该存在的阴影"]
+    direction LR
+    MC3_1["<b>三 MC3_1 黄昏前赶到球场</b><br/>🧭 mulberryForest · ⏱ 限时 4000t"]
+    MC3_1F["<b>三 MC3_1F 夜里的球场</b><br/>🧭 mulberryForest"]
+    MC3_2["<b>三 MC3_2 清掉改写未完成的伪人</b><br/>⚔ 伪人×6<br/>🔓 解锁 四"]
+    MC3_1 --> MC3_2
+    MC3_1 -.-> MC3_1F
+    MC3_1F --> MC3_2
+  end
+
+  subgraph MC4["四 · 校花的秘密"]
+    direction LR
+    MC4_1["<b>四 MC4_1 天台上多出来的球</b><br/>💬 对话 张晚意"]
+    MC4_2A["<b>四 MC4_2A 跟她走</b><br/>💬 对话 张晚意<br/>🔓 解锁 五"]
+    MC4_2B["<b>四 MC4_2B 先回卧室取错题本</b><br/>🧭 lichLair<br/>🔓 解锁 五"]
+    MC4_1 --> MC4_2A
+    MC4_1 --> MC4_2B
+  end
+
+  subgraph MC5["五 · 伪人的爪牙"]
+    direction LR
+    MC5_1["<b>五 MC5_1 问老师那道题</b><br/>💬 对话 班主任 · ⏱ 限时 3000t"]
+    MC5_1F["<b>五 MC5_1F 被留下补课</b><br/>📍 mulberryTown · ⏱ 限时 2400t"]
+    MC5_2["<b>五 MC5_2 深夜教室的爪牙</b><br/>⚔ 伪人×8<br/>🔓 解锁 六"]
+    MC5_1 --> MC5_2
+    MC5_1 -.-> MC5_1F
+    MC5_1F --> MC5_2
+  end
+
+  subgraph MC6["六 · 觉醒·第二序列"]
+    direction LR
+    MC6_1["<b>六 MC6_1 拾起神秘网球</b><br/>🧭 mulberryForest"]
+    MC6_1F["<b>六 MC6_1F 球不见了</b><br/>💬 对话 小满"]
+    MC6_2["<b>六 MC6_2 人人平等</b><br/>⚔ 伪人·宿主×1<br/>🔓 解锁 七"]
+    MC6_1 --> MC6_2
+    MC6_1 -.-> MC6_1F
+    MC6_1F --> MC6_2
+  end
+
+  subgraph MC7["七 · 踏入超凡"]
+    direction LR
+    MC7_1["<b>七 MC7_1 引路人</b><br/>💬 对话 张晚意"]
+    MC7_2A["<b>七 MC7_2A 界域登记</b><br/>📍 kingdom"]
+    MC7_3A["<b>七 MC7_3A 界域市集试炼</b><br/>⚔ 伪人×6<br/>🔓 解锁 八"]
+    MC7_2B["<b>七 MC7_2B 旧书店问守塔人</b><br/>💬 对话 老周"]
+    MC7_3B["<b>七 MC7_3B 同学录的三个版本</b><br/>📍 oldForest<br/>🔓 解锁 八"]
+    MC7_2C["<b>七 MC7_2C 旧货市场买情报</b><br/>💬 对话 百晓生"]
+    MC7_3C["<b>七 MC7_3C 情报的代价</b><br/>⚔ 伪人·宿主×2<br/>🔓 解锁 八"]
+    MC7_1 --> MC7_2A
+    MC7_1 --> MC7_2B
+    MC7_1 --> MC7_2C
+    MC7_2A --> MC7_3A
+    MC7_2B --> MC7_3B
+    MC7_2C --> MC7_3C
+  end
+
+  subgraph MC8["八 · 塔与名字"]
+    direction LR
+    MC8_1["<b>八 MC8_1 进入黑塔</b><br/>📍 mulberryDungeon1"]
+    MC8_2["<b>八 MC8_2 把名字写回去</b><br/>⚔ 伪人×5"]
+    MC8_3["<b>八 MC8_3 谁在替你记住</b><br/>💬 对话 老周"]
+    MC8_4A["<b>八 MC8_4A 塔心的镜子</b><br/>⚔ 伪人×6"]
+    MC8_4B["<b>八 MC8_4B 名录墙的最后一行</b><br/>📍 oldGraveyard"]
+    MC8_1 --> MC8_2
+    MC8_2 --> MC8_3
+    MC8_3 --> MC8_4A
+    MC8_3 --> MC8_4B
+  end
+
+  subgraph SIDE["支线 · 开局即可选（不推进主线 phase）"]
+    direction LR
+    MS1_1["<b>MS1_1 备料：铁矿石×4</b><br/>🌿 铁矿石×4"]
+    MS1_2["<b>MS1_2 交付锻造台</b><br/>📍 mulberryTown"]
+    MS2_1["<b>MS2_1 认药：采集×3</b><br/>🌿 药材×3"]
+    MS2_2["<b>MS2_2 第一次开炉</b><br/>📍 mulberryTown"]
+    MS1_1 --> MS1_2
+    MS2_1 --> MS2_2
+  end
+
+  %% ── 章节间解锁（lockedBy，子图级）──
+  MC1 ==>|解锁 二| MC2
+  MC2 ==>|解锁 三| MC3
+  MC3 ==>|解锁 四| MC4
+  MC4 ==>|解锁 五| MC5
+  MC5 ==>|解锁 六| MC6
+  MC6 ==>|解锁 七| MC7
+  MC7 ==>|解锁 八| MC8
+
+  MC8_4B ~~~ SIDE
+
+  classDef finish fill:#16241a,stroke:#66bb6a,stroke-width:1.5px,color:#cfe8d4
+  classDef start fill:#1e2733,stroke:#5a9bff,stroke-width:2px,color:#d6e6ff
+  classDef fail fill:#2a1a1c,stroke:#ef5350,stroke-width:1.5px,color:#ffd4d4
+  classDef side fill:#221f18,stroke:#8a7a4a,color:#e8dfc8
+
+  class MC1_1,MC2_1,MC3_1,MC4_1,MC5_1,MC6_1,MC7_1,MC8_1 start
+  class MC3_1F,MC5_1F,MC6_1F fail
+  class MC1_3,MC2_2A,MC2_2B,MC3_2,MC4_2A,MC4_2B,MC5_2,MC6_2,MC7_3A,MC7_3B,MC7_3C,MC8_4A,MC8_4B finish
+  class MS1_1,MS1_2,MS2_1,MS2_2 side
+
