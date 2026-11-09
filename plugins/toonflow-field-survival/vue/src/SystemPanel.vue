@@ -43,6 +43,8 @@ const props = defineProps<{
   eventRepeatHits?: Record<string, number>;
   /** 任务板：进度视图（宿主 state.questView 权威，本页签只读） */
   questView?: any;
+  /** ★ 对话任务可寻路的 NPC 目标（key=委托 id，由 App.vue 从故事地图包解析） */
+  navTargets?: Record<string, any>;
   /** AI 托管配置（系统 → AI 页签） */
   aiSettings?: AISettings;
   /** 当前托管角色数（用于估算请求频率） */
@@ -226,6 +228,7 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         v-else-if="activeTab === 'quest'"
         :view="questView || null"
         :current-map="currentMap"
+        :nav-targets="navTargets || {}"
         :event-zones="eventZones || []"
         @go="(id: string) => emit('quest-go', id)"
         @recover="(id: string) => emit('quest-recover', id)"

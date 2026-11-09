@@ -381,6 +381,25 @@ section("12. 主线节点寻路（nodeHasDest / questGoToDest 数据契约）");
   eq(row?.isChain, true, "该行同样带主线标识");
 }
 
+/* ══════════════════════════════════════════════════════
+   13) 刷新后链定义重载（ensureChainDefs 守卫回归）
+   ══════════════════════════════════════════════════════ */
+section("13. 刷新后链定义重载（chainState 非空不能当已载入）");
+{
+  // 真机复现：sys_state 存档恢复出 chainState，但 chainBoard 是运行时字段、不进存档。
+  // 旧实现拿 chainState 非空当「已载入」直接 return → 主线页空白、★主线 0、寻路全消失。
+  const st = newState();
+  st.chainState = { MC1: { id: "MC1", status: "running", nodes: {} } };
+  st.chainBoard = [];
+  pluginDataStore.set("chain_defs", { version: 1, chains: CHAINS });
+  const r = await call("sys_chain_board", {}, st);
+  eq(r.state.chainBoard.length, CHAINS.length, "chainState 非空 / chainBoard 空 → 仍从 chain_defs 重载链定义");
+  eq((r.state.chainView?.chains || []).length, CHAINS.length, "chainView 恢复出全部链（主线页不再空白）");
+  const r2 = await call("sys_chain_start", { id: "MC1" }, r.state);
+  ok(!/没有这条主线/.test(r2.msg), "sys_chain_start MC1 不再回「没有这条主线」：" + r2.msg);
+  pluginDataStore.delete("chain_defs");
+}
+
 /* ── 汇总 ─────────────────────────────────────────── */
 console.log("\n" + "═".repeat(64));
 console.log(`通过 ${passed} 项，失败 ${failures.length} 项`);

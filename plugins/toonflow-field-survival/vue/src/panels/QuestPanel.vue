@@ -41,6 +41,8 @@ const props = defineProps<{
   aiText: string;
   /** 当前地图（判断 away 任务） */
   currentMap: string;
+  /** ★ 对话任务可寻路的 NPC 目标（key=委托 id，由 App.vue 从故事地图包解析） */
+  navTargets?: Record<string, any>;
 }>();
 
 const emit = defineEmits<{
@@ -78,7 +80,9 @@ const activeTab = ref<TabId>("main");
 const v = computed(() => props.view || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
 const list = computed<any[]>(() => (v.value as any)[activeTab.value] || []);
 const counts = computed(() => ({
-  main: (cv.value.chains || []).filter((c: any) => c.status === "running" || c.status === "awaiting_choice").length,
+  // ★ 含「可开始」的链：只数 running 时新故事会显示 0，玩家误以为主线页是空的
+  main: (cv.value.chains || []).filter((c: any) =>
+    c.status === "available" || c.status === "running" || c.status === "awaiting_choice").length,
   available: v.value.available.length,
   active: v.value.active.length,
   done: v.value.done.length,
@@ -215,6 +219,30 @@ function nodeHasDest(n: any): boolean {
     (o.kind === "arrive" || o.kind === "explore")
     && typeof o.x === "number" && typeof o.y === "number");
 }
+/** ★ 普通委托是否可寻路：自带坐标，或目标 NPC 已被解析出来（talk 任务） */
+function questCanNav(q: any): boolean {
+  if (!q) return false;
+  if (typeof q.destX === "number" && typeof q.destY === "number") return true;
+  return !!(props.navTargets || {})[String(q.id)];
+}
+/** ★ 链节点是否可寻路：自带坐标，或目标 NPC 已被解析出来 */
+function nodeCanNav(n: any): boolean {
+  if (!n) return false;
+  return nodeHasDest(n) || !!(props.navTargets || {})[String(n.questId)];
+}
+/** 寻路按钮提示：talk 任务显示要找谁 */
+function navTitle(id: any, fallback: string): string {
+  const t = (props.navTargets || {})[String(id || "")];
+  return t ? `自动走向 ${t.label}${t.mapKey && t.mapKey !== props.currentMap ? `（${t.mapKey}，将先传送）` : ""}` : fallback;
+}
+/** 普通委托寻路提示：有 NPC 目标就说找谁，否则沿用旧的目的地文案 */
+function questNavTitle(q: any): string {
+  const t = (props.navTargets || {})[String(q?.id || "")];
+  if (t) return navTitle(q.id, "");
+  return q.destMap && q.destMap !== props.currentMap
+    ? `目的地在${q.destMap}，先传送再自动走`
+    : "自动寻路到目的地";
+}
 /** 链的前置未完成（用于「未解锁」提示） */
 function lockedByNames(c: any, all: any[]): string {
   const ids: string[] = c?.lockedBy || [];
@@ -236,6 +264,7 @@ function lockedByNames(c: any, all: any[]): string {
       <button
         v-for="t in tabs" :key="t.id"
         class="qp-tab" :class="{ 'qp-tab--on': activeTab === t.id }"
+        :title="t.id === 'main' ? '可开始 / 进行中的主线链数；点这里开始主线、接取节点并寻路' : ''"
         @click="activeTab = t.id"
       >
         <span class="qp-tab__icon">{{ t.icon }}</span>{{ t.label }}
@@ -322,9 +351,9 @@ function lockedByNames(c: any, all: any[]): string {
             <div class="ch-node__ops">
               <button v-if="n.status === 'selectable'" class="qp-btn qp-btn--ok" @click="emit('chain-accept', c.id, n.id)">接取</button>
               <button
-                v-if="n.status === 'active' && nodeHasDest(n)"
+                v-if="n.status === 'active' && nodeCanNav(n)"
                 class="qp-btn qp-btn--nav"
-                title="自动走到任务目的地"
+                :title="navTitle(n.questId, '自动走到任务目的地')"
                 @click="emit('chain-go', n.questId)"
               >🧭 寻路</button>
               <button v-if="n.status === 'active' && n.canTurnIn" class="qp-btn qp-btn--ok" @click="emit('chain-turnin', c.id, n.id)">交任务</button>
@@ -360,9 +389,9 @@ function lockedByNames(c: any, all: any[]): string {
             <div class="ch-node__ops">
               <button v-if="n.status === 'selectable'" class="qp-btn qp-btn--ok" @click="emit('chain-accept', c.id, n.id)">接取</button>
               <button
-                v-if="n.status === 'active' && nodeHasDest(n)"
+                v-if="n.status === 'active' && nodeCanNav(n)"
                 class="qp-btn qp-btn--nav"
-                title="自动走到任务目的地"
+                :title="navTitle(n.questId, '自动走到任务目的地')"
                 @click="emit('chain-go', n.questId)"
               >🧭 寻路</button>
               <button v-if="n.status === 'active' && n.canTurnIn" class="qp-btn qp-btn--ok" @click="emit('chain-turnin', c.id, n.id)">交任务</button>
@@ -420,9 +449,9 @@ function lockedByNames(c: any, all: any[]): string {
           </button>
           <!-- ★ 寻路：点击后自动走到目的地（同图 A*；跨图先传送再走） -->
           <button
-            v-if="q.destX !== undefined && q.destY !== undefined"
+            v-if="questCanNav(q)"
             class="qp-btn qp-btn--nav"
-            :title="q.destMap && q.destMap !== currentMap ? `目的地在${q.destMap}，先传送再自动走` : '自动寻路到目的地'"
+            :title="questNavTitle(q)"
             @click="emit('go', q.id)"
           >🧭 寻路</button>
           <button v-if="q.canTurnIn" class="qp-btn qp-btn--ok" @click="emit('turnin', q.id)">交任务</button>

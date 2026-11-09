@@ -3922,8 +3922,12 @@ function normalizeChainDef(raw: any): StoryChainDef | null {
 
 /** 载入链定义（pluginData["chain_defs"]，结构与 main-quests.json 同构） */
 async function ensureChainDefs(ctx: PluginGameContext | undefined, s: FieldSurvivalState): Promise<number> {
-  const chainState = (s as any).chainState;
-  if (chainState && typeof chainState === "object" && Object.keys(chainState).length > 0) return 0;
+  // ★ 绝不能用 chainState 非空当「链定义已载入」的守卫：
+  //   chainState 会随 sys_state 存档恢复，chainBoard 却是**运行时字段、不进存档**。
+  //   页面一刷新 → chainState 有 10 条、chainBoard 为空 → 旧逻辑直接 return，
+  //   链定义永远不再载入，于是主线页空白、★主线显示 0、所有 sys_chain_* 回「没有这条主线」，
+  //   链节点上的「🧭 寻路」也跟着全部消失。只按 chainBoard 判断。
+  if (Array.isArray((s as any).chainBoard) && (s as any).chainBoard.length) return 0;
   const get = ctx?.tsApi?.pluginData?.get;
   if (!get) return 0;
   try {

@@ -21,7 +21,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue"
 import { onHostState, sendToHost, sendTick, notifyLoaded, sendChat, toCloneable, isTurnBased } from "./bridge";
 import { startProactivePoller, stopProactivePoller } from "./sms/proactivePoller";
 import { toonflowJsApi } from "./toonflowJsApi";
-import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, setStoryContext, readStoryJson, envInfo, mapPackState } from "./storyMap";
+import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, getStoryMapBundle, setStoryContext, readStoryJson, envInfo, mapPackState } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
 import DebugPanel from "./DebugPanel.vue";
@@ -1024,6 +1024,125 @@ function sameLevel(a: string, b: string): boolean {
   return !!ka && !!kb && ka === kb;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+ * ★ 对话（talk）任务寻路：目标 NPC 目的地解析
+ * ---------------------------------------------------------------------
+ * 原来只有 arrive / explore（任务自带坐标）+ gather（采集区映射）能寻路，
+ * 纯 talk 任务（例：MC1_1「早餐与名字」→ 妈妈）一个寻路入口都没有，
+ * 玩家看到「对话 妈妈 0/1」却不知道人在哪。
+ * 这里按**数据**定位，不硬编码任何 NPC / 坐标：
+ *   ① 当前图实体：mapnpc_<uid> 或名字精确匹配 → 用实时坐标（NPC 会游走）
+ *   ② 故事地图包：遍历全部关卡的 Tiled 对象，按 uid / 名字匹配，
+ *      坐标换算沿用 mapConfig.normalizeTiledMap 的口径：
+ *        x = obj.x/32 - W/2, y = obj.y/32 - 1 - H/2
+ *   ③ 都找不到 → 返回 null，按钮不显示（绝不出现「寻路后原地不动」）
+ * ═══════════════════════════════════════════════════════════════ */
+interface TalkNavTarget { x: number; y: number; mapKey: string; label: string; }
+interface StoryNpcEntry { uid: string; names: string[]; x: number; y: number; mapKey: string; }
+
+let storyNpcIndexCache: { src: any; list: StoryNpcEntry[] } | null = null;
+
+/** 从已加载的故事地图包里建立「NPC → 坐标」索引；按 bundle 对象身份缓存，避免每 tick 扫全图 */
+function storyNpcIndex(): StoryNpcEntry[] {
+  const b: any = getStoryMapBundle();
+  if (!b) return [];
+  // mapFiles 是主形态；旧包只有 files["maps/<key>.json"]，两种都兼容
+  const primary: Record<string, any> = b.mapFiles || {};
+  const raw: Record<string, any> = b.files || {};
+  const src = Object.keys(primary).length ? primary : raw;
+  if (storyNpcIndexCache && storyNpcIndexCache.src === src) return storyNpcIndexCache.list;
+  const list: StoryNpcEntry[] = [];
+  const pairs: [string, any][] = Object.keys(primary).length
+    ? Object.keys(primary).map((k) => [String(k).replace(/\.json$/i, ""), primary[k]])
+    : Object.keys(raw)
+        .filter((k) => /^maps\/.*\.json$/i.test(k))
+        .map((k) => [k.replace(/^maps\//i, "").replace(/\.json$/i, ""), raw[k]]);
+  for (const [key, j] of pairs) {
+    if (!j || !Array.isArray(j.layers)) continue;
+    const W = Number(j.width) || 0;
+    const H = Number(j.height) || 0;
+    if (!W || !H) continue;
+    for (const layer of j.layers) {
+      if (!layer || layer.type !== "objectgroup" || !Array.isArray(layer.objects)) continue;
+      for (const o of layer.objects) {
+        if (!o) continue;
+        const props: any = Array.isArray(o.properties)
+          ? Object.fromEntries(o.properties.map((p: any) => [p.name, p.value]))
+          : (o.properties || {});
+        const names = [o.name, props.name, props.full_name]
+          .map((x) => String(x || "").trim()).filter(Boolean);
+        if (!names.length && o.id == null) continue;
+        list.push({
+          uid: String(o.id ?? ""),
+          names,
+          x: Number(o.x || 0) / 32 - W / 2,
+          y: Number(o.y || 0) / 32 - 1 - H / 2,
+          mapKey: levelKeyOf(key) || key,
+        });
+      }
+    }
+  }
+  storyNpcIndexCache = { src, list };
+  return list;
+}
+
+/** 解析某个 talk 目标的 NPC 位置（当前图优先，其次故事包全图） */
+function resolveTalkNpc(target: string, uid: string, preferMap?: string): TalkNavTarget | null {
+  const name = String(target || "").trim();
+  const uidStr = String(uid || "").trim();
+  if (!name && !uidStr) return null;
+  // ① 当前图实体（实时坐标）
+  const live = ((state.value?.entities ?? []) as any[]).find((e) => {
+    if (e.alive === false) return false;
+    const id = String(e.id || "");
+    if (uidStr && new RegExp("^mapnpc_" + uidStr.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(_|$)").test(id)) return true;
+    return !!name && (String(e.name || e.label || "") === name || String(e.displayName || "") === name);
+  });
+  if (live) {
+    return { x: Number(live.x), y: Number(live.y), mapKey: currentLevelName.value, label: name || String(live.name || "NPC") };
+  }
+  // ② 故事地图包：精确 uid / 精确名字 / 包含匹配，按分数取最优；同分时优先任务声明的地图
+  const pref = preferMap ? levelKeyOf(preferMap) : "";
+  let best: { score: number; t: TalkNavTarget } | null = null;
+  for (const e of storyNpcIndex()) {
+    let score = 0;
+    if (uidStr && e.uid === uidStr) score = 3;
+    else if (name && e.names.includes(name)) score = 2;
+    else if (name && e.names.some((n) => n.includes(name) || name.includes(n))) score = 1;
+    if (!score) continue;
+    if (pref && levelKeyOf(e.mapKey) === pref) score += 0.5;
+    if (best && best.score >= score) continue;
+    best = {
+      score,
+      t: { x: e.x, y: e.y, mapKey: e.mapKey, label: name || e.names[0] || "NPC" },
+    };
+  }
+  return best ? best.t : null;
+}
+
+/** 当前所有「可寻路的对话任务」：key 是委托 id（链节点用 questId，与普通委托同 id） */
+const talkNavTargets = computed<Record<string, TalkNavTarget>>(() => {
+  const out: Record<string, TalkNavTarget> = {};
+  const add = (id: any, objectives: any[], preferMap?: string) => {
+    const key = String(id || "");
+    if (!key || out[key]) return;
+    const o = (objectives || []).find((x: any) =>
+      x?.kind === "talk" && (Number(x.have) || 0) < (Number(x.need) || 1));
+    if (!o) return;
+    const t = resolveTalkNpc(String(o.target || ""), String(o.uid || ""), preferMap);
+    if (t) out[key] = t;
+  };
+  for (const q of (questView.value.active || [])) {
+    if (q.status === "active") add(q.id, q.objectives, q.destMapRaw);
+  }
+  for (const c of (chainView.value.chains || [])) {
+    for (const n of (c.nodes || [])) {
+      if (n.status === "active" || n.status === "selectable") add(n.questId, n.objectives, n.destMapRaw);
+    }
+  }
+  return out;
+});
+
 /** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮）
  *  ★ 2026-10-18 新增：gather 类任务也通过 GATHER_ZONES_BY_ITEM 映射
  *     找到最近的采集区，生成虚拟目的地（x/y/r 从 eventZones 实时读取）。 */
@@ -1052,6 +1171,25 @@ const questDestinations = computed<any[]>(() => {
       met: !!q.met,
       type: String(q.type || ""),
       /** 采集区名（gather 类用）；arrive/explore 类为空 */
+      gatherZone: "",
+    });
+  }
+
+  // ── talk 类（★ 新增）：目标 NPC 在本图 → 也画一个「找人」目的地标记 ──
+  for (const [qid, t] of Object.entries(talkNavTargets.value)) {
+    if (seen.has(qid)) continue;
+    if (!sameLevel(t.mapKey, currentLevelName.value)) continue;
+    seen.add(qid);
+    out.push({
+      id: qid,
+      title: `找 ${t.label}`,
+      x: t.x,
+      y: t.y,
+      radius: 1.6,
+      needConfirm: false,   // 对话目标不弹「到达」浮钮，走近自动触发聊天
+      atDest: false,
+      met: false,
+      type: "talk",
       gatherZone: "",
     });
   }
@@ -1131,6 +1269,23 @@ let pendingQuestWalk: { x: number; y: number; map: string; title: string } | nul
 function questGoToDest(id: string): void {
   const me = (state.value?.entities ?? []).find((e) => e.side === "player");
   if (!me) { showToast("玩家还没进场"); return; }
+  // ★ 对话 NPC 寻路（含跨图）：目标坐标由 talkNavTargets 从实体 / 故事地图包解析
+  const talk = talkNavTargets.value[id];
+  if (talk) {
+    input.value.dx = 0;
+    input.value.dy = 0;
+    const travel = levelKeyOf(talk.mapKey) || talk.mapKey;
+    if (!travel || sameLevel(travel, currentLevelName.value)) {
+      input.value.moveTo = { x: talk.x, y: talk.y };
+      recomputeMoveToPath(talk.x, talk.y);
+      showToast(`自动寻路中：去找 ${talk.label}`);
+    } else {
+      pendingQuestWalk = { x: talk.x, y: talk.y, map: travel, title: `去找 ${talk.label}` };
+      showToast(`「${talk.label}」在「${getLevelDisplayName(travel) || travel}」，先传送过去再走`);
+      onSysTravel(travel);
+    }
+    return;
+  }
   const local = questDestinations.value.find((x) => x.id === id);
   if (local) {
     input.value.dx = 0;
@@ -8835,6 +8990,7 @@ watch(() => state.value?.phase, (p) => {
             :asking="questAsking"
             :ai-text="questAiText"
             :current-map="currentLevelName || ''"
+            :nav-targets="talkNavTargets"
             @accept="onQuestAccept"
             @turnin="onQuestTurnin"
             @abandon="onQuestAbandon"
@@ -9219,6 +9375,7 @@ watch(() => state.value?.phase, (p) => {
         :event-zones="sysEventZones"
         :event-repeat-hits="sysEventRepeatHits"
         :quest-view="questView"
+        :nav-targets="talkNavTargets"
         :ai-settings="sysAISettings"
         :ai-managed-count="sysAIManagedCount"
         :sms-conversations="sysSmsConversations"

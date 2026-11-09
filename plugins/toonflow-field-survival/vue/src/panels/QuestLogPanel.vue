@@ -36,6 +36,8 @@ const props = defineProps<{
   currentMap: string;
   /** 当前地图的 eventZones（来自 App.vue eventZonesRef，zone 名→坐标） */
   eventZones?: { name: string; x: number; y: number; r?: number }[];
+  /** ★ 对话任务可寻路的 NPC 目标（key=委托 id，由 App.vue 从故事地图包解析） */
+  navTargets?: Record<string, any>;
 }>();
 
 const v = computed<any>(() => props.view || { available: [], active: [], done: [], turned: [], playerLevel: 1 });
@@ -108,6 +110,8 @@ function timerLow(q: any): boolean {
  *  ★ 2026-10-18 新增：gather 类任务 —— 目标物品在映射表里且本图有对应采集区 */
 function hasNavigableDest(q: any): boolean {
   if (!q) return false;
+  // ★ talk 任务：目标 NPC 已从「当前图实体 / 故事地图包」解析出坐标（含跨图）
+  if ((props.navTargets || {})[String(q.id)]) return true;
   if (typeof q.destX === "number" && typeof q.destY === "number" && (q.destMap || q.destMapRaw)) return true;
   const objs = q.objectives || [];
   if (objs.some((o: any) => (o.kind === "arrive" || o.kind === "explore")
@@ -124,6 +128,12 @@ function hasNavigableDest(q: any): boolean {
     return true;
   }
   return false;
+}
+/** 寻路按钮提示：talk 任务直接告诉玩家去找谁、在不在别的图 */
+function navTitle(q: any): string {
+  const t = (props.navTargets || {})[String(q?.id || "")];
+  if (!t) return "自动走向任务目的地";
+  return `自动走向 ${t.label}${t.mapKey && t.mapKey !== props.currentMap ? `（${t.mapKey}，将先传送）` : ""}`;
 }
 </script>
 
@@ -167,7 +177,7 @@ function hasNavigableDest(q: any): boolean {
         <!-- ★ 2026-10-18：active 任务的快捷操作（寻路 / 找回 / 到达 / 放弃） -->
         <div class="ql-ops">
           <button v-if="hasNavigableDest(q) && q.status === 'active'"
-                  class="ql-btn ql-btn--nav" @click="emit('go', q.id)" title="自动走向任务目的地">🧭 寻路</button>
+                  class="ql-btn ql-btn--nav" @click="emit('go', q.id)" :title="navTitle(q)">🧭 寻路</button>
           <button v-if="q.type === 'escort' && q.cargoLost"
                   class="ql-btn ql-btn--recover" @click="emit('recover', q.id)" title="货物在 6m 范围内被找到（实测 ≈1.2m 贴身）">🔄 找回货物</button>
           <button v-if="q.atDest"
