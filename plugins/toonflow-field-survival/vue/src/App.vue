@@ -7260,7 +7260,12 @@ async function onChatStart() {
     // 事件触发过（flag 变化）就不再弹普通聊天 —— 简化判定：事件引擎内部防重入，
     // 若本次命中了事件，引擎的 console 会打日志；这里无法直接得知，用启发式：
     // 只要 tiledId 对应本图事件文件的 interact uid，就不弹聊天。
-    if (eventUidsHas(tiledId)) return;
+    if (eventUidsHas(tiledId)) {
+      // ★ 事件接管时 sys_chat 不会发 → talk 类任务进度钩子收不到；
+      //   补一条 sys_quest_talk 让后端 noteQuestTalk 记数（链 talk 目标依赖此通道）
+      void sendSysCmdAwait("sys_quest_talk", { uid: tiledId, name: npc.name }).catch(() => {});
+      return;
+    }
   }
   chatNpcId.value = npc.id;
   chatNpcName.value = npc.name;

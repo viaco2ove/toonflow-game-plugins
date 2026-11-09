@@ -3948,24 +3948,34 @@ async function ensureChainDefs(ctx: PluginGameContext | undefined, s: FieldSurvi
   //   链定义永远不再载入，于是主线页空白、★主线显示 0、所有 sys_chain_* 回「没有这条主线」，
   //   链节点上的「🧭 寻路」也跟着全部消失。只按 chainBoard 判断。
   if (Array.isArray((s as any).chainBoard) && (s as any).chainBoard.length) return 0;
-  const get = ctx?.tsApi?.pluginData?.get;
-  if (!get) return 0;
+  const pd = ctx?.tsApi?.pluginData;
+  if (!pd?.get) return 0;
   const worldName = str((ctx as any)?.worldName, "");
-  // ① 故事隔离 key（主通道）
-  // ② 老的全局 key（回退：老安装包 / 无 worldName 时）
+  // ★ 读通道（2026-11-09 修）：CLI `plugin_session_data -u` 把模板写在 sessionId="all"，
+  //   而 pluginData.get **只读当前会话**的行 → `chain_defs:<故事名>` 永远读不到，
+  //   主线页恒 0/0「这个故事还没有配置主线任务链」。
+  //   与 map_visual 同口径：先走会话 get（兼容事件脚本运行期注入的会话副本），
+  //   再走 getTemplate（sessionId="all" 命名空间，CLI 播种的模板）。
+  const getters: Array<(k: string) => Promise<any>> = [(k) => pd.get(k)];
+  if (typeof pd.getTemplate === "function") getters.push((k) => pd.getTemplate!(k));
+  // ① 故事隔离 key（主通道）  ② 老的全局 key（回退：老安装包 / 无 worldName 时）
   const keys = worldName ? [chainDefsKey(worldName), "chain_defs"] : ["chain_defs"];
   for (const k of keys) {
-    try {
-      const raw = await get(k);
-      const arr = Array.isArray(raw) ? raw
-        : Array.isArray((raw as any)?.chains) ? (raw as any).chains
-        : [];
-      const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
-      if (!defs.length) continue;
-      (s as any).chainBoard = defs;
-      return defs.length;
-    } catch { /* 换下一个 key */ }
+    for (const g of getters) {
+      try {
+        const raw = await g(k);
+        const arr = Array.isArray(raw) ? raw
+          : Array.isArray((raw as any)?.chains) ? (raw as any).chains
+          : [];
+        const defs = arr.map((x: any) => normalizeChainDef(x)).filter(Boolean) as StoryChainDef[];
+        if (!defs.length) continue;
+        (s as any).chainBoard = defs;
+        console.log(`[chain] 链定义已载入 key=${k}（${getters.indexOf(g) === 0 ? "会话" : "模板/all"}通道）: ${defs.length} 条`);
+        return defs.length;
+      } catch { /* 换下一个通道 */ }
+    }
   }
+  console.warn(`[chain] 链定义载入失败：worldName=${worldName || "(空)"} 尝试过 keys=${keys.join(", ")}（会话+模板通道均未命中）`);
   return 0;
 }
 
@@ -6479,6 +6489,18 @@ export async function handle_action(
       await persistSys(context, s);
       const done = (s.quests || {})[String(def.id)]?.status === "done";
       return okResp(done ? `已到达目的地，「${def.title}」可以交了` : `已记录到达（${def.title}）`);
+    }
+
+    case "sys_quest_talk": {
+      // ★ 事件接管的 NPC 交互也记 talk 进度：onChatStart 里事件优先接管、聊天面板不弹，
+      //   sys_chat 钩子收不到 → 前端在此补发记数（uid 与事件系统同口径：mapnpc_<uid> 第2段）
+      const tuid = str(params?.uid).trim();
+      const tnm = str(params?.name ?? params?.npcName).trim();
+      if (!tuid && !tnm) return okResp("缺少对话目标");
+      noteQuestTalk(s, tuid, tnm);
+      buildQuestView(s);
+      await persistSys(context, s);
+      return okResp("已记录对话");
     }
 
     case "sys_quest_ask": {
