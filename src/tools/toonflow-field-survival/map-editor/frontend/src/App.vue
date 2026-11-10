@@ -43,6 +43,8 @@ const OBJ_META = {
   ROCK:             { label: '岩石（装饰）',     color: '#b0bec5', icon: '🪨', sprite: 0 },
   GOLD:             { label: '金币',            color: '#ffd54f', icon: '🪙', sprite: 0 },
   KEY:              { label: '钥匙',            color: '#ffd54f', icon: '🔑', sprite: 0 },
+  // ── 功能实体：任务板（主线委托入口；游戏端按 dialog=BOARD 识别，画公告板+金色光环）──
+  QUEST_BOARD:      { label: '任务板（主线委托）', color: '#ffd54a', icon: '📋', sprite: 0 },
   // ── 文字标识类（建筑名称显示，见 tiles-maps-editor/references/building-labels.md）──
   FLOAT_LABEL:      { label: '悬浮文字（仿入口）', color: '#f48fb1', icon: '🗨', sprite: 0 },
   SIGNBOARD:        { label: '路标（仿任务板）',   color: '#ffd54a', icon: '🪧', sprite: 0 },
@@ -913,6 +915,47 @@ function render() {
       }
       // ★ sprite 优先：obj.gid（Tiled 对象指向图集）> OBJ_META.sprite（按类型映射）
       const spriteId = obj.gid ? (obj.gid - (map.tilesets?.[0]?.firstgid ?? 1)) : (meta.sprite || 0)
+      // ★ 任务板：不画 gid 贴图（gid 58 指向的图块其实是宝箱），画公告板样式（游戏端 drawQuestBoard 同风格）
+      if (props.dialog === 'BOARD' || props.entity_type === 'QUEST_BOARD') {
+        const k = Math.max(0.6, Math.min(2.4, zoom.value))
+        // 脚底阴影
+        ctx.save()
+        ctx.globalAlpha = 0.3
+        ctx.fillStyle = '#000'
+        ctx.beginPath()
+        ctx.ellipse(sx + sz / 2, sy + sz * 0.88, sz * 0.24, sz * 0.08, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+        // 金色光环
+        ctx.strokeStyle = '#ffd54a'
+        ctx.lineWidth = 1.5 * k
+        ctx.beginPath()
+        ctx.ellipse(sx + sz / 2, sy + sz * 0.45, sz * 0.42, sz * 0.18, 0, 0, Math.PI * 2)
+        ctx.stroke()
+        // 木柱
+        ctx.fillStyle = '#6b4a2b'
+        ctx.fillRect(sx + sz / 2 - 3 * k, sy + sz * 0.4, 6 * k, sz * 0.48)
+        // 公告板面板 + 内纸
+        const bw = sz * 0.72, bh = sz * 0.5
+        const bx = sx + sz / 2 - bw / 2, by = sy + sz * 0.02
+        ctx.fillStyle = '#caa472'
+        ctx.strokeStyle = '#5a3b1e'
+        ctx.lineWidth = 1.5 * k
+        ctx.fillRect(bx, by, bw, bh)
+        ctx.strokeRect(bx, by, bw, bh)
+        ctx.fillStyle = '#f3e2bd'
+        ctx.fillRect(bx + bw * 0.12, by + bh * 0.15, bw * 0.34, bh * 0.42)
+        ctx.fillRect(bx + bw * 0.54, by + bh * 0.15, bw * 0.34, bh * 0.28)
+        // 名字标签
+        const label = props.full_name || obj.name || '任务板'
+        ctx.font = `bold ${Math.max(8, Math.round(9 * zoom.value))}px Consolas`
+        const lw = ctx.measureText(label).width
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'
+        ctx.fillRect(sx + sz / 2 - lw / 2 - 2, sy - 12 * zoom.value, lw + 4, 11 * zoom.value)
+        ctx.fillStyle = '#ffd54a'
+        ctx.fillText(label, sx + sz / 2, sy - 6 * zoom.value)
+        continue
+      }
       if (tileset.value.loaded && spriteId > 0 && spriteId * TILE_SIZE < tileset.value.img.width * (tileset.value.img.height / TILE_SIZE)) {
         const sx2 = (spriteId % tsCols2) * TILE_SIZE
         const sy2 = Math.floor(spriteId / tsCols2) * TILE_SIZE
@@ -1185,6 +1228,10 @@ function handleClick(tx, ty) {
         ? { entity_type: placingType.value, heal: 40 }
         : placingType.value === 'SPAWN_POINT'
         ? { entity_type: placingType.value }
+        : placingType.value === 'QUEST_BOARD'
+        ? // ★ 任务板：与游戏端识别口径完全一致（entity_type=NPC + dialog=BOARD），
+          //   运行时 normalizeTiledMap → entity.board=true → 画公告板+金色光环、近旁弹「📜 任务」
+          { entity_type: 'NPC', full_name: '任务板', name: '任务板', dialog: 'BOARD' }
         : TEXT_LIKE.has(placingType.value)
         ? {
             entity_type: placingType.value,
@@ -1198,6 +1245,12 @@ function handleClick(tx, ty) {
         properties: Object.entries(props).map(([k, v]) => ({
           name: k, value: v, type: typeof v === 'number' ? 'int' : 'string'
         }))
+      }
+      // ★ 任务板：补 Tiled 顶层字段（与黑塔 mulberryTown 真实任务板同构）
+      if (placingType.value === 'QUEST_BOARD') {
+        newObj.name = '任务板'
+        newObj.type = 'board'
+        newObj.gid = 58   // 指向图集公告板贴图（运行时 board=true 走专用绘制，gid 仅兜底）
       }
       L.objects.push(newObj)
       selectedObj.value = newObj
