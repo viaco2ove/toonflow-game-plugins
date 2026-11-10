@@ -38,7 +38,7 @@ ai 不能自己觉得5175 不行 ，就自己 转到 3000 这个dev-host 进行�
 
 ## 系统环境配置 
 务必查看！！！
-[system.yml](system/system.yml)
+$current_project_windows\system\system.yml
 特别是 web_project_windows，这是前端代码地址
 
 ## Reference：参考资料和技能经验知识

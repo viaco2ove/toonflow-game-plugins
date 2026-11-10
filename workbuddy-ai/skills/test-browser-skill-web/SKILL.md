@@ -38,9 +38,10 @@ ai 不能自己觉得5175 不行 ，就自己 转到 3000 这个dev-host 进行�
 
 ## 系统环境配置 
 务必查看！！！
-[system.yml](system/system.yml)
+## 系统环境配置 
+务必查看！！！
+$current_project_windows\system\system.yml
 特别是 web_project_windows，这是前端代码地址
-
 ## Reference：参考资料和技能经验知识
 [如何测试 5175 Web 宿主（实战手册）](Reference/how-to-test-web-host.md)
 > ⚠️ 2026-10-06 实测发现 5175 宿主有一个 bug：`pluginMinigameView` 在 gameType 为裸 type（如 `"field_survival"`）时返回 null，导致 iframe 不挂载、战斗功能全不可测。已在 `Toonflow-game-web/src/components/ScenePlay.vue` 修复（两处改动）。修复后需重新 `npm run dev` 启动 5175 生效。
