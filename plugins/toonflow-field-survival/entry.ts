@@ -645,6 +645,29 @@ const rndY  = () => rnd(WORLD_Z_RANGE[0] + 80, WORLD_Z_RANGE[1] - 80);
    */
 const MOVE_SPEED_M = 3.0;      // 米/秒
 const TICK_DT_S = 0.1;         // 一次 tick = 100ms（与前端 TICK_MS 对齐）
+/** ★ 一次 tick 的毫秒数（前端 TICK_MS = 100）；用于把真实时间差折算成 tick 数 */
+const TICK_MS_MS = 100;
+
+/**
+ * ★ 本次 tick 与上次 tick 的真实间隔（毫秒），并把时间戳写回 state。
+ *
+ * 为什么需要：宿主 tick 频率不是恒定 10Hz —— 前端在玩家 3 秒无输入后把上报
+ * 降到 SEND_IDLE_MS=1000ms（1Hz 挂机档）。凡是「每 tick 减 1」的计时器
+ * （技能冷却 cdLeft / 飘字 life / 特效 vfx.life）在挂机档都会慢 10 倍，
+ * 表现为「冷却不像秒」「特效不消失」。用真实墙钟差值折算即可与频率解耦。
+ *
+ * 首次 tick（没有上一次时间戳）返回 TICK_MS_MS（按 1 tick 计，不做补偿）。
+ */
+function tickDeltaMs(s: FieldSurvivalState): number {
+  const now = Date.now();
+  const last = num((s as any)._tickAtMs, 0);
+  (s as any)._tickAtMs = now;
+  if (!(last > 0)) return TICK_MS_MS;
+  const dt = now - last;
+  // 防御：时钟回拨 / 极端卡顿时钳到合理区间（0.1s ~ 10s）
+  if (!(dt > 0)) return TICK_MS_MS;
+  return Math.min(10000, Math.max(TICK_MS_MS, dt));
+}
 const MOB_VIEW_M   = 80;       // ★ v4：仅盟友 AI 追击射程兜底用（敌人改用 MOB_DETECT_M）
 /** ★ game.md《野怪和攻击机制》：近战距离 1.0 米（从 0.5m 调大，消除视觉死区——
  *  0.5m 时怪停在玩家身边但模型体积导致实际距离 0.8~1m，看起来"呆着不打"；
@@ -2385,11 +2408,35 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       e.y = clampY(ny);
     }
   });
-  s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft -= 1; });
-  s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - 1 })).filter((f) => f.life > 0);
-  // ★ 打击特效衰减：vfx life 每 tick -1
+  /* ★ ★ 时间基准修复（2026-11-10）：冷却/飘字/特效必须按**真实经过时间**衰减，
+   *   不能按 tick 次数递减。
+   *
+   * 背景（用户实测）：施放技能后技能格倒计时「不像秒」——设计 cd=24（2.4 秒）
+   *   却要等二十几秒才归零；技能特效也长时间不消失。两者同时出现。
+   *
+   * 根因：宿主 tick **不是恒定 10Hz**。前端 `currentSendMs()` 在玩家 3 秒无输入后
+   *   把上报频率降到 SEND_IDLE_MS = 1000ms（1Hz 挂机档，省带宽）。
+   *   而这里 `cdLeft -= 1` / `life -= 1` 都是**每 tick 减 1**（隐含「1 tick = 100ms」）：
+   *     活跃档 10Hz → cd=24 恰好 2.4 秒（对）
+   *     挂机档  1Hz → cd=24 要 24 秒（错 10 倍！）且 UI 仍按 /10 显示「3 秒」
+   *   ⇒ 挂机时冷却「不像秒」；特效 life=12~30 在 1Hz 下要 12~30 秒才消失。
+   *
+   * 修复：改为按真实经过的毫秒数折算 tick 数来递减（沿用游戏既有惯例：
+   *   cdLeft 单位仍是「tick 数」，UI 口径 cdLeft/10 = 秒 不变）。
+   *   · dtMs 取自本次 tick 与上次 tick 的真实时间差（由宿主墙钟计算）
+   *   · 递减量 = round(dtMs / TICK_MS)，最小 1（保证每次 tick 至少推进一格）
+   *   · 首次 tick（无上次时间戳）按 1 tick 计，不做补偿
+   *   ⇒ 无论宿主 tick 是 10Hz 还是 1Hz，冷却与特效都按真实秒数走。
+   */
+  const _dtMs = tickDeltaMs(s);
+  const _dec = Math.max(1, Math.round(_dtMs / TICK_MS_MS));
+  s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft = Math.max(0, k.cdLeft - _dec); });
+  s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - _dec })).filter((f) => f.life > 0);
+  // ★ 打击特效衰减：vfx life 按真实时间折算递减（life 同样是「tick 数」口径）
   const _vfx = (s as any).vfx;
-  if (Array.isArray(_vfx) && _vfx.length) (s as any).vfx = _vfx.filter((v: any) => { v.life -= 1; return v.life > 0; });
+  if (Array.isArray(_vfx) && _vfx.length) {
+    (s as any).vfx = _vfx.filter((v: any) => { v.life -= _dec; return v.life > 0; });
+  }
 
   // 宝箱：走过去开启（优先地图 loot）
   s.chests.forEach((c) => {

@@ -644,10 +644,10 @@ const DEFAULT_ROLES: RoleOption[] = [
   { id: "r07", name: "朱果", roleType: "npc" },
   { id: "r08", name: "骑士", roleType: "npc" },
   { id: "r09", name: "郭奉凯", roleType: "npc" },
-  { id: "r10", name: "霍魁", roleType: "npc" },
+  { id: "r10", name: "剑士", roleType: "npc" },
   { id: "r11", name: "魏靖", roleType: "npc" },
   { id: "r12", name: "林佩雅", roleType: "npc" },
-  { id: "r13", name: "暮光者", roleType: "npc" },
+  { id: "r13", name: "白袍客", roleType: "npc" },
   { id: "r14", name: "某男子", roleType: "npc" },
   { id: "r15", name: "某女子", roleType: "npc" },
 ];
@@ -810,8 +810,8 @@ function currentTheme(): "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null {
     "旧书店": null,
     "认知污染带": "CATACOMBS",
     "被遗忘者名录": null,
-    "伪人总部·收容课教室": "ICE",
-    "伪人总部·拟态间": "ICE",
+    "总部·收容课教室": "ICE",
+    "总部·拟态间": "ICE",
     "黑塔·降临旧址": null,
     "超凡界·界域": null,
     "延城·地表": null,
@@ -1157,8 +1157,26 @@ function pushExplosion(x: number, y: number): void {
 /** tick 内每帧推进 VFX 寿命 */
 function tickVfx(): void {
   if (!state.vfx || state.vfx.length === 0) return;
-  for (const p of state.vfx) p.life--;
+  for (const p of state.vfx) p.life -= mockTickDec();
   state.vfx = state.vfx.filter((p) => p.life > 0);
+}
+
+/**
+ * ★ 时间基准（2026-11-10）：本次 tick 应推进的「tick 数」。
+ *
+ * 与 entry.ts 的 tickDeltaMs 同源：宿主 tick 频率不是恒定 10Hz —— 前端在玩家
+ * 3 秒无输入后把上报降到 SEND_IDLE_MS=1000ms（1Hz 挂机档）。凡是「每 tick 减 1」
+ * 的计时器在挂机档都会慢 10 倍（技能冷却 cdLeft / 飘字 life / 特效 vfx.life），
+ * 表现为「冷却不像秒」「特效不消失」。按真实墙钟差值折算即与频率解耦。
+ */
+function mockTickDec(): number {
+  const now = Date.now();
+  const last = (state as any)._tickAtMs as number | undefined;
+  (state as any)._tickAtMs = now;
+  if (!last || !(last > 0)) return 1;
+  const dt = now - last;
+  if (!(dt > 0)) return 1;
+  return Math.max(1, Math.min(100, Math.round(dt / 100)));
 }
 
 function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], mapPlayerSpawn?: { x: number; y: number }): GameState {
@@ -1384,8 +1402,9 @@ function install(): void {
           if (state.tick % 30 === 0) me.hp = Math.min(me.maxHp, me.hp + 1);
         }
 
-        // 全技能 CD 冷却（每 tick -1）
-        for (const s of state.skills) { if (s.cdLeft > 0) s.cdLeft--; }
+        // 全技能 CD 冷却（按真实时间折算递减，兼容 1Hz 挂机档）
+        const _cdDec = mockTickDec();
+        for (const s of state.skills) { if (s.cdLeft > 0) s.cdLeft = Math.max(0, s.cdLeft - _cdDec); }
 
         // ★ 敌人"解困"：刷点（makeEntity / mapmob / zone_）与安全区推出都可能把怪
         //   放进墙里 → 每 tick 做一次廉价纠正。已经在合法位置的怪是 no-op。

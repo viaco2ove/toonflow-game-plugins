@@ -1945,11 +1945,21 @@ window.addEventListener("message", async (e) => {
         lastState._mobLevel = currentLevelName;
       }
       // 6. 飘字/vfx/cd 衰减
-      lastState.floaters = lastState.floaters.filter((f) => { f.life--; return f.life > 0; });
-      if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life--; return v.life > 0; });
-      // ★ 技能 cd 每 tick -1（castSkill 时 dev-host 已设 cdLeft=cd）
+      //    ★ 时间基准（2026-11-10）：按**真实经过时间**折算递减，不是每 tick 减 1。
+      //      宿主 tick 频率不恒定 —— 前端 3 秒无输入后把上报降到 1Hz（挂机档），
+      //      「每 tick 减 1」会让冷却/特效慢 10 倍（表现：冷却不像秒、特效不消失）。
+      //      与 entry.ts tickDeltaMs / mockHost mockTickDec 同一口径。
+      const _nowMs = Date.now();
+      const _lastMs = Number(lastState._tickAtMs || 0);
+      lastState._tickAtMs = _nowMs;
+      const _dec = _lastMs > 0
+        ? Math.max(1, Math.min(100, Math.round((_nowMs - _lastMs) / 100)))
+        : 1;
+      lastState.floaters = lastState.floaters.filter((f) => { f.life -= _dec; return f.life > 0; });
+      if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life -= _dec; return v.life > 0; });
+      // ★ 技能 cd 按真实时间折算递减（castSkill 时 dev-host 已设 cdLeft=cd）
       for (const sk of lastState.skills || []) {
-        if (sk.cdLeft && sk.cdLeft > 0) sk.cdLeft = Math.max(0, sk.cdLeft - 1);
+        if (sk.cdLeft && sk.cdLeft > 0) sk.cdLeft = Math.max(0, sk.cdLeft - _dec);
       }
       for (const e of ents) {
         if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
