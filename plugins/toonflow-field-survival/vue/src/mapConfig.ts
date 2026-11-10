@@ -36,7 +36,7 @@ import { TerrainScaleConfig, DEFAULT_SCALE } from "./terrainScale";
 import { assetUrl, mobKeyFor } from "./assets";
 import { getStoryMapRaw, getStoryFirstMap, getStoryLevelNames } from "./storyMap";
 import {
-  getArchetype, getTypeZh, getSpriteTile, getSpriteKey,
+  getArchetype, getTypeZh, getSpriteTiles, getSpriteKey,
   isMobType, isNonMobType, getNpcDialogZh,
 } from "./entityRegistry";
 
@@ -231,11 +231,11 @@ export function entitySpriteKeyOf(entityType: string): string {
 }
 
 /**
- * ★ 地图集声明的图集主帧 tile id（未声明 → 0）。
- *   > 0 时绘制层直接用这个 tile 画怪，完全不依赖名字猜帧。
+ * ★ 地图集声明的图集帧 tile id 列表（未声明 → []）。
+ *   非空时绘制层直接用这些帧画怪，完全不依赖名字猜帧（数据驱动贴图）。
  */
-export function entitySpriteTile(entityType: string): number {
-  return getSpriteTile(entityType);
+export function entitySpriteTiles(entityType: string): number[] {
+  return getSpriteTiles(entityType);
 }
 
 /**

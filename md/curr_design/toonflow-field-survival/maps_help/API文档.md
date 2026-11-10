@@ -1,6 +1,6 @@
 # 地图事件 API 文档（toonflow-field-survival）
 
-> 权威类型契约：`../../../../.cache/toonflow-field-survival/maps/eventScripts/_ctx.ts`
+> 权威类型契约：`../../../../.cache/toonflow-field-survival/maps/Infringing_plugin/eventScripts/_ctx.ts`
 > 运行时实现：`plugins/toonflow-field-survival/vue/src/eventEngine.ts`
 > 后端命令实现：`plugins/toonflow-field-survival/entry.ts`（`case "sys_xxx"`）
 > **本文所有「实现状态」以 2026-10-28 的代码为准**（上一版停在 10-19，缺 proximity / interval / ctx.story 等）。

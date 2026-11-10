@@ -153,13 +153,20 @@ const KEYWORD_RULES: Array<{ pattern: RegExp; build: (cmd: string, ent: Entity, 
     },
   },
   {
-    // ★ 数据驱动：护送 / 找人 —— 按名字关键词在场上找最近的非敌对实体
-    //   （赦夜人：林家商队 / 林家护卫 / 陆文昭；别的地图集换成自己的 NPC 名即可，不用改插件）
-    pattern: /(商队|护送|护卫|陆文昭|执事|暮光)/i,
+    // ★ 数据驱动：护送 / 找人 —— **按场上实体名模糊匹配**最近的非敌对实体。
+    //   插件不认任何具体 NPC 名：把命令里的关键词拆出来，在场上实体名里找包含关系，
+    //   所以换地图集不用改插件（地图集自己的人名自然会命中）。
+    pattern: /(?:去找|护送|陪同|跟随|接应|找)([^\s，。！？]{2,12})/,
     build: (cmd, ent, state) => {
-      const kw = /(商队|护送)/i.test(cmd) ? /商队|林家/ : /(护卫)/i.test(cmd) ? /护卫/ : /陆文昭|执事|暮光/;
+      const m = cmd.match(/(?:去找|护送|陪同|跟随|接应|找)([^\s，。！？]{2,12})/);
+      if (!m) return null;
+      const want = m[1];
+      // 逐字降级匹配：先全名，再去掉修饰词的头尾字（越短越泛）
+      const probes = [want];
+      if (want.length > 2) probes.push(want.slice(0, -1), want.slice(1), want.slice(0, 2));
       const cands = (state.entities || []).filter(
-        (e) => e.side !== "enemy" && e.alive !== false && e.id !== ent.id && kw.test(String(e.name || "")),
+        (e) => e.side !== "enemy" && e.alive !== false && e.id !== ent.id
+          && probes.some((p) => p && String(e.name || "").includes(p)),
       );
       if (!cands.length) return null;
       let near = cands[0];

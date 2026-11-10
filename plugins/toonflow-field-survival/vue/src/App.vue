@@ -52,7 +52,7 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, mobArchetypeOf, entityTypeZh, entitySpriteKey, entitySpriteTile, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, mobArchetypeOf, entityTypeZh, entitySpriteKey, entitySpriteTiles, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
 import { loadEntityRegistry } from "./entityRegistry";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
@@ -5210,8 +5210,10 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
   //   地图集若在 entity_types.json 里声明了图集 tile id → 直接用它（数据驱动，精确）；
   //   没声明 → 走通用 sprite key 的帧循环。
-  const declaredTile = entitySpriteTile(e.entity_type || "");
-  const tileId = declaredTile > 0 ? declaredTile : spriteTileId(key, _animTick);
+  const declaredTiles = entitySpriteTiles(e.entity_type || "");
+  const tileId = declaredTiles.length
+    ? declaredTiles[Math.floor(_animTick / 8) % declaredTiles.length]
+    : spriteTileId(key, _animTick);
   // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
   const targetTiles = ENTITY_DIM_TILES[key] ?? 1.0;   // ★ v4：格数基准（与角色/树同尺度）
   const dw = Math.max(4, Math.round(targetTiles * pixelsPerMeter));
@@ -7633,8 +7635,9 @@ function onChatLeave() {
   if (npc) onChatStart();
   else {
     // 找不到 nearChat 时，直接设置一个 mock NPC 触发聊天
-    chatNpcId.value = "npc_ally_huo_kui" as any;
-    chatNpcName.value = "霍魁";
+    //   ★ mock 名不带任何地图集业务（角色由 LLM 现场演绎）
+    chatNpcId.value = "npc_mock" as any;
+    chatNpcName.value = "同伴";
     chatMessages.value = [];
     chatInputText.value = "";
     chatPending.value = false;
@@ -7939,6 +7942,8 @@ async function onUploadMap(ev: Event) {
       try {
         await toonflowJsApi.pluginData.set("map_visual", { files: visFiles, first: visFirst });
         await loadStoryMapBundle(true);
+        // ★ 实体档案随视觉包一起来（entity_types.json）→ 强制重载注册表
+        loadEntityRegistry(true);
         // ★ 新包里可能带了新图集 → 一并替换（否则地面/精灵仍是旧图集）
         try {
           const objUrl = getStoryTilesetObjectUrl();
@@ -8665,6 +8670,8 @@ onMounted(async () => {
         mapReloading.value = true;
         try {
           const b = await loadStoryMapBundle(true);
+          // ★ 实体档案来自包内 entity_types.json → 重读包后必须重载注册表
+          loadEntityRegistry(true);
           pollMapPack();
           if (!b || Object.keys(b.files).length === 0) {
             // ★ 确诊未装 / 读取失败：不静默兜底，明确告知（状态条与遮罩已显示原因）。
