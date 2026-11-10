@@ -154,28 +154,7 @@ export interface MapNpc {
  * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
  */
 export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number; level: number }> = {
-  // ★ 黑塔伪人系（map_design/黑塔：从超忆症开始成神）
-  HT_FAKE_STUDENT: { name: "伪人·学生", hp: 45,  atk: 9,  level: 1 },
-  HT_FAKE_PAW:     { name: "伪人·爪牙", hp: 75,  atk: 14, level: 3 },
-  HT_FAKE_ELITE:   { name: "伪人·精英", hp: 150, atk: 20, level: 5 },
-  HT_FAKE_TEACHER: { name: "伪人·教师", hp: 110, atk: 16, level: 4 },
-  HT_FAKE_HOST:    { name: "伪人·宿主", hp: 260, atk: 26, level: 7 },
-  HT_FAKE_MR:      { name: "先生",     hp: 420, atk: 34, level: 9 },
-  RAT:         { name: "老鼠",       hp: 12,  atk: 4,  level: 1 },
-  GOBLIN:      { name: "哥布林",     hp: 30,  atk: 6,  level: 1 },
-  LOOT_GOBLIN: { name: "拾荒哥布林", hp: 40,  atk: 8,  level: 2 },
-  ORC:         { name: "半兽人",     hp: 80,  atk: 12, level: 3 },
-  ORC_BOSS:    { name: "兽人首领",   hp: 200, atk: 18, level: 8 },
-  SKELETON:    { name: "骷髅兵",     hp: 50,  atk: 12, level: 2 },
-  ZOMBIE:      { name: "僵尸",       hp: 60,  atk: 10, level: 1 },
-  IMP:         { name: "小恶魔",     hp: 30,  atk: 7,  level: 2 },
-  GHOST:       { name: "幽灵",       hp: 35,  atk: 9,  level: 3 },
-  LICH:        { name: "巫妖",       hp: 160, atk: 20, level: 7 },
-  WOLF:        { name: "巨狼",       hp: 60,  atk: 10, level: 2 },
-  BOAR:        { name: "野猪",       hp: 50,  atk: 8,  level: 1 },
-  SNAKE:       { name: "毒蛇",       hp: 25,  atk: 8,  level: 2 },
-  BAT:         { name: "蝙蝠",       hp: 20,  atk: 5,  level: 1 },
-  WILD_GOAT:   { name: "山羊",       hp: 45,  atk: 9,  level: 2 },
+  // 禁止在插件编写地图集的特有业务
 };
 
 /**
@@ -184,39 +163,7 @@ export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: num
  *   表里没有的类型回退 MOB_ARCHETYPES[].name。
  */
 export const ENTITY_TYPE_ZH: Record<string, string> = {
-  // ★ 黑塔伪人系
-  HT_FAKE_STUDENT: "伪人·学生",
-  HT_FAKE_PAW: "伪人·爪牙",
-  HT_FAKE_ELITE: "伪人·精英",
-  HT_FAKE_TEACHER: "伪人·教师",
-  HT_FAKE_HOST: "伪人·宿主",
-  HT_FAKE_MR: "先生",
-  RAT: "老鼠",
-  BAT: "暗夜生物",
-  SNAKE: "爬虫",
-  WILD_GOAT: "山羊",
-  GOBLIN: "哥布林",
-  ZOMBIE: "人形亡者",
-  IMP: "小恶魔",
-  SKELETON: "骷髅兵",
-  KOBOLD: "狗头人",
-  ICE_ELEMENTAL: "冰元素",
-  ORC: "半兽人",
-  BONEMAN: "白骨人",
-  EMPOWERED_ORC: "强化半兽人",
-  DEMON: "恶魔",
-  GHOST: "幽灵",
-  MUMMY: "木乃伊",
-  SIREN: "塞壬",
-  TROLL: "巨魔",
-  BANSHEE: "报丧女妖",
-  GOLEM: "石魔",
-  CYCLOPS: "独眼巨人",
-  MINOTAUR: "牛头人",
-  VAMPIRE: "血族",
-  LICH: "巫妖",
-  LOOT_GOBLIN: "拾荒哥布林",
-  ORC_BOSS: "兽人首领",
+   // 禁止在插件编写地图集的特有业务
 };
 
 /**
@@ -232,24 +179,7 @@ export const NPC_DIALOG_ZH: Record<string, string> = {
   BARKEEP: "酒馆老板",
   // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
   NANI_AND_BILI_RESCUE: "娜妮",
-  // ★ ：大罗宗人物（map_design/ 地图集）
-  // ★ 黑塔：从超忆症开始成神（map_design/黑塔：从超忆症开始成神）
-  SU_XIAO_CLASS_PRESIDENT: "苏晓",
-  XIAO_MAN_GUIDE: "小满",
-  WEI_SHU_COACH: "魏叔",
-  ZHANG_WANYI_GUIDE: "张晚意",
-  OLD_ZHOU_HINT: "老周",
-  BAI_XIAOSHENG_INFO: "百晓生",
-  BAI_ZIXUAN: "白子轩",
-  MOM_BREAKFAST: "妈妈",
-  CLASS_TEACHER: "班主任",
-  PE_COMMITTEE: "体育委员",
-  MR_XIANSHENG: "先生",
-  XUANCHEN: "玄尘长老",
-  MO_LAO: "墨老",
-  SU_MO: "苏沫",
-  XIAO_ZHONG: "萧肿",
-  CHEN_NANXUAN: "陈南璇",
+  // 禁止在插件编写地图集的特有业务
 };
 
 /** 阵营规范化：非法值返回 null（调用方回退 entity_type 推断） */
@@ -286,19 +216,7 @@ function hasChestName(props: Record<string, any>): boolean {
  *   表外类型回退 mobKeyFor(名字)。
  */
 export const ENTITY_SPRITE_KEY: Record<string, string> = {
-  // ★ 黑塔伪人系：复用已验证的人物动画帧（TILE_ANIM_ID 有映射的优先）
-  HT_FAKE_STUDENT: "ht_student",
-  HT_FAKE_PAW: "ht_paw",
-  HT_FAKE_ELITE: "ht_elite",
-  HT_FAKE_TEACHER: "ht_teacher",
-  HT_FAKE_HOST: "ht_host",
-  HT_FAKE_MR: "ht_mr",
-  RAT: "rat", BAT: "bat", SNAKE: "snake", WILD_GOAT: "goat",
-  GOBLIN: "goblin", LOOT_GOBLIN: "goblin", IMP: "goblin", KOBOLD: "goblin",
-  SKELETON: "skeleton", ZOMBIE: "skeleton", BONEMAN: "skeleton",
-  MUMMY: "skeleton", VAMPIRE: "skeleton", BANSHEE: "skeleton", GHOST: "skeleton", LICH: "skeleton",
-  ORC: "orc", ORC_BOSS: "orc", EMPOWERED_ORC: "orc", DEMON: "orc", WOLF: "orc",
-  TROLL: "minotaur", GOLEM: "minotaur", CYCLOPS: "minotaur", MINOTAUR: "minotaur",
+  // 禁止在插件编写地图集的特有业务
 };
 
 /** 野怪白名单（由 MOB_ARCHETYPES 派生，避免两处维护不一致） */
@@ -853,71 +771,7 @@ export const DEFAULT_START_LEVEL = "Mulberry Town";
    城镇 / 王国映射为 null → 不刷怪（保留 safe zone 行为）
    ============================================================ */
 export const THEME_BY_MAPNAME: Record<string, "RUINS" | "CATACOMBS" | "MINE" | "ICE" | null> = {
-  // ★ 黑塔：从超忆症开始成神（map_design/黑塔：从超忆症开始成神）
-  //   运行期传入的是关卡 key（slug，来自 App.vue currentLevelName），
-  //   中文显示名一并登记，两种写法都能命中。
-  lichLair:              null,
-  mulberryTown:          null,
-  mulberryForest:        "RUINS",
-  mulberryGraveyard:     "CATACOMBS",
-  forestDungeon1:        "RUINS",
-  forestDungeon2:        "RUINS",
-  forestDungeon3:        "CATACOMBS",
-  forestDungeon4:        "MINE",
-  forestDungeon5:        "MINE",
-  mulberryDungeon1:      "MINE",
-  mulberryDungeon2:      "MINE",
-  mulberryDungeon3:      "ICE",
-  mulberryDungeon4:      "ICE",
-  mulberryDungeon5:      "ICE",
-  lootGoblinLair:        "RUINS",
-  oldForest:             null,
-  taintedForest:         "CATACOMBS",
-  oldGraveyard:          null,
-  lichBoss:              "ICE",
-  oldlichBoss:           "ICE",
-  orcCastle:             null,
-  overworld:             null,
-  "陈曦的卧室":             null,
-  "延城一中":               null,
-  "网球场·黄昏":            "RUINS",
-  "旧教学楼·天台":          "CATACOMBS",
-  "记忆回廊·一层·早自习":    "RUINS",
-  "记忆回廊·二层·课间十分钟": "RUINS",
-  "记忆回廊·三层·运动会":    "CATACOMBS",
-  "记忆回廊·四层·那天下午":  "MINE",
-  "记忆回廊·五层·被改写的放学": "MINE",
-  "黑塔·一层·门厅":          "MINE",
-  "黑塔·二层·名册室":        "MINE",
-  "黑塔·三层·咀嚼室":        "ICE",
-  "黑塔·四层·剥忆室":        "ICE",
-  "黑塔·五层·塔心":          "ICE",
-  "旧货市场":               "RUINS",
-  "旧书店":                 null,
-  "认知污染带":             "CATACOMBS",
-  "被遗忘者名录":            null,
-  "伪人总部·收容课教室":     "ICE",
-  "伪人总部·拟态间":         "ICE",
-  "黑塔·降临旧址":           null,
-  "超凡界·界域":             null,
-  "延城·地表":              null,
-  "Mulberry Town":          null,
-  "Mulberry Forest":        "RUINS",
-  "Mulberry Graveyard":     "CATACOMBS",
-  "Lich Lair":              "CATACOMBS",
-  "Loot Goblin Lair":       "RUINS",
-  "Mulberry Dungeon":       "RUINS",
-  "Mulberry Dungeon 2":     "RUINS",
-  "Mulberry Dungeon 3":     "RUINS",
-  "Mulberry Dungeon 4":     "RUINS",
-  "Mulberry Dungeon 5":     "RUINS",
-  "Forest Dungeon":         "RUINS",
-  "Forest Dungeon 2":       "RUINS",
-  "Forest Dungeon 3":       "RUINS",
-  "Forest Dungeon 4":       "RUINS",
-  "Forest Dungeon 5":       "RUINS",
-  "Kingdom":                null,
-  "Lich Boss":              "CATACOMBS",
+  // 禁止在插件编写地图集的特有业务
 };
 
 /** 按关卡名查 theme，未登记则回退 RUINS（最弱怪） */
@@ -1061,20 +915,7 @@ export function getLevelDisplayName(levelName: string): string {
  * 返回空字符串，不显示标签。
  */
 export const MAP_MOB_LEVEL_RANGE: Record<string, [number, number]> = {
-  // ★ 黑塔：从超忆症开始成神 —— 旧货市场只有一只宿主（见 map_design/黑塔：…/lootGoblinLair.json）
-  lootGoblinLair: [25, 25],
-  mulberryForest: [1, 10],
-  mulberryGraveyard: [10, 20],
-  forestDungeon1: [10, 20],
-  forestDungeon2: [20, 30],
-  forestDungeon3: [30, 40],
-  forestDungeon4: [40, 50],
-  forestDungeon5: [50, 60],
-  mulberryDungeon1: [60, 70],
-  mulberryDungeon2: [70, 80],
-  mulberryDungeon3: [80, 90],
-  mulberryDungeon4: [90, 100],
-  mulberryDungeon5: [100, 110],
+  // 禁止在插件编写地图集的特有业务
 };
 
 /** 关卡显示名 → 等级范围标签（如 "Lv.10-20"）；无野怪/未登记返回 ""。 */

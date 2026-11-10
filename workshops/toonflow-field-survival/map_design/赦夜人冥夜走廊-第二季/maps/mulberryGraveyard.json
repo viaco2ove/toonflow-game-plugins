@@ -2910,6 +2910,238 @@
      "width": 32,
      "x": 416,
      "y": 448
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 320,
+     "name": "SY_BLOODBAT",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 4
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 768,
+     "y": 288
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 321,
+     "name": "SY_BLOODBAT",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 4
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 864,
+     "y": 288
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 322,
+     "name": "SY_BLOODBAT",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 4
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 832,
+     "y": 416
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 323,
+     "name": "SY_BLOODBAT",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 4
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 928,
+     "y": 352
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 324,
+     "name": "SY_BLOODBAT",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 4
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 736,
+     "y": 384
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 325,
+     "name": "SY_BLACKCORPSE",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLACKCORPSE"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 6
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "黑甲尸"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 800,
+     "y": 224
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 326,
+     "name": "SY_BLACKCORPSE",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLACKCORPSE"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 6
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "黑甲尸"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 896,
+     "y": 224
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 327,
+     "name": "SY_BLACKCORPSE",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLACKCORPSE"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 6
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "黑甲尸"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 864,
+     "y": 160
     }
    ],
    "opacity": 1,
@@ -2920,7 +3152,7 @@
   }
  ],
  "nextlayerid": 4,
- "nextobjectid": 38,
+ "nextobjectid": 328,
  "orientation": "orthogonal",
  "renderorder": "right-down",
  "tiledversion": "1.2.1",

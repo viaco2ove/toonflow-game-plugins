@@ -2412,6 +2412,209 @@
      "width": 32,
      "x": 160,
      "y": 768
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 350,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 576,
+     "y": 384
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 351,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 704,
+     "y": 384
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 352,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 640,
+     "y": 512
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 353,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 768,
+     "y": 480
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 354,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 544,
+     "y": 480
+    },
+    {
+     "gid": 3705,
+     "height": 32,
+     "id": 355,
+     "name": "SY_BLOODBAT2",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLOODBAT2"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 8
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "血蝠2"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 736,
+     "y": 352
+    },
+    {
+     "gid": 5293,
+     "height": 32,
+     "id": 360,
+     "name": "SY_LUWENZHAO_BOSS",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_LUWENZHAO_BOSS"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 12
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "暮光执事"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 672,
+     "y": 448
     }
    ],
    "opacity": 1,
@@ -2423,7 +2626,7 @@
  ],
  "name": "冥夜走廊·五层",
  "nextlayerid": 4,
- "nextobjectid": 12,
+ "nextobjectid": 361,
  "orientation": "orthogonal",
  "renderorder": "right-down",
  "tiledversion": "1.2.1",

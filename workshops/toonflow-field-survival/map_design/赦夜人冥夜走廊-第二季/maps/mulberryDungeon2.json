@@ -1762,6 +1762,40 @@
      "width": 32,
      "x": 416,
      "y": 608
+    },
+    {
+     "gid": 4818,
+     "height": 32,
+     "id": 340,
+     "name": "玉简残片",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "NPC"
+      },
+      {
+       "name": "wanders",
+       "type": "bool",
+       "value": false
+      },
+      {
+       "name": "full_name",
+       "type": "string",
+       "value": "玉简残片"
+      },
+      {
+       "name": "name",
+       "type": "string",
+       "value": "玉简残片"
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 512,
+     "y": 320
     }
    ],
    "opacity": 1,
@@ -1773,7 +1807,7 @@
  ],
  "name": "冥夜走廊·二层",
  "nextlayerid": 4,
- "nextobjectid": 9,
+ "nextobjectid": 341,
  "orientation": "orthogonal",
  "renderorder": "right-down",
  "tiledversion": "1.2.1",
