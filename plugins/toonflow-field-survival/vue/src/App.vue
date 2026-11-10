@@ -52,7 +52,8 @@ import {
   TerrainScaleConfig, DEFAULT_SCALE,
 } from "./terrainScale";
 import { ChunkTerrainSystem } from "./chunkTerrain";
-import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, MOB_ARCHETYPES, ENTITY_TYPE_ZH, ENTITY_SPRITE_KEY, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
+import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL, makeScaleFromMap, getTiledRaw, mobArchetypeOf, entityTypeZh, entitySpriteKey, entitySpriteTile, normalizeTiledMap, listLevelNames, getLevelDisplayName, levelNameToFile } from "./mapConfig";
+import { loadEntityRegistry } from "./entityRegistry";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
@@ -3510,15 +3511,15 @@ function freeEnemySpot(x: number, y: number): { x: number; y: number } {
 function injectMapMobsToState(s: GameState | null | undefined, cfg: MapConfig | null | undefined): void {
   if (!s || !cfg?.mobs?.length) return;
   for (const mob of cfg.mobs) {
-    // 档案表统一取自 mapConfig.MOB_ARCHETYPES（与地图白名单同一份数据）
-    let arch = MOB_ARCHETYPES[mob.entity_type];
+    // ★ 档案来源 = 地图集 entity_types.json（插件不写任何地图集业务，见 entityRegistry.ts）
+    let arch = mobArchetypeOf(mob.entity_type);
     if (!arch) {
       console.warn(
-        "[field-survival] mobTypeMap 缺少类型：", mob.entity_type, "→ 使用兜底档案（请补进 MOB_ARCHETYPES）",
+        "[field-survival] 地图集未声明该 entity_type：", mob.entity_type, "→ 使用通用兜底档案（建议在 entity_types.json 里声明）",
       );
-      arch = { name: mob.name || "野怪", hp: 30, atk: 6, level: 1 };
+      arch = { name: mob.name || "野怪", hp: 30, atk: 6, def: 0, level: 1, camp: "hostile", spriteTile: 0 };
     }
-    // ★ 等级：Tiled 对象 level 属性 > MOB_ARCHETYPES 默认值；HP/ATK 随等级按比例缩放
+    // ★ 等级：Tiled 对象 level 属性 > 地图集声明的默认等级；HP/ATK 随等级按比例缩放
     const lv = mob.level ?? arch.level ?? 1;
     // ★ 练习假人4（level=0 = auto）：等级永远比用户高 5 级（设计文档：假人事件.md）
     //   每次进图重算 —— 用户升级后再进图，假人更强。
@@ -3533,7 +3534,7 @@ function injectMapMobsToState(s: GameState | null | undefined, cfg: MapConfig | 
     const camp = mob.camp || "hostile";
     const mobSide = camp === "friendly" ? "ally" : camp === "neutral" ? "neutral" : "enemy";
     // 头顶显示：类型中文名 + 可选姓名——「哥布林」/「哥布林(低阶湮物)」
-    const zhName = ENTITY_TYPE_ZH[mob.entity_type] || arch.name;
+    const zhName = entityTypeZh(mob.entity_type) || arch.name;
     const mobLabel = mob.full_name ? `${zhName}(${mob.full_name})` : zhName;
     // ★ 修复③（坐标系统一）：Tiled 对象坐标按"瓦片数"直接当作米使用，
     //   必须夹进当前地图范围（如森林 60×40 → ±29 m），否则实体落在图外。
@@ -5204,9 +5205,13 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   const pixelsPerMeter = (ppm ?? 20);
   // ★ 根据野怪名字映射到 tileset monster tile
   //   game.md：优先按 entity_type 精确映射（头顶已显示中文名+姓名，中文名不再承担 sprite 映射职责）
-  const key = ENTITY_SPRITE_KEY[e.entity_type || ""] || mobKeyFor(e.name);
+  // ★ 贴图：优先用地图集声明的图集 tile id（数据驱动），否则用通用猜帧
+  const key = entitySpriteKey(e.entity_type || "", e.name);
   // ★ 永远 walk 帧循环（Rotten-Soup 风格）
-  const tileId = spriteTileId(key, _animTick);
+  //   地图集若在 entity_types.json 里声明了图集 tile id → 直接用它（数据驱动，精确）；
+  //   没声明 → 走通用 sprite key 的帧循环。
+  const declaredTile = entitySpriteTile(e.entity_type || "");
+  const tileId = declaredTile > 0 ? declaredTile : spriteTileId(key, _animTick);
   // 等比缩放（米数 × pixelsPerMeter → 屏幕像素）
   const targetTiles = ENTITY_DIM_TILES[key] ?? 1.0;   // ★ v4：格数基准（与角色/树同尺度）
   const dw = Math.max(4, Math.round(targetTiles * pixelsPerMeter));

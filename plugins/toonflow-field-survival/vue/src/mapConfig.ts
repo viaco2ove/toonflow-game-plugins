@@ -33,8 +33,12 @@
  */
 
 import { TerrainScaleConfig, DEFAULT_SCALE } from "./terrainScale";
-import { assetUrl } from "./assets";
+import { assetUrl, mobKeyFor } from "./assets";
 import { getStoryMapRaw, getStoryFirstMap, getStoryLevelNames } from "./storyMap";
+import {
+  getArchetype, getTypeZh, getSpriteTile, getSpriteKey,
+  isMobType, isNonMobType, getNpcDialogZh,
+} from "./entityRegistry";
 
 /* ============================================================
    数据类型
@@ -144,43 +148,40 @@ export interface MapNpc {
 }
 
 /**
- * ★ 野怪档案表（战斗数值单一数据源）
+ * ★ 野怪档案（**数据驱动，不在插件里写任何地图集特有业务**）
  *
- * 这张表同时是 Tiled 地图解析的「野怪白名单」：
- *   - 表内 type  → normalizeTiledMap 提取为 MapMob，进图后由 App 生成 mapmob_* 敌人；
- *   - 表外 type  → 若也不在 NON_MOB_ENTITY_TYPES，解析时 console.warn（不静默丢弃）。
+ * 档案来源 = 地图集视觉包里的 entity_types.json（见 entityRegistry.ts）：
+ *   - 数值 / 头顶中文名 / 阵营 / 贴图帧，全由地图集自己声明；
+ *   - 插件只保留**通用**的类型判定（哪些 entity_type 算「怪」），
+ *     且判定依据同样来自地图集声明，插件不认任何具体类型名。
  *
- * 修复点：此前只认 GOBLIN，mulberryForest 里的 ORC / mulberryGraveyard 里的 LICH、
- * GHOST 等会被静默丢弃 → 进图后这些野怪不存在。
+ * 通用兜底（地图集没声明时）：
+ *   - 数值  hp/str 派生，level 1
+ *   - 贴图  mobKeyFor(名字) 通用猜帧（assets.ts，纯规则不含故事知识）
  */
-export const MOB_ARCHETYPES: Record<string, { name: string; hp: number; atk: number; level: number }> = {
-  // 禁止在插件编写地图集的特有业务
-};
+export interface MobArchetype {
+  name: string; hp: number; atk: number; def: number; level: number;
+  camp: "hostile" | "friendly" | "neutral"; spriteTile: number;
+}
+
+/** 取某 entity_type 的档案（未声明 → null，调用方走通用兜底） */
+export function mobArchetypeOf(entityType: string): MobArchetype | null {
+  return getArchetype(entityType);
+}
+
+/** entity_type → 头顶中文名（未声明 → ""，调用方回退名字） */
+export function entityTypeZh(entityType: string): string {
+  return getTypeZh(entityType);
+}
 
 /**
- * ★ entity_type → 头顶显示中文名（与 entity_types.json 的 name_zh 同口径）。
- *   头顶规则：无 full_name 显示「哥布林」；有 full_name 显示「哥布林(低阶湮物)」。
- *   表里没有的类型回退 MOB_ARCHETYPES[].name。
+ * ★ NPC dialog key → 头顶显示中文名（**由地图集 entity_types.json 的 npc_dialogs 声明**）。
+ *   Tiled 地图里 NPC 常只带 dialog key、对象名叫 "NPC"，
+ *   地图集没声明该 key 时回退原值（不硬编码任何故事知识）。
  */
-export const ENTITY_TYPE_ZH: Record<string, string> = {
-   // 禁止在插件编写地图集的特有业务
-};
-
-/**
- * ★ NPC dialog key → 头顶显示中文名（与 vite.config.ts dev-host DIALOGUE_MAP 的 speaker 同口径）。
- *   Tiled 地图里 DWARF_BILI / BARTENDER 这类 NPC 只带 dialog key、对象名叫 "NPC"，
- *   不查这张表的话头顶会显示难看的 "NPC"；表里没有的 key 回退原值。
- */
-export const NPC_DIALOG_ZH: Record<string, string> = {
-  DWARF_BILI: "矮人比利",
-  BARTENDER: "酒馆老板",
-  MAYOR_LEONARD: "镇长 Leonard",
-  LEONARD: "镇长 Leonard",
-  BARKEEP: "酒馆老板",
-  // mulberryForest：Nani 与 Dwarf Bili 在森林的营救剧情触发 NPC
-  NANI_AND_BILI_RESCUE: "娜妮",
-  // 禁止在插件编写地图集的特有业务
-};
+export function npcDialogZh(dialogKey: string): string {
+  return getNpcDialogZh(dialogKey);
+}
 
 /** 阵营规范化：非法值返回 null（调用方回退 entity_type 推断） */
 export function normalizeCamp(v: any): "neutral" | "hostile" | "friendly" | null {
@@ -211,19 +212,56 @@ function hasChestName(props: Record<string, any>): boolean {
 }
 
 /**
- * ★ entity_type → sprite key（assets.ts 的 mob key：rat/bat/snake/goat/goblin/skeleton/orc/minotaur）。
- *   头顶显示中文名后，中文名不再承担 sprite 关键字匹配职责，按 entity_type 精确映射；
- *   表外类型回退 mobKeyFor(名字)。
+ * ★ entity_type → sprite key（**通用解析，不含地图集业务**）。
+ *
+ * 优先级：
+ *   ① 地图集 entity_types.json 声明的 sprite_key（assets.ts 的通用 key）；
+ *   ② 都没给 → mobKeyFor(名字) 的通用猜帧（纯中文关键字规则，无故事知识）。
+ *   另见 entitySpriteTile()：地图集声明了图集 tile id 时可直接精确出图。
  */
-export const ENTITY_SPRITE_KEY: Record<string, string> = {
-  // 禁止在插件编写地图集的特有业务
-};
+export function entitySpriteKey(entityType: string, name: string): string {
+  const key = getSpriteKey(entityType);
+  if (key) return key;
+  return mobKeyFor(name);
+}
 
-/** 野怪白名单（由 MOB_ARCHETYPES 派生，避免两处维护不一致） */
-export const MOB_ENTITY_TYPES: Set<string> = new Set(Object.keys(MOB_ARCHETYPES));
+/** 地图集声明的 sprite_key（未声明 → ""） */
+export function entitySpriteKeyOf(entityType: string): string {
+  return getSpriteKey(entityType);
+}
 
-/** 已知的非怪物类型（玩家/ NPC / 出口机关 / 掉落物 / 尸体等）：未进白名单也不告警 */
-export const NON_MOB_ENTITY_TYPES: Set<string> = new Set([
+/**
+ * ★ 地图集声明的图集主帧 tile id（未声明 → 0）。
+ *   > 0 时绘制层直接用这个 tile 画怪，完全不依赖名字猜帧。
+ */
+export function entitySpriteTile(entityType: string): number {
+  return getSpriteTile(entityType);
+}
+
+/**
+ * ★ 「怪类型」判定（**数据驱动**）：地图集 entity_types.json 声明的怪类型集合。
+ *   未声明的类型，若地图对象显式带 camp=hostile 也算怪（通用规则）。
+ */
+export function isKnownMobType(entityType: string): boolean {
+  return isMobType(entityType);
+}
+
+/**
+ * ★ 「非怪类型」判定（**数据驱动 + 引擎通用词表**）。
+ *   引擎通用词表（PLAYER / NPC / DOOR / CHEST / LADDER…）是引擎自己的词汇，
+ *   不属于任何地图集的业务；地图集自己的类型清单走 entity_types.json。
+ */
+export function isKnownNonMobType(entityType: string): boolean {
+  if (ENGINE_NON_MOB_ENTITY_TYPES.has(String(entityType || "").trim())) return true;
+  return isNonMobType(entityType);
+}
+
+/**
+ * ★ 引擎通用「非怪类型」词表（**引擎自己的词汇，不是任何地图集的业务**）：
+ *   玩家 / NPC / 出口机关 / 掉落物 / 尸体 / 场景道具 / 文字标识。
+ *   地图集特有的类型清单由 entity_types.json 声明（见 isKnownNonMobType）。
+ */
+export const ENGINE_NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   "PLAYER",
   "NPC",
   "LEVEL_TRANSITION",
@@ -237,8 +275,6 @@ export const NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   "TREE",
   "ROCK",
   "WALL",
-  "ZOMBIE_CORPSE",
-  "SKELETON_CORPSE",
   "CORPSE",
   "SIGN",
   // ★ 文字标识类（建筑名称显示；编辑器侧同名类型，见 building-labels.md）
@@ -436,7 +472,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           // ★ 完整中文名：full_name 优先 > props.name（Mayor Leonard） > dialog key 中文名 > obj.name > 兜底
           //   （「Bar」这种位置占位名不能盖过 dialog 的角色名——酒馆老板不该显示成 "Bar"）
           const isAscii = /^[\x00-\x7F]+$/.test(propName);
-          const dialogZh = hasDialog ? (NPC_DIALOG_ZH[String(props.dialog).trim().toUpperCase()] || "") : "";
+          const dialogZh = hasDialog ? npcDialogZh(String(props.dialog)) : "";
           const displayName = fullName
             || (propName && !isAscii ? propName : "")
             || dialogZh
@@ -481,13 +517,13 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             pickupItem: isPickup ? String(props.pickup_item) : undefined,
           });
         } else if ((normalizeCamp(props.camp) !== "neutral"
-                   && (MOB_ENTITY_TYPES.has(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile"))
+                   && (isKnownMobType(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile"))
                    || isTrainingDummy(props)) {
           // ★ 怪物 → 记录位置、类型、等级，App.vue switchLevel 时加载到 entities
           //   阵营判定（game.md 优化）：对象带 camp 属性时以 camp 为准；
           //   没有 camp 时回退 entity_type 白名单推断（白名单内 → hostile），原地图无需修改依然可用。
           //   camp=hostile 还允许白名单外的类型也能成为野怪（走兜底档案），消除 entity_type 判定的不可靠性。
-          //   等级优先取 Tiled 属性 props.level，未标注时用 MOB_ARCHETYPES 默认值。
+          //   等级优先取 Tiled 属性 props.level，未标注时用地图集 entity_types.json 声明的默认等级。
           //
           //   ★ 练习假人（training_dummy=true）：camp=neutral 但**必须进 mobs**——
           //   它要有 hp（能被攻击）、能被近战命中、能显示血条。camp=neutral 时
@@ -496,7 +532,7 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
           const mobName = String(props.name || obj.name || "野怪");
-          const archLevel = MOB_ARCHETYPES[props.entity_type]?.level ?? 1;
+          const archLevel = mobArchetypeOf(String(props.entity_type))?.level ?? 1;
           const mobLevel = Number.isFinite(props.level) ? Number(props.level) : archLevel;
           // ★ 击杀奖励：Tiled 对象属性里可写 bounty / dropTable（JSON 字符串）——
           //   这是「地图集参与击杀奖励」的唯一入口（事件引擎没有 kill_count 挂载点，见
@@ -527,11 +563,11 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
                   .map((d: any) => ({ name: String(d.name), w: num(d.w, 1) }))
               : undefined,
           });
-        } else if (normalizeCamp(props.camp) === "neutral" && !NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+        } else if (normalizeCamp(props.camp) === "neutral" && !isKnownNonMobType(String(props.entity_type))) {
           // ★ camp=neutral 的实体型对象（如中立野怪/商人怪）→ NPC 装饰物（不参战、头顶显示姓名）
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
-          const zh = ENTITY_TYPE_ZH[String(props.entity_type)] || MOB_ARCHETYPES[props.entity_type]?.name || obj.name || "路人";
+          const zh = entityTypeZh(String(props.entity_type)) || mobArchetypeOf(String(props.entity_type))?.name || obj.name || "路人";
           const fullName = props.full_name != null ? String(props.full_name) : "";
           decorations.push({
             id: `n_${decIdx++}`,
@@ -579,11 +615,11 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             name: label,
             ...({ label } as any),
           } as any);
-        } else if (!NON_MOB_ENTITY_TYPES.has(String(props.entity_type))) {
+        } else if (!isKnownNonMobType(String(props.entity_type))) {
           // ★ 未识别类型不得静默丢弃：至少告警，便于新增地图时及时补进白名单
           console.warn(
             `[mapConfig] 未识别的 entity_type，已跳过：entity_type=${String(props.entity_type)}` +
-              ` name=${obj.name ?? ""} id=${obj.id}（如需作为野怪，请加入 MOB_ARCHETYPES）`,
+              ` name=${obj.name ?? ""} id=${obj.id}（如需作为野怪，请在地图集 entity_types.json 里声明该 entity_type）`,
           );
         }
       }
