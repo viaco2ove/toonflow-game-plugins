@@ -2428,11 +2428,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2457,11 +2452,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2486,11 +2476,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2515,11 +2500,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2544,11 +2524,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2573,11 +2548,6 @@
        "name": "level",
        "type": "int",
        "value": 8
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠2"
       }
      ],
      "rotation": 0,
@@ -2602,11 +2572,6 @@
        "name": "level",
        "type": "int",
        "value": 12
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "暮光执事"
       }
      ],
      "rotation": 0,

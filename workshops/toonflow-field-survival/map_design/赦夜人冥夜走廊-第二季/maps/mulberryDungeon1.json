@@ -1662,11 +1662,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "走廊魔物"
       }
      ],
      "rotation": 0,
@@ -1691,11 +1686,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "走廊魔物"
       }
      ],
      "rotation": 0,
@@ -1720,11 +1710,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "走廊魔物"
       }
      ],
      "rotation": 0,
@@ -1749,11 +1734,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "走廊魔物"
       }
      ],
      "rotation": 0,

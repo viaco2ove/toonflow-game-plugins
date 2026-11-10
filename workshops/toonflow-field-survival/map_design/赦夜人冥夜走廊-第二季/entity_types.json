@@ -1,35 +1,9 @@
 {
   "meta": {
-    "game": "Rotten-Soup",
-    "generated_at": "2026-09-29 09:54:57",
-    "sources": {
-      "enemy_data": "src/assets/js/game/utils/data/data.xlsx#Enemies",
-      "registry": "src/assets/js/game/utils/EntityFactory.js#entityShop",
-      "textures": "src/assets/js/game/utils/EntityFactory.js#actorTextures",
-      "spawn_tables": "src/assets/js/game/map/generation/RandomDungeon.js#dungeonThemes",
-      "handmade_maps": "public/maps/*.json"
-    },
-    "note": "代码中不存在「野怪/敌人」两套分类，所有敌对生物统一为 hostile:true 的 StatelessAI 实例",
-    "description_zh_note": "description_zh 为对应英文 description 的中文翻译，专有名词（地精/巫妖等）按奇幻 RPG 惯例译法"
-  },
-  "summary": {
-    "entity_type_registered_total": 32,
-    "hostile_actor_types": 24,
-    "regular_enemy_types": 22,
-    "special_enemy_types": 2,
-    "non_hostile_entity_types": 6,
-    "corpse_entity_types": 2,
-    "item_types": 16,
-    "playable_now_regular_enemies": 5,
-    "spawnable_now_list": [
-      "RAT",
-      "BAT",
-      "SNAKE",
-      "GOBLIN",
-      "ORC"
-    ],
-    "playable_now_note": "createDungeonFloors 固定 5 层 -> level<=5 -> 恒为 RUINS 主题；另有 LOOT_GOBLIN 可遇",
-    "breakdown": "32 项 = 22 常规敌人 + LICH + LOOT_GOBLIN + 6 非敌对 actor(NPC/LEVEL_TRANSITION/CHEST/DOOR/LOCKED_DOOR/LADDER) + 2 尸体"
+    "generator": "src/tools/toonflow-field-survival/build_entity_types.py",
+    "note": "本文件由地图集自己维护：插件只做通用解析，不含任何地图集业务。改怪数值/中文名/贴图/NPC 名请改这里，不要改插件。",
+    "story": "赦夜人冥夜走廊-第二季",
+    "base_source": "map_design/base/entity_types.json（Rotten-Soup 原始数据）"
   },
   "enemies": [
     {
@@ -62,7 +36,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "name_zh": "老鼠",
+      "camp": "hostile"
     },
     {
       "entity_type": "BAT",
@@ -95,7 +71,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "name_zh": "暗夜生物",
+      "camp": "hostile"
     },
     {
       "entity_type": "SNAKE",
@@ -129,7 +107,9 @@
           "generatable": true
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "name_zh": "爬虫",
+      "camp": "hostile"
     },
     {
       "entity_type": "WILD_GOAT",
@@ -148,7 +128,9 @@
       "ai": "StatelessAI",
       "textures": [],
       "spawn": [],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "山羊",
+      "camp": "hostile"
     },
     {
       "entity_type": "GOBLIN",
@@ -191,7 +173,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "name_zh": "哥布林",
+      "camp": "hostile"
     },
     {
       "entity_type": "ZOMBIE",
@@ -219,7 +203,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "人形亡者",
+      "camp": "hostile"
     },
     {
       "entity_type": "IMP",
@@ -247,7 +233,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "小恶魔",
+      "camp": "hostile"
     },
     {
       "entity_type": "SKELETON",
@@ -282,7 +270,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "骷髅兵",
+      "camp": "hostile"
     },
     {
       "entity_type": "KOBOLD",
@@ -321,7 +311,9 @@
           "generatable": false
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "狗头人",
+      "camp": "hostile"
     },
     {
       "entity_type": "ICE_ELEMENTAL",
@@ -349,7 +341,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "冰元素",
+      "camp": "hostile"
     },
     {
       "entity_type": "ORC",
@@ -392,7 +386,9 @@
           "generatable": false
         }
       ],
-      "playable_now": true
+      "playable_now": true,
+      "name_zh": "半兽人",
+      "camp": "hostile"
     },
     {
       "entity_type": "BONEMAN",
@@ -422,7 +418,9 @@
           "id_mismatch": "xlsx 为 BONEMAN，刷怪表写 BONE_MAN"
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "白骨人",
+      "camp": "hostile"
     },
     {
       "entity_type": "DEMON",
@@ -449,7 +447,9 @@
         2415
       ],
       "spawn": [],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "恶魔",
+      "camp": "hostile"
     },
     {
       "entity_type": "GHOST",
@@ -478,7 +478,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "幽灵",
+      "camp": "hostile"
     },
     {
       "entity_type": "MUMMY",
@@ -512,7 +514,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "木乃伊",
+      "camp": "hostile"
     },
     {
       "entity_type": "SIREN",
@@ -540,7 +544,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "塞壬",
+      "camp": "hostile"
     },
     {
       "entity_type": "TROLL",
@@ -568,7 +574,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "巨魔",
+      "camp": "hostile"
     },
     {
       "entity_type": "BANSHEE",
@@ -595,7 +603,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "报丧女偶",
+      "camp": "hostile"
     },
     {
       "entity_type": "GOLEM",
@@ -622,7 +632,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "石魔",
+      "camp": "hostile"
     },
     {
       "entity_type": "CYCLOPS",
@@ -649,7 +661,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "独眼巨人",
+      "camp": "hostile"
     },
     {
       "entity_type": "MINOTAUR",
@@ -681,7 +695,9 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "牛头人",
+      "camp": "hostile"
     },
     {
       "entity_type": "VAMPIRE",
@@ -708,7 +724,114 @@
           "generatable": true
         }
       ],
-      "playable_now": false
+      "playable_now": false,
+      "name_zh": "血族",
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_BLOODRAT",
+      "name": "blood rat",
+      "name_zh": "魔血鼠",
+      "description_zh": "被魔血浸过的鼠。牙龈发黑，见人就钻。",
+      "hp_game": 45,
+      "atk_game": 10,
+      "def_game": 2,
+      "level_game": 2,
+      "textures": [
+        2365,
+        2373
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_BLOODBAT",
+      "name": "blood bat",
+      "name_zh": "血蝠",
+      "description_zh": "夜行的血蝠。翼膜下渗着暗红的液体。",
+      "hp_game": 70,
+      "atk_game": 14,
+      "def_game": 3,
+      "level_game": 4,
+      "textures": [
+        3704,
+        3712
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_BLOODBAT2",
+      "name": "blood bat elder",
+      "name_zh": "血翼蝠",
+      "description_zh": "翼展近一米的血蝠王。群里的那只。",
+      "hp_game": 130,
+      "atk_game": 22,
+      "def_game": 5,
+      "level_game": 8,
+      "textures": [
+        3704,
+        3712
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_BLACKCORPSE",
+      "name": "black armored corpse",
+      "name_zh": "黑甲尸",
+      "description_zh": "披着黑甲的尸傀。甲缝里塞满了暗核碎片。",
+      "hp_game": 180,
+      "atk_game": 24,
+      "def_game": 12,
+      "level_game": 6,
+      "textures": [
+        2552,
+        2560
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_CARRION",
+      "name": "carrion",
+      "name_zh": "尸傀",
+      "description_zh": "还没被完全唤醒的尸傀。关节还是软的。",
+      "hp_game": 90,
+      "atk_game": 16,
+      "def_game": 4,
+      "level_game": 5,
+      "textures": [
+        2552,
+        2560
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_CORRIDOR",
+      "name": "corridor thing",
+      "name_zh": "走廊魔物",
+      "description_zh": "走廊深处的东西。看不出原本是什么形状。",
+      "hp_game": 110,
+      "atk_game": 18,
+      "def_game": 6,
+      "level_game": 6,
+      "textures": [
+        7440,
+        7448
+      ],
+      "camp": "hostile"
+    },
+    {
+      "entity_type": "SY_LUWENZHAO_BOSS",
+      "name": "twilight deacon",
+      "name_zh": "陆文昭",
+      "description_zh": "暮光教会的执事。终章里的那个人。",
+      "hp_game": 420,
+      "atk_game": 34,
+      "def_game": 18,
+      "level_game": 12,
+      "textures": [
+        5292,
+        5300
+      ],
+      "camp": "hostile"
     }
   ],
   "special_enemies": [
@@ -788,195 +911,13 @@
     "NECROMANCY_SPELLBOOK",
     "MAP_REVEALING_SCROLL"
   ],
-  "dungeon_themes": {
-    "RUINS": {
-      "level_range": "level <= 5",
-      "referenced_in_randomDungeon": true,
-      "mob_distribution": {
-        "ORC": 7,
-        "GOBLIN": 30,
-        "BAT": 20,
-        "RAT": 30,
-        "SNAKE": 25,
-        "LOOT_GOBLIN": 5
-      },
-      "weight_total": 117,
-      "invalid_weight": 0,
-      "invalid_ratio": 0.0
-    },
-    "CATACOMBS": {
-      "level_range": "level <= 10",
-      "referenced_in_randomDungeon": true,
-      "mob_distribution": {
-        "ZOMBIE": 30,
-        "SKELETON": 30,
-        "MUMMY": 30,
-        "GHOST": 10,
-        "BANSHEE": 5,
-        "VAMPIRE": 1
-      },
-      "weight_total": 106,
-      "invalid_weight": 0,
-      "invalid_ratio": 0.0
-    },
-    "MINE": {
-      "level_range": "level <= 15",
-      "referenced_in_randomDungeon": true,
-      "mob_distribution": {
-        "KOBOLD": 2,
-        "MINOTAUR": 1,
-        "GOBLIN": 5,
-        "ORC": 5,
-        "EMPOWERED_ORC": 5,
-        "BONE_MAN": 10,
-        "GOLEM": 1
-      },
-      "weight_total": 29,
-      "invalid_weight": 15,
-      "invalid_ratio": 0.517
-    },
-    "ICE": {
-      "level_range": "level > 15",
-      "referenced_in_randomDungeon": true,
-      "mob_distribution": {
-        "CYCLOPS": 1,
-        "TROLL": 3,
-        "MINOTAUR": 1,
-        "ICE_ELEMENTAL": 3,
-        "SKELETON": 20,
-        "IMP": 10,
-        "SIREN": 1
-      },
-      "weight_total": 39,
-      "invalid_weight": 0,
-      "invalid_ratio": 0.0
-    },
-    "HELL": {
-      "level_range": "never",
-      "referenced_in_randomDungeon": false,
-      "mob_distribution": {
-        "ORC": 2,
-        "EMPOWERED_ORC": 1,
-        "KOBOLD": 1,
-        "GOBLIN": 7,
-        "BAT": 10,
-        "RAT": 10
-      },
-      "weight_total": 31,
-      "invalid_weight": 1,
-      "invalid_ratio": 0.032
-    }
-  },
-  "map_placements": {
-    "lichLair.json": {
-      "PLAYER": 1,
-      "LADDER": 1,
-      "CHEST": 1
-    },
-    "lootGoblinLair.json": {
-      "PLAYER": 1,
-      "CHEST": 7,
-      "DOOR": 2,
-      "GOLD": 8,
-      "LOOT_GOBLIN": 1
-    },
-    "mulberryForest.json": {
-      "GOBLIN": 9,
-      "NPC": 7,
-      "LOCKED_DOOR": 1,
-      "DOOR": 1,
-      "LADDER": 1,
-      "ORC": 2,
-      "CHEST": 1,
-      "KEY": 1,
-      "LEVEL_TRANSITION": 1,
-      "PLAYER": 1
-    },
-    "mulberryGraveyard.json": {
-      "LICH": 1,
-      "ZOMBIE_CORPSE": 2,
-      "SKELETON_CORPSE": 1,
-      "SKELETON": 2,
-      "LOCKED_DOOR": 1,
-      "LADDER": 1,
-      "PLAYER": 1,
-      "LEVEL_TRANSITION": 1,
-      "GHOST": 1
-    },
-    "mulberryTown.json": {
-      "DOOR": 20,
-      "CHEST": 3,
-      "NPC": 28,
-      "LADDER": 1,
-      "LEVEL_TRANSITION": 2,
-      "PLAYER": 1
-    }
-  },
-  "unused_assets": {
-    "entity_types_without_spawn_table": [
-      "WILD_GOAT",
-      "DEMON"
-    ],
-    "entity_types_only_in_commented_code": [
-      "WILD_GOAT"
-    ],
-    "dead_classes": [
-      "entities/actors/enemies/legendary/OrcPriest.js",
-      "entities/actors/enemies/SimpleEnemy.js"
-    ],
-    "dead_spawn_code": [
-      "RandomSimplex.js randomSimplexMap 敌人生成已注释",
-      "RandomCave.js createActor 已注释"
-    ],
-    "dead_theme": [
-      "HELL"
-    ]
-  },
-  "issues": [
-    {
-      "severity": "critical",
-      "file": "src/assets/js/game/map/generation/RandomDungeon.js",
-      "detail": "主题 MINE 的 mobDistribution 引用了未注册的 entity_type: {'EMPOWERED_ORC': 5, 'BONE_MAN': 10}",
-      "effect": "createActor 打印错误并返回 null，随后 tile.actors.push(null)",
-      "invalid_ratio": 0.517
-    },
-    {
-      "severity": "critical",
-      "file": "src/assets/js/game/map/generation/RandomDungeon.js",
-      "detail": "主题 HELL 的 mobDistribution 引用了未注册的 entity_type: {'EMPOWERED_ORC': 1}",
-      "effect": "createActor 打印错误并返回 null，随后 tile.actors.push(null)",
-      "invalid_ratio": 0.032
-    },
-    {
-      "severity": "critical",
-      "file": "src/assets/js/game/utils/EntityFactory.js:166 / RandomDungeon.js:116",
-      "detail": "命名不一致：xlsx id 为 BONEMAN，贴图表与 MINE 刷怪表写作 BONE_MAN",
-      "effect": "MINE 主题 10/29 权重失效"
-    },
-    {
-      "severity": "critical",
-      "file": "src/assets/js/game/utils/EntityFactory.js:146",
-      "detail": "EMPOWERED_ORC 仅有贴图、无 entityShop 条目（旧版为 Orc(x,y,id,true) 强化变体，重构后丢失）",
-      "effect": "MINE 5/29 + HELL 1/31 权重失效"
-    },
-    {
-      "severity": "warning",
-      "file": "src/assets/js/game/Game.js:208",
-      "detail": "createDungeonFloors(origin, dungeonName, 5) 固定 5 层，level 最大 5",
-      "effect": "CATACOMBS/MINE/ICE 主题永不生成，16 种敌人不可达"
-    },
-    {
-      "severity": "warning",
-      "file": "src/assets/js/game/map/generation/RandomDungeon.js:171",
-      "detail": "dungeonThemes.HELL 从未被 randomDungeon 引用",
-      "effect": "主题与掉落表为死代码"
-    },
-    {
-      "severity": "info",
-      "file": "EntityFactory.js#actorTextures",
-      "detail": "actorTextures 缺少 WILD_GOAT；以 id=null 调用 createActor(\"WILD_GOAT\") 会索引 undefined 抛 TypeError",
-      "effect": "潜在运行时错误"
-    }
-  ],
-  "non_hostile_note": "non_hostile_entity_types(6) 与 corpse_entity_types(2) 合起来是 entityShop 里除敌人外的 8 项"
+  "npc_dialogs": {
+    "NANI_AND_BILI_RESCUE": "林家商队",
+    "BOARD": "任务板",
+    "BARTENDER": "药铺老板",
+    "MAYOR_LEONARD": "镇民",
+    "DWARF_BILI": "矮人比利",
+    "LEONARD": "镇长 Leonard",
+    "BARKEEP": "酒馆老板"
+  }
 }

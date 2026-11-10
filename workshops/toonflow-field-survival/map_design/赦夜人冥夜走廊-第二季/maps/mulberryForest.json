@@ -8100,11 +8100,6 @@
        "name": "level",
        "type": "int",
        "value": 2
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "魔血鼠"
       }
      ],
      "rotation": 0,
@@ -8129,11 +8124,6 @@
        "name": "level",
        "type": "int",
        "value": 2
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "魔血鼠"
       }
      ],
      "rotation": 0,
@@ -8158,11 +8148,6 @@
        "name": "level",
        "type": "int",
        "value": 2
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "魔血鼠"
       }
      ],
      "rotation": 0,
@@ -8187,11 +8172,6 @@
        "name": "level",
        "type": "int",
        "value": 2
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "魔血鼠"
       }
      ],
      "rotation": 0,
@@ -8216,11 +8196,6 @@
        "name": "level",
        "type": "int",
        "value": 2
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "魔血鼠"
       }
      ],
      "rotation": 0,

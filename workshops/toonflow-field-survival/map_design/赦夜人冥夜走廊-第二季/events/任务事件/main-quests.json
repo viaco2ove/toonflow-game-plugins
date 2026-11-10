@@ -1,0 +1,706 @@
+{
+  "version": 1,
+  "meta": {
+    "story": "赦夜人冥夜走廊-第二季",
+    "chapter": "chapter 85「黑夜」· 6 phase",
+    "note": "主线任务链数据。目标全部指向本故事 map_design 地图集里真实存在的实体（uid = Tiled object id）。与 events/主线任务/主线任务.mmd 同构（mmd 由本文件生成）。"
+  },
+  "chains": [
+    {
+      "id": "MC1",
+      "title": "黑夜",
+      "chapter": "第一章 · 桑镇",
+      "desc": "夜色压在桑镇的屋檐上。药铺的灯还亮着——你得在没人注意到你之前，凑够今晚要的东西。",
+      "giver": "任务板",
+      "order": 1,
+      "lockedBy": [],
+      "nodes": [
+        {
+          "id": "MC1_1",
+          "quest": {
+            "id": "MCQ101",
+            "title": "夜采",
+            "type": "gather",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "药圃的夜合花只在子时开。裴勇要三株，你只有这一夜。",
+            "objectives": [
+              { "kind": "gather", "target": "夜合花", "count": 3 }
+            ],
+            "reward": { "exp": 60, "money": 40 },
+            "flags": { "done": "phase_1_night_herb" }
+          },
+          "onSuccess": ["MC1_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_2",
+          "quest": {
+            "id": "MCQ102",
+            "title": "药铺夜灯",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "药铺的灯是全镇最晚灭的。老板说，夜里来买药的人不问来路——这正是你要的。",
+            "objectives": [
+              { "kind": "talk", "target": "药铺老板", "uid": "165", "count": 1 }
+            ],
+            "reward": { "exp": 70, "money": 50 },
+            "flags": { "done": "pharmacy_met" }
+          },
+          "onSuccess": ["MC1_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_3",
+          "quest": {
+            "id": "MCQ103",
+            "title": "街头传闻",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "镇民在井边压低声音说话：镇西那间空屋最近夜里有人点灯，穿白袍。",
+            "objectives": [
+              { "kind": "talk", "target": "镇民", "uid": "225", "count": 1 }
+            ],
+            "reward": { "exp": 80, "money": 60 },
+            "flags": { "done": "rumor_twilight" }
+          },
+          "onSuccess": ["MC1_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_4",
+          "quest": {
+            "id": "MCQ104",
+            "title": "暮光者",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "白袍的人站在屋檐下。他知道你的名字——而且知道你今晚来买什么。",
+            "objectives": [
+              { "kind": "talk", "target": "陆文昭", "uid": "300", "count": 1 }
+            ],
+            "reward": { "exp": 120, "money": 80 },
+            "flags": { "done": "met_luwenzhao" }
+          },
+          "onSuccess": ["MC1_5"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_5",
+          "quest": {
+            "id": "MCQ105",
+            "title": "残忍",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "镇西的空屋。布道点的石板上，血还没干。你终于明白他们管这叫什么。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryTown", "x": -15.5, "y": -13.0, "radius": 4, "confirm": true, "comment": "暮光布道点（eventZones 暮光布道点 tile 6,15 → 米 -15.5,-13.0）" }
+            ],
+            "reward": { "exp": 150, "money": 100 },
+            "flags": { "done": "phase_1_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC2",
+      "title": "泥泞",
+      "chapter": "第二章 · 桑林",
+      "desc": "镇口往南是桑林。泥泞没过脚踝的地方，埋着不该埋的东西。",
+      "giver": "任务板",
+      "order": 2,
+      "lockedBy": ["MC1"],
+      "nodes": [
+        {
+          "id": "MC2_1",
+          "quest": {
+            "id": "MCQ201",
+            "title": "出镇",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 2,
+            "desc": "穿过镇口的栅栏门，泥腥味立刻压过来。桑林没有灯。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryForest", "x": -28.0, "y": 6.0, "radius": 4, "confirm": true, "comment": "林口（eventZones 林口 tile 2,26 → 米 -28,6）" }
+            ],
+            "reward": { "exp": 100, "money": 60 }
+          },
+          "onSuccess": ["MC2_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_2",
+          "quest": {
+            "id": "MCQ202",
+            "title": "魔血试炼",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 2,
+            "desc": "洼地里的东西被魔血催得发狂。先清三只魔血鼠——这滩血就是你的第一课。",
+            "objectives": [
+              { "kind": "kill", "target": "魔血鼠", "count": 3 }
+            ],
+            "reward": { "exp": 140, "money": 90 },
+            "flags": { "done": "blood_trial_1" }
+          },
+          "onSuccess": ["MC2_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_3",
+          "quest": {
+            "id": "MCQ203",
+            "title": "魔血洼地",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 3,
+            "desc": "洼地中央的土是黑的。踩进去的那一瞬间，你觉得自己被什么东西记下了。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryForest", "x": 20.0, "y": 0.0, "radius": 5, "confirm": true, "comment": "魔血洼地（eventZones tile 50,20 → 米 20,0）" }
+            ],
+            "reward": { "exp": 160, "money": 100 },
+            "flags": { "done": "blood_trial_2" }
+          },
+          "onSuccess": ["MC2_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_4",
+          "quest": {
+            "id": "MCQ204",
+            "title": "林家商队",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 3,
+            "desc": "林家的车队陷在泥里，护卫在跟什么东西对峙。你决定先站到他们那边。",
+            "objectives": [
+              { "kind": "talk", "target": "林家商队", "uid": "15", "count": 1 },
+              { "kind": "talk", "target": "林家护卫", "uid": "12", "count": 1 }
+            ],
+            "reward": { "exp": 200, "money": 140 },
+            "flags": { "done": "guard_joined" }
+          },
+          "onSuccess": ["MC2_5"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_5",
+          "quest": {
+            "id": "MCQ205",
+            "title": "暮光索血",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 4,
+            "desc": "陆文昭在林子深处等你。他要的不是钱——他要看你的血是什么颜色。",
+            "objectives": [
+              { "kind": "talk", "target": "陆文昭", "uid": "306", "count": 1 }
+            ],
+            "reward": { "exp": 220, "money": 150 },
+            "flags": { "done": "phase_2_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC3",
+      "title": "月蚀",
+      "chapter": "第三章 · 桑林 → 乱葬岗",
+      "desc": "月亮被咬掉一半。乱葬岗的土开始自己翻动。",
+      "giver": "任务板",
+      "order": 3,
+      "lockedBy": ["MC2"],
+      "nodes": [
+        {
+          "id": "MC3_1",
+          "quest": {
+            "id": "MCQ301",
+            "title": "玉简留影",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 4,
+            "desc": "石阵里浮着半片玉简。上面的字迹在动——它在记你。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryForest", "x": 15.0, "y": -11.0, "radius": 4, "confirm": true, "comment": "月蚀石阵（eventZones tile 45,9 → 米 15,-11）" }
+            ],
+            "reward": { "exp": 220, "money": 140 },
+            "flags": { "done": "jade_shadow" }
+          },
+          "onSuccess": ["MC3_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_2",
+          "quest": {
+            "id": "MCQ302",
+            "title": "月蚀开场",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 4,
+            "desc": "乱葬岗的入口。土是新翻的，铲印还是热的。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryGraveyard", "x": 3.5, "y": 12.5, "radius": 4, "confirm": true, "comment": "墓园入口（eventZones tile 26,27 → 米 3.5,12.5）" }
+            ],
+            "reward": { "exp": 240, "money": 150 },
+            "flags": { "done": "phase_3_active" }
+          },
+          "onSuccess": ["MC3_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_3",
+          "quest": {
+            "id": "MCQ303",
+            "title": "灵魂吞噬",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 5,
+            "desc": "祭坛要的不是血，是命。你从自己身上割下一块，换来一夜的清醒。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryGraveyard", "x": -9.5, "y": -0.5, "radius": 4, "confirm": true, "comment": "灵魂祭坛（eventZones tile 13,14 → 米 -9.5,-0.5）" }
+            ],
+            "reward": { "exp": 280, "money": 180 },
+            "flags": { "done": "soul_devour" }
+          },
+          "onSuccess": ["MC3_4"],
+          "onFail": ["MC3_3F"]
+        },
+        {
+          "id": "MC3_3F",
+          "quest": {
+            "id": "MCQ303F",
+            "title": "气血枯竭",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 4,
+            "desc": "你倒在乱葬岗外围。醒来时天已经亮了——有些代价只能用休息换回来。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryGraveyard", "x": 3.5, "y": 12.5, "radius": 5, "confirm": true, "comment": "乱葬岗外围（墓园入口附近）——休整回血" }
+            ],
+            "reward": { "exp": 120, "money": 60 },
+            "flags": { "done": "rest_recovered" }
+          },
+          "onSuccess": ["MC3_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_4",
+          "quest": {
+            "id": "MCQ304",
+            "title": "尸坑苏醒",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 5,
+            "desc": "尸坑里翻出两具黑甲尸。它们身上嵌着暗核——和它们一样，不会安静躺着。",
+            "objectives": [
+              { "kind": "kill", "target": "黑甲尸", "count": 2 }
+            ],
+            "reward": { "exp": 320, "money": 200 },
+            "flags": { "done": "phase_3_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC4",
+      "title": "獠牙初现",
+      "chapter": "第四章 · 乱葬岗",
+      "desc": "第一次真正被当成猎物。",
+      "giver": "任务板",
+      "order": 4,
+      "lockedBy": ["MC3"],
+      "nodes": [
+        {
+          "id": "MC4_1",
+          "quest": {
+            "id": "MCQ401",
+            "title": "血蝠夜行",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 5,
+            "desc": "五只血蝠。它们不叫，只在扑到面前的那一瞬才出声。",
+            "objectives": [
+              { "kind": "kill", "target": "血蝠", "count": 5 }
+            ],
+            "reward": { "exp": 340, "money": 200 },
+            "flags": { "done": "bloodbat_wave" }
+          },
+          "onSuccess": ["MC4_2"],
+          "onFail": ["MC4_1F"]
+        },
+        {
+          "id": "MC4_1F",
+          "quest": {
+            "id": "MCQ401F",
+            "title": "蝠群围攻",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 4,
+            "desc": "你被围住了。退回尸坑上方的高处，先把气喘匀。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryGraveyard", "x": 3.5, "y": -3.5, "radius": 4, "confirm": true, "comment": "尸坑上方（eventZones 尸坑 tile 26,11 → 米 3.5,-3.5）——撤退整备" }
+            ],
+            "reward": { "exp": 140, "money": 80 },
+            "flags": { "done": "retreated" }
+          },
+          "onSuccess": ["MC4_1"],
+          "onFail": []
+        },
+        {
+          "id": "MC4_2",
+          "quest": {
+            "id": "MCQ402",
+            "title": "凿 · 破甲",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 6,
+            "desc": "黑甲尸的甲缝不是弱点，是钥匙。凿开它。",
+            "objectives": [
+              { "kind": "kill", "target": "黑甲尸", "count": 2 }
+            ],
+            "reward": { "exp": 380, "money": 240 },
+            "flags": { "done": "chisel_break" }
+          },
+          "onSuccess": ["MC4_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC4_3",
+          "quest": {
+            "id": "MCQ403",
+            "title": "獠牙初现",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryGraveyard",
+            "level": 6,
+            "desc": "尸坑最深处。有什么东西在下面磨牙——而它知道你在这儿。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryGraveyard", "x": 4.5, "y": -10.5, "radius": 3, "confirm": true, "comment": "尸坑深处（黑甲尸 id=327 所在）" }
+            ],
+            "reward": { "exp": 420, "money": 260 },
+            "flags": { "done": "phase_4_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC5",
+      "title": "锋芒",
+      "chapter": "第五章 · 冥夜走廊一 → 二层",
+      "desc": "走廊的石头记得每一个进来的人。",
+      "giver": "任务板",
+      "order": 5,
+      "lockedBy": ["MC4"],
+      "nodes": [
+        {
+          "id": "MC5_1",
+          "quest": {
+            "id": "MCQ501",
+            "title": "锋芒前厅",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryDungeon1",
+            "level": 6,
+            "desc": "走廊一层。墙上插满了断刃——每一把都被人从某个地方掰下来。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryDungeon1", "x": -0.5, "y": 0.5, "radius": 5, "confirm": true, "comment": "锋芒前厅（eventZones tile 15,12 → 米 -0.5,0.5）" }
+            ],
+            "reward": { "exp": 400, "money": 240 },
+            "flags": { "done": "phase_5_active" }
+          },
+          "onSuccess": ["MC5_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_2",
+          "quest": {
+            "id": "MCQ502",
+            "title": "掰 · 断刃",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryDungeon1",
+            "level": 6,
+            "desc": "四只走廊魔物。它们守着的不是路，是那些断刃。",
+            "objectives": [
+              { "kind": "kill", "target": "走廊魔物", "count": 4 }
+            ],
+            "reward": { "exp": 440, "money": 280 },
+            "flags": { "done": "snap_blade" }
+          },
+          "onSuccess": ["MC5_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_3",
+          "quest": {
+            "id": "MCQ503",
+            "title": "玉简留影 · 二段",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryDungeon2",
+            "level": 7,
+            "desc": "走廊二层还有半片玉简。这次它记下的不是你，是陆文昭。",
+            "objectives": [
+              { "kind": "talk", "target": "玉简残片", "uid": "340", "count": 1 }
+            ],
+            "reward": { "exp": 460, "money": 300 },
+            "flags": { "done": "jade_shadow_2" }
+          },
+          "onSuccess": ["MC5_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_4",
+          "quest": {
+            "id": "MCQ504",
+            "title": "魔血池",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryDungeon2",
+            "level": 7,
+            "desc": "池子里的血是温的。它在等你把手伸进去——代价你已经知道了。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryDungeon2", "x": 8.5, "y": 6.5, "radius": 4, "confirm": true, "comment": "魔血池（eventZones tile 25,18 → 米 8.5,6.5）" }
+            ],
+            "reward": { "exp": 500, "money": 320 },
+            "flags": { "done": "phase_5_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC6",
+      "title": "陨落之影",
+      "chapter": "第六章 · 冥夜走廊三 → 五层",
+      "desc": "走廊尽头有个人影，等了很久了。",
+      "giver": "任务板",
+      "order": 6,
+      "lockedBy": ["MC5"],
+      "nodes": [
+        {
+          "id": "MC6_1",
+          "quest": {
+            "id": "MCQ601",
+            "title": "鳄窟伏击",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryDungeon3",
+            "level": 8,
+            "desc": "三层的血是黑的。有人在这儿张过口——而且它不打算只咬一口。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryDungeon3", "x": 2.5, "y": 0.5, "radius": 5, "confirm": true, "comment": "鳄窟（eventZones tile 20,13 → 米 2.5,0.5）" }
+            ],
+            "reward": { "exp": 520, "money": 340 },
+            "flags": { "done": "crocbite" }
+          },
+          "onSuccess": ["MC6_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_2",
+          "quest": {
+            "id": "MCQ602",
+            "title": "凿室",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryDungeon4",
+            "level": 8,
+            "desc": "四层的凿室。墙上全是凿痕——一层一层往下，像有人在往深处挖。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryDungeon4", "x": 1.5, "y": 0.5, "radius": 5, "confirm": true, "comment": "凿室（eventZones tile 20,13 → 米 1.5,0.5）" }
+            ],
+            "reward": { "exp": 560, "money": 360 },
+            "flags": { "done": "chisel_2" }
+          },
+          "onSuccess": ["MC6_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_3",
+          "quest": {
+            "id": "MCQ603",
+            "title": "剥皮间",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryDungeon4",
+            "level": 9,
+            "desc": "剥皮间。这里的残忍已经不需要解释了——它是被做成了工艺。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryDungeon4", "x": 11.5, "y": 7.5, "radius": 4, "confirm": true, "comment": "剥皮间（eventZones tile 30,20 → 米 11.5,7.5）" }
+            ],
+            "reward": { "exp": 600, "money": 380 },
+            "flags": { "done": "peel_done" }
+          },
+          "onSuccess": ["MC6_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_4",
+          "quest": {
+            "id": "MCQ604",
+            "title": "蝠群风暴",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryDungeon5",
+            "level": 10,
+            "desc": "六只强化血蝠。它们不再试探——这一波是要命的。",
+            "objectives": [
+              { "kind": "kill", "target": "血翼蝠", "count": 6 }
+            ],
+            "reward": { "exp": 660, "money": 420 },
+            "flags": { "done": "bloodbat2_wave" }
+          },
+          "onSuccess": ["MC6_5"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_5",
+          "quest": {
+            "id": "MCQ605",
+            "title": "终战 · 陆文昭",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryDungeon5",
+            "level": 12,
+            "desc": "走廊尽头。暮光执事站在陨落之影的中央——他等这一夜，等了很久。",
+            "objectives": [
+              { "kind": "kill", "target": "陆文昭", "count": 1 }
+            ],
+            "reward": { "exp": 900, "money": 600, "items": [ { "name": "暗核", "count": 3 } ] },
+            "flags": { "done": "phase_6_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MS1",
+      "title": "苏家旁支",
+      "chapter": "支线 · 同行",
+      "desc": "苏清漪在桑镇就注意到了你。她想跟你走一段路。",
+      "giver": "任务板",
+      "order": 101,
+      "lockedBy": [],
+      "side": true,
+      "nodes": [
+        {
+          "id": "MS1_1",
+          "quest": {
+            "id": "MSQ101",
+            "title": "苏家旁支",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "药铺边上站着一个姑娘。她说她的名字叫苏清漪，然后问你是不是要去桑林。",
+            "objectives": [
+              { "kind": "talk", "target": "苏清漪", "uid": "301", "count": 1 }
+            ],
+            "reward": { "exp": 80, "money": 50 }
+          },
+          "onSuccess": ["MS1_2"],
+          "onFail": []
+        },
+        {
+          "id": "MS1_2",
+          "quest": {
+            "id": "MSQ102",
+            "title": "泥泞同行",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 2,
+            "desc": "桑林里她又出现了。她说苏家的事她知道一些——但不是现在。",
+            "objectives": [
+              { "kind": "talk", "target": "苏清漪", "uid": "302", "count": 1 }
+            ],
+            "reward": { "exp": 120, "money": 80 },
+            "flags": { "done": "suqingyi_joined" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MS2",
+      "title": "林中异动",
+      "chapter": "支线 · 彩蛋",
+      "desc": "林子里有些动静，但好像不是敌人。",
+      "giver": "任务板",
+      "order": 102,
+      "lockedBy": [],
+      "side": true,
+      "nodes": [
+        {
+          "id": "MS2_1",
+          "quest": {
+            "id": "MSQ201",
+            "title": "林中异动",
+            "type": "arrive",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 1,
+            "desc": "灌木后面有窸窸窣窣的声音。不是魔血鼠——那东西不会这样叫。",
+            "objectives": [
+              { "kind": "arrive", "map": "mulberryForest", "x": 5.0, "y": -9.0, "radius": 4, "confirm": true, "comment": "灰绒兔所在（id=303）" }
+            ],
+            "reward": { "exp": 60, "money": 40 }
+          },
+          "onSuccess": ["MS2_2"],
+          "onFail": []
+        },
+        {
+          "id": "MS2_2",
+          "quest": {
+            "id": "MSQ202",
+            "title": "无害之约",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryForest",
+            "level": 1,
+            "desc": "是只灰绒兔。它看着你，没有跑。这一晚你决定不动手。",
+            "objectives": [
+              { "kind": "talk", "target": "灰绒兔", "uid": "303", "count": 1 }
+            ],
+            "reward": { "exp": 100, "money": 60, "items": [ { "name": "止血包扎", "count": 1 } ] },
+            "flags": { "done": "rabbit_friend" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    }
+  ]
+}

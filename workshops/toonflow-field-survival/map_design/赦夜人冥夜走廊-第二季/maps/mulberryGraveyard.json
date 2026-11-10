@@ -2926,11 +2926,6 @@
        "name": "level",
        "type": "int",
        "value": 4
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠"
       }
      ],
      "rotation": 0,
@@ -2955,11 +2950,6 @@
        "name": "level",
        "type": "int",
        "value": 4
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠"
       }
      ],
      "rotation": 0,
@@ -2984,11 +2974,6 @@
        "name": "level",
        "type": "int",
        "value": 4
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠"
       }
      ],
      "rotation": 0,
@@ -3013,11 +2998,6 @@
        "name": "level",
        "type": "int",
        "value": 4
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠"
       }
      ],
      "rotation": 0,
@@ -3042,11 +3022,6 @@
        "name": "level",
        "type": "int",
        "value": 4
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "血蝠"
       }
      ],
      "rotation": 0,
@@ -3071,11 +3046,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "黑甲尸"
       }
      ],
      "rotation": 0,
@@ -3100,11 +3070,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "黑甲尸"
       }
      ],
      "rotation": 0,
@@ -3129,11 +3094,6 @@
        "name": "level",
        "type": "int",
        "value": 6
-      },
-      {
-       "name": "full_name",
-       "type": "string",
-       "value": "黑甲尸"
       }
      ],
      "rotation": 0,
@@ -3142,6 +3102,54 @@
      "width": 32,
      "x": 864,
      "y": 160
+    },
+    {
+     "gid": 2552,
+     "height": 32,
+     "id": 328,
+     "name": "SY_BLACKCORPSE",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLACKCORPSE"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 6
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 704,
+     "y": 256
+    },
+    {
+     "gid": 2552,
+     "height": 32,
+     "id": 329,
+     "name": "SY_BLACKCORPSE",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_BLACKCORPSE"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 6
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 960,
+     "y": 320
     }
    ],
    "opacity": 1,
@@ -3152,7 +3160,7 @@
   }
  ],
  "nextlayerid": 4,
- "nextobjectid": 328,
+ "nextobjectid": 330,
  "orientation": "orthogonal",
  "renderorder": "right-down",
  "tiledversion": "1.2.1",
