@@ -289,6 +289,10 @@ export const ENGINE_NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   "FLOAT_LABEL",
   "SIGNBOARD",
   "GROUND_TEXT",
+  // ★ 可拾取物：编辑器历史上把 entity_type 写成 PICKUP（编辑器放置类型名）。
+  //   运行时协议以 pickup_item 为准（见 hasPickupItem），这里只是登记成
+  //   「非怪类型」以免落到「未识别的 entity_type」告警分支。
+  "PICKUP",
 ]);
 
 /** ★ 文字标识类实体：解析成 kind="text_label" 的装饰（App.vue 按 textKind 分三种画法） */
