@@ -109,8 +109,10 @@ const propEtypeQuery = ref('')
 const propEtypeOpen = ref(false)
 const propEtypeFiltered = computed(() => filterEtypes(propEtypeQuery.value))
 const propEtypePlaceholder = computed(() => {
-  const m = OBJ_META[selectedObjInfo.value?.entityType]
-  return m ? `${m.icon} ${m.label}` : '选择类型'
+  const key = selectedObjInfo.value?.entityType
+  const m = OBJ_META[key]
+  // 地图里出现 OBJ_META 没登记的类型时，直接显示原 key，避免看起来像"未设置"
+  return m ? `${m.icon} ${m.label}` : (key || '选择类型')
 })
 function pickPropEtype(key) {
   propEtypeOpen.value = false
