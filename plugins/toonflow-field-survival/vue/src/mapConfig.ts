@@ -212,6 +212,14 @@ function hasChestName(props: Record<string, any>): boolean {
 }
 
 /**
+ * ★ 是否「可拾取物」（Tiled 对象带非空 pickup_item 属性）。
+ *   协议以 pickup_item 为准，与 entity_type 无关 —— 见 normalizeTiledMap 里的说明。
+ */
+function hasPickupItem(props: Record<string, any>): boolean {
+  return typeof props.pickup_item === "string" && props.pickup_item.trim().length > 0;
+}
+
+/**
  * ★ entity_type → sprite key（**通用解析，不含地图集业务**）。
  *
  * 优先级：
@@ -451,7 +459,15 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             x: obj.x / 32 - W / 2,
             y: obj.y / 32 - 1 - H / 2,
           };
-        } else if (props.entity_type === "NPC" || (props.entity_type === "CHEST" && hasChestName(props))) {
+        } else if (props.entity_type === "NPC"
+                   || (props.entity_type === "CHEST" && hasChestName(props))
+                   // ★ 可拾取物（pickup_item）：**不论 entity_type 是什么**都收进 npcs[]。
+                   //   实测坑（2026-11-11）：编辑器的「类型」下拉把可拾取物的 entity_type
+                  //   改成了 PICKUP（编辑器自己的放置类型名，不是运行时词汇），
+                  //   而运行时只认 entity_type=NPC → 该对象被当成「未识别类型」直接丢弃，
+                  //   游戏里既没实体也没装饰 → 玩家完全看不到这东西。
+                   //   修正：只要带 pickup_item，就按可拾取物处理（协议以 pickup_item 为准）。
+                   || hasPickupItem(props)) {
           // ★ 分层处理（game.md：entity_type 只决定行为类，外观由 object.gid 指向图集）：
           //   - 无名占位 NPC（含农场动物：mulberryTown id 190/191/192 的牛）→ 只进装饰层，
           //     用 obj.gid 选贴图 + wanders 游走，**不生成实体、不画头顶名字**，

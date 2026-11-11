@@ -112,16 +112,45 @@ const filteredEtypes = computed(() => filterEtypes(etypeQuery.value))
 const propEtypeQuery = ref('')
 const propEtypeOpen = ref(false)
 const propEtypeFiltered = computed(() => filterEtypes(propEtypeQuery.value))
+/**
+ * ★ 属性面板的「有效类型」：
+ *   可拾取物的运行时协议是 entity_type=NPC + pickup_item=<物品名>，
+ *   所以只要带 pickup_item，对外就显示为「可拾取物」，而不是裸的 NPC。
+ */
+const propEffectiveEtype = computed(() => {
+  const info = selectedObjInfo.value
+  if (!info) return ''
+  const pu = info.props.pickup_item
+  if (typeof pu === 'string' && pu.trim()) return 'PICKUP'
+  return info.entityType
+})
 const propEtypePlaceholder = computed(() => {
-  const key = selectedObjInfo.value?.entityType
+  const key = propEffectiveEtype.value
   const m = OBJ_META[key]
   // 地图里出现 OBJ_META 没登记的类型时，直接显示原 key，避免看起来像"未设置"
   return m ? `${m.icon} ${m.label}` : (key || '选择类型')
 })
+/**
+ * ★ 切换对象「类型」时的属性改写规则：
+ *   - 选「可拾取物」→ 写 entity_type=NPC + pickup_item（运行时只认这个组合）。
+ *     ★ 不能写 entity_type=PICKUP：那是编辑器自己的放置类型名，运行时不认识，
+ *       对象会被当成「未识别类型」丢掉 → 游戏里完全看不见（2026-11-11 实测）。
+ *   - 选别的类型 → 写 entity_type=<key>，并清掉 pickup_item
+ *     （否则旧的可拾取物标记会让运行时把它仍当可拾取物处理）。
+ */
 function pickPropEtype(key) {
   propEtypeOpen.value = false
   propEtypeQuery.value = ''
+  if (key === 'PICKUP') {
+    onPropInput('entity_type', 'NPC')
+    const cur = selectedObjInfo.value?.props?.pickup_item
+    onPropInput('pickup_item', typeof cur === 'string' && cur.trim() ? cur : '斧头')
+    onPropInput('full_name', selectedObjInfo.value?.props?.full_name || '斧头')
+    onPropInput('name', selectedObjInfo.value?.props?.name || '斧头')
+    return
+  }
   onPropInput('entity_type', key)
+  if (selectedObjInfo.value?.props?.pickup_item) onPropInput('pickup_item', '')
 }
 function pickPropEtypeFirst() {
   const list = propEtypeFiltered.value
@@ -1288,6 +1317,16 @@ function handleClick(tx, ty) {
         newObj.type = 'board'
         newObj.gid = 58   // 指向图集公告板贴图（运行时 board=true 走专用绘制，gid 仅兜底）
       }
+      // ★ 可拾取物：补 Tiled 顶层字段
+      //   type='pickup' 便于 Tiled 里一眼认出（与 git HEAD 里那个斧头对象同构）；
+      //   gid 指向图集「战斧」贴图（tile 153 + firstgid 1 = 154），
+      //   运行时 drawPickupSprite 按 gid 出图（没有 gid 才会退到旧的手绘斧头图标）。
+      if (placingType.value === 'PICKUP') {
+        const itemName = placingPickupItem.value.trim() || '物品'
+        newObj.name = itemName
+        newObj.type = 'pickup'
+        newObj.gid = 154
+      }
       L.objects.push(newObj)
       selectedObj.value = newObj
       isDirty.value = true
@@ -1711,7 +1750,7 @@ function onPropApply() {
                 v-for="key in propEtypeFiltered"
                 :key="key"
                 class="etype-item"
-                :class="{ active: key === selectedObjInfo.entityType }"
+                :class="{ active: key === propEffectiveEtype }"
                 @mousedown.prevent="pickPropEtype(key)"
               >
                 <span class="etype-icon">{{ OBJ_META[key].icon }}</span>
@@ -1756,7 +1795,7 @@ function onPropApply() {
           <input class="prop-input" type="text" :value="selectedObjInfo.props.dialog || ''" @input="(e) => onPropInput('dialog', e.target.value)">
         </div>
         <!-- ★ 可拾取物：pickup_item 非空 → 运行时走近弹「是否拾取」，确认后进背包 -->
-        <div class="prop-row" v-if="'pickup_item' in selectedObjInfo.props || selectedObjInfo.props.pickup_item">
+        <div class="prop-row" v-if="propEffectiveEtype === 'PICKUP' || 'pickup_item' in selectedObjInfo.props || selectedObjInfo.props.pickup_item">
           <span class="prop-label">拾取物品</span>
           <input class="prop-input" type="text" :value="selectedObjInfo.props.pickup_item || ''" placeholder="如：斧头" @input="(e) => onPropInput('pickup_item', e.target.value)">
         </div>
