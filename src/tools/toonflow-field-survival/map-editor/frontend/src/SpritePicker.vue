@@ -37,18 +37,21 @@ const emit = defineEmits(['update:modelValue', 'pick'])
 const TILE_SIZE = 32
 const open = ref(false)
 const query = ref('')
-const onlyCharacter = ref(true)
+const filterCategory = ref('character')  // 默认只看人物（与旧「只看人物」勾选一致）；'all' | 'weapon' | 'armor' | ...
 const rootRef = ref(null)
 
 // 缩略图缓存：tileId → dataURL（避免每次重绘都 drawImage 一次）
 const thumbCache = new Map()
 
 const allSprites = computed(() => props.spritesData?.sprites || [])
+const allCategories = computed(() => props.spritesData?.categories || [])
 
 const filtered = computed(() => {
   const q = query.value.trim().toLowerCase()
   let list = allSprites.value
-  if (onlyCharacter.value) list = list.filter(s => s.category === 'character')
+  if (filterCategory.value !== 'all') {
+    list = list.filter(s => s.category === filterCategory.value)
+  }
   if (!q) return list
   return list.filter(s =>
     String(s.label).toLowerCase().includes(q) ||
@@ -131,8 +134,10 @@ function onKey(e) {
 }
 
 const countLabel = computed(() => {
-  const total = allSprites.value.filter(s => s.category === 'character').length
-  return onlyCharacter.value ? `人物 ${total}` : `全部 ${allSprites.value.length}`
+  if (filterCategory.value === 'all') return `全部 ${allSprites.value.length}`
+  const cat = allCategories.value.find(c => c.key === filterCategory.value)
+  const n = allSprites.value.filter(s => s.category === filterCategory.value).length
+  return cat ? `${cat.label} ${n}` : `${n}`
 })
 </script>
 
@@ -159,10 +164,10 @@ const countLabel = computed(() => {
           placeholder="搜索名称或 tile id…"
           @keydown.stop="onKey"
         >
-        <label class="spk-check">
-          <input v-model="onlyCharacter" type="checkbox">
-          只看人物
-        </label>
+        <select v-model="filterCategory" class="spk-category">
+          <option value="all">全部</option>
+          <option v-for="c in allCategories" :key="c.key" :value="c.key">{{ c.label }}</option>
+        </select>
         <span class="spk-count">{{ countLabel }}</span>
       </div>
 
@@ -231,7 +236,11 @@ const countLabel = computed(() => {
   border: 1px solid #444; border-radius: 3px; font-size: 11px;
 }
 .spk-search:focus { outline: none; border-color: #6a9fd8; }
-.spk-check { display: flex; align-items: center; gap: 3px; font-size: 10px; color: #aaa; white-space: nowrap; }
+.spk-category {
+  padding: 3px 6px; background: #0d0d0d; color: #e8e8e8;
+  border: 1px solid #444; border-radius: 3px; font-size: 10px; white-space: nowrap;
+}
+.spk-category:focus { outline: none; border-color: #6a9fd8; }
 .spk-count { font-size: 10px; color: #666; white-space: nowrap; }
 
 /* 缩略图网格 */

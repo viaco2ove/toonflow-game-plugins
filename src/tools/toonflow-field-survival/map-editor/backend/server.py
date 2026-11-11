@@ -450,7 +450,7 @@ def get_tileset(name: str):
 
 @app.get("/api/collections/{name}/sprites")
 def get_sprites(name: str):
-    """返回图集里的**人物/怪物动画帧**清单（用于「换实体形象」下拉框）。
+    """返回图集里的**人物/怪物动画帧 + 武器/防具/物品/告示牌**清单（用于「换实体形象」下拉框）。
 
     为什么需要独立端点：
       /dawnlike 端点只保留「有 description 的 tile」（3770 个无描述的 tile 被丢弃），
@@ -462,10 +462,11 @@ def get_sprites(name: str):
 
     返回：
       { tilewidth, tileheight, columns, tilecount,
+        categories: [ {key, label} ... ],
         sprites: [ { id, animId, category, label } ... ] }
       - id      : 图集 tile id（写入 object.gid 时用 id+firstgid）
       - animId  : walk 动画第二帧（compiled_dawnlike 的 animated_id）
-      - category: 'character'（有动画）或 'prop'（静态装饰）
+      - category: 'character'（有动画）/ 'weapon' / 'armor' / 'item' / 'sign' / 'furniture' / 'prop'
     """
     p = ensure_collection(name)
     src = p / "compiled_dawnlike.json"
@@ -479,8 +480,27 @@ def get_sprites(name: str):
     columns = raw.get("columns", 0)
     tilecount = raw.get("tilecount", 0)
 
+    # 加载物品分类表（后端 sprite_catalog.json 为全局默认，地图集可在自己目录下覆盖）
+    cata_f = p / "sprite_catalog.json"
+    if not cata_f.exists():
+        cata_f = Path(__file__).parent / "sprite_catalog.json"
+    catalog_doc = json.load(open(cata_f, "r", encoding="utf-8")) if cata_f.exists() else {}
+    catalog_cats = catalog_doc.get("categories", [])
+    catalog_entries = catalog_doc.get("entries", [])
+
     sprites = []
     seen = set()
+
+    # 1) 从 catalog 构建区间索引（tile id → {category, label_prefix, n/total}）
+    cata_map = {}
+    for ent in catalog_entries:
+        frm, to = ent.get("from", 0), ent.get("to", 0)
+        cat, lbl = ent.get("category", "prop"), ent.get("label", "")
+        total = to - frm + 1
+        for i, tid in enumerate(range(frm, to + 1)):
+            cata_map[tid] = {"category": cat, "label": f"{lbl}{i+1 if total > 1 else ''}"}
+
+    # 2) 人物／怪物动画帧（有 animated 属性）
     for t in raw.get("tiles", []):
         tid = t.get("id")
         if tid is None:
@@ -490,30 +510,55 @@ def get_sprites(name: str):
         anim_id = props.get("animated_id", 0)
         anim_id = anim_id if isinstance(anim_id, int) and anim_id > 0 else 0
         desc = (props.get("description") or "").strip()
-        # ★ 判定「可当形象」：有动画（人物/怪物 walk）或有 description（命名装饰）。
-        #   纯地面/墙砖（无动画无描述）不列 —— 它们是场景素材，不是实体形象。
-        if not animated and not desc:
-            continue
-        # walk 动画的「首帧」只取一次：animated_id 指向的是第二帧，第一帧是它自己
-        if animated and anim_id and anim_id < tid:
-            # 这是别人动画的第二帧 → 跳过（首帧已收录）
-            continue
-        if tid in seen:
-            continue
-        seen.add(tid)
-        sprites.append({
-            "id": tid,
-            "animId": anim_id,
-            "category": "character" if animated else "prop",
-            "label": desc or f"#{tid}",
-        })
 
-    sprites.sort(key=lambda s: (s["category"] != "character", s["id"]))
+        # 人物：有动画 → category=character
+        if animated:
+            # walk 动画的「首帧」只取一次：animated_id 指向的是第二帧，第一帧是它自己
+            if anim_id and anim_id < tid:
+                # 这是别人动画的第二帧 → 跳过（首帧已收录）
+                continue
+            if tid not in seen:
+                seen.add(tid)
+                sprites.append({
+                    "id": tid,
+                    "animId": anim_id,
+                    "category": "character",
+                    "label": desc or f"#{tid}",
+                })
+
+        # 有 description 的静态物：若 catalog 已分类则用 catalog，否则归 prop
+        elif desc:
+            if tid not in seen:
+                seen.add(tid)
+                cm = cata_map.get(tid)
+                sprites.append({
+                    "id": tid,
+                    "animId": 0,
+                    "category": cm["category"] if cm else "prop",
+                    "label": cm["label"] if cm else desc,
+                })
+
+    # 3) 只在 catalog 而不在 tiles 里的物品（零散武器／防具／告示牌）：补进
+    for tid, cm in cata_map.items():
+        if tid not in seen:
+            seen.add(tid)
+            sprites.append({
+                "id": tid,
+                "animId": 0,
+                "category": cm["category"],
+                "label": cm["label"],
+            })
+
+    # 排序：人物 → 武器 → 防具 → 物品 → 告示牌 → 家具 → 其他
+    ORDER = {"character": 0, "weapon": 1, "armor": 2, "item": 3, "sign": 4, "furniture": 5, "prop": 6}
+    sprites.sort(key=lambda s: (ORDER.get(s["category"], 9), s["id"]))
+
     return {
         "tilewidth": tilewidth,
         "tileheight": tileheight,
         "columns": columns,
         "tilecount": tilecount,
+        "categories": catalog_cats,
         "sprites": sprites,
     }
 

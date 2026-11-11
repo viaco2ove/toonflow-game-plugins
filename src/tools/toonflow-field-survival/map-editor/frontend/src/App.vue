@@ -45,6 +45,8 @@ const OBJ_META = {
   KEY:              { label: '钥匙',            color: '#ffd54f', icon: '🔑', sprite: 0 },
   // ── 功能实体：任务板（主线委托入口；游戏端按 dialog=BOARD 识别，画公告板+金色光环）──
   QUEST_BOARD:      { label: '任务板（主线委托）', color: '#ffd54a', icon: '📋', sprite: 0 },
+  // ── 可拾取物：写 entity_type=NPC + pickup_item，运行时走近弹「是否拾取」 ──
+  PICKUP:           { label: '可拾取物（走近拾取）', color: '#4dd0e1', icon: '🪓', sprite: 0 },
   // ── 文字标识类（建筑名称显示，见 tiles-maps-editor/references/building-labels.md）──
   FLOAT_LABEL:      { label: '悬浮文字（仿入口）', color: '#f48fb1', icon: '🗨', sprite: 0 },
   SIGNBOARD:        { label: '路标（仿任务板）',   color: '#ffd54a', icon: '🪧', sprite: 0 },
@@ -82,6 +84,8 @@ const placingCamp = ref('neutral')
 const placingLevel = ref(1)
 // ★ 文字类实体（悬浮文字/路标/地表文字）的显示文本
 const placingText = ref('')
+// ★ 可拾取物（PICKUP 放置类型）：拾取后进背包的物品名
+const placingPickupItem = ref('斧头')
 // ★ 实体类型可搜索下拉框
 const etypeQuery = ref('')
 const etypeOpen = ref(false)
@@ -1256,6 +1260,14 @@ function handleClick(tx, ty) {
         ? // ★ 任务板：与游戏端识别口径完全一致（entity_type=NPC + dialog=BOARD），
           //   运行时 normalizeTiledMap → entity.board=true → 画公告板+金色光环、近旁弹「📜 任务」
           { entity_type: 'NPC', full_name: '任务板', name: '任务板', dialog: 'BOARD' }
+        : placingType.value === 'PICKUP'
+        ? // ★ 可拾取物：运行时只认 pickup_item（entity_type 必须是 NPC 才会进 npcs[]）
+          {
+            entity_type: 'NPC',
+            full_name: placingPickupItem.value.trim() || '物品',
+            name: placingPickupItem.value.trim() || '物品',
+            pickup_item: placingPickupItem.value.trim() || '物品',
+          }
         : TEXT_LIKE.has(placingType.value)
         ? {
             entity_type: placingType.value,
@@ -1549,6 +1561,15 @@ function onPropApply() {
         placeholder="显示文字，如：高三教学楼"
         title="悬浮/贴地显示的文字"
       >
+      <!-- 可拾取物：拾取后进背包的物品名（写 pickup_item） -->
+      <input
+        type="text"
+        v-model="placingPickupItem"
+        v-show="placingType === 'PICKUP'"
+        style="width:110px"
+        placeholder="拾取物品名，如：斧头"
+        title="玩家拾取后进入背包的物品名（运行时按 pickup_item 识别）"
+      >
     </div>
     <div class="sep"></div>
     <div class="toolbar-group">
@@ -1733,6 +1754,11 @@ function onPropApply() {
         <div class="prop-row" v-if="'dialog' in selectedObjInfo.props || selectedObjInfo.entityType === 'NPC'">
           <span class="prop-label">对话ID</span>
           <input class="prop-input" type="text" :value="selectedObjInfo.props.dialog || ''" @input="(e) => onPropInput('dialog', e.target.value)">
+        </div>
+        <!-- ★ 可拾取物：pickup_item 非空 → 运行时走近弹「是否拾取」，确认后进背包 -->
+        <div class="prop-row" v-if="'pickup_item' in selectedObjInfo.props || selectedObjInfo.props.pickup_item">
+          <span class="prop-label">拾取物品</span>
+          <input class="prop-input" type="text" :value="selectedObjInfo.props.pickup_item || ''" placeholder="如：斧头" @input="(e) => onPropInput('pickup_item', e.target.value)">
         </div>
         <div class="prop-row" v-if="'portalID' in selectedObjInfo.props">
           <span class="prop-label">目标地图</span>

@@ -4939,6 +4939,58 @@ function drawQuestBoard(ctx: CanvasRenderingContext2D, px: number, py: number, p
   ctx.restore();
 }
 
+/** ★ 可拾取物绘制（带 gid 的图集贴图版）：地面贴图 + 脉动光环 + 「🪓 名称」标签。
+ *  与 drawPickupAxe 同源风格（后者是没 gid 时的纯手绘兜底）。
+ *  贴图按 1 格大小放在脚底，光环让玩家一眼看出"这是可拾取的东西"。 */
+function drawPickupSprite(ctx: CanvasRenderingContext2D, px: number, py: number, ppm: number, tileId: number, itemName: string): void {
+  const k = Math.max(0.6, Math.min(2.4, ppm / 20));
+  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  const pulse = (now % 1200) / 1200;
+  const size = Math.max(16, Math.round(ppm * 0.9));
+
+  // 脚底阴影
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(px, py + 4 * k, size * 0.45, size * 0.16, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 脉动光环（吸引注意）
+  const ringR = (16 + Math.sin(pulse * Math.PI * 2) * 3) * k;
+  ctx.save();
+  ctx.globalAlpha = 0.2 + 0.35 * (1 - Math.abs(pulse - 0.5) * 2);
+  ctx.strokeStyle = "#9fe6ff";
+  ctx.lineWidth = 3 * k;
+  ctx.beginPath();
+  ctx.ellipse(px, py - 16 * k, ringR, ringR * 0.5, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 图集贴图（放大到 size，插值关闭保持像素风）
+  applyPixelPerfect(ctx);
+  drawTile(ctx, tileId, px - size / 2, py - size + 4, size, size, false);
+
+  // 文字标签（始终显示，带蓝边底框）
+  const label = `🪓 ${itemName || "物品"}`;
+  ctx.save();
+  ctx.textAlign = "center";
+  ctx.font = `bold ${Math.round(13 * k)}px 'Microsoft YaHei', sans-serif`;
+  const tw = ctx.measureText(label).width;
+  const lx = px, ly = py - 34 * k;
+  const padX = 6 * k, padY = 3 * k;
+  ctx.fillStyle = "rgba(10,20,30,.85)";
+  rrPath(ctx, lx - tw / 2 - padX, ly - 13 * k - padY, tw + padX * 2, 16 * k + padY * 2, 6 * k);
+  ctx.fill();
+  ctx.strokeStyle = "#9fe6ff";
+  ctx.lineWidth = 1.5 * k;
+  ctx.stroke();
+  ctx.fillStyle = "#d6f3ff";
+  ctx.fillText(label, lx, ly);
+  ctx.restore();
+}
+
 /** ★ 可拾取物绘制：地面发光的斧头图标 + 脉动光环 + 始终显示的「🪓 斧头」文字标签。
  *  与 drawQuestBoard 同源风格，让玩家一眼看出"这是可拾取的东西"。 */
 function drawPickupAxe(ctx: CanvasRenderingContext2D, px: number, py: number, ppm: number, itemName: string): void {
@@ -5025,9 +5077,16 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     drawQuestBoard(ctx, px, py, pixelsPerMeter);
     return;
   }
-  // ★ 可拾取物（地图斧头等）：专用绘制（地面发光斧头图标 + 脉动光环），直接接管
+  // ★ 可拾取物（地图斧头等）：专用绘制（地面发光图标 + 脉动光环），直接接管
+  //   带 gid 的按图集贴图出图（编辑器「形象」里选的斧头/武器/道具），
+  //   没带 gid 的沿用旧手绘斧头图标（老地图对象没有 gid，保持兼容）。
   if ((e as any).pickupItem) {
-    drawPickupAxe(ctx, px, py, pixelsPerMeter, String((e as any).pickupItem));
+    const pkGid = Number((e as any).gid) || 0;
+    if (pkGid > 0 && SHEET_TILESET.ready) {
+      drawPickupSprite(ctx, px, py, pixelsPerMeter, walkTileId(pkGid - 1, _animTick), String((e as any).pickupItem));
+    } else {
+      drawPickupAxe(ctx, px, py, pixelsPerMeter, String((e as any).pickupItem));
+    }
     return;
   }
   // ★ 根据 side 选择 sprite key（角色从 tileset 切片，支持 2 帧 walk 动画）

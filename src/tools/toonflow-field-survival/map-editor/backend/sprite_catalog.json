@@ -1,0 +1,629 @@
+{
+ "_comment": "图集 tile 分类表（DawnLike 物品区）。各地图集可在自己目录放同名文件覆盖；from/to 闭区间，label 末尾自动追加序号。",
+ "categories": [
+  {
+   "key": "character",
+   "label": "人物"
+  },
+  {
+   "key": "weapon",
+   "label": "武器"
+  },
+  {
+   "key": "armor",
+   "label": "防具"
+  },
+  {
+   "key": "item",
+   "label": "道具"
+  },
+  {
+   "key": "sign",
+   "label": "告示牌/任务板"
+  },
+  {
+   "key": "furniture",
+   "label": "家具"
+  },
+  {
+   "key": "prop",
+   "label": "其他装饰"
+  }
+ ],
+ "entries": [
+  {
+   "from": 11640,
+   "to": 11663,
+   "category": "weapon",
+   "label": "青铜剑"
+  },
+  {
+   "from": 11664,
+   "to": 11671,
+   "category": "weapon",
+   "label": "青铜斧"
+  },
+  {
+   "from": 11672,
+   "to": 11678,
+   "category": "armor",
+   "label": "青铜胸甲"
+  },
+  {
+   "from": 11679,
+   "to": 11685,
+   "category": "armor",
+   "label": "青铜护腿"
+  },
+  {
+   "from": 11686,
+   "to": 11687,
+   "category": "armor",
+   "label": "青铜护具"
+  },
+  {
+   "from": 11688,
+   "to": 11690,
+   "category": "armor",
+   "label": "青铜头盔"
+  },
+  {
+   "from": 11691,
+   "to": 11699,
+   "category": "armor",
+   "label": "青铜靴子"
+  },
+  {
+   "from": 11760,
+   "to": 11783,
+   "category": "weapon",
+   "label": "黑铁剑"
+  },
+  {
+   "from": 11784,
+   "to": 11791,
+   "category": "weapon",
+   "label": "黑铁斧"
+  },
+  {
+   "from": 11792,
+   "to": 11798,
+   "category": "armor",
+   "label": "黑铁胸甲"
+  },
+  {
+   "from": 11799,
+   "to": 11805,
+   "category": "armor",
+   "label": "黑铁护腿"
+  },
+  {
+   "from": 11806,
+   "to": 11807,
+   "category": "armor",
+   "label": "黑铁护具"
+  },
+  {
+   "from": 11808,
+   "to": 11810,
+   "category": "armor",
+   "label": "黑铁头盔"
+  },
+  {
+   "from": 11811,
+   "to": 11819,
+   "category": "armor",
+   "label": "黑铁靴子"
+  },
+  {
+   "from": 11880,
+   "to": 11903,
+   "category": "weapon",
+   "label": "白银剑"
+  },
+  {
+   "from": 11904,
+   "to": 11911,
+   "category": "weapon",
+   "label": "白银斧"
+  },
+  {
+   "from": 11912,
+   "to": 11918,
+   "category": "armor",
+   "label": "白银胸甲"
+  },
+  {
+   "from": 11919,
+   "to": 11925,
+   "category": "armor",
+   "label": "白银护腿"
+  },
+  {
+   "from": 11926,
+   "to": 11927,
+   "category": "armor",
+   "label": "白银护具"
+  },
+  {
+   "from": 11928,
+   "to": 11930,
+   "category": "armor",
+   "label": "白银头盔"
+  },
+  {
+   "from": 11931,
+   "to": 11939,
+   "category": "armor",
+   "label": "白银靴子"
+  },
+  {
+   "from": 12000,
+   "to": 12023,
+   "category": "weapon",
+   "label": "紫晶剑"
+  },
+  {
+   "from": 12024,
+   "to": 12031,
+   "category": "weapon",
+   "label": "紫晶斧"
+  },
+  {
+   "from": 12032,
+   "to": 12038,
+   "category": "armor",
+   "label": "紫晶胸甲"
+  },
+  {
+   "from": 12039,
+   "to": 12045,
+   "category": "armor",
+   "label": "紫晶护腿"
+  },
+  {
+   "from": 12046,
+   "to": 12047,
+   "category": "armor",
+   "label": "紫晶护具"
+  },
+  {
+   "from": 12048,
+   "to": 12050,
+   "category": "armor",
+   "label": "紫晶头盔"
+  },
+  {
+   "from": 12051,
+   "to": 12059,
+   "category": "armor",
+   "label": "紫晶靴子"
+  },
+  {
+   "from": 12120,
+   "to": 12143,
+   "category": "weapon",
+   "label": "翠绿剑"
+  },
+  {
+   "from": 12144,
+   "to": 12151,
+   "category": "weapon",
+   "label": "翠绿斧"
+  },
+  {
+   "from": 12152,
+   "to": 12158,
+   "category": "armor",
+   "label": "翠绿胸甲"
+  },
+  {
+   "from": 12159,
+   "to": 12165,
+   "category": "armor",
+   "label": "翠绿护腿"
+  },
+  {
+   "from": 12166,
+   "to": 12167,
+   "category": "armor",
+   "label": "翠绿护具"
+  },
+  {
+   "from": 12168,
+   "to": 12170,
+   "category": "armor",
+   "label": "翠绿头盔"
+  },
+  {
+   "from": 12171,
+   "to": 12179,
+   "category": "armor",
+   "label": "翠绿靴子"
+  },
+  {
+   "from": 12240,
+   "to": 12263,
+   "category": "weapon",
+   "label": "碧青剑"
+  },
+  {
+   "from": 12264,
+   "to": 12271,
+   "category": "weapon",
+   "label": "碧青斧"
+  },
+  {
+   "from": 12272,
+   "to": 12278,
+   "category": "armor",
+   "label": "碧青胸甲"
+  },
+  {
+   "from": 12279,
+   "to": 12285,
+   "category": "armor",
+   "label": "碧青护腿"
+  },
+  {
+   "from": 12286,
+   "to": 12287,
+   "category": "armor",
+   "label": "碧青护具"
+  },
+  {
+   "from": 12288,
+   "to": 12290,
+   "category": "armor",
+   "label": "碧青头盔"
+  },
+  {
+   "from": 12291,
+   "to": 12299,
+   "category": "armor",
+   "label": "碧青靴子"
+  },
+  {
+   "from": 12360,
+   "to": 12383,
+   "category": "weapon",
+   "label": "赤红剑"
+  },
+  {
+   "from": 12384,
+   "to": 12391,
+   "category": "weapon",
+   "label": "赤红斧"
+  },
+  {
+   "from": 12392,
+   "to": 12398,
+   "category": "armor",
+   "label": "赤红胸甲"
+  },
+  {
+   "from": 12399,
+   "to": 12405,
+   "category": "armor",
+   "label": "赤红护腿"
+  },
+  {
+   "from": 12406,
+   "to": 12407,
+   "category": "armor",
+   "label": "赤红护具"
+  },
+  {
+   "from": 12408,
+   "to": 12410,
+   "category": "armor",
+   "label": "赤红头盔"
+  },
+  {
+   "from": 12411,
+   "to": 12419,
+   "category": "armor",
+   "label": "赤红靴子"
+  },
+  {
+   "from": 12480,
+   "to": 12503,
+   "category": "weapon",
+   "label": "蔚蓝剑"
+  },
+  {
+   "from": 12504,
+   "to": 12511,
+   "category": "weapon",
+   "label": "蔚蓝斧"
+  },
+  {
+   "from": 12512,
+   "to": 12518,
+   "category": "armor",
+   "label": "蔚蓝胸甲"
+  },
+  {
+   "from": 12519,
+   "to": 12525,
+   "category": "armor",
+   "label": "蔚蓝护腿"
+  },
+  {
+   "from": 12526,
+   "to": 12527,
+   "category": "armor",
+   "label": "蔚蓝护具"
+  },
+  {
+   "from": 12528,
+   "to": 12530,
+   "category": "armor",
+   "label": "蔚蓝头盔"
+  },
+  {
+   "from": 12531,
+   "to": 12539,
+   "category": "armor",
+   "label": "蔚蓝靴子"
+  },
+  {
+   "from": 12600,
+   "to": 12623,
+   "category": "weapon",
+   "label": "青蓝剑"
+  },
+  {
+   "from": 12624,
+   "to": 12631,
+   "category": "weapon",
+   "label": "青蓝斧"
+  },
+  {
+   "from": 12632,
+   "to": 12638,
+   "category": "armor",
+   "label": "青蓝胸甲"
+  },
+  {
+   "from": 12639,
+   "to": 12645,
+   "category": "armor",
+   "label": "青蓝护腿"
+  },
+  {
+   "from": 12646,
+   "to": 12647,
+   "category": "armor",
+   "label": "青蓝护具"
+  },
+  {
+   "from": 12648,
+   "to": 12650,
+   "category": "armor",
+   "label": "青蓝头盔"
+  },
+  {
+   "from": 12651,
+   "to": 12659,
+   "category": "armor",
+   "label": "青蓝靴子"
+  },
+  {
+   "from": 12720,
+   "to": 12743,
+   "category": "weapon",
+   "label": "钢灰剑"
+  },
+  {
+   "from": 12744,
+   "to": 12751,
+   "category": "weapon",
+   "label": "钢灰斧"
+  },
+  {
+   "from": 12752,
+   "to": 12758,
+   "category": "armor",
+   "label": "钢灰胸甲"
+  },
+  {
+   "from": 12759,
+   "to": 12765,
+   "category": "armor",
+   "label": "钢灰护腿"
+  },
+  {
+   "from": 12766,
+   "to": 12767,
+   "category": "armor",
+   "label": "钢灰护具"
+  },
+  {
+   "from": 12768,
+   "to": 12770,
+   "category": "armor",
+   "label": "钢灰头盔"
+  },
+  {
+   "from": 12771,
+   "to": 12779,
+   "category": "armor",
+   "label": "钢灰靴子"
+  },
+  {
+   "from": 12840,
+   "to": 12863,
+   "category": "weapon",
+   "label": "黄金剑"
+  },
+  {
+   "from": 12864,
+   "to": 12871,
+   "category": "weapon",
+   "label": "黄金斧"
+  },
+  {
+   "from": 12872,
+   "to": 12878,
+   "category": "armor",
+   "label": "黄金胸甲"
+  },
+  {
+   "from": 12879,
+   "to": 12885,
+   "category": "armor",
+   "label": "黄金护腿"
+  },
+  {
+   "from": 12886,
+   "to": 12887,
+   "category": "armor",
+   "label": "黄金护具"
+  },
+  {
+   "from": 12888,
+   "to": 12890,
+   "category": "armor",
+   "label": "黄金头盔"
+  },
+  {
+   "from": 12891,
+   "to": 12899,
+   "category": "armor",
+   "label": "黄金靴子"
+  },
+  {
+   "from": 12960,
+   "to": 12983,
+   "category": "weapon",
+   "label": "品红剑"
+  },
+  {
+   "from": 12984,
+   "to": 12991,
+   "category": "weapon",
+   "label": "品红斧"
+  },
+  {
+   "from": 12992,
+   "to": 12998,
+   "category": "armor",
+   "label": "品红胸甲"
+  },
+  {
+   "from": 12999,
+   "to": 13005,
+   "category": "armor",
+   "label": "品红护腿"
+  },
+  {
+   "from": 13006,
+   "to": 13007,
+   "category": "armor",
+   "label": "品红护具"
+  },
+  {
+   "from": 13008,
+   "to": 13010,
+   "category": "armor",
+   "label": "品红头盔"
+  },
+  {
+   "from": 13011,
+   "to": 13019,
+   "category": "armor",
+   "label": "品红靴子"
+  },
+  {
+   "from": 24,
+   "to": 24,
+   "category": "item",
+   "label": "钥匙"
+  },
+  {
+   "from": 32,
+   "to": 37,
+   "category": "weapon",
+   "label": "长剑"
+  },
+  {
+   "from": 153,
+   "to": 153,
+   "category": "weapon",
+   "label": "战斧"
+  },
+  {
+   "from": 488,
+   "to": 488,
+   "category": "item",
+   "label": "红药水"
+  },
+  {
+   "from": 495,
+   "to": 495,
+   "category": "item",
+   "label": "蓝药水"
+  },
+  {
+   "from": 608,
+   "to": 608,
+   "category": "item",
+   "label": "深蓝药水"
+  },
+  {
+   "from": 969,
+   "to": 969,
+   "category": "item",
+   "label": "红药水(大)"
+  },
+  {
+   "from": 664,
+   "to": 664,
+   "category": "weapon",
+   "label": "弓"
+  },
+  {
+   "from": 784,
+   "to": 784,
+   "category": "weapon",
+   "label": "箭"
+  },
+  {
+   "from": 918,
+   "to": 918,
+   "category": "item",
+   "label": "卷轴"
+  },
+  {
+   "from": 1189,
+   "to": 1190,
+   "category": "item",
+   "label": "酒杯"
+  },
+  {
+   "from": 4528,
+   "to": 4543,
+   "category": "sign",
+   "label": "告示牌"
+  },
+  {
+   "from": 4648,
+   "to": 4663,
+   "category": "sign",
+   "label": "店铺招牌"
+  },
+  {
+   "from": 4408,
+   "to": 4423,
+   "category": "furniture",
+   "label": "书架"
+  },
+  {
+   "from": 4888,
+   "to": 4903,
+   "category": "furniture",
+   "label": "烛台"
+  }
+ ]
+}
