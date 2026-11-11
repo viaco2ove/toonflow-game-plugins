@@ -609,3 +609,13 @@ input:focus, select:focus {
   color: #6b7480;
   font-size: 12px;
 }
+/* 属性面板里的类型下拉：宽度撑满属性列，下拉列表右对齐避免溢出面板 */
+.prop-etype-combo {
+  width: 100%;
+  min-width: 120px;
+}
+.prop-etype-combo .etype-list {
+  left: auto;
+  right: 0;
+  max-width: 320px;
+}

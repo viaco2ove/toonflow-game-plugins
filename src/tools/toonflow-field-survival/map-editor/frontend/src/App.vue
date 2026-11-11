@@ -93,15 +93,37 @@ const etypePlaceholder = computed(() => {
 const TEXT_LIKE = new Set(['FLOAT_LABEL', 'SIGNBOARD', 'GROUND_TEXT'])
 const isTextLikeType = computed(() => TEXT_LIKE.has(placingType.value))
 /** 过滤：中文 label / 英文 key / 图标 都能搜（不区分大小写） */
-const filteredEtypes = computed(() => {
-  const q = etypeQuery.value.trim().toLowerCase()
+function filterEtypes(q) {
+  const query = String(q || '').trim().toLowerCase()
   const keys = Object.keys(OBJ_META)
-  if (!q) return keys
+  if (!query) return keys
   return keys.filter((k) => {
     const m = OBJ_META[k]
-    return k.toLowerCase().includes(q) || m.label.toLowerCase().includes(q)
+    return k.toLowerCase().includes(query) || m.label.toLowerCase().includes(query)
   })
+}
+const filteredEtypes = computed(() => filterEtypes(etypeQuery.value))
+
+// ─── 属性面板「类型」可搜索下拉（独立状态，避免与放置工具互相干扰）──
+const propEtypeQuery = ref('')
+const propEtypeOpen = ref(false)
+const propEtypeFiltered = computed(() => filterEtypes(propEtypeQuery.value))
+const propEtypePlaceholder = computed(() => {
+  const m = OBJ_META[selectedObjInfo.value?.entityType]
+  return m ? `${m.icon} ${m.label}` : '选择类型'
 })
+function pickPropEtype(key) {
+  propEtypeOpen.value = false
+  propEtypeQuery.value = ''
+  onPropInput('entity_type', key)
+}
+function pickPropEtypeFirst() {
+  const list = propEtypeFiltered.value
+  if (list.length) pickPropEtype(list[0])
+}
+function onPropEtypeBlur() {
+  setTimeout(() => { propEtypeOpen.value = false }, 120)
+}
 function pickEtype(key) {
   placingType.value = key
   etypeOpen.value = false
@@ -1649,9 +1671,33 @@ function onPropApply() {
         </div>
         <div class="prop-row">
           <span class="prop-label">类型</span>
-          <select class="prop-input" :value="selectedObjInfo.entityType" @change="(e) => onPropInput('entity_type', e.target.value)">
-            <option v-for="key in Object.keys(OBJ_META)" :key="key" :value="key">{{ key }}</option>
-          </select>
+          <div class="etype-combo prop-etype-combo" :class="{ open: propEtypeOpen }">
+            <input
+              class="etype-input"
+              type="text"
+              v-model="propEtypeQuery"
+              @focus="propEtypeOpen = true"
+              @blur="onPropEtypeBlur"
+              @keydown.esc="propEtypeOpen = false"
+              @keydown.enter.prevent="pickPropEtypeFirst"
+              :placeholder="propEtypePlaceholder"
+              title="输入关键字搜索实体类型（如：门、NPC、路标）"
+            >
+            <div class="etype-list" v-show="propEtypeOpen">
+              <div
+                v-for="key in propEtypeFiltered"
+                :key="key"
+                class="etype-item"
+                :class="{ active: key === selectedObjInfo.entityType }"
+                @mousedown.prevent="pickPropEtype(key)"
+              >
+                <span class="etype-icon">{{ OBJ_META[key].icon }}</span>
+                <span class="etype-label">{{ OBJ_META[key].label }}</span>
+                <span class="etype-key">{{ key }}</span>
+              </div>
+              <div class="etype-empty" v-if="!propEtypeFiltered.length">无匹配类型</div>
+            </div>
+          </div>
         </div>
         <div class="prop-row">
           <span class="prop-label">名称</span>
