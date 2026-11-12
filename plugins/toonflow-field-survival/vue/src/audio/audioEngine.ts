@@ -81,6 +81,26 @@ let noiseBuffer: AudioBuffer | null = null;
 /** 已挂上手势监听 */
 let unlockBound = false;
 
+/* ============================================================
+   ★ 音量图（GainNode 架构）
+   ------------------------------------------------------------
+   为什么要这样改：
+     旧实现把音量在 schedule() 时乘进包络 → 改音量只影响**下次播放**，
+     正在响的声音纹丝不动 → 用户拖滑块听不出变化，只能靠再点一次试听来验证，
+     反馈延迟 = 一次完整往返，操作感非常「卡」。
+     而且每次播放都要重算一次增益链 → 调度开销随音效数量线性增长。
+   新实现：
+     masterGain ─┬─ groupGain(ui) ─┬─ [每次播放的临时包络] ─┐
+                 ├─ groupGain(move) ┤                        ├→ destination
+                 └─ ...             ┘                        ┘
+     滑块直接改 GainNode.gain → 正在响的声音**立刻**变轻/变响，
+     且不需要重新调度任何东西。
+   ============================================================ */
+/** 主音量节点 */
+let masterGain: GainNode | null = null;
+/** 各分组的增益节点（group id → node） */
+const groupGains = new Map<SoundGroup, GainNode>();
+
 /** AudioContext 构造失败（老旧 WebView / 无音频设备）→ 永久降级 */
 let unsupported = false;
 
@@ -115,11 +135,52 @@ function ensureCtx(): AudioContext | null {
       return null;
     }
     ctx = new AC();
+    buildGainGraph(ctx);
   } catch {
     unsupported = true;
     ctx = null;
   }
   return ctx;
+}
+
+/**
+ * 构建增益图：master → (group → per-voice) → destination
+ * 只在 AudioContext 创建时调用一次。
+ */
+function buildGainGraph(ac: AudioContext): void {
+  try {
+    masterGain = ac.createGain();
+    masterGain.gain.value = masterVolume;
+    masterGain.connect(ac.destination);
+    for (const g of Object.keys(groupVolume) as SoundGroup[]) {
+      const node = ac.createGain();
+      node.gain.value = groupVolume[g] ?? 1;
+      node.connect(masterGain);
+      groupGains.set(g, node);
+    }
+  } catch {
+    masterGain = null;
+    groupGains.clear();
+  }
+}
+
+/**
+ * 音量写入：同时更新数值与 GainNode。
+ * ★ 用 setTargetAtTime 而不是直接赋值 —— 直接赋值会在当前音频块边界产生
+ *   突变（爆音/咔哒）；setTargetAtTime 做平滑过渡，滑块拖动时听感自然。
+ * @param timeSec 平滑时间常数（秒），越小越跟手
+ */
+function applyGain(node: GainNode | null, v: number, timeSec: number, now: number): void {
+  if (!node) return;
+  try {
+    node.gain.setTargetAtTime(v, now, timeSec);
+  } catch {
+    try {
+      node.gain.value = v;
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /** 懒初始化噪声缓冲（1s 白噪声，循环取用） */
@@ -252,13 +313,16 @@ export function play(name: string, opts?: PlayOptions): void {
 function schedule(ac: AudioContext, r: SoundRecipe, opts?: PlayOptions): void {
   const dur = Math.max(20, r.dur ?? 150) / 1000;
   const repeat = Math.max(1, r.repeat ?? 1);
+  // ★ 这里只剩「配方自身的峰值增益」。主音量与分组音量都在 GainNode 上，
+  //   由滑块实时控制 → 拖动时正在响的声音立刻跟着变。
   const gain = clamp01((r.gain ?? 0.2) * (opts?.gain ?? 1));
   const rate = opts?.rate ?? 1;
   const detune = r.detune ?? 0;
   const start = ac.currentTime + (r.delay ?? 0) / 1000;
-  const groupGain = groupVolume[r.group] ?? 1;
-  const total = gain * masterVolume * groupGain;
-  if (total <= 0.001) return;
+  if (gain <= 0.001) return;
+
+  // 声音终点接在「分组增益节点」上（若图未建立则退回 destination）
+  const dest: AudioNode = groupGains.get(r.group) ?? masterGain ?? ac.destination;
 
   for (let i = 0; i < repeat; i++) {
     const t0 = start + i * dur;
@@ -270,10 +334,10 @@ function schedule(ac: AudioContext, r: SoundRecipe, opts?: PlayOptions): void {
     const f1 = r.toFreq !== undefined ? Math.max(20, r.toFreq * rate * jitter) : f0;
 
     const env = ac.createGain();
-    env.connect(ac.destination);
+    env.connect(dest);
     // 包络：快起 + 指数衰减（避免爆音）
     env.gain.setValueAtTime(0.0001, t0);
-    env.gain.exponentialRampToValueAtTime(Math.max(0.0002, total), t0 + Math.min(0.015, dur * 0.25));
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t0 + Math.min(0.015, dur * 0.25));
     env.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
 
     const wave = r.wave ?? "sine";
@@ -335,6 +399,8 @@ export function setSoundEnabled(on: boolean): void {
     }
     ctx = null;
     noiseBuffer = null;
+    masterGain = null;
+    groupGains.clear();
     voiceEnds.length = 0;
     lastPlayed.clear();
   }
@@ -343,9 +409,30 @@ export function setSoundEnabled(on: boolean): void {
 export function getMasterVolume(): number {
   return masterVolume;
 }
+
+/** ★ 音量滑动的落盘防抖：拖动时每秒可能触发 60+ 次 setItem，
+ *  同步写 localStorage 会明显卡手。改成 300ms 内只写最后一次。 */
+let persistTimer: any = null;
+function persist(key: string, value: string): void {
+  try {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      write(key, value);
+    }, 300);
+  } catch {
+    write(key, value);
+  }
+}
+
+/** 主音量平滑时间常数（秒）—— 越小越跟手，但仍避免爆音 */
+const SLIDE_TAU = 0.02;
+
 export function setMasterVolume(v: number): void {
   masterVolume = clamp01(v);
-  write(KEY_MASTER, String(masterVolume));
+  // 正在响的声音立刻跟着变（这是「手感」的关键）
+  applyGain(masterGain, masterVolume, SLIDE_TAU, ctx?.currentTime ?? 0);
+  persist(KEY_MASTER, String(masterVolume));
 }
 
 export function getGroupVolume(g: SoundGroup): number {
@@ -353,7 +440,8 @@ export function getGroupVolume(g: SoundGroup): number {
 }
 export function setGroupVolume(g: SoundGroup, v: number): void {
   groupVolume[g] = clamp01(v);
-  write(KEY_GROUP + g, String(groupVolume[g]));
+  applyGain(groupGains.get(g) ?? null, groupVolume[g], SLIDE_TAU, ctx?.currentTime ?? 0);
+  persist(KEY_GROUP + g, String(groupVolume[g]));
 }
 
 /** 调试面板用：上下文状态 */

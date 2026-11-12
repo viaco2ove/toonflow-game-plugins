@@ -6206,7 +6206,14 @@ export async function handle_action(
       if (!skill || skill.empty || !skill.name || !player || !player.alive) return okResp("");
       if (skill.cdLeft > 0) return okResp(`${skill.name} 冷却中`);
       // ★ 空放：无目标也正常施放（特效/CD 照常），只是没有伤害结算
-      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(player, e) < SKILL_RANGE_M);
+      // ★ BUG-3 修复（2026-11-12）：命中判定用前端上报的实时位姿（与 attack 对称）。
+      //   原来只用 state 里的玩家位置，而 state 来自落库快照（最多滞后 2s）→
+      //   玩家明明站在射程内却空放。castRef 仅作本次判定的参考点，不写回 state
+      //   （位姿由 tick 的 pose 落库）。
+      const castRef = (params?.player && Number.isFinite(num(params.player.x, NaN)) && Number.isFinite(num(params.player.y, NaN)))
+        ? { x: num(params.player.x, player.x), y: num(params.player.y, player.y) }
+        : player;
+      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && !e.deathMs && dist(castRef, e) < SKILL_RANGE_M);
       skill.cdLeft = skill.cd;
       // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
       (player as any).actionBobMs = 300;
@@ -6252,9 +6259,18 @@ export async function handle_action(
       //   玩家点了假人 → damage() 正常结算；kills/exp 走下面的 dummy 特判（不给经验）
       const enemies = s.entities.filter((e) =>
         (e.side === "enemy" || (e as any).trainingDummy === true) && e.alive !== false);
-      const inRange = enemies.filter((e) => dist(player, e) < SKILL_RANGE_M);
+      // ★ BUG-3 修复（2026-11-12）：普攻判定也用前端上报的实时位姿。
+      //   原来只用 state 里的玩家位置判 4m 范围，而 state 来自落库快照（滞后 2s，
+      //   移动 3m/s → 6m 偏差）→ 玩家视觉上已贴近野怪，点了却说「附近没有敌人」。
+      //   与 case "skill" / case "tick" 对齐（它们都用 params.player 的 lastLocalPose）。
+      //   atkRef 仅作本次判定的参考点，不写回 state。
+      const atkRef = (params?.player && Number.isFinite(num(params.player.x, NaN)) && Number.isFinite(num(params.player.y, NaN)))
+        ? { x: num(params.player.x, player.x), y: num(params.player.y, player.y) }
+        : player;
+      // 渐隐期（deathMs>0）的尸体不再可选中——否则玩家会对正在消失的尸体空挥一次
+      const inRange = enemies.filter((e) => !e.deathMs && dist(atkRef, e) < SKILL_RANGE_M);
       if (!inRange.length) return okResp("附近没有敌人");
-      const target = inRange.reduce((best, e) => (!best || dist(player, e) < dist(player, best) ? e : best), inRange[0]);
+      const target = inRange.reduce((best, e) => (!best || dist(atkRef, e) < dist(atkRef, best) ? e : best), inRange[0]);
       const dmg = Math.max(1, Math.round(player.atk * 0.6));
       (player as any).actionBobMs = 200;
       floater(s, "普攻", player.x, player.y - 34);
