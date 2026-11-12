@@ -9,6 +9,33 @@
  * 本文件不参与构建（type-only），由 App.vue 运行时构造 ctx 实例。
  */
 
+/**
+ * ★ 音效配方（地图集注册业务专属音效时使用）。
+ *  插件内置的通用配方见 audio/recipes.ts，这里只暴露必要字段。
+ */
+export interface AudioRecipeLike {
+  /** 分组（决定用哪一路分组音量） */
+  group: "ui" | "move" | "combat" | "item" | "skill" | "system";
+  /** 合成波形 */
+  wave?: "sine" | "square" | "sawtooth" | "triangle" | "noise";
+  /** 起始频率 Hz */
+  freq?: number;
+  /** 结束频率 Hz（做滑音） */
+  toFreq?: number;
+  /** 时长 ms */
+  dur?: number;
+  /** 峰值增益 0~1 */
+  gain?: number;
+  /** 噪声占比 0~1 */
+  noise?: number;
+  /** 延迟 ms */
+  delay?: number;
+  /** 音高随机化 ±比例 */
+  detune?: number;
+  /** 播放次数 */
+  repeat?: number;
+}
+
 /** 实体句柄（玩家/NPC/怪通用） */
 export interface Entity {
   id: string;
@@ -169,9 +196,22 @@ export interface Ctx {
     setLocked(mapFile: string, locked: boolean): void;
   };
 
-  /** 音效（占位：当前引擎无音频通道，no-op） */
+  /**
+   * 音效通道（通用能力，插件内置实现）。
+   *   - 默认关闭，需用户在「系统 → 设置 → 音效」里打开；
+   *   - 音效名走内置配方表（通用功能音）或地图集自行 register() 的业务专属音效；
+   *   - 播放失败一律静默降级，绝不影响游戏逻辑。
+   */
   audio: {
-    play(name: string): void;
+    /** 播放一条音效（内置配方名或已注册的自定义配方名） */
+    play(name: string, opts?: { gain?: number; rate?: number }): void;
+    /**
+     * 注册业务专属音效配方（地图集用）。
+     * 插件只提供通用能力，具体音效配方由地图集注入。
+     */
+    register(name: string, recipe: AudioRecipeLike): void;
+    /** 当前是否已开启音效 */
+    enabled(): boolean;
   };
 
   /** LLM 调用（剧情对话/判定） */

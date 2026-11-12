@@ -14,6 +14,11 @@
  */
 import { ref } from "vue";
 import { assetUrl } from "./assets";
+import {
+  play as playSound,
+  registerRecipe as registerSoundRecipe,
+  isSoundEnabled,
+} from "./audio/audioEngine";
 import type { Ctx, EventsFile, EventDef } from "./shared/_ctx";
 
 // ─── 运行时状态 ───
@@ -495,7 +500,15 @@ function makeCtx(actor: EventActor = PLAYER_ACTOR, info: EventCtxInfo = EMPTY_EV
         })();
       },
     },
-    audio: { play: () => { /* no-op（v0.2 接音频通道） */ } },
+    audio: {
+      play: (name: string, opts?: { gain?: number; rate?: number }) => {
+        playSound(name, opts);
+      },
+      register: (name: string, recipe: any) => {
+        registerSoundRecipe(name, recipe);
+      },
+      enabled: () => isSoundEnabled(),
+    },
     llm: {
       speak: async (npcId: string, npcName: string, userText: string): Promise<string> => {
         // 走 sys_chat 通道（App.vue 的 chatResultWaiters 机制）—— v0.2 接入

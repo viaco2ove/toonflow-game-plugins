@@ -56,6 +56,8 @@ import { loadMapConfig, loadLevelByName, loadStartLevelName, DEFAULT_START_LEVEL
 import { loadEntityRegistry } from "./entityRegistry";
 // ★ 事件系统（map_design 修真地图集改造配套）：地图事件触发器运行时
 import { initEventEngine, onMapEntered, onInteract as fireInteractEvent, eventUidsHas, setEventZones, tickZones, getLoadedEvents, getEventZones, getRepeatHits, fireEventManually, loadMapEvents, reloadFlags, setEventFlag, delEventFlag, tickIntervalEvents, setPlayerCombatLevel, getProximityPoints } from "./eventEngine";
+import { bindUnlockGesture } from "./audio/audioEngine";
+import { sfx, updateFootstep, resetFootstep, detectDamage, resetDamageDetect } from "./audio/gameSounds";
 // ★ AI 托管系统（ally 类型角色的 AI 控制）
 import { enableAI, disableAI, tickAllAIs, isAIEnabled, registerAILLM, registerMapNpcResolver, notifyAICombat, notifyAILoot, issueAIChatCommand, wakeAiForPlayerSms } from "./ai";
 // ★ 通信(短信)：状态管理（唯一数据源）
@@ -276,6 +278,7 @@ function onSysBtnClick(e: MouseEvent) {
     return;
   }
   showSystemPanel.value = !showSystemPanel.value;
+  sfx[showSystemPanel.value ? "open" : "close"]();
 }
 
 /* ============================================================
@@ -2785,8 +2788,8 @@ function onRightClick(e: MouseEvent) {
     .map((e) => ({ e, d: Math.hypot(e.x - tx, e.y - ty) }))
     .filter(({ d }) => d < 1.5)
     .sort((a, b) => a.d - b.d)[0]?.e;
-  if (clicked) sendTick("attack", { targetId: clicked.id });
-  else sendTick("attack", {});   // 无目标时让后端就近找（entry.ts 会返回"附近没有敌人"）
+  if (clicked) { sfx.swing(); sendTick("attack", { targetId: clicked.id }); }
+  else { sfx.swing(); sendTick("attack", {}); }   // 无目标时让后端就近找（entry.ts 会返回"附近没有敌人"）
 }
 
 /** 点击地面特效入队（超出上限则丢弃最旧的，避免连点导致数组无限增长） */
@@ -4488,6 +4491,9 @@ const ZONE_RESPAWN_SEC = 45;       // 离开区域后刷新野怪时间（秒）
 const TICK_RATE_MS = 100;          // tick 间隔（毫秒）
 /** 本地权威位姿缓存：宿主 state 推回时用它覆盖宿主侧玩家坐标（防回退） */
 let lastLocalPose: { x: number; y: number; facing: number } | null = null;
+
+/** ★ 音效手势解锁监听的清理函数（onBeforeUnmount 里摘掉） */
+let unlockGestureCleanup: (() => void) | null = null;
 /** 区域刷新追踪 */
 let currentZoneName: string | null = null;       // 玩家当前所在区域
 let zoneLeftTick: number = 0;                    // 离开区域的 tick 时间
@@ -7024,6 +7030,7 @@ function onPickupConfirm(): void {
   if (e) e.alive = false;        // 立即从画面消失；切图清场后会随重新进入刷新
   nearPickup.value = null;
   pickupDismissed.value = false;
+  sfx.pickup();
 }
 
 /** 暂时忽略：关闭提示，本次靠近不再弹出（离开范围后重新提示） */
@@ -7243,8 +7250,8 @@ function onQuestOpen(): void {
   runSysCmd("sys_chain_board", {});
   questOpen.value = true;
 }
-function onQuestAccept(id: string): void { runSysCmd("sys_quest_accept", { id }); }
-function onQuestTurnin(id: string): void { runSysCmd("sys_quest_turnin", { id }); }
+function onQuestAccept(id: string): void { sfx.questAccept(); runSysCmd("sys_quest_accept", { id }); }
+function onQuestTurnin(id: string): void { sfx.questDone(); runSysCmd("sys_quest_turnin", { id }); }
 function onQuestAbandon(id: string): void { runSysCmd("sys_quest_abandon", { id }); }
 function onQuestArrive(id: string): void { runSysCmd("sys_quest_arrive", { id }); }
 function onQuestAsk(id: string, question: string): void { runSysCmd("sys_quest_ask", { id, question }); }
@@ -7724,6 +7731,24 @@ function onSleep() {
   runSysCmd("sys_rest", { reason: "在床上睡了一觉" });
 }
 
+/**
+ * ★ 音效观察（10Hz 调用）：
+ *   - 脚步：按玩家**位移阈值**触发（不是每帧），避免连续噪音
+ *   - 命中/受伤/死亡：比对前后两帧的 hp 差分（不依赖宿主事件字段）
+ * 音效总开关关闭时，audioEngine 内部直接 return，这里等于零开销。
+ */
+function observeGameAudio(s: any): void {
+  if (!s || !Array.isArray(s.entities)) return;
+  // 伤害差分
+  detectDamage(s.entities as any);
+  // 脚步：玩家是否在移动（位移量 > 0）
+  const me = s.entities.find((e: any) => e.side === "player");
+  if (me) {
+    const moving = Math.abs(Number(me.vx) || 0) > 0.01 || Math.abs(Number(me.vy) || 0) > 0.01;
+    updateFootstep(Number(me.x) || 0, Number(me.y) || 0, moving);
+  }
+}
+
 function loop(ts: number) {
   raf = requestAnimationFrame(loop);
   _animTick++;
@@ -7765,6 +7790,9 @@ function loop(ts: number) {
     lastTickAt = ts;
     // ★ v3：本地兜底推进（外部 mockHost 未启动时玩家也能移动）——本地仍保持 10Hz
     localTick();
+    // ★ 音效观察：脚步（位移阈值）+ 伤害差分（命中/受伤/死亡）
+    //   放在 10Hz 段而不是每帧 → 状态比对开销可忽略，且不影响渲染帧率。
+    observeGameAudio(s);
     // ★ game.md 床碰撞：靠近床时出睡眠按钮（10Hz 足够，9~49 格查表很便宜）
     updateNearBed();
     // ★ game.md 对话功能：10Hz 刷新附近可对话角色
@@ -7845,6 +7873,7 @@ function castSkill(i: number) {
   // ★ 空格子（补齐用的占位）点了不施放
   const slot: any = skillPage.value[i];
   if (!slot || slot.empty || !slot.name) return;
+  sfx.skill();
   sendTick("skill", {
     index: i,
     targets: pickSkillTargets(),
@@ -7855,6 +7884,7 @@ function useItem(i: number) {
   // ★ 空格子 / 数量为 0 的物品点了不发送
   const it: any = itemPage.value[i];
   if (!it || it.empty || !it.name || (it.count ?? 0) <= 0) return;
+  sfx.itemUse();
   sendTick("item", { index: i });
 }
 function pageSkill(d: number) { sendTick("page", { kind: "skill", delta: d }); }
@@ -8112,6 +8142,10 @@ let stopHost: (() => void) | null = null;
 
 /** 应用启动：加载地图 → 初始化 chunk / 装饰 → 开启渲染循环 */
 onMounted(async () => {
+  // ★ 音效手势解锁：插件 UI 跑在宿主 iframe 里，宿主外层的手势**不传递**到 iframe，
+  //   所以必须挂在插件文档自身的 pointerdown/keydown 上（浏览器自动播放策略要求）。
+  //   音效总开关关闭时这个监听会立刻自我移除（bindUnlockGesture → unlockAudio 直接 return）。
+  unlockGestureCleanup = bindUnlockGesture();
   // ★ 调试句柄：standalone/dev-host 下可从控制台切图（window.__switchLevel("Mulberry Forest")）
   (window as any).__switchLevel = switchLevel;
   // ★ 事件系统初始化（map_design 事件引擎）：注入游戏钩子
@@ -8876,6 +8910,11 @@ onBeforeUnmount(() => {
   void flushSmsSave();
   // ★ P3：停掉短信事件轮询器
   stopProactivePoller();
+  // ★ 音效：摘掉手势解锁监听 + 重置差分/脚步状态
+  unlockGestureCleanup?.();
+  unlockGestureCleanup = null;
+  resetFootstep();
+  resetDamageDetect();
   cancelAnimationFrame(raf);
 });
 

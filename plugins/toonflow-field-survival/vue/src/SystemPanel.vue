@@ -9,10 +9,12 @@ import RolePanel from "./panels/RolePanel.vue";
 import EventPanel from "./panels/EventPanel.vue";
 import QuestLogPanel from "./panels/QuestLogPanel.vue";
 import AIPanel from "./panels/AIPanel.vue";
+import SoundPanel from "./panels/SoundPanel.vue";
 import SmsPanel from "./sms/SmsPanel.vue";
 import type { SmsContact } from "./sms/SmsNewGroupModal.vue";
 import type { Conversation } from "./sms/types";
 import { getLevelDisplayName } from "./mapConfig";
+import { sfx } from "./audio/gameSounds";
 import type { AISettings } from "./ai/aiConfig";
 import { DEFAULT_AI_SETTINGS } from "./ai/aiConfig";
 
@@ -83,6 +85,23 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
 
 const activeTab = ref<TabId>("sms");
 
+/** ★ 设置页内部分区（AI 托管 / 音效） */
+const configSection = ref<"ai" | "sound">("ai");
+
+/** 切页签：播一声轻 UI 音（音效关闭时静默） */
+function onTabClick(id: TabId): void {
+  if (activeTab.value === id) return;
+  activeTab.value = id;
+  sfx.tab();
+}
+
+/** 切设置页内部分区 */
+function onConfigSection(s: "ai" | "sound"): void {
+  if (configSection.value === s) return;
+  configSection.value = s;
+  sfx.tab();
+}
+
 /** ★ 通信 tab 角标：未读数（其它 tab 恒为 0） */
 function badgeOf(tabId: TabId): number {
   if (tabId !== "sms") return 0;
@@ -128,7 +147,7 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         :key="t.id"
         class="sp-tab"
         :class="{ 'sp-tab--on': activeTab === t.id }"
-        @click="activeTab = t.id"
+        @click="onTabClick(t.id)"
       >
         <span class="sp-tab__icon">{{ t.icon }}</span>{{ t.label }}
         <span v-if="badgeOf(t.id) > 0" class="sp-tab__badge">{{ badgeText(badgeOf(t.id)) }}</span>
@@ -235,13 +254,28 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         @arrive="(id: string) => emit('quest-arrive', id)"
         @abandon="(id: string) => emit('quest-abandon', id)"
       />
-      <AIPanel
-        v-else-if="activeTab === 'config'"
-        :settings="aiSettings || defaultSettings"
-        :managed-count="aiManagedCount || 0"
-        @save="(s: AISettings) => emit('ai-settings-save', s)"
-        @reset="() => emit('ai-settings-reset')"
-      />
+      <!-- ★ 设置页内部分两区：AI 托管 / 音效（音效默认关闭，需用户手动打开） -->
+      <div v-else-if="activeTab === 'config'" class="sp-config">
+        <div class="sp-config__tabs">
+          <button
+            class="sp-config__tab"
+            :class="{ 'sp-config__tab--on': configSection === 'ai' }"
+            @click="onConfigSection('ai')"          >🤖 AI 托管</button>
+          <button
+            class="sp-config__tab"
+            :class="{ 'sp-config__tab--on': configSection === 'sound' }"
+            @click="onConfigSection('sound')"
+          >🔊 音效</button>
+        </div>
+        <AIPanel
+          v-if="configSection === 'ai'"
+          :settings="aiSettings || defaultSettings"
+          :managed-count="aiManagedCount || 0"
+          @save="(s: AISettings) => emit('ai-settings-save', s)"
+          @reset="() => emit('ai-settings-reset')"
+        />
+        <SoundPanel v-else />
+      </div>
     </div>
 
     <div class="sp-foot">{{ notice || "拖动标题栏可移动面板；背包内可拖拽排序" }}</div>
@@ -288,6 +322,11 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
   pointer-events: none;
 }
 .sp-body { flex: 1 1 auto; overflow: auto; padding: 8px; }
+/* ★ 设置页内部分区（AI 托管 / 音效）的二级标签 */
+.sp-config { display: flex; flex-direction: column; gap: 10px; }
+.sp-config__tabs { display: flex; gap: 6px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 6px; }
+.sp-config__tab { padding: 4px 12px; border-radius: 5px; border: 1px solid rgba(255,255,255,0.16); background: rgba(255,255,255,0.05); color: #cfd8e3; cursor: pointer; font-size: 12px; }
+.sp-config__tab--on { background: #2f6fd0; border-color: #5a9bff; color: #fff; }
 /* ★ 通信 tab：短信面板自己管滚动 → 关掉外层滚动，避免双滚动条 */
 .sp-body--flush { overflow: hidden; padding: 6px; }
 .sp-foot { padding: 6px 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); color: #93a2b3; font-size: 11px; min-height: 24px; }
