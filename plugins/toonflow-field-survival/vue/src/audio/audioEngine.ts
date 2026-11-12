@@ -47,7 +47,7 @@ let enabled = false;
 let masterVolume = 0.7;
 const groupVolume: Record<SoundGroup, number> = {
   ui: 0.6,
-  move: 0.4,
+  move: 0.75,
   combat: 0.9,
   item: 0.8,
   skill: 0.85,

@@ -7741,11 +7741,11 @@ function observeGameAudio(s: any): void {
   if (!s || !Array.isArray(s.entities)) return;
   // 伤害差分
   detectDamage(s.entities as any);
-  // 脚步：玩家是否在移动（位移量 > 0）
+  // 脚步：只看位置差分（★ 不用 me.vx/me.vy —— 那两个字段全程是 0，
+  //   实体的移动是直接改 x/y 的，速度字段从未被赋真实值）
   const me = s.entities.find((e: any) => e.side === "player");
   if (me) {
-    const moving = Math.abs(Number(me.vx) || 0) > 0.01 || Math.abs(Number(me.vy) || 0) > 0.01;
-    updateFootstep(Number(me.x) || 0, Number(me.y) || 0, moving);
+    updateFootstep(Number(me.x) || 0, Number(me.y) || 0);
   }
 }
 

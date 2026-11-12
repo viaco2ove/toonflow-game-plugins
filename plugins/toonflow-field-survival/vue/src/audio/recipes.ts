@@ -106,14 +106,32 @@ export const SOUND_RECIPES: Record<string, SoundRecipe> = {
   skill_ready: { group: "skill", wave: "sine", freq: 990, toFreq: 1320, dur: 140, gain: 0.14 },
 
   /* ---------------- 移动 ---------------- */
-  /** 脚步（草地默认） */
-  footstep: { group: "move", wave: "noise", noise: 1, freq: 420, dur: 55, gain: 0.1 },
-  /** 石地脚步 */
-  footstep_stone: { group: "move", wave: "noise", noise: 1, freq: 1500, dur: 40, gain: 0.09 },
-  /** 木地脚步 */
-  footstep_wood: { group: "move", wave: "noise", noise: 1, freq: 700, dur: 60, gain: 0.1 },
-  /** 水边脚步 */
-  footstep_water: { group: "move", wave: "noise", noise: 1, freq: 900, dur: 90, gain: 0.08 },
+  /**
+   * 脚步（草地默认）
+   * ★ 重做成「低频砰 + 高频沙沙」双层（原版纯噪声太闷、听不出来）：
+   *   - 振荡器层：square 180Hz → 90Hz 的下滑，给出「踏地」的实感
+   *   - 噪声层：bandpass 1200Hz 的沙沙声，给出「摩擦」的质感
+   *   两者叠加 + 略微 detune（±4%）→ 每次落脚略有差异，不腻。
+   */
+  footstep: {
+    group: "move", wave: "square", freq: 180, toFreq: 90,
+    dur: 90, gain: 0.34, noise: 0.7, detune: 0.04,
+  },
+  /** 石地脚步（更清脆的高频） */
+  footstep_stone: {
+    group: "move", wave: "square", freq: 260, toFreq: 140,
+    dur: 70, gain: 0.3, noise: 0.85, detune: 0.05,
+  },
+  /** 木地脚步（带一点空腔共鸣） */
+  footstep_wood: {
+    group: "move", wave: "triangle", freq: 220, toFreq: 110,
+    dur: 130, gain: 0.32, noise: 0.55, detune: 0.03,
+  },
+  /** 水边脚步（更长的沙沙声） */
+  footstep_water: {
+    group: "move", wave: "sine", freq: 150, toFreq: 80,
+    dur: 200, gain: 0.3, noise: 1, detune: 0.06,
+  },
 
   /* ---------------- 任务 / 系统 ---------------- */
   /** 任务接取 */

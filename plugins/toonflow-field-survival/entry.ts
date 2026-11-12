@@ -6269,8 +6269,32 @@ export async function handle_action(
         : player;
       // 渐隐期（deathMs>0）的尸体不再可选中——否则玩家会对正在消失的尸体空挥一次
       const inRange = enemies.filter((e) => !e.deathMs && dist(atkRef, e) < SKILL_RANGE_M);
-      if (!inRange.length) return okResp("附近没有敌人");
-      const target = inRange.reduce((best, e) => (!best || dist(atkRef, e) < dist(atkRef, best) ? e : best), inRange[0]);
+      if (!inRange.length) {
+        // ★ M3-2：带 targetId 时优先给精确原因（不存在 / 太远），不笼统说「附近没有敌人」
+        const wantId0 = str(params?.targetId);
+        if (wantId0) {
+          const anywhere0 = enemies.find((e) => e.id === wantId0 && !e.deathMs);
+          return okResp(anywhere0
+            ? `目标 ${anywhere0.name}（${wantId0}）距离超过攻击范围（>${SKILL_RANGE_M}m），请先靠近再攻击`
+            : `目标 ${wantId0} 不存在或已死亡（可用 query_state 查看当前存活敌人）`);
+        }
+        return okResp("附近没有敌人");
+      }
+      // ★ M3-2（2026-11-12，网络通信机制 v3 §10）：MCP kill_mob 指定目标 ——
+      //   params.targetId 在范围内则精确选它（AI 看准哪只杀哪只）；
+      //   不在范围/不存在 → 面向 AI 的可读错误（M3-8）；缺省仍选最近（前端点击行为不变）。
+      const wantId = str(params?.targetId);
+      let target = inRange.reduce((best, e) => (!best || dist(atkRef, e) < dist(atkRef, best) ? e : best), inRange[0]);
+      if (wantId) {
+        const wanted = inRange.find((e) => e.id === wantId);
+        if (!wanted) {
+          const anywhere = enemies.find((e) => e.id === wantId && !e.deathMs);
+          return okResp(anywhere
+            ? `目标 ${anywhere.name}（${wantId}）距离超过攻击范围（>${SKILL_RANGE_M}m），请先靠近再攻击`
+            : `目标 ${wantId} 不存在或已死亡（可用 query_state 查看当前存活敌人）`);
+        }
+        target = wanted;
+      }
       const dmg = Math.max(1, Math.round(player.atk * 0.6));
       (player as any).actionBobMs = 200;
       floater(s, "普攻", player.x, player.y - 34);
@@ -7508,6 +7532,76 @@ export async function handle_action(
         default:
           return okResp(`ai_command: 未知 action '${cmd}'`);
       }
+    }
+
+    /* ====== ★ v3 MCP（2026-11-12，网络通信机制 v3 §10 M3）：AI agent 权威通道 ======
+     *  这两个 action 是 MCP tools（clear_effect / spawn_entity）的落地点。
+     *  铁律：MCP 层不直接改 state，必须经 handle_action 走权威结算（v3 §6 红线），
+     *  所以后果（entity 构造 / vfx 移除）都在本文件里发生。 */
+    case "ai_clear_vfx": {
+      // clear_effect：params { effectId? } 或 { all: true }——特效从 s.vfx 移除，
+      // 前端下一帧即消失（drawVfxLayer 读权威 state）。缺省（不带参）视为 all。
+      const vfxArr: any[] = Array.isArray((s as any).vfx) ? (s as any).vfx : [];
+      if (!vfxArr.length) return okResp("当前没有任何特效可清除");
+      const vfxId = str(params?.effectId || params?.id);
+      if (params?.all === true || !vfxId) {
+        const n = vfxArr.length;
+        (s as any).vfx = [];
+        return okResp(`已清除全部特效（${n} 个）`);
+      }
+      const idx = vfxArr.findIndex((v: any) => v.id === vfxId);
+      if (idx < 0) {
+        const ids = vfxArr.map((v: any) => v.id).slice(0, 8).join(", ");
+        return okResp(`特效 ${vfxId} 不存在（当前特效：${ids || "无"}）`);
+      }
+      vfxArr.splice(idx, 1);
+      return okResp(`已清除特效 ${vfxId}`);
+    }
+
+    case "ai_spawn": {
+      // spawn_entity：params { archetypeId?, count?, x?, y? }。
+      // 与 spawnWave 同一条 makeEntity 权威构造链（hp/atk/bounty/def 一致）；
+      // 类型只允许「地图怪图鉴」（s.map.enemy_archetypes）内的 archetype——
+      // 白名单校验防 AI 伪造实体；缺省坐标 → 按既有刷怪规则散布在玩家 30~100m。
+      if (s.phase !== "playing") {
+        return okResp(`游戏未开始（当前 phase=${s.phase}），无法刷出实体`);
+      }
+      const archs = (s.map?.enemy_archetypes && s.map.enemy_archetypes.length)
+        ? s.map.enemy_archetypes
+        : [{ id: "enemy_1", name: "荒野游荡者", lv: 1, hp: 40, atk: 6, def: 2, speed: 1.4, bounty: { exp: 10, money: 8 }, color: "#9b3a3a" }];
+      const archId = str(params?.archetypeId || params?.entityType || "");
+      const arch = archId ? archs.find((a) => a.id === archId) : archs[0];
+      if (!arch) {
+        const ids = archs.map((a) => `${a.id}(${a.name})`).join(", ");
+        return okResp(`未知实体类型「${archId}」。可用类型：${ids}`);
+      }
+      const count = Math.max(1, Math.min(6, Math.round(num(params?.count, 1))));
+      const player = s.entities.find((e) => e.side === "player");
+      const hasXY = Number.isFinite(num(params?.x, NaN)) && Number.isFinite(num(params?.y, NaN));
+      const cx = hasXY ? clampX(num(params?.x, player?.x ?? PLAYER_SPAWN.x)) : (player?.x ?? PLAYER_SPAWN.x);
+      const cy = hasXY ? clampY(num(params?.y, player?.y ?? PLAYER_SPAWN.y)) : (player?.y ?? PLAYER_SPAWN.y);
+      const spawned: string[] = [];
+      for (let i = 0; i < count; i++) {
+        const angle = rnd(0, Math.PI * 2);
+        const d = hasXY ? 0 : rnd(30, 100);
+        // id 唯一性：s.tick 对同 tick 内的多批 spawn 会撞车（实测 2026-11-12：
+        // 5 批 count=6 同 tick → 30 个实体共享 6 个 id，kill_mob 按 id 索敌会错杀）。
+        // 参照 floater/pushVfx 加随机段。
+        const e = makeEntity(
+          { id: `ai_${arch.id}_${s.tick}_${i}_${Math.random().toString(36).slice(2, 6)}`, name: arch.name, hp: arch.hp, level: arch.lv },
+          "enemy",
+          clampX(cx + Math.cos(angle) * d),
+          clampY(cy + Math.sin(angle) * d),
+          i,
+        );
+        e.atk = arch.atk;
+        (e as any).bounty = { ...arch.bounty };
+        (e as any).def = arch.def;
+        s.entities.push(e);
+        spawned.push(e.id);
+      }
+      pushEvent(s, `AI 刷出 ${arch.name}×${count}`);
+      return okResp(`已刷出 ${arch.name}×${count}（${spawned.join(", ")}）`);
     }
 
     case "sys_party": {

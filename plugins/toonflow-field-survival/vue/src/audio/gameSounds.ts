@@ -16,6 +16,8 @@ import type { Entity } from "../types";
    脚步（位移阈值触发）
    ============================================================ */
 const STEP_DIST_M = 1.6;   // 每移动 1.6 米触发一次
+/** 判定「在移动」的最小单帧位移（米）—— 小于这个值视为静止 */
+const MOVING_EPS_M = 0.01;
 let stepAccum = 0;
 let lastStepX = 0;
 let lastStepY = 0;
@@ -23,27 +25,40 @@ let stepPrimed = false;
 
 /**
  * 喂入玩家位置，位移够阈值就播一步脚步。
+ *
+ * ★★ 关键修复（2026-11-12）：
+ *   旧实现靠 `moving` 入参（由 App.vue 从 `me.vx/me.vy` 推出）判断是否在移动。
+ *   但**实体的 vx/vy 从来不被赋值为实际速度** —— localTick 里只有
+ *   `me.vx = 0; me.vy = 0;`（位置是直接改 x/y 的，速度字段全程是 0）。
+ *   → moving 永远 false → 脚步声一次都不会响。
+ *   现在改成**纯位置差分**：只要这次采样相对上次动了就算在移动。
+ *
  * 返回是否真的播了（便于调试）。
  */
-export function updateFootstep(x: number, y: number, moving: boolean): boolean {
-  if (!moving) {
-    stepPrimed = false;
-    stepAccum = 0;
-    return false;
-  }
+export function updateFootstep(x: number, y: number, _moving?: boolean): boolean {
   if (!stepPrimed) {
+    // 首次喂位置：只建立基准
     stepPrimed = true;
     lastStepX = x;
     lastStepY = y;
+    stepAccum = 0;
     return false;
   }
   const dx = x - lastStepX;
   const dy = y - lastStepY;
-  stepAccum += Math.hypot(dx, dy);
-  if (stepAccum < STEP_DIST_M) return false;
-  stepAccum = 0;
+  const dist = Math.hypot(dx, dy);
+
+  // 本帧几乎没动 → 视为静止（但保留基准，方便下一帧继续累加）
+  if (dist < MOVING_EPS_M) return false;
+
+  stepAccum += dist;
   lastStepX = x;
   lastStepY = y;
+  if (stepAccum < STEP_DIST_M) return false;
+
+  // ★ 保留超出的余数（不直接清零）：
+  //   若清零，每步都会丢掉超出部分 → 实际步距变成 1.8m 而非 1.6m，节奏不均。
+  stepAccum -= STEP_DIST_M;
   play("footstep");
   return true;
 }
