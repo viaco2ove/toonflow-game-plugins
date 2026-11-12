@@ -264,6 +264,12 @@ export interface PlayOptions {
   gain?: number;
   /** 音高倍率 */
   rate?: number;
+  /**
+   * ★ 绕过去重窗口（试听用）。
+   *   滑块松手时立刻试听，若刚好落在同名音效的 80ms 去重窗口内会被吞掉，
+   *   用户会听到「没反应」→ 强制播放。
+   */
+  force?: boolean;
 }
 
 /**
@@ -279,12 +285,14 @@ export function play(name: string, opts?: PlayOptions): void {
     }
     return;
   }
-  // 同 key 去重
+  // 同 key 去重（force 时跳过）
   const now = Date.now();
-  const last = lastPlayed.get(name) || 0;
-  if (now - last < DEDUPE_MS) return;
-  lastPlayed.set(name, now);
-  if (lastPlayed.size > 200) lastPlayed.clear();
+  if (!opts?.force) {
+    const last = lastPlayed.get(name) || 0;
+    if (now - last < DEDUPE_MS) return;
+    lastPlayed.set(name, now);
+    if (lastPlayed.size > 200) lastPlayed.clear();
+  }
 
   const ac = ensureCtx();
   if (!ac) return;

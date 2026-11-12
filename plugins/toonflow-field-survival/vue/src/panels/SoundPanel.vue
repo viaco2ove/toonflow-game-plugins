@@ -10,7 +10,7 @@
  *   3. 本面板只管**通用能力**（音量/开关）；
  *      业务专属音效由地图集通过 ctx.audio.register() 注入，不在这里配。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import {
   getGroupVolume,
   getMasterVolume,
@@ -29,8 +29,13 @@ import { GROUP_SAMPLE, SOUND_GROUPS, type SoundGroup } from "../audio/recipes";
 const on = ref(isSoundEnabled());
 /** 主音量 */
 const master = ref(getMasterVolume());
-/** 分组音量 */
-const groups = ref<Record<string, number>>(
+/**
+ * ★ 分组音量：逐 key 赋值，**不要**整体替换对象。
+ *   整体替换（`groups.value = {...groups.value, [g.id]: v}`）会让 Vue
+ *   认为整个 groups 的依赖全变了 → 6 个滑块 + 6 个百分比文本全部重渲染。
+ *   拖动时 input 事件每秒 60+ 次 → 明显卡手。
+ */
+const groups = reactive<Record<string, number>>(
   Object.fromEntries(SOUND_GROUPS.map((g) => [g.id, getGroupVolume(g.id)])),
 );
 /** 音频上下文状态（调试行） */
@@ -67,20 +72,20 @@ function onMaster(v: number) {
   setMasterVolume(v);
 }
 
-/** 分组音量 */
+/** 分组音量（逐 key 赋值 → 只有该滑块和它的百分比文本重渲染） */
 function onGroup(g: SoundGroup, v: number) {
-  groups.value = { ...groups.value, [g.id]: v };
+  groups[g] = v;
   setGroupVolume(g, v);
 }
 
-/** 试听（分组样例） */
+/** 试听（分组样例）—— force 绕过去重，保证「点了就有声」 */
 function preview(g: SoundGroup) {
   if (!on.value) {
     // 未开启时先开启（用户点了试听 = 明确意图）
     toggleAll(true);
   }
   unlockAudio();
-  playSound(GROUP_SAMPLE[g], { gain: 1 });
+  playSound(GROUP_SAMPLE[g], { gain: 1, force: true });
   refresh();
 }
 
@@ -134,7 +139,9 @@ onMounted(refresh);
       </div>
       <input
         type="range" class="sd-range" min="0" max="1" step="0.05"
-        :value="master" @input="onMaster(Number(($event.target as HTMLInputElement).value))"
+        :value="master"
+        @input="onMaster(Number(($event.target as HTMLInputElement).value))"
+        @change="preview('ui')"
       />
     </div>
 
@@ -152,6 +159,7 @@ onMounted(refresh);
         type="range" class="sd-range" min="0" max="1" step="0.05"
         :value="groups[g.id] ?? 0"
         @input="onGroup(g.id, Number(($event.target as HTMLInputElement).value))"
+        @change="preview(g.id)"
       />
     </div>
 
