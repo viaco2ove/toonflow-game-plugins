@@ -52,7 +52,7 @@ const sellCount = ref(1);
 const form = reactive({
   name: "", power: 0, cost: 0, cd: 0, type: "heal", range: "melee",
   lv: 1, buff_type: "", durability: -1, attribute_type: "", attribute_value: 0,
-  quantity: 1, description: "", effects_type: "",
+  quantity: 1, description: "", effects_type: "", attack_shape: "circle",
 });
 
 function startEdit(it: any, i: number) {
@@ -73,6 +73,8 @@ function startEdit(it: any, i: number) {
   form.quantity = Math.max(1, Math.round(Number(it.count ?? it.quantity) || 1));
   form.description = String(it.description || it.desc || "");
   form.effects_type = String(it.effects_type || "");
+  // ★ V2（2026-11-13）：攻击形状（缺省 circle = V1 圆形行为）
+  form.attack_shape = it.attack_shape === "cone" ? "cone" : "circle";
 }
 function submitEdit(i: number) {
   emit("edit-item", {
@@ -91,6 +93,7 @@ function submitEdit(i: number) {
     quantity: Math.max(1, Math.round(Number(form.quantity) || 1)),
     description: form.description.trim(),
     effects_type: form.effects_type,
+    attack_shape: form.attack_shape,
   });
   editing.value = -1;
 }
@@ -179,6 +182,12 @@ function onMove(i: number, dir: number) { emit("move-item", i, dir); }
           <select v-model="form.range">
             <option value="melee">近战（冲斩特效）</option>
             <option value="ranged">远程（火球特效）</option>
+          </select>
+        </label>
+        <label v-if="form.type === 'atk'">攻击形状
+          <select v-model="form.attack_shape">
+            <option value="circle">圆形（周围一圈）</option>
+            <option value="cone">朝向扇形（只打面前）</option>
           </select>
         </label>
         <label v-if="form.type === 'buff'">buff 类型

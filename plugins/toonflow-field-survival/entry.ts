@@ -305,8 +305,7 @@ interface Entity {
   atk: number;
   level: number;
   /** ★ game.md 等级系统：蓝量（满蓝 = 100 + 等级*10 + 道具/技能加成） */
-  mp?: number;
-  maxMp?: number;
+  mp?: number;  maxMp?: number;
   /** ★ game.md 等级系统：当前经验 / 下级所需经验（= 当前等级*100），玩家实体上同步 */
   exp?: number;
   expToNext?: number;
@@ -321,6 +320,216 @@ interface Entity {
   /** 巢点/生成点（野怪 AI 归位用），宿主实体统一挂在字段上 */
   homeX?: number;
   homeY?: number;
+  /** ★ v4：敌人 AI 状态 idle | chase | return | npc（前端读它画仇恨感叹号） */
+  aiState?: string;
+  /** ★ V2（2026-11-13）：头顶状态徽章（宿主权威，前端只读渲染）
+   *  · hurt  = 被打（血滴 + 圆圈，颜色按受击方阵营）
+   *  · buff  = 增益生效中（绿色血滴 + 圆圈）
+   *  同 kind 只保留一枚 → 「最新图样」天然成立 */
+  headBadges?: HeadBadge[];
+  /** ★ V2：生效中的 buff 名称列表（AI sensor 读；此前只 push 不删，现由 buffUntilTick 驱动过期） */
+  buffs?: string[];
+  /** ★ V2：buff 到期 tick（到点后清 buffs + 清 buff 徽章） */
+  buffUntilTick?: number;
+  /** ★ V2：当前 buff 名（过期时用于从 buffs 列表移除） */
+  buffName?: string;
+}
+
+/* ============================================================
+   ★ V2（2026-11-13）头顶状态徽章 + 攻击范围指示
+   ------------------------------------------------------------
+   设计文档：md/curr_design/toonflow-field-survival/技能特效设计/V2/技能特效设计V2.md
+
+   铁律：徽章的**内容**（有没有、什么颜色、什么图标、兜底什么字）全部由宿主决定，
+   前端只做「把宿主给的东西画出来」——与 v3 网络通信「状态必须是同一份」同一条纪律。
+   ============================================================ */
+
+/** ★ V2 头顶状态徽章 */
+export interface HeadBadge {
+  /** hurt=被打 / buff=增益生效中 */
+  kind: "hurt" | "buff";
+  /** 徽章主色：玩家受击=粉红 / 敌怪受击=红 / buff=绿 */
+  color: string;
+  /** 法术图标相对路径（相对 ui/，如 images/spells/fire/fireball.png）；缺省=用 label 兜底 */
+  icon?: string;
+  /** 图标兜底文字：hurt 缺省 "伤"、buff 缺省 "buff" */
+  label?: string;
+  /** 产生时刻（tick） */
+  bornTick: number;
+  /** 到期时刻（tick）；缺省=不自动过期 */
+  expireTick?: number;
+}
+
+/** ★ V2 颜色常量（唯一真源） */
+const HURT_PLAYER_COLOR = "#ff8fc8";   // 玩家受击（粉红）
+const HURT_ENEMY_COLOR = "#ff4d4d";    // 敌怪受击（红）
+const BUFF_COLOR = "#5fe57a";          // buff 生效中（绿）
+const AGGRO_COLOR = "#ff3b3b";         // 仇恨感叹号（红）
+const HURT_LABEL = "伤";               // 圆圈内文字兜底（受击）
+const BUFF_LABEL = "buff";             // 圆圈内文字兜底（增益）
+/** ★ V2：hurt 徽章存活时长（tick）= 1.5 秒 */
+const HURT_BADGE_TICKS = 15;
+/** ★ V2：buff 默认时长（tick）= 30 秒 */
+const BUFF_DURATION_TICKS = 300;
+
+/** ★ V2：写/替换头顶徽章（同 kind 只留一枚 → 「最新图样」天然成立） */
+function setHeadBadge(s: FieldSurvivalState, ent: Entity | undefined, badge: HeadBadge): void {
+  if (!ent) return;
+  const list = Array.isArray(ent.headBadges) ? ent.headBadges.slice() : [];
+  const idx = list.findIndex((b) => b.kind === badge.kind);
+  if (idx >= 0) list[idx] = badge;
+  else list.push(badge);
+  // 上限：每实体最多 2 枚（hurt + buff 各一）
+  ent.headBadges = list.slice(-2);
+}
+
+/** ★ V2：清除指定 kind 的头顶徽章 */
+function clearHeadBadge(s: FieldSurvivalState, ent: Entity | undefined, kind: "hurt" | "buff"): void {
+  if (!ent || !Array.isArray(ent.headBadges)) return;
+  ent.headBadges = ent.headBadges.filter((b) => b.kind !== kind);
+}
+
+/**
+ * ★ V2（2026-11-13）：施加 buff —— 写 buffs 列表 + 写头顶绿色徽章 + 设置到期 tick。
+ *
+ * 为什么需要 applyBuff（而不是各处直接 push）：
+ *   现状 `entry.ts` 里只有 AI 分支会 `ent.buffs.push(sk.name)`，**玩家自己的 buff 技能
+ *   压根不入 buffs**，而且**只 push 永不删** → 「buff 生效期间」无法界定，徽章会永挂。
+ *   统一走这里后： buffs 列表、头顶徽章、到期 tick 三者始终同源。
+ */
+function applyBuff(s: FieldSurvivalState, ent: Entity | undefined,
+                   opts: { name: string; icon?: string; durationTicks?: number }): void {
+  if (!ent || !opts?.name) return;
+  const dur = Math.max(1, Math.round(opts.durationTicks ?? BUFF_DURATION_TICKS));
+  const list = Array.isArray(ent.buffs) ? ent.buffs.slice() : [];
+  if (!list.includes(opts.name)) list.push(opts.name);
+  ent.buffs = list;
+  ent.buffName = opts.name;
+  ent.buffUntilTick = s.tick + dur;
+  setHeadBadge(s, ent, {
+    kind: "buff",
+    color: BUFF_COLOR,
+    icon: opts.icon || undefined,
+    label: BUFF_LABEL,
+    bornTick: s.tick,
+    expireTick: s.tick + dur,
+  });
+}
+
+/* ============================================================
+   ★ V2（2026-11-13）攻击形状 + 攻击范围指示区
+   ------------------------------------------------------------
+   V1：所有范围攻击都是**圆形**（判定 `dist < SKILL_RANGE_M`）。
+   V2：新增**朝向攻击类型**（cone）—— 只攻击面前的敌人。
+        施放瞬间在地面画出与判定范围**完全一致**的粉红色半透明指示区：
+          circle → 粉红圆形；cone → 粉红扇形（默认 60°）。
+
+   ★ 铁律：指示区与命中判定**共用同一组常量 + 同一个判定函数**
+     → 不会出现「看到扇形却打到了扇形外的怪」（比没有指示更糟）。
+   ============================================================ */
+
+/** ★ V2 攻击形状：circle=圆形范围（V1 行为）/ cone=朝向扇形（V2 新增） */
+export type AttackShape = "circle" | "cone";
+
+/** ★ V2 攻击范围指示区（一次性，挂在施放点，不跟随实体） */
+export interface RangeIndicator {
+  id: string;
+  shape: AttackShape;
+  /** 施放者位置（世界米） */
+  x: number;
+  y: number;
+  /** 作用半径（米）—— circle 用作半径，cone 用作扇形半径 */
+  radius: number;
+  /** 朝向（角度制 0=右 90=下 180=左 270=上）—— cone 用 */
+  facing: number;
+  /** 扇形半角（度）—— cone 用 */
+  halfAngleDeg: number;
+  /** 剩余生命（tick） */
+  life: number;
+  total: number;
+}
+
+/** ★ V2：扇形半角（度）= 总 60°。与前端朝向光锥 ±30°（App.vue drawFacingCone）一致 */
+const CONE_HALF_ANGLE_DEG = 30;
+/** ★ V2：指示区存活时长（tick）= 1.2 秒 */
+const RANGE_INDICATOR_TICKS = 12;
+
+/** ★ V2：角度差（度），归一到 [-180, 180] */
+function angleDiffDeg(a: number, b: number): number {
+  return (((a - b) % 360) + 540) % 360 - 180;
+}
+
+/**
+ * ★ V2：攻击形状命中判定（**唯一真源**：指示区与判定共用）
+ *   circle → 半径内全部命中（V1 行为，向下兼容）
+ *   cone   → 半径内 **且** 在朝向 ±halfAngleDeg 内命中
+ * @param shape 攻击形状
+ * @param fx,fy 施放者坐标（米）
+ * @param facing 施放者朝向（角度制：0=右 90=下 180=左 270=上）
+ * @param halfAngleDeg 扇形半角（度）
+ * @param tx,ty 目标坐标（米）
+ * @param radius 作用半径（米）
+ */
+function inAttackRange(
+  shape: AttackShape, fx: number, fy: number, facing: number,
+  halfAngleDeg: number, tx: number, ty: number, radius: number,
+): boolean {
+  const dx = tx - fx, dy = ty - fy;
+  const d = Math.hypot(dx, dy);
+  if (d > radius) return false;
+  if (shape !== "cone") return true;
+  // 目标与施放者几乎重合 → 距离已通过，方向无意义 → 命中
+  if (d < 0.0001) return true;
+  const targetAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return Math.abs(angleDiffDeg(targetAngle, facing)) <= halfAngleDeg;
+}
+
+/**
+ * ★ V2：解析 cone 技能的实际朝向。
+ *   优先级：
+ *     1) 客户端上报的实时位姿 params.player.facing（玩家手动朝向，最符合直觉）
+ *     2) 有明确目标时用「施放者→目标」方向
+ *     3) 兜底用实体自身的 facing
+ */
+function resolveCastFacing(
+  params: any, castRef: { x: number; y: number }, fallbackFacing: number,
+  target?: { x: number; y: number } | null,
+): number {
+  const poseFacing = num(params?.player?.facing, NaN);
+  if (Number.isFinite(poseFacing)) return poseFacing;
+  if (target) {
+    const dx = target.x - castRef.x, dy = target.y - castRef.y;
+    if (Math.hypot(dx, dy) > 0.01) return (Math.atan2(dy, dx) * 180) / Math.PI;
+  }
+  return fallbackFacing;
+}
+
+/** ★ V2：读技能/物品的攻击形状（缺省 circle —— V1 行为，向下兼容） */
+function attackShapeOf(src: any): AttackShape {
+  return String(src?.attack_shape || "") === "cone" ? "cone" : "circle";
+}
+
+/**
+ * ★ V2：生成攻击范围指示区。
+ *   ⚠️ radius 必须与命中判定用的是**同一个值**，否则指示区与判定不一致。
+ */
+function pushRangeIndicator(
+  s: FieldSurvivalState,
+  opts: { shape: AttackShape; x: number; y: number; radius: number;
+          facing: number; halfAngleDeg: number; lifeTicks?: number },
+): void {
+  if (!Array.isArray((s as any).rangeIndicators)) (s as any).rangeIndicators = [];
+  const life = Math.max(1, Math.round(opts.lifeTicks ?? RANGE_INDICATOR_TICKS));
+  (s as any).rangeIndicators.push({
+    id: `ri_${s.tick}_${Math.random().toString(36).slice(2, 6)}`,
+    shape: opts.shape, x: opts.x, y: opts.y, radius: opts.radius,
+    facing: opts.facing, halfAngleDeg: opts.halfAngleDeg,
+    life, total: life,
+  });
+  // 上限 8 个（连点也不会刷屏）
+  if ((s as any).rangeIndicators.length > 8) {
+    (s as any).rangeIndicators = (s as any).rangeIndicators.slice(-8);
+  }
 }
 
 /* ── ★ 任务板系统（spec：events/任务事件/任务板.事件.md + 任务参考.list.md）────────
@@ -393,6 +602,8 @@ interface Chest { id: string; x: number; y: number; opened: boolean; tier?: numb
 interface Potion { id: string; x: number; y: number; heal: number; }
 interface SkillSlot { name: string; power: number; cost: number; cd: number; cdLeft: number;
   type?: "atk" | "heal" | "buff"; range?: "melee" | "ranged"; lv?: number; buff_type?: string; effects_type?: string;
+  /** ★ V2（2026-11-13）：攻击形状 circle=圆形范围（V1 行为）/ cone=朝向扇形（只打面前） */
+  attack_shape?: AttackShape;
   /** ★ 快捷栏占位空格（补齐到 4 的整数倍用）：前端置灰、点击无效 */
   empty?: boolean; }
 interface ItemSlot { name: string; count: number; heal: number; kind?: string;
@@ -453,11 +664,13 @@ export interface FieldSurvivalState {
   entities: Entity[];
   chests: Chest[];
   potions: Potion[];
-  floaters: Array<{ id: string; text: string; x: number; y: number; life: number }>;
+  floaters: Array<{ id: string; text: string; x: number; y: number; life: number; kind?: string; color?: string }>;
   /** ★ game.md 打击特效：宿主侧生成的战斗粒子（kind 与前端 drawVfxLayer 对齐） */
   vfx?: Array<Record<string, any>>;
+  /** ★ V2（2026-11-13）：攻击范围指示区（circle=粉红圆形 / cone=粉红扇形） */
+  rangeIndicators?: RangeIndicator[];
   /** game.md 技能修改：用户改过的技能参数（按归一技能名存），持久化到 t_plugin_session_data */
-  skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string; effects_type?: string }>;
+  skillMeta?: Record<string, { power: number; cost: number; cd: number; type: string; range: string; lv: number; buff_type: string; effects_type?: string; attack_shape?: AttackShape }>;
   /** ★ game.md 物品修改：用户改过的物品参数（按展示名存），持久化到 t_plugin_session_data */
   itemMeta?: Record<string, ItemMeta>;
   /** ★ 野怪击杀奖励：全局掉落表（[{name,w}]）；地图 archetype.dropTable 优先 */
@@ -964,6 +1177,8 @@ function buildSkills(card: Record<string, unknown> | undefined, padTo = QUICKBAR
       lv: num(m?.lv, lvs[i] || 1),
       buff_type: m?.buff_type || "",
       effects_type: m?.effects_type || "",
+      // ★ V2：攻击形状（缺省 circle = V1 圆形行为，向下兼容）
+      attack_shape: attackShapeOf(m),
     };
   });
   return padQuickbar(out, padTo, () => ({
@@ -1184,8 +1399,20 @@ function pushEvent(s: FieldSurvivalState, text: string) {
   if (s.events.length > 40) s.events = s.events.slice(-40);
 }
 
-function floater(s: FieldSurvivalState, text: string, x: number, y: number) {
-  s.floaters.push({ id: `f_${s.tick}_${Math.random().toString(36).slice(2, 6)}`, text, x, y, life: 24 });
+/**
+ * ★ V2（2026-11-13）：飘字支持 kind / color。
+ *   背景：前端 App.vue 的飘字渲染早就是 `f.color || "#fff"`，但**宿主从来没写过 color**
+ *   → 玩家/野怪受伤都是白字。V2 的「粉红扣血值（玩家）/ 红色扣血值（野怪）」必须先把颜色喂进去。
+ *   不传 opts 的老调用点行为完全不变（向后兼容）。
+ */
+function floater(s: FieldSurvivalState, text: string, x: number, y: number,
+                opts?: { kind?: string; color?: string }) {
+  s.floaters.push({
+    id: `f_${s.tick}_${Math.random().toString(36).slice(2, 6)}`,
+    text, x, y, life: 24,
+    kind: opts?.kind,
+    color: opts?.color,
+  });
   if (s.floaters.length > 30) s.floaters = s.floaters.slice(-30);
 }
 
@@ -1401,7 +1628,15 @@ function standDummyRegen(s: FieldSurvivalState): void {
   }
 }
 
-function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity) {
+/**
+ * ★ V2（2026-11-13）：伤害结算 + 头顶徽章 + 带色飘字。
+ *
+ * @param src 致伤来源（**可选**）：只有「用技能/物品造成的伤害」才传，
+ *   用来给头顶徽章提供「被攻击技能最新图样」（法术图标）。
+ *   野怪平A / 盟友平A 不传 → 圆圈内兜底显示「伤」。
+ */
+function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?: Entity,
+                src?: { icon?: string; label?: string }) {
   // ★ AI 托管：玩家战斗状态打点（damage 是所有伤害的唯一入口 —— 普攻/技能/AI 攻击/怪物攻击都走这里）
   //   玩家参与（挨打或出手）即视为进入交战 → engaged。
   //   判据放在这里而不是「附近有敌人」，是因为战斗的开始必然产生一次伤害结算。
@@ -1425,7 +1660,17 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
     pushVfx(s, { kind: "spark", entityId: target.id, x: target.x, y: target.y, life: 8, total: 8, color: "#ff5a5a" });
     pushVfx(s, { kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
     if (attacker) (attacker as any).actionBobMs = 300;
-    floater(s, `-${Math.round(amount)}`, target.x, target.y - 24);
+    // ★ V2：飘字带色（玩家受击=粉红 / 敌怪受击=红）+ 头顶 hurt 徽章
+    const hurtColor = target.side === "enemy" ? HURT_ENEMY_COLOR : HURT_PLAYER_COLOR;
+    floater(s, `-${Math.round(amount)}`, target.x, target.y - 24, { kind: "damage", color: hurtColor });
+    setHeadBadge(s, target, {
+      kind: "hurt",
+      color: hurtColor,
+      icon: src?.icon || undefined,
+      label: src?.label || HURT_LABEL,
+      bornTick: s.tick,
+      expireTick: s.tick + HURT_BADGE_TICKS,
+    });
     // ★ P1 打击感：震屏 + 顿帧 + 击退（entry.ts 驱动，通过 state 传前端）
     s.screenShake = 6; s.screenShakeIntensity = 4;
     s.hitStopFrames = 3;
@@ -2175,6 +2420,15 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   const player = s.entities.find((e) => e.side === "player");
   if (!player || !player.alive) return;
 
+  /* ★ 时间基准修复第二枪（2026-11-13）：实体 cooldown 必须按真实时间衰减。
+     背景：前端在玩家 3 秒无输入后把 tick 上报降到 1Hz（挂机档）——
+     「每 tick 减 1」的计时器都会慢 10 倍。2026-11-10 修了技能 cdLeft / 飘字 / vfx，
+     但**实体 e.cooldown（攻击间隔）漏了** → 玩家站桩不动时野怪打一下就停，
+     45 tick 的攻击间隔从 4.5 秒变成 45 秒（实测：1Hz 下 8 秒 cooldown 只降 8）。
+     修法与 cdLeft 同源：tickDeltaMs 折算真实经过时间 → _dec，实体循环用它衰减。
+     ⚠️ tickDeltaMs 有副作用（写 _tickAtMs），全 step 只能调这一次 —— 所以提到最前。 */
+  const _dec = Math.max(1, Math.round(tickDeltaMs(s) / TICK_MS_MS));
+
   /* ★ 关键修复（坐标双写）：玩家位姿的权威在客户端。
      game.html 每 100ms 已在本地推进一次玩家坐标，并通过 tick 参数的 player 字段上报；
      宿主侧只镜像该结果，不再用 input.dx/dy 重复积分玩家，
@@ -2376,7 +2630,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   // ★ 敌人碰撞：先把上一帧落在墙里/界外的怪挪出来，再积分；位移走带避障的 navStep
   unstickEnemies(s);
   s.entities.forEach((e) => {
-    if (e.cooldown > 0) e.cooldown -= 1;
+    // ★ 2026-11-13：cooldown 按 _dec（真实时间折算）衰减 —— 修复挂机档（1Hz）下
+    //   攻击间隔从 4.5s 拉长到 45s（详见 step() 开头的注释）
+    if (e.cooldown > 0) e.cooldown = Math.max(0, e.cooldown - _dec);
     // ★ 打击特效衰减：hitFlashMs / actionBobMs 每 tick -100ms（与 dev-host 同步）
     if ((e as any).hitFlashMs > 0) (e as any).hitFlashMs = Math.max(0, (e as any).hitFlashMs - 100);
     if ((e as any).actionBobMs > 0) (e as any).actionBobMs = Math.max(0, (e as any).actionBobMs - 100);
@@ -2393,6 +2649,20 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     if ((e as any).deathMs != null && (e as any).deathMs > 0) {
       (e as any).deathMs = Math.max(0, (e as any).deathMs - 100);
       if ((e as any).deathMs === 0) e.alive = false;
+    }
+    // ★ V2（2026-11-13）：buff 到期 → 从 buffs 列表移除 + 清头顶 buff 徽章
+    //   现状 buffs 只 push 不删（永不过期）→ 「buff 生效期间」无法界定、徽章会永挂。
+    if (e.buffUntilTick != null && s.tick >= e.buffUntilTick) {
+      e.buffUntilTick = undefined;
+      const bn = e.buffName || "";
+      if (bn && Array.isArray(e.buffs)) e.buffs = e.buffs.filter((n: string) => n !== bn);
+      e.buffName = undefined;
+      clearHeadBadge(s, e, "buff");
+    }
+    // ★ V2：头顶徽章过期清理（hurt 徽章 1.5s 后自动淡出消失）
+    if (Array.isArray(e.headBadges) && e.headBadges.length) {
+      const keep = e.headBadges.filter((b) => b.expireTick == null || b.expireTick > s.tick);
+      if (keep.length !== e.headBadges.length) e.headBadges = keep;
     }
     const nx = e.x + e.vx * TICK_DT_S;
     const ny = e.y + e.vy * TICK_DT_S;
@@ -2428,14 +2698,19 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
    *   · 首次 tick（无上次时间戳）按 1 tick 计，不做补偿
    *   ⇒ 无论宿主 tick 是 10Hz 还是 1Hz，冷却与特效都按真实秒数走。
    */
-  const _dtMs = tickDeltaMs(s);
-  const _dec = Math.max(1, Math.round(_dtMs / TICK_MS_MS));
+  /* ★ 2026-11-13：tickDeltaMs 已上移到 step() 开头（_dec，供实体 cooldown 用），
+     这里直接复用 —— tickDeltaMs 有副作用（写 _tickAtMs），全 step 只能调一次。 */
   s.skills.forEach((k) => { if (k.cdLeft > 0) k.cdLeft = Math.max(0, k.cdLeft - _dec); });
   s.floaters = s.floaters.map((f) => ({ ...f, life: f.life - _dec })).filter((f) => f.life > 0);
   // ★ 打击特效衰减：vfx life 按真实时间折算递减（life 同样是「tick 数」口径）
   const _vfx = (s as any).vfx;
   if (Array.isArray(_vfx) && _vfx.length) {
     (s as any).vfx = _vfx.filter((v: any) => { v.life -= _dec; return v.life > 0; });
+  }
+  // ★ V2：攻击范围指示区衰减（life 与 vfx 同口径：真实时间折算的 tick 数）
+  const _ri = (s as any).rangeIndicators;
+  if (Array.isArray(_ri) && _ri.length) {
+    (s as any).rangeIndicators = _ri.filter((r: any) => { r.life -= _dec; return r.life > 0; });
   }
 
   // 宝箱：走过去开启（优先地图 loot）
@@ -2512,6 +2787,8 @@ export interface BagItem {
   attribute_type?: string; attribute_value?: number;
   /** ★ P2 技能属性特效 */
   effects_type?: string;
+  /** ★ V2（2026-11-13）：攻击形状 circle / cone */
+  attack_shape?: AttackShape;
 }
 /** ★ game.md 物品修改：itemMeta 持久化结构（t_plugin_session_data） */
 export interface ItemMeta {
@@ -2524,6 +2801,8 @@ export interface ItemMeta {
   quantity: number; description: string;
   /** ★ P2 技能属性特效（空串/缺省 = 走默认 VFX） */
   effects_type?: string;
+  /** ★ V2（2026-11-13）：攻击形状 circle / cone */
+  attack_shape?: AttackShape;
 }
 export interface ShopGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from: string; cat?: string; }
 export interface NpcCard {
@@ -2936,6 +3215,8 @@ function mergeBag(raw: BagItem[], meta?: Record<string, BagItem>, order?: string
       attribute_type: im && "attribute_type" in im ? im.attribute_type : inferItemAttrType(it.name),
       attribute_value: num(im?.attribute_value, defaultItemAttrValue(it.name)),
       effects_type: im?.effects_type || "",
+      // ★ V2：攻击形状（circle / cone）——缺省 circle = V1 行为
+      attack_shape: attackShapeOf(im),
     });
   });
   const list = Array.from(map.values());
@@ -4756,17 +5037,29 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
     if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
   } else if (t === "buff") {
     pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), icon: effectIcon(it.effects_type), size: 1.0 });
+    // ★ V2：施加 buff → 头顶绿色徽章（圈内=物品的 effects_type 图标，无则「buff」）
+    applyBuff(s, me, { name: it.name, icon: effectIcon(it.effects_type) });
     if (it.buff_type) msg += `（${it.buff_type}）`;
   } else {
     // atk / attribute：普攻效果；attribute 是纯属性点，使用不消耗但有小跳 + 普攻特效
-    const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(me, e) < SKILL_RANGE_M);
+    // ★ V2：物品也支持攻击形状（circle / cone）——cone 时命中受朝向限制
+    const itShape = attackShapeOf(it);
+    const itFacing = num((me as any).facing, 0);
+    const targets = s.entities.filter((e) => e.side === "enemy" && e.alive
+      && inAttackRange(itShape, me.x, me.y, itFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+    // ★ V2：物品命中也出攻击范围指示区
+    pushRangeIndicator(s, {
+      shape: itShape, x: me.x, y: me.y, radius: SKILL_RANGE_M,
+      facing: itFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+    });
     if ((it.range || "melee") === "ranged" && targets[0]) {
       pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), icon: effectIcon(it.effects_type), size: 1.0 });
     } else {
       pushVfx(s, { kind: "slash_arc", entityId: me.id, x: me.x, y: me.y, facing: me.facing, life: 12, total: 12, color: effectColor(it.effects_type, "#fff"), icon: effectIcon(it.effects_type), size: 1.6 });
     }
     if (num(it.power, 0) > 0 && targets.length) {
-      damage(s, targets[0], num(it.power, 0), me);
+      // ★ V2：致伤来源 = 该物品（头顶徽章圈内显示物品的 effects_type 图标）
+      damage(s, targets[0], num(it.power, 0), me, { icon: effectIcon(it.effects_type), label: it.name });
       msg += `，命中 ${targets[0].name}`;
     }
     if (t === "attribute") { consumed = false; msg += `（属性点 ${it.attribute_type || "-"}+${it.attribute_value || 0}）`; }
@@ -6213,17 +6506,30 @@ export async function handle_action(
       const castRef = (params?.player && Number.isFinite(num(params.player.x, NaN)) && Number.isFinite(num(params.player.y, NaN)))
         ? { x: num(params.player.x, player.x), y: num(params.player.y, player.y) }
         : player;
-      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && !e.deathMs && dist(castRef, e) < SKILL_RANGE_M);
+      // ★ V2（2026-11-13）：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形）
+      //   朝向取客户端上报的实时 facing（玩家手动朝向），无则退化为「施放者→最近目标」。
+      //   ⚠️ 指示区与判定用**同一个** inAttackRange + 同一组常量 → 不会出现「看到扇形却打到外面」。
+      const skillShape = attackShapeOf(skill);
+      const skillFacing = resolveCastFacing(params, castRef, player.facing, null);
+      const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && !e.deathMs
+        && inAttackRange(skillShape, castRef.x, castRef.y, skillFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
       skill.cdLeft = skill.cd;
       // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
       (player as any).actionBobMs = 300;
       floater(s, skill.name, player.x, player.y - 34);
+      // ★ V2：攻击范围指示区（circle=粉红圆形 / cone=粉红扇形），半径=判定半径
+      pushRangeIndicator(s, {
+        shape: skillShape, x: castRef.x, y: castRef.y, radius: SKILL_RANGE_M,
+        facing: skillFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+      });
       // ★ game.md 技能特效：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const fx = skillFxKind(skill);
       if (fx === "heal") {
         pushVfx(s, { kind: "heal_ring", entityId: player.id, x: player.x, y: player.y, life: 18, total: 18, color: effectColor((skill as any).effects_type, "#7CFFB2"), icon: effectIcon((skill as any).effects_type), size: 1.0 });
       } else if (fx === "buff") {
         pushVfx(s, { kind: "buff_ring", entityId: player.id, x: player.x, y: player.y, life: 30, total: 30, color: effectColor((skill as any).effects_type, "#9CCFFF"), icon: effectIcon((skill as any).effects_type), size: 1.0 });
+        // ★ V2：施加 buff → 头顶绿色徽章（此前玩家的 buff 技能压根不入 buffs 列表）
+        applyBuff(s, player, { name: skill.name, icon: effectIcon((skill as any).effects_type) });
       } else if (fx === "ranged") {
         const t0 = targets[0];
         pushVfx(s, {
@@ -6234,7 +6540,9 @@ export async function handle_action(
       } else {
         pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor((skill as any).effects_type, "#fff"), icon: effectIcon((skill as any).effects_type), size: 1.6 });
       }
-      targets.slice(0, 3).forEach((t) => damage(s, t, skill.power, player));
+      targets.slice(0, 3).forEach((t) =>
+        // ★ V2：致伤来源 = 该技能（头顶徽章圈内显示技能的 effects_type 图标）
+        damage(s, t, skill.power, player, { icon: effectIcon((skill as any).effects_type), label: skill.name }));
       pushEvent(s, targets.length ? `施放 ${skill.name}，命中 ${Math.min(3, targets.length)} 个目标` : `施放 ${skill.name}`);
       return okResp(targets.length ? `${skill.name}` : `${skill.name}（空放）`);
     }
@@ -6268,7 +6576,13 @@ export async function handle_action(
         ? { x: num(params.player.x, player.x), y: num(params.player.y, player.y) }
         : player;
       // 渐隐期（deathMs>0）的尸体不再可选中——否则玩家会对正在消失的尸体空挥一次
-      const inRange = enemies.filter((e) => !e.deathMs && dist(atkRef, e) < SKILL_RANGE_M);
+      // ★ V2（2026-11-13）：普攻的攻击形状取「主手武器的 attack_shape」（缺省 circle = V1 行为）。
+      //   ⚠️ 指示区与判定必须一致：cone 时命中也受朝向限制，否则「看到扇形却打外面」比没指示更糟。
+      const mainItem0 = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
+      const atkShape = attackShapeOf(mainItem0);
+      const atkFacing = resolveCastFacing(params, atkRef, player.facing, null);
+      const inRange = enemies.filter((e) => !e.deathMs
+        && inAttackRange(atkShape, atkRef.x, atkRef.y, atkFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
       if (!inRange.length) {
         // ★ M3-2：带 targetId 时优先给精确原因（不存在 / 太远），不笼统说「附近没有敌人」
         const wantId0 = str(params?.targetId);
@@ -6298,10 +6612,16 @@ export async function handle_action(
       const dmg = Math.max(1, Math.round(player.atk * 0.6));
       (player as any).actionBobMs = 200;
       floater(s, "普攻", player.x, player.y - 34);
+      // ★ V2：普攻也出攻击范围指示区（circle=圆形 / cone=扇形），与判定区完全一致
+      pushRangeIndicator(s, {
+        shape: atkShape, x: atkRef.x, y: atkRef.y, radius: SKILL_RANGE_M,
+        facing: atkFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+      });
       // ★ P2：普攻带当前武器/主手物品的 effects_type（从 playerCard 第一件 atk 装备推断，无则默认白）
-      const mainItem = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
+      const mainItem = mainItem0;
       pushVfx(s, { kind: "slash_arc", entityId: player.id, x: player.x, y: player.y, facing: player.facing, life: 12, total: 12, color: effectColor(mainItem?.effects_type, "#fff"), size: 1.2 });
-      damage(s, target, dmg, player);
+      // ★ V2：致伤来源 = 主手武器（无武器 effects_type → 徽章圈内兜底「伤」）
+      damage(s, target, dmg, player, { icon: effectIcon(mainItem?.effects_type), label: "普攻" });
       pushEvent(s, `普攻命中 ${target.name}，伤害 ${dmg}`);
       return okResp(`普攻 → ${target.name} -${dmg}`);
     }
@@ -7159,13 +7479,23 @@ export async function handle_action(
       sk.cdLeft = sk.cd;
       (meSk as any).actionBobMs = 300;
       floater(s, sk.name, meSk.x, meSk.y - 34);
-      const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive && dist(meSk, e) < SKILL_RANGE_M);
+      // ★ V2：攻击范围指示区（与上面判定用同一组常量）
+      pushRangeIndicator(s, {
+        shape: attackShapeOf(sk), x: meSk.x, y: meSk.y, radius: SKILL_RANGE_M,
+        facing: num((meSk as any).facing, 0), halfAngleDeg: CONE_HALF_ANGLE_DEG,
+      });
+      const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive
+        // ★ V2：攻击形状（circle / cone），cone 时命中受朝向限制（与指示区一致）
+        && inAttackRange(attackShapeOf(sk), meSk.x, meSk.y, num((meSk as any).facing, 0),
+          CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
       // ★ game.md 技能特效（与「skill」共用一套归类）：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const _fx = skillFxKind(sk);
       if (_fx === "heal") {
         pushVfx(s, { kind: "heal_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 18, total: 18, color: effectColor((sk as any).effects_type, "#7CFFB2"), icon: effectIcon((sk as any).effects_type), size: 1.0 });
       } else if (_fx === "buff") {
         pushVfx(s, { kind: "buff_ring", entityId: meSk.id, x: meSk.x, y: meSk.y, life: 30, total: 30, color: effectColor((sk as any).effects_type, "#9CCFFF"), icon: effectIcon((sk as any).effects_type), size: 1.0 });
+        // ★ V2：施加 buff → 头顶绿色徽章
+        applyBuff(s, meSk, { name: sk.name, icon: effectIcon((sk as any).effects_type) });
       } else if (_fx === "ranged") {
         const _t0 = skTargets[0];
         pushVfx(s, {
@@ -7180,7 +7510,9 @@ export async function handle_action(
         pushEvent(s, `施放 ${sk.name}（空放，无目标）`);
         return okResp(`${sk.name}（空放）`);
       }
-      skTargets.slice(0, 3).forEach((t) => damage(s, t, sk.power, meSk));
+      skTargets.slice(0, 3).forEach((t) =>
+        // ★ V2：致伤来源 = 该技能
+        damage(s, t, sk.power, meSk, { icon: effectIcon((sk as any).effects_type), label: sk.name }));
       pushEvent(s, `施放 ${sk.name}，命中 ${Math.min(3, skTargets.length)} 个目标`);
       return okResp(`${sk.name}`);
     }
@@ -7201,7 +7533,12 @@ export async function handle_action(
       sk.lv = Math.max(1, Math.round(num(params?.lv, sk.lv || 1)));
       sk.buff_type = BUFF_TYPES.includes(str(params?.buff_type)) ? str(params?.buff_type) : "";
       sk.effects_type = (typeof params?.effects_type === "string") ? params.effects_type : (sk.effects_type || "");
-      s.skillMeta = { ...(s.skillMeta || {}), [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type, effects_type: sk.effects_type } };
+      // ★ V2（2026-11-13）：攻击形状（circle / cone）——只认 "cone"，其余一律 circle
+      sk.attack_shape = (params?.attack_shape != null)
+        ? attackShapeOf(params)
+        : attackShapeOf(sk);
+      // ⚠️ skillMeta 是**整条覆盖**写：漏一个字段就会丢（改了形状刷新后回默认值）
+      s.skillMeta = { ...(s.skillMeta || {}), [skillKey(nm)]: { power: sk.power, cost: sk.cost, cd: sk.cd, type: sk.type, range: sk.range, lv: sk.lv, buff_type: sk.buff_type, effects_type: sk.effects_type, attack_shape: sk.attack_shape } };
       // 参数卡「技能」只保存技能名称列表：改名/升级时替换原条目（带 lv 注记）
       const card = (s.playerCard || {}) as Record<string, any>;
       const flat: string[] = [];
@@ -7262,6 +7599,8 @@ export async function handle_action(
       it.attribute_type = (ITEM_ATTR_TYPES as readonly string[]).includes(str(params?.attribute_type)) ? str(params?.attribute_type) : "";
       it.attribute_value = Math.round(num(params?.attribute_value, it.attribute_value || 0));
       it.effects_type = (typeof params?.effects_type === "string") ? params.effects_type : (it.effects_type || "");
+      // ★ V2（2026-11-13）：物品的攻击形状（circle / cone）
+      it.attack_shape = (params?.attack_shape != null) ? attackShapeOf(params) : attackShapeOf(it);
       // ★ game.md quantity/description：先汇总原条目数量与描述，再决定写回值
       const flat: string[] = [];
       (Array.isArray(card.items) ? card.items : []).forEach((x: any) => {
@@ -7291,6 +7630,8 @@ export async function handle_action(
         attribute_type: it.attribute_type!, attribute_value: it.attribute_value!,
         quantity: qty, description: descFinal,
         effects_type: it.effects_type!,
+        // ★ V2：攻击形状（整条覆盖写 itemMeta，漏字段会丢）
+        attack_shape: it.attack_shape,
       };
       s.itemMeta = { ...(s.itemMeta || {}) };
       if (oldName !== nm) delete s.itemMeta[oldName];
@@ -7478,7 +7819,11 @@ export async function handle_action(
           (ent as any).actionBobMs = 300;
           floater(s, sk.name, ent.x, ent.y - 34);
           const skPower = Math.max(1, Math.round(num(sk.power, 0)) + Math.round(num((ent as any).atk, 10) * 0.5));
-          const skTargets = s.entities.filter((e: any) => e.side === "enemy" && e.alive && dist(ent, e) <= SKILL_RANGE_M);
+          // ★ V2：攻击形状（circle / cone）——cone 时命中受朝向限制（与指示区一致）
+          const aiShape = attackShapeOf(sk);
+          const aiFacing = num((ent as any).facing, 0);
+          const skTargets = s.entities.filter((e: any) => e.side === "enemy" && e.alive
+            && inAttackRange(aiShape, ent.x, ent.y, aiFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
           const explicitId = str(params?.targetId);
           const ordered = explicitId
             ? [...skTargets].sort((a: any, b: any) => (a.id === explicitId ? -1 : b.id === explicitId ? 1 : 0))
@@ -7492,13 +7837,18 @@ export async function handle_action(
             return okResp(`${sk.name}（治疗）`);
           }
           if (skFx === "buff") {
-            (ent as any).buffs = Array.isArray((ent as any).buffs) ? (ent as any).buffs : [];
-            if (!(ent as any).buffs.includes(sk.name)) (ent as any).buffs.push(sk.name);
+            // ★ V2：统一走 applyBuff（写 buffs + 头顶绿色徽章 + 到期 tick）
+            applyBuff(s, ent, { name: sk.name, icon: effectIcon(sk.effects_type) });
             pushVfx(s, { kind: "buff_ring", entityId: ent.id, x: ent.x, y: ent.y, life: 30, total: 30, color: effectColor(sk.effects_type, "#9CCFFF"), icon: effectIcon(sk.effects_type), size: 1 });
             pushEvent(s, `${ent.name} 释放 ${sk.name}${sk.buff_type ? `（${sk.buff_type}）` : ""}`);
             return okResp(`${sk.name}（强化）`);
           }
           const skT0 = ordered[0];
+          // ★ V2：AI 角色放技能也出攻击范围指示区
+          pushRangeIndicator(s, {
+            shape: aiShape, x: ent.x, y: ent.y, radius: SKILL_RANGE_M,
+            facing: aiFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+          });
           pushVfx(s, skFx === "ranged"
             ? { kind: "fireball", entityId: ent.id, targetEntityId: skT0 ? skT0.id : undefined, x: ent.x, y: ent.y, targetX: skT0 ? skT0.x : ent.x, targetY: skT0 ? skT0.y : ent.y, facing: num((ent as any).facing, 0), life: 16, total: 16, color: effectColor(sk.effects_type, "#ff6a00"), icon: effectIcon(sk.effects_type), size: 1 }
             : { kind: "slash_arc", entityId: ent.id, x: ent.x, y: ent.y, facing: num((ent as any).facing, 0), life: 12, total: 12, color: effectColor(sk.effects_type, "#fff"), icon: effectIcon(sk.effects_type), size: 1.6 });
@@ -7507,7 +7857,9 @@ export async function handle_action(
             return okResp(`${sk.name}（空放）`);
           }
           const hitCount = Math.min(3, ordered.length);
-          ordered.slice(0, 3).forEach((t: any) => damage(s, t, skPower, ent));
+          ordered.slice(0, 3).forEach((t: any) =>
+            // ★ V2：致伤来源 = AI 角色放的技能
+            damage(s, t, skPower, ent, { icon: effectIcon(sk.effects_type), label: sk.name }));
           pushEvent(s, `${ent.name} 释放 ${sk.name}，命中 ${hitCount} 个目标`);
           return okResp(`${sk.name}（命中 ${hitCount}）`);
         }

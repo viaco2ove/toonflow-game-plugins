@@ -567,6 +567,112 @@ window.__STORY__ = ${JSON.stringify(story)};
 //   无需任何复制/构建步骤。iframe 的 window 与 top 不同 → 下面还要往 iframe 注入一份。
 window.__DEV_TILESET__ = "1";
 let lastState = null;
+// ============================================================
+// ★ V2（2026-11-13）dev-host 桩的 V2 规则（与真机 entry.ts 逐条对齐）
+//   —— 头顶徽章（仇恨感叹号 / 受击血滴+圆圈 / buff 血滴+圆圈）
+//   —— 攻击范围指示区（circle=粉红圆形 / cone=粉红扇形）
+//   —— 攻击形状判定（cone 只打面前）
+//   ⚠️ 本段是**浏览器侧**代码（PAGE 模板里），不能用 TS 语法、不能 import
+//      → 与 src/v2Stub.ts 是两份实现，改动必须**同步**。
+//      （设计文档：md/curr_design/toonflow-field-survival/技能特效设计/V2/技能特效设计V2.md）
+// ============================================================
+const V2_HURT_PLAYER_COLOR = "#ff8fc8";   // 玩家受击（粉红）
+const V2_HURT_ENEMY_COLOR = "#ff4d4d";    // 敌怪受击（红）
+const V2_BUFF_COLOR = "#5fe57a";          // buff 生效中（绿）
+const V2_HURT_LABEL = "伤";
+const V2_BUFF_LABEL = "buff";
+const V2_SKILL_RANGE_M = 4;               // 攻击射程（米）
+const V2_CONE_HALF_ANGLE_DEG = 30;        // 扇形半角（度）
+const V2_RANGE_INDICATOR_TICKS = 12;      // 指示区存活 1.2s
+const V2_HURT_BADGE_TICKS = 15;           // hurt 徽章存活 1.5s
+
+function v2AngleDiffDeg(a, b) { return (((a - b) % 360) + 540) % 360 - 180; }
+
+function v2InAttackRange(shape, fx, fy, facing, halfAngleDeg, tx, ty, radius) {
+  const dx = tx - fx, dy = ty - fy;
+  const d = Math.hypot(dx, dy);
+  if (d > radius) return false;
+  if (shape !== "cone") return true;
+  if (d < 0.0001) return true;
+  const targetAngle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  return Math.abs(v2AngleDiffDeg(targetAngle, facing)) <= halfAngleDeg;
+}
+
+function v2AttackShape(src) { return String((src && src.attack_shape) || "") === "cone" ? "cone" : "circle"; }
+
+function v2SetHeadBadge(st, ent, badge) {
+  if (!ent) return;
+  const list = Array.isArray(ent.headBadges) ? ent.headBadges.slice() : [];
+  const idx = list.findIndex(b => b.kind === badge.kind);
+  if (idx >= 0) list[idx] = badge; else list.push(badge);
+  ent.headBadges = list.slice(-2);
+}
+
+function v2ClearHeadBadge(ent, kind) {
+  if (!ent || !Array.isArray(ent.headBadges)) return;
+  ent.headBadges = ent.headBadges.filter(b => b.kind !== kind);
+}
+
+function v2ApplyHurt(st, target, amount, src) {
+  if (!target) return;
+  const color = target.side === "enemy" ? V2_HURT_ENEMY_COLOR : V2_HURT_PLAYER_COLOR;
+  st.floaters.push({
+    id: "f" + st.tick + "_h" + Math.random().toString(36).slice(2, 6),
+    text: "-" + Math.round(amount), x: target.x, y: target.y - 10,
+    life: 20, kind: "damage", color,
+  });
+  v2SetHeadBadge(st, target, {
+    kind: "hurt", color,
+    icon: (src && src.icon) || undefined,
+    label: (src && src.label) || V2_HURT_LABEL,
+    bornTick: st.tick, expireTick: st.tick + V2_HURT_BADGE_TICKS,
+  });
+}
+
+function v2ApplyBuff(st, ent, opts) {
+  if (!ent || !opts || !opts.name) return;
+  const dur = Math.max(1, Math.round(opts.durationTicks || 300));
+  const list = Array.isArray(ent.buffs) ? ent.buffs.slice() : [];
+  if (!list.includes(opts.name)) list.push(opts.name);
+  ent.buffs = list;
+  ent.buffName = opts.name;
+  ent.buffUntilTick = st.tick + dur;
+  v2SetHeadBadge(st, ent, {
+    kind: "buff", color: V2_BUFF_COLOR,
+    icon: opts.icon || undefined, label: V2_BUFF_LABEL,
+    bornTick: st.tick, expireTick: st.tick + dur,
+  });
+}
+
+function v2PushRangeIndicator(st, opts) {
+  if (!Array.isArray(st.rangeIndicators)) st.rangeIndicators = [];
+  const life = Math.max(1, Math.round(opts.lifeTicks || V2_RANGE_INDICATOR_TICKS));
+  st.rangeIndicators.push({
+    id: "ri_" + st.tick + "_" + Math.random().toString(36).slice(2, 6),
+    shape: opts.shape, x: opts.x, y: opts.y, radius: opts.radius,
+    facing: opts.facing, halfAngleDeg: opts.halfAngleDeg, life, total: life,
+  });
+  if (st.rangeIndicators.length > 8) st.rangeIndicators = st.rangeIndicators.slice(-8);
+}
+
+function v2TickCleanup(st, dec) {
+  if (Array.isArray(st.rangeIndicators) && st.rangeIndicators.length) {
+    st.rangeIndicators = st.rangeIndicators.filter(r => { r.life -= dec; return r.life > 0; });
+  }
+  for (const e of st.entities) {
+    if (e.buffUntilTick != null && st.tick >= e.buffUntilTick) {
+      e.buffUntilTick = undefined;
+      const bn = e.buffName || "";
+      if (bn && Array.isArray(e.buffs)) e.buffs = e.buffs.filter(n => n !== bn);
+      e.buffName = undefined;
+      v2ClearHeadBadge(e, "buff");
+    }
+    if (Array.isArray(e.headBadges) && e.headBadges.length) {
+      const keep = e.headBadges.filter(b => b.expireTick == null || b.expireTick > st.tick);
+      if (keep.length !== e.headBadges.length) e.headBadges = keep;
+    }
+  }
+}
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
 let currentLevelName = null;
@@ -1743,6 +1849,16 @@ window.addEventListener("message", async (e) => {
         if (lastState.phase === "over") return;
         // ★ 自己计数 tick（p.tick 是客户端的，可能为 0）
         lastState.tick = (lastState.tick || 0) + 1;
+        // ★ V2 修复（2026-11-13，同步 entry.ts）：时间基准提前到敌人 AI 之前算——
+        //   实体 e.cooldown（攻击间隔）必须按真实时间折算衰减，否则玩家站桩 3 秒后
+        //   前端降到 1Hz 时，45 tick 的攻击间隔从 4.5s 拉长成 45s（怪打一下就停很久）。
+        //   ⚠️ 只能在这里算一次（写 _tickAtMs 有副作用），后面的飘字/vfx 衰减段直接复用。
+        const _nowMs = Date.now();
+        const _lastMs = Number(lastState._tickAtMs || 0);
+        lastState._tickAtMs = _nowMs;
+        const _dec = _lastMs > 0
+          ? Math.max(1, Math.min(100, Math.round((_nowMs - _lastMs) / 100)))
+          : 1;
         // ★ 必须每次重新读 lastState.entities —— 之前 const ents = ... 会把旧数组引用
         //   冻结，野怪同步段重建 lastState.entities 后下面的逻辑仍改旧数组，
         //   导致 server push 出去的仍然是旧 11 只野怪（dev-host 永远在用切关前的引用）。
@@ -1803,10 +1919,15 @@ window.addEventListener("message", async (e) => {
             e.x += (hx / hd) * sp; e.y += (hy / hd) * sp;
             e.facing = hx > 0 ? 0 : 180;
           }
-          e.cooldown = (e.cooldown || 0) - 1;
+          // ★ V2 修复：按 _dec（真实时间）衰减，1Hz 挂机档下攻击间隔不再拉长 10 倍
+          e.cooldown = Math.max(0, (e.cooldown || 0) - _dec);
+          // ★ V2：脱战 → 无仇恨（前端据此隐藏感叹号）
+          e.aiState = "idle";
           continue;
         }
         // ── 4m 内：追击 + 攻击 ──
+        // ★ V2：进入 4m 探测半径 → 有仇恨（前端据此显示红色感叹号）
+        e.aiState = "chase";
         if (isRanged) {
           if (d2 > 4) {
             const sp = 2.0 * 0.1;
@@ -1822,14 +1943,16 @@ window.addEventListener("message", async (e) => {
           }
         }
         e.facing = dx > 0 ? 0 : 180;
-        e.cooldown = (e.cooldown || 0) - 1;
+        // ★ V2 修复：按 _dec（真实时间）衰减，同 entry.ts
+        e.cooldown = Math.max(0, (e.cooldown || 0) - _dec);
         // 伤害判定距离：近战 0.5m / 远程 4m（game.md 63-64）
         const attackRange = isRanged ? 4 : 0.5;
         if (d2 < attackRange && e.cooldown <= 0) {
           const dmg = Math.max(1, (e.atk || 5) - (target.def || 0));
           target.hp = Math.max(0, target.hp - dmg);
           target.hitFlashMs = 250;
-          lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+          // ★ V2：带色飘字 + 头顶 hurt 徽章（玩家受击=粉红，与 entry.ts 一致）
+          v2ApplyHurt(lastState, target, dmg);
           e.cooldown = 40;
           // ★ P1 打击感（dev-host 桩同步 entry.ts）：怪打玩家 → 震屏 + 顿帧 + 玩家被击退
           lastState.screenShake = 6; lastState.screenShakeIntensity = 4;
@@ -1860,7 +1983,8 @@ window.addEventListener("message", async (e) => {
           closest.hp = Math.max(0, closest.hp - dmg);
           closest.hitFlashMs = 250;
           me.actionBobMs = 300;
-          lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+          // ★ V2：带色飘字 + 头顶 hurt 徽章（敌怪受击=红色）
+          v2ApplyHurt(lastState, closest, dmg);
           // ★ P1 打击感（dev-host 桩同步 entry.ts）：打中怪 → 震屏 + 顿帧 + 怪被击退
           lastState.screenShake = 6; lastState.screenShakeIntensity = 4;
           lastState.hitStopFrames = 3;
@@ -1893,7 +2017,8 @@ window.addEventListener("message", async (e) => {
             target2.hp = Math.max(0, target2.hp - dmg);
             target2.hitFlashMs = 250;
             a.actionBobMs = 300;
-            lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target2.x, y: target2.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            // ★ V2：带色飘字 + 头顶 hurt 徽章（敌怪受击=红色）
+            v2ApplyHurt(lastState, target2, dmg);
             // ★ P1 打击感（dev-host 桩同步 entry.ts）：盟友击中 → 震屏 + 击退（不加顿帧，避免盟友打怪频繁冻结玩家操作）
             lastState.screenShake = 6; lastState.screenShakeIntensity = 3;
             const kdx = target2.x - a.x, kdy = target2.y - a.y;
@@ -1949,14 +2074,12 @@ window.addEventListener("message", async (e) => {
       //      宿主 tick 频率不恒定 —— 前端 3 秒无输入后把上报降到 1Hz（挂机档），
       //      「每 tick 减 1」会让冷却/特效慢 10 倍（表现：冷却不像秒、特效不消失）。
       //      与 entry.ts tickDeltaMs / mockHost mockTickDec 同一口径。
-      const _nowMs = Date.now();
-      const _lastMs = Number(lastState._tickAtMs || 0);
-      lastState._tickAtMs = _nowMs;
-      const _dec = _lastMs > 0
-        ? Math.max(1, Math.min(100, Math.round((_nowMs - _lastMs) / 100)))
-        : 1;
+      //    ★ 2026-11-13：_dec 已提前到 tick 开头算（敌人 AI 的 cooldown 也要用），
+      //      这里直接复用 —— _tickAtMs 写入有副作用，全 tick 只能算一次。
       lastState.floaters = lastState.floaters.filter((f) => { f.life -= _dec; return f.life > 0; });
       if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life -= _dec; return v.life > 0; });
+      // ★ V2（2026-11-13）：过期徽章清理 + buff 到期 + 指示区衰减（与 entry.ts step() 一致）
+      v2TickCleanup(lastState, _dec);
       // ★ 技能 cd 按真实时间折算递减（castSkill 时 dev-host 已设 cdLeft=cd）
       for (const sk of lastState.skills || []) {
         if (sk.cdLeft && sk.cdLeft > 0) sk.cdLeft = Math.max(0, sk.cdLeft - _dec);
@@ -1997,6 +2120,15 @@ window.addEventListener("message", async (e) => {
       if (me2 && sk) {
         if (!lastState.vfx) lastState.vfx = [];
         const id = "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6);
+        // ★ V2（2026-11-13）：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形只打面前）
+        //   命中判定与指示区**共用** v2InAttackRange + 同一组常量 → 指示区 = 判定区
+        const _shape = v2AttackShape(sk);
+        const _facing = Number(me2.facing) || 0;
+        // ★ V2：施放即出现攻击范围指示区（circle=粉红圆形 / cone=粉红扇形）
+        v2PushRangeIndicator(lastState, {
+          shape: _shape, x: me2.x, y: me2.y, radius: V2_SKILL_RANGE_M,
+          facing: _facing, halfAngleDeg: V2_CONE_HALF_ANGLE_DEG,
+        });
         if (sk.name === "冲斩") {
           lastState.vfx.push({
             id, kind: "slash_arc", entityId: me2.id,
@@ -2011,6 +2143,12 @@ window.addEventListener("message", async (e) => {
             if (e2.side !== "enemy" || !e2.alive) continue;
             const dd = Math.hypot(e2.x - me2.x, e2.y - me2.y);
             if (dd < minD && dd < 12) { minD = dd; target = e2; }
+          }
+          // ★ V2：cone 形状时按朝向扇形筛目标（扇形外的怪不受影响）
+          if (target && _shape === "cone") {
+            const ok = v2InAttackRange(_shape, me2.x, me2.y, _facing,
+              V2_CONE_HALF_ANGLE_DEG, (target).x, (target).y, V2_SKILL_RANGE_M);
+            if (!ok) target = null;
           }
           const tx = target ? target.x : me2.x + Math.cos((me2.facing || 0) * Math.PI / 180) * 10;
           const ty = target ? target.y : me2.y - Math.sin((me2.facing || 0) * Math.PI / 180) * 10;
@@ -2027,7 +2165,8 @@ window.addEventListener("message", async (e) => {
             const dmg = Math.max(1, (sk.power || 20) + Math.floor((me2.atk || 30) * 0.5) - (target.def || 0));
             target.hp = Math.max(0, target.hp - dmg);
             target.hitFlashMs = 250;
-            lastState.floaters.push({ id: "f" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), text: "-" + dmg, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            // ★ V2：带色飘字 + 头顶 hurt 徽章（敌怪受击=红色）
+            v2ApplyHurt(lastState, target, dmg);
             lastState.vfx.push({ id: "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6), kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
           }
         } else if (sk.name === "治疗") {
@@ -2044,6 +2183,8 @@ window.addEventListener("message", async (e) => {
             facing: 0, life: 30, total: 30,
             color: "#9CCFFF", size: 1.0,
           });
+          // ★ V2：施加 buff → 头顶绿色徽章（圈内=技能图标，无则「buff」）
+          v2ApplyBuff(lastState, me2, { name: sk.name, icon: (sk).icon });
         }
         sk.cdLeft = sk.cd || 0;
       }

@@ -22,6 +22,11 @@ import {
 } from "./collision";
 // ★ 图纸 → 成品解析（用图纸打造时，产物必须是图纸记载的成品，不能是图纸本身）
 import { blueprintProduct, looksLikeBlueprint } from "./shared/forgeCommon";
+// ★ V2（2026-11-13）：头顶徽章 + 攻击范围指示区 + 攻击形状判定（与 entry.ts 逐条对齐）
+import {
+  v2ApplyHurt, v2ApplyBuff, v2PushRangeIndicator, v2InAttackRange, v2AttackShape,
+  v2TickCleanup, V2_SKILL_RANGE_M, V2_CONE_HALF_ANGLE_DEG,
+} from "./v2Stub";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
 interface TestDataBundle {
@@ -1455,6 +1460,8 @@ function install(): void {
           // ★ 看见玩家 4 米；近战 0.5 米内攻击；远程 4 米内攻击
           const isRanged = (e as any).isRanged === true;
           if (d2 < 4) {
+            // ★ V2：进入 4m 探测半径 → 有仇恨（前端据此显示红色感叹号）
+            (e as any).aiState = "chase";
             if (isRanged) {
               // ★ 远程怪保持在 3-4 米的安全距离（不贴身，但保留锁定姿态）
               const desiredDist = 3.5;
@@ -1474,8 +1481,13 @@ function install(): void {
               moveEnemyBy(e, (dx / (d2 || 1)) * sp, (dy / (d2 || 1)) * sp);
               e.facing = dx > 0 ? 0 : 180;   // 角度制：0=右 180=左
             }
+          } else {
+            // ★ V2：脱离 4m → 无仇恨（前端据此隐藏感叹号）
+            (e as any).aiState = "idle";
           }
-          e.cooldown--;
+          // ★ V2 修复（2026-11-13，同步 entry.ts）：按 _cdDec（真实时间）衰减——
+          //   挂机档 1Hz 下「每 tick 减 1」会把 45 tick 攻击间隔拉长成 45 秒
+          e.cooldown = Math.max(0, e.cooldown - _cdDec);
           // ★ 攻击判定：近战 0.5 米，远程 4 米
           const attackRange = isRanged ? 4 : 0.5;
           if (d2 < attackRange && e.cooldown <= 0) {
@@ -1485,7 +1497,8 @@ function install(): void {
             // ★ VFX：远程怪打玩家 → 火球飞向玩家；近战怪打玩家 → 玩家位置斩波
             pushAttackVfx(e, target, isRanged);
             flashEntity(target);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + damage, x: target.x, y: target.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            // ★ V2：带色飘字 + 头顶 hurt 徽章（与 entry.ts damage() 一致：玩家受击=粉红）
+            v2ApplyHurt(state as any, target as any, damage);
             e.cooldown = 40;
             if (target.hp <= 0) {
               target.alive = false;
@@ -1514,7 +1527,8 @@ function install(): void {
             flashEntity(closest);
             knockbackEntity(closest, me.x, me.y);
             bobEntity(me);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: closest.x, y: closest.y - 10, life: 12, kind: "damage", color: "#ff5a5a" });
+            // ★ V2：带色飘字 + 头顶 hurt 徽章（敌怪受击=红色）
+            v2ApplyHurt(state as any, closest as any, dmg);
             state.events.push("[mock] 攻击 " + closest.name + " (-" + dmg + "HP)");
             if (closest.hp <= 0) {
               closest.alive = false;
@@ -1532,6 +1546,10 @@ function install(): void {
         state.floaters = state.floaters.filter((f) => { f.life--; return f.life > 0; });
         // VFX 粒子衰减
         tickVfx();
+        // ★ V2（2026-11-13）：过期徽章清理 + buff 到期 + 指示区衰减（与 entry.ts step() 一致）
+        //   ⚠️ 复用本 tick 已算好的 _cdDec：mockTickDec() 内部会改写时间戳，
+        //     同一 tick 里再调一次只会拿到 1（dt≈0 被钳到最小值）→ 衰减会慢 10 倍。
+        v2TickCleanup(state as any, _cdDec);
         // ★ 实体 hitFlashMs / actionBobMs 按 ms 衰减（tick 约 100ms）
         state.entities.forEach((e) => {
           if (e.hitFlashMs && e.hitFlashMs > 0) e.hitFlashMs = Math.max(0, e.hitFlashMs - 100);
@@ -1593,12 +1611,21 @@ function install(): void {
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "atk") {
           // 攻击技能：找最近的敌人，50 米内；★ 空放：无目标也放特效 + 飘字
+          // ★ V2：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形只打面前）
+          //   命中判定与指示区**共用** v2InAttackRange + 同一组常量 → 指示区 = 判定区
+          const shape = v2AttackShape(slot);
+          const facing = Number((me as any).facing) || 0;
           let target: Entity | null = null;
           let minD = Infinity;
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
             const dd = Math.hypot(e.x - me.x, e.y - me.y);
             if (dd < 50 && dd < minD) { minD = dd; target = e; }
+          });
+          // ★ V2：攻击范围指示区（施放即出现）
+          v2PushRangeIndicator(state as any, {
+            shape, x: me.x, y: me.y, radius: V2_SKILL_RANGE_M,
+            facing, halfAngleDeg: V2_CONE_HALF_ANGLE_DEG,
           });
           if (target) {
             const dmg = Math.max(1, slot.power - (target.def || 0));
@@ -1608,7 +1635,8 @@ function install(): void {
             flashEntity(target);
             knockbackEntity(target, me.x, me.y);
             bobEntity(me);
-            state.floaters.push({ id: "f" + state.tick, text: "-" + dmg, x: target.x, y: target.y - 10, life: 20, kind: "damage", color: "#ff5a5a" });
+            // ★ V2：带色飘字 + 头顶 hurt 徽章（敌怪受击=红色）
+            v2ApplyHurt(state as any, target as any, dmg);
             state.events.push("[mock] " + slot.name + " 对 " + target.name + " 造成 " + dmg + " 伤害");
             if (target.hp <= 0) {
               target.alive = false;
@@ -1642,6 +1670,8 @@ function install(): void {
           pushRingVfx(me, "buff_ring", "#f5c542");
           bobEntity(me);
           state.floaters.push({ id: "f" + state.tick, text: "+DEF", x: me.x, y: me.y - 10, life: 20, kind: "buff", color: "#f5c542" });
+          // ★ V2：施加 buff → 头顶绿色徽章（圈内=技能图标，无则「buff」）
+          v2ApplyBuff(state as any, me as any, { name: slot.name, icon: (slot as any).icon });
           state.events.push("[mock] " + slot.name + "，DEF+10（持续 6 秒）");
         }
         push();

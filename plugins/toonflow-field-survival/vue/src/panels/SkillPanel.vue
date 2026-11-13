@@ -36,7 +36,8 @@ function cdLeftText(cdLeft: number) { return (cdLeft / 10).toFixed(1) + "s"; }
 
 /** 正在编辑的技能下标（-1 = 无） */
 const editing = ref(-1);
-const form = reactive({ name: "", power: 0, cost: 0, cd: 24, type: "atk", range: "melee", lv: 1, buff_type: "", effects_type: "" });
+/** ★ V2（2026-11-13）：攻击形状 —— circle=圆形范围（V1 行为）/ cone=朝向扇形（只打面前） */
+const form = reactive({ name: "", power: 0, cost: 0, cd: 24, type: "atk", range: "melee", lv: 1, buff_type: "", effects_type: "", attack_shape: "circle" });
 
 function startEdit(s: any, i: number) {
   editing.value = editing.value === i ? -1 : i;
@@ -50,6 +51,8 @@ function startEdit(s: any, i: number) {
   form.lv = Math.max(1, Math.round(Number(s.lv) || 1));
   form.buff_type = BUFF_TYPES.includes(s.buff_type) ? s.buff_type : "";
   form.effects_type = String(s.effects_type || "");
+  // ★ V2：攻击形状（缺省 circle = V1 圆形行为）
+  form.attack_shape = s.attack_shape === "cone" ? "cone" : "circle";
 }
 function submitEdit(s: any, i: number) {
   // ★ 面板列表可能已过滤掉快捷栏占位空格，行号 i 与后端 s.skills 下标不再相等；
@@ -65,6 +68,7 @@ function submitEdit(s: any, i: number) {
     lv: form.lv,
     buff_type: form.buff_type,
     effects_type: form.effects_type,
+    attack_shape: form.attack_shape,
   });
   editing.value = -1;
 }
@@ -118,6 +122,12 @@ function onSell(s: any, i: number) {
             <option value="ranged">远程（火球特效）</option>
           </select>
         </label>
+        <label v-if="form.type === 'atk'">攻击形状
+          <select v-model="form.attack_shape">
+            <option value="circle">圆形（周围一圈）</option>
+            <option value="cone">朝向扇形（只打面前）</option>
+          </select>
+        </label>
         <label v-if="form.type === 'buff'">buff 类型
           <select v-model="form.buff_type">
             <option value="">无</option>
@@ -134,7 +144,7 @@ function onSell(s: any, i: number) {
           <button class="skp-btn" @click="submitEdit(s, i)">保存</button>
           <button class="skp-btn skp-btn--ghost" @click="editing = -1">取消</button>
         </div>
-        <div class="skp-edit__hint">修改后参数保存到 t_plugin_session_data；特效按类型沿用：攻击近战→冲斩刀光 / 攻击远程→火球 / 治疗→治疗环 / 强化→护盾环。</div>
+        <div class="skp-edit__hint">修改后参数保存到 t_plugin_session_data；特效按类型沿用：攻击近战→冲斩刀光 / 攻击远程→火球 / 治疗→治疗环 / 强化→护盾环。★「朝向扇形」只打面前（施放时脚下会画出粉红扇形，扇形外的敌人不受影响）。</div>
       </div>
     </div>
 

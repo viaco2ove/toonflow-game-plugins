@@ -24,6 +24,9 @@ import { toonflowJsApi } from "./toonflowJsApi";
 import { loadStoryMapBundle, getStoryFirstMap, getStoryTilesetObjectUrl, getStoryMapBundle, setStoryContext, readStoryJson, envInfo, mapPackState } from "./storyMap";
 import { readZipEntries } from "./zipTbg";
 import type { GameState, Entity, RoleOption, MapData } from "./types";
+// ★ V2（2026-11-13）：头顶状态徽章层 + 攻击范围指示区层
+import { recordHeadBadge, drawHeadStatusLayer, resetHeadStatusLayer } from "./headStatus";
+import { drawRangeIndicatorLayer } from "./rangeIndicator";
 import DebugPanel from "./DebugPanel.vue";
 import SystemPanel from "./SystemPanel.vue";
 import ForgeAlchemyPanel from "./panels/ForgeAlchemyPanel.vue";
@@ -442,9 +445,11 @@ interface SysItem {
   durability?: number; durabilityLeft?: number; attribute_type?: string; attribute_value?: number;
   /** ★ game.md：数量与描述（描述保留参数卡原注记全文） */
   quantity?: number; description?: string;
+  /** ★ V2（2026-11-13）：属性特效 + 攻击形状 */
+  effects_type?: string; attack_shape?: string;
   index?: number;
 }
-interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; effects_type?: string; }
+interface SysSkill { id?: string; name: string; power: number; cost: number; cd: number; cdLeft: number; index: number; type?: string; range?: string; lv?: number; buff_type?: string; effects_type?: string; attack_shape?: string; }
 interface SysRole { id: string; name: string; side: string; enemy: boolean; level: number; hp: number; maxHp: number; exp: number; alive: boolean; mapName: string; x: number; y: number; inParty: boolean; aiManaged?: boolean; avatarPath?: string; parameterCardJson?: any; onMap?: boolean; roleType?: string; }
 interface SysGood { id: string; name: string; price: number; kind: string; rarity: string; heal: number; desc?: string; from?: string; }
 
@@ -750,6 +755,9 @@ const sysBagItems = computed<SysItem[]>(() => {
       durabilityLeft: Math.round(Number(im.durabilityLeft ?? dur)),
       attribute_type: im.attribute_type !== undefined ? String(im.attribute_type) : inferItemAttrLocal(name),
       attribute_value: Number(im.attribute_value ?? 0),
+      // ★ V2：属性特效 + 攻击形状（缺省 circle = V1 圆形行为）
+      effects_type: String(im.effects_type || ""),
+      attack_shape: im.attack_shape === "cone" ? "cone" : "circle",
     });
   }
   const list = Array.from(merged.values());
@@ -786,6 +794,7 @@ const sysSkills = computed<SysSkill[]>(() => {
       lv: s.lv,
       buff_type: s.buff_type,
       effects_type: s.effects_type || "",   // ★ P2 属性特效
+      attack_shape: s.attack_shape || "circle",   // ★ V2 攻击形状（circle=圆形 / cone=朝向扇形）
       index: i,
     });
   });
@@ -5252,6 +5261,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   //     这里只记录位置，由 render() 在特效画完后统一补画 → 特效不再遮住血条。
   recordHpBar(e, px, py + 8, Math.max(24, Math.round(dw) + 2), e.side === "enemy" ? "#d63b3b" : "#4ec74e");
 
+  // ★ V2（2026-11-13）：头顶状态徽章锚点（只记位置，真正绘制在徽章层）
+  //   锚点在**名字之上**：有头像 → 头像顶再往上；无头像 → sprite 顶再往上。
+  const _badgeAnchorY = hasAvatar ? (avatarY - avatarSize - 6) : (dy - 30);
+  recordHeadBadge(e, px, _badgeAnchorY, Number((state.value as any)?.tick) || 0, pixelsPerMeter);
+
   // ★ 关闭死亡淡出的 ctx.save()（if 块内打开的）
   if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
 }
@@ -5361,6 +5375,9 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   // 血条
   //   ★ 血条实际绘制被挪到 drawHpBarsOverlay()（VFX 层之后），这里只记录位置。
   recordHpBar(e, px, dy - 6, Math.max(24, Math.round(dw) + 2), "#d63b3b");
+
+  // ★ V2（2026-11-13）：头顶状态徽章锚点（野怪名字在 dy-26，徽章在名字之上）
+  recordHeadBadge(e, px, dy - 40, Number((state.value as any)?.tick) || 0, pixelsPerMeter);
 
   // ★ 关闭死亡淡出的 ctx.save()
   if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
@@ -5793,30 +5810,9 @@ function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: num
 
 /* ============================================================
    ★ P2.5 属性法术图标特效（public/images/spells 26×26 像素图标）
+   ★ V2（2026-11-13）：spellIcon / 缓存已抽到 ./spellIcon.ts（与头顶徽章共用一份）
    ============================================================ */
-
-/** 法术图标缓存（路径 → HTMLImageElement）；20 张上限，LRU 语义（Map 保序） */
-const spellIconCache = new Map<string, HTMLImageElement>();
-
-/** 取法术图标；未加载时触发异步加载，本帧返回 null（下一帧自然就绪） */
-function spellIcon(src: string): HTMLImageElement | null {
-  let img = spellIconCache.get(src);
-  if (img) {
-    // LRU：命中后挪到末尾
-    spellIconCache.delete(src);
-    spellIconCache.set(src, img);
-    return (img.complete && img.naturalWidth > 0) ? img : null;
-  }
-  if (spellIconCache.size > 20) {
-    const oldest = spellIconCache.keys().next().value;
-    if (oldest) spellIconCache.delete(oldest);
-  }
-  img = new Image();
-  img.onload = () => { /* 下一帧 drawVfxLayer 自然取到 */ };
-  img.src = src;
-  spellIconCache.set(src, img);
-  return null;
-}
+import { spellIcon } from "./spellIcon";
 
 /** 属性特效图标叠加：图标 0.7×→1.5× 放大 + 同色光环淡出（叠在斩波/火球/环之上） */
 function drawIconBurst(
@@ -6266,10 +6262,18 @@ function render() {
     ctx.restore();
   }
 
+  // —— ★ V2（2026-11-13）攻击范围指示区层（在迷雾之后、实体之前）——
+  //   circle=粉红圆形 / cone=粉红扇形。是**地面投影**，画在实体之下 →
+  //   不能盖住怪和玩家（否则看起来像角色被染色）。
+  drawRangeIndicatorLayer(ctx, (s as any).rangeIndicators, wx2px, wz2py, sx,
+    (typeof performance !== "undefined" ? performance.now() : Date.now()));
+
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
   //   ★ 血条缓冲先清空：实体绘制阶段只 recordHpBar() 记位置，
   //     真正绘制在 VFX 层之后（drawHpBarsOverlay）→ 特效不再遮住血条。
   hpBarBuffer = [];
+  // ★ V2：头顶徽章锚点缓冲同样先清空（实体阶段只 recordHeadBadge 记位置）
+  resetHeadStatusLayer();
   const roleIds = new Set(s.roles.map((r) => r.id));
   const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const dtSec = Math.max(0.001, Math.min(0.1, lastRenderAt ? (_nowMs - lastRenderAt) / 1000 : 0.016));
@@ -6316,6 +6320,11 @@ function render() {
 
   // —— ★ 血条补画层（在 VFX 之后）——保证打击特效下也能看清血量 ——
   drawHpBarsOverlay(ctx);
+
+  // —— ★ V2（2026-11-13）头顶状态徽章层（在血条之后）——
+  //   仇恨感叹号 / 受击血滴+圆圈 / buff 血滴+圆圈。
+  //   位置在特效与血条之后 → 不会被打击特效盖住。
+  drawHeadStatusLayer(ctx, _nowMs);
 
   // —— ★ 点击寻路可视化：A* 路径虚线 + 目标标记 + 点击涟漪 ——
   drawClickFxLayer(ctx, wx2px, wz2py, sx);

@@ -770,7 +770,16 @@ export function getStoryEntityTypes(): any | null {
  */
 export function getStoryLevelNames(): string[] {
   const n = bundle?.mapFiles ? Object.keys(bundle.mapFiles).length : 0;
-  console.info(`[field-survival] getStoryLevelNames: ${n} 张`);
+  // ★ 只在关卡数变化时打一条（2026-11-13）：此函数被 levelKeyOf → sameLevel →
+  //   任务目的地 computed（questDestinations）高频调用——战斗档 state 每 tick 变，
+  //   computed 10Hz 重算 → 无条件 console.info 每秒刷 10~20 条同文日志，纯噪音。
+  //   （不是递归：computed 只在依赖变化时重算，本函数不写任何响应式状态。）
+  if (n !== _lastLevelCountLogged) {
+    _lastLevelCountLogged = n;
+    console.info(`[field-survival] getStoryLevelNames: ${n} 张`);
+  }
   if (!bundle || !bundle.mapFiles) return [];
   return Object.keys(bundle.mapFiles);
 }
+/** 上次打日志时的关卡数（日志去重用，-1 = 从未打过） */
+let _lastLevelCountLogged = -1;

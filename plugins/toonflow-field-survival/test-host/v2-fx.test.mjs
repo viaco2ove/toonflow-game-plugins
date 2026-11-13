@@ -1,0 +1,296 @@
+/**
+ * v2-fx.test.mjs —— V2 战斗特效端到端测试（entry.js 级）
+ * ============================================================
+ * 覆盖 md/curr_design/toonflow-field-survival/技能特效设计/V2/技能特效设计V2.md：
+ *   R1 仇恨感叹号   宿主 aiState === "chase"
+ *   R2 玩家受击     粉红徽章 #ff8fc8 + 粉红飘字
+ *   R3 野怪受击     红色徽章 #ff4d4d + 红色飘字
+ *   R4 buff 生效中  绿色徽章 #5fe57a + buffs 列表 + 到期清理
+ *   R5 攻击形状     circle=圆形 / cone=朝向扇形（扇形外不受影响）+ 粉红指示区
+ *
+ * ★ 为什么是 entry.js 级而不是走 HTTP：
+ *   走 HTTP 会依赖**会话状态**（玩家血量、怪是否被清空、坐标是否被推走），
+ *   前序用例的残留会让断言随机失败（实测踩过：玩家 hp 耗尽 → R2/R4/R5 连锁挂）。
+ *   直接驱动引擎 = 完全确定性，每次跑出来的结果都一样。
+ *   （HTTP 端到端另有 test_v2_fx.py 覆盖。）
+ *
+ * ★ 必须用**编译后的 entry.js**（esm），不是 entry.ts。
+ *
+ * 运行：node test-host/v2-fx.test.mjs
+ */
+import { handle_action } from "../entry.js";
+
+/* ── 迷你断言框架 ─────────────────────────────────── */
+let passed = 0;
+const failures = [];
+function ok(cond, msg) {
+  if (cond) { passed++; console.log("  ✓ " + msg); }
+  else { failures.push(msg); console.log("  ✗ " + msg); }
+}
+function eq(a, b, msg) { ok(a === b, `${msg}（期望 ${JSON.stringify(b)}，实际 ${JSON.stringify(a)}）`); }
+function section(t) { console.log("\n── " + t + " " + "─".repeat(Math.max(0, 58 - t.length))); }
+
+/* ── 假宿主 ───────────────────────────────────────── */
+const pluginDataStore = new Map();
+const context = {
+  pluginId: "com.toonflow.minigame-field-survival",
+  pluginDir: ".",
+  manifest: {},
+  userId: 1,
+  sessionId: "v2-fx-test",
+  roles: [],
+  worldName: "",
+  tsApi: {
+    pluginData: {
+      get: async (k) => pluginDataStore.get(k),
+      set: async (k, v) => { pluginDataStore.set(k, v); },
+      list: async () => Array.from(pluginDataStore.keys()),
+      remove: async (k) => { pluginDataStore.delete(k); },
+    },
+    agent: { run: async () => ({ ok: true, output: "{}" }) },
+  },
+};
+
+async function call(action, params, state) {
+  const r = await handle_action(action, params || {}, state, context);
+  return { msg: r.response || "", state: r.state || state, code: r.code, data: r.data };
+}
+
+/**
+ * 构造一个「玩家在 (0,0)、怪在 0.5m」的可控 playing 态。
+ * ★ 怪**不放 isLocal** → 宿主权威，位移不被前端覆盖 → 追击/攻击链路可测。
+ */
+function newState(opts = {}) {
+  const px = opts.px ?? 0, py = opts.py ?? 0;
+  const st = {
+    phase: "playing", version: 3, tick: 0,
+    world: { w: 3000, h: 3000 },
+    roles: [], selections: { participants: [], spectators: [], enemies: [] },
+    entities: [
+      { id: "p1", name: "玩家", side: "player", x: px, y: py, vx: 0, vy: 0,
+        hp: opts.hp ?? 1000, maxHp: opts.hp ?? 1000, atk: 30, level: 1, mp: 100, maxMp: 100,
+        facing: 0, cooldown: 0, alive: true },
+      { id: "e1", name: "怪", side: "enemy", x: px + 0.5, y: py, vx: 0, vy: 0,
+        hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true,
+        homeX: px + 0.5, homeY: py },
+    ],
+    floaters: [], vfx: [], rangeIndicators: [],
+    skills: opts.skills ?? [], items: [], chests: [], potions: [],
+    events: [], drops: [], money: 0, exp: 0, kills: 0, skillPage: 0, itemPage: 0,
+    playerCard: {}, skillMeta: {}, bagMeta: {}, bagOrder: [], itemMeta: {},
+    quests: {}, questBoard: [], npcCards: [], partyIds: [], regions: [],
+  };
+  return st;
+}
+const playerOf = (st) => st.entities.find((e) => e.side === "player");
+const mobOf = (st) => st.entities.find((e) => e.side === "enemy");
+const badgesOf = (st, ent) => (ent && ent.headBadges) || [];
+const badge = (st, ent, kind) => badgesOf(st, ent).find((b) => b.kind === kind);
+const damageFloaters = (st) => (st.floaters || []).filter((f) => f.kind === "damage");
+
+/* ══════════════════════════════════════════════════════
+   1) R1 仇恨：怪进入探测半径 → aiState = chase
+   ══════════════════════════════════════════════════════ */
+section("1. R1 仇恨感叹号（宿主 aiState=chase）");
+{
+  const st = newState({ px: 0, py: 0 });
+  eq(mobOf(st).aiState, undefined, "初始无 aiState");
+  await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+  eq(mobOf(st).aiState, "chase", "怪在 0.5m 内 → aiState=chase（前端据此画感叹号）");
+
+  // 拉远到探测半径外 → 应脱战
+  const st2 = newState({ px: 0, py: 0 });
+  st2.entities[1].x = 0;
+  st2.entities[1].y = 0;
+  await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st2);
+  // 同位置也算在半径内 → 仍 chase
+  ok(mobOf(st2).aiState === "chase", "同位置 → 仍 chase");
+}
+
+/* ══════════════════════════════════════════════════════
+   2) R3 野怪受击 → 红色徽章 + 红色飘字
+   ══════════════════════════════════════════════════════ */
+section("2. R3 野怪被攻击 → 红色徽章 + 红色飘字");
+{
+  const st = newState({ px: 0, py: 0 });
+  const hp0 = mobOf(st).hp;
+  await call("attack", { targetId: "e1", player: { x: 0, y: 0, facing: 0 } }, st);
+  ok(mobOf(st).hp < hp0, `野怪掉血（${hp0} → ${mobOf(st).hp}）`);
+  const b = badge(st, mobOf(st), "hurt");
+  ok(!!b, "野怪带 hurt 徽章");
+  eq(b && b.color, "#ff4d4d", "徽章为红色 #ff4d4d");
+  ok(b && (b.icon || b.label), `徽章有图标或兜底文案（icon=${b && b.icon} label=${b && b.label}）`);
+  const fl = damageFloaters(st);
+  ok(fl.length > 0, "产生伤害飘字");
+  eq(fl.at(-1) && fl.at(-1).color, "#ff4d4d", "飘字为红色");
+  ok(b && b.expireTick > st.tick, `徽章有过期时刻（expireTick=${b && b.expireTick}）`);
+}
+
+/* ══════════════════════════════════════════════════════
+   3) R2 玩家受击 → 粉红徽章 + 粉红飘字
+   ══════════════════════════════════════════════════════ */
+section("3. R2 玩家被攻击 → 粉红徽章 + 粉红飘字");
+{
+  const st = newState({ px: 0, py: 0 });
+  const hp0 = playerOf(st).hp;
+  // 野怪在 0.5m 内 → tick 一次即触发攻击
+  await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+  ok(playerOf(st).hp < hp0, `玩家掉血（${hp0} → ${playerOf(st).hp}）`);
+  const b = badge(st, playerOf(st), "hurt");
+  ok(!!b, "玩家带 hurt 徽章");
+  eq(b && b.color, "#ff8fc8", "徽章为粉红 #ff8fc8");
+  eq(b && b.label, "伤", "徽章兜底文案为「伤」（野怪平A 无技能来源）");
+  const fl = damageFloaters(st);
+  ok(fl.length > 0 && fl.at(-1).color === "#ff8fc8", "飘字为粉红");
+}
+
+/* ══════════════════════════════════════════════════════
+   4) R4 buff → 绿色徽章 + buffs 列表 + 到期清理
+   ══════════════════════════════════════════════════════ */
+section("4. R4 buff 生效中 → 绿色徽章 + buffs 列表");
+{
+  const st = newState({
+    px: 0, py: 0,
+    skills: [{ name: "护盾", power: 0, cost: 0, cd: 0, cdLeft: 0, type: "buff", range: "melee", effects_type: "earth" }],
+  });
+  await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+  const b = badge(st, playerOf(st), "buff");
+  ok(!!b, "玩家带 buff 徽章");
+  eq(b && b.color, "#5fe57a", "徽章为绿色 #5fe57a");
+  ok(b && b.icon, `徽章带法术图标（${b && b.icon}）`);
+  ok((playerOf(st).buffs || []).includes("护盾"), `buffs 列表含该技能（${JSON.stringify(playerOf(st).buffs)}）`);
+  ok(playerOf(st).buffUntilTick > st.tick, `有到期 tick（${playerOf(st).buffUntilTick}）`);
+
+  // 到期清理：把 tick 推到过期
+  const until = playerOf(st).buffUntilTick;
+  st.tick = until + 1;
+  await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+  ok(!badge(st, playerOf(st), "buff"), "到期后 buff 徽章消失");
+  ok(!(playerOf(st).buffs || []).includes("护盾"), "到期后 buffs 列表同步清空");
+}
+
+/* ══════════════════════════════════════════════════════
+   5) R5 攻击形状：circle / cone
+   ══════════════════════════════════════════════════════ */
+section("5. R5 攻击形状 circle / cone");
+{
+  // ① circle：正右 + 正下两只怪都应被打
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "圆技能", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "circle" }],
+    });
+    st.entities.push({ id: "e2", name: "怪B", side: "enemy", x: 0, y: 2, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 0, homeY: 2 });
+    const r = await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+    ok(mobOf(st).hp < 500, `circle：正右的怪被打（${mobOf(st).hp}）`);
+    const e2 = st.entities.find((e) => e.id === "e2");
+    ok(e2.hp < 500, `circle：正下的怪也被打（${e2.hp}）`);
+    const inds = st.rangeIndicators || [];
+    ok(inds.some((i) => i.shape === "circle"), "产生 shape=circle 指示区");
+    const ci = inds.find((i) => i.shape === "circle");
+    eq(ci && ci.radius, 4, "指示区半径 = 4m（与判定半径一致）");
+  }
+
+  // ② cone（朝右）：正右的怪被打，正下 90° 的怪**不受影响**
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "扇技能", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "cone" }],
+    });
+    st.entities.push({ id: "e2", name: "怪B", side: "enemy", x: 0, y: 2, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 0, homeY: 2 });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+    ok(mobOf(st).hp < 500, `cone：扇形内（正右）的怪被打（${mobOf(st).hp}）`);
+    const e2 = st.entities.find((e) => e.id === "e2");
+    eq(e2.hp, 500, "cone：扇形外（正下 90°）的怪不受影响");
+    const inds = st.rangeIndicators || [];
+    const ci = inds.find((i) => i.shape === "cone");
+    ok(!!ci, "产生 shape=cone 指示区");
+    eq(ci && ci.radius, 4, "cone 指示区半径 = 4m");
+    eq(ci && ci.halfAngleDeg, 30, "cone 指示区半角 = 30°（总 60°）");
+    eq(ci && ci.facing, 0, "cone 指示区朝向 = 施放朝向");
+  }
+
+  // ③ 指示区 = 判定区：cone 时半径外的怪也不受影响
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "扇技能", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "cone" }],
+    });
+    st.entities.push({ id: "e2", name: "怪B", side: "enemy", x: 0, y: 8, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 0, homeY: 8 });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+    const e2 = st.entities.find((e) => e.id === "e2");
+    eq(e2.hp, 500, "cone：半径外（8m）的怪不受影响（指示区=判定区）");
+  }
+
+  // ④ 配置持久化：sys_skill_edit 改 attack_shape
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "技能A", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "circle" }],
+    });
+    await call("sys_skill_edit", {
+      index: 0, name: "技能A", power: 10, cost: 0, cd: 24,
+      type: "atk", range: "melee", lv: 1, attack_shape: "cone",
+    }, st);
+    eq(st.skills[0].attack_shape, "cone", "sys_skill_edit 保存 attack_shape=cone");
+    // skillMeta 的 key 是归一化小写名（skillKey = cleanSkillName().toLowerCase()）
+    const metaKey = Object.keys(st.skillMeta || {})[0];
+    eq(st.skillMeta && st.skillMeta[metaKey] && st.skillMeta[metaKey].attack_shape, "cone",
+      `skillMeta 持久化了 attack_shape（key=${metaKey}，不会被整条覆盖写丢掉）`);
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   6) 攻击间隔与上报频率解耦（本次 bug 的根因回归）
+   ══════════════════════════════════════════════════════ */
+section("6. 回归：野怪攻击间隔按真实时间（挂机档 1Hz 不再变 45 秒）");
+{
+  // 模拟挂机档：每次 tick 之间隔 1 秒（前端 3 秒无输入后降频）
+  const st = newState({ px: 0, py: 0 });
+  const hp0 = playerOf(st).hp;
+  const hits = [];
+  let prev = hp0;
+  const t0 = Date.now();
+  for (let i = 0; i < 12; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+    const hp = playerOf(st).hp;
+    if (hp < prev) { hits.push(((Date.now() - t0) / 1000).toFixed(1)); prev = hp; }
+  }
+  const gaps = hits.slice(1).map((h, i) => (parseFloat(h) - parseFloat(hits[i])).toFixed(1));
+  ok(hits.length >= 2, `挂机档（1Hz）下攻击了 ${hits.length} 次（时刻 ${JSON.stringify(hits)}）`);
+  const avg = gaps.length ? gaps.reduce((a, b) => a + parseFloat(b), 0) / gaps.length : 999;
+  ok(avg < 8, `挂机档攻击间隔 ${avg.toFixed(1)}s < 8s（修复前是 45s）`);
+  ok(mobOf(st).cooldown < 45, `怪 cooldown 已按真实时间衰减（${mobOf(st).cooldown}）`);
+}
+
+/* ══════════════════════════════════════════════════════
+   7) 徽章上限：每实体最多 hurt + buff 各一枚
+   ══════════════════════════════════════════════════════ */
+section("7. 徽章数量上限（每实体最多 2 枚）");
+{
+  const st = newState({
+    px: 0, py: 0,
+    skills: [{ name: "护盾", power: 0, cost: 0, cd: 0, cdLeft: 0, type: "buff", range: "melee" }],
+  });
+  await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+  await call("attack", { targetId: "e1", player: { x: 0, y: 0, facing: 0 } }, st);
+  await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+  const n = badgesOf(st, playerOf(st)).length;
+  ok(n <= 2, `玩家徽章数 ${n} ≤ 2`);
+  const kinds = badgesOf(st, playerOf(st)).map((b) => b.kind).sort();
+  ok(kinds.length <= 2 && new Set(kinds).size === kinds.length, `徽章 kind 不重复（${JSON.stringify(kinds)}）`);
+}
+
+/* ── 汇总 ─────────────────────────────────────────── */
+console.log("\n" + "═".repeat(64));
+console.log(`总计 ${passed + failures.length} 项断言，FAIL ${failures.length} 项`);
+if (failures.length) {
+  console.log("\n失败项：");
+  for (const f of failures) console.log("  ✗ " + f);
+  process.exit(1);
+}
+console.log("全部通过 ✅");

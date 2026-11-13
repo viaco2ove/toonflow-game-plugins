@@ -1,5 +1,39 @@
 export type Side = "player" | "ally" | "enemy" | "spectator" | "neutral";
 
+/** ★ V2（2026-11-13）攻击形状：circle=圆形范围（V1 行为）/ cone=朝向扇形（V2 新增） */
+export type AttackShape = "circle" | "cone";
+
+/** ★ V2（2026-11-13）头顶状态徽章（宿主权威，前端只读渲染） */
+export interface HeadBadge {
+  /** hurt=被打 / buff=增益生效中 */
+  kind: "hurt" | "buff";
+  /** 徽章主色：玩家受击=粉红 / 敌怪受击=红 / buff=绿 */
+  color: string;
+  /** 法术图标相对路径（相对 ui/，如 images/spells/fire/fireball.png） */
+  icon?: string;
+  /** 图标兜底文字：hurt→"伤"、buff→"buff" */
+  label?: string;
+  bornTick: number;
+  expireTick?: number;
+}
+
+/** ★ V2（2026-11-13）攻击范围指示区（宿主生成的一次性效果） */
+export interface RangeIndicator {
+  id: string;
+  shape: AttackShape;
+  /** 施放者位置（世界米） */
+  x: number;
+  y: number;
+  /** 作用半径（米） */
+  radius: number;
+  /** 朝向（角度制 0=右 90=下 180=左 270=上） */
+  facing: number;
+  /** 扇形半角（度） */
+  halfAngleDeg: number;
+  life: number;
+  total: number;
+}
+
 export interface Entity {
   id: string;
   name: string;
@@ -63,6 +97,10 @@ export interface Entity {
   _aiBag?: { name: string; count: number }[];
   /** ★ AI 托管：技能加持记录（buff 技能写到角色身上，每 tick 由 sensor 读取） */
   buffs?: string[];
+  /** ★ V2：敌人 AI 状态（idle / chase / return / npc）——「chase」= 有仇恨 → 画感叹号 */
+  aiState?: string;
+  /** ★ V2（2026-11-13）：头顶状态徽章（宿主权威：hurt=被打 / buff=增益生效中） */
+  headBadges?: HeadBadge[];
 }
 
 export interface Chest {
@@ -79,8 +117,7 @@ export interface Chest {
 export interface Potion { id: string; x: number; y: number; heal: number; mp?: number; }
 
 /** ★ VFX 粒子（屏幕像素空间：x/y 都是已转换的屏幕像素） */
-export interface VfxParticle {
-  id: string;
+export interface VfxParticle {  id: string;
   kind: "slash_arc" | "fireball" | "heal_ring" | "buff_ring" | "explosion" | "spark" | "icon_burst";
   x: number;
   y: number;
@@ -143,6 +180,8 @@ export interface SkillSlot {
   range: "melee" | "ranged";
   /** ★ 属性特效类型（为空则走默认 VFX） */
   effects_type?: EffectType;
+  /** ★ V2（2026-11-13）：攻击形状 circle=圆形范围（V1 行为）/ cone=朝向扇形（只打面前） */
+  attack_shape?: AttackShape;
   /** ★ 快捷栏占位空格（后端补齐到 4 的整数倍用）：置灰、点击无效 */
   empty?: boolean;
 }
@@ -166,6 +205,8 @@ export interface ItemSlot {
   singleUse?: boolean;
   /** ★ 属性特效类型（为空则走默认 VFX） */
   effects_type?: EffectType;
+  /** ★ V2（2026-11-13）：攻击形状 circle / cone */
+  attack_shape?: AttackShape;
   /** ★ 快捷栏占位空格（后端补齐到 4 的整数倍用）：置灰、点击无效 */
   empty?: boolean;
 }
@@ -278,6 +319,8 @@ export interface GameState {
   floaters: Floater[];
   /** ★ VFX 粒子层（战斗特效） */
   vfx?: VfxParticle[];
+  /** ★ V2（2026-11-13）：攻击范围指示区（circle=粉红圆形 / cone=粉红扇形） */
+  rangeIndicators?: RangeIndicator[];
   skills: SkillSlot[];
   items: ItemSlot[];
   skillPage: number;
