@@ -581,7 +581,12 @@ const V2_HURT_ENEMY_COLOR = "#ff4d4d";    // 敌怪受击（红）
 const V2_BUFF_COLOR = "#5fe57a";          // buff 生效中（绿）
 const V2_HURT_LABEL = "伤";
 const V2_BUFF_LABEL = "buff";
-const V2_SKILL_RANGE_M = 4;               // 攻击射程（米）
+const V2_SKILL_RANGE_M = 4;               // 远程攻击射程（米）
+// ★ V2_2 射程分离（2026-11-14，与 entry.ts attackRangeOf 同口径）：近战 2m / 远程 4m
+const V2_MELEE_RANGE_M = 2;
+function v2AttackRangeOf(src) {
+  return String((src && src.range) || "") === "ranged" ? V2_SKILL_RANGE_M : V2_MELEE_RANGE_M;
+}
 const V2_CONE_HALF_ANGLE_DEG = 30;        // 扇形半角（度）
 const V2_RANGE_INDICATOR_TICKS = 12;      // 指示区存活 1.2s
 const V2_HURT_BADGE_TICKS = 15;           // hurt 徽章存活 1.5s
@@ -673,6 +678,37 @@ function v2TickCleanup(st, dec) {
     }
   }
 }
+
+// ★ V2_2（2026-11-13）改造5/6：特效密度裁剪 —— 与 entry.ts pushVfx 内联逻辑逐条对齐
+//   （改动必须两处同步）：每实体最多 3 个（第 4 个挤掉最旧）、野怪（side=enemy）
+//   特效全局最多 5 个。dev-host 在每 tick 衰减后调用一次（push 散装无统一入口）。
+function vfxPruneDensity(st) {
+  const arr = st.vfx;
+  if (!Array.isArray(arr) || !arr.length) return;
+  const sideOf = new Map();
+  for (const e of st.entities) sideOf.set(String(e.id), e.side);
+  const MAX_PER_ENTITY = 3;
+  const MAX_MOB_TOTAL = 5;
+  const perEnt = new Map();
+  let mobCount = 0;
+  const keep = [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const v = arr[i];
+    const entKey = v.entityId != null ? String(v.entityId) : null;
+    if (entKey != null) {
+      const cnt = perEnt.get(entKey) || 0;
+      if (cnt >= MAX_PER_ENTITY) continue;
+      perEnt.set(entKey, cnt + 1);
+    }
+    if (entKey != null && sideOf.get(entKey) === "enemy") {
+      if (mobCount >= MAX_MOB_TOTAL) continue;
+      mobCount += 1;
+    }
+    keep.push(v);
+  }
+  keep.reverse();
+  st.vfx = keep;
+}
 let storyData = null;
 // ★ 当前关卡名（由客户端每帧 tick 上报；null = 未知 → 默认 RUINS 不安全，见 currentTheme）
 let currentLevelName = null;
@@ -691,6 +727,14 @@ window.__devHostModify = (patch) => {
 window.__devHostState = () => {
   if (!lastState) return { error: "no state" };
   const enemies = (lastState.entities || []).filter(e => e.side === "enemy");
+  // ★ V2_2：vfx 摘要（特效堆积排查用）——每 entityId 计数 + 总数 + 各 kind 计数
+  const vfxByEntity = {};
+  const vfxByKind = {};
+  for (const v of (lastState.vfx || [])) {
+    const k = v.entityId != null ? String(v.entityId) : "(none)";
+    vfxByEntity[k] = (vfxByEntity[k] || 0) + 1;
+    vfxByKind[v.kind] = (vfxByKind[v.kind] || 0) + 1;
+  }
   return {
     phase: lastState.phase,
     tick: lastState.tick,
@@ -699,6 +743,21 @@ window.__devHostState = () => {
     totalEntities: (lastState.entities || []).length,
     enemyCount: enemies.length,
     enemies: enemies.slice(0, 20).map(e => ({ id: e.id, name: e.name, level: e.level, hp: e.hp, alive: e.alive, x: e.x, y: e.y })),
+    vfxTotal: (lastState.vfx || []).length,
+    vfxByEntity,
+    vfxByKind,
+    // ★ V2_2 卡顿排查：快捷栏物品摘要（找干粮的真实 index 用）
+    items: (lastState.items || []).slice(0, 12).map((it, i) => ({ i, name: it.name, count: it.count, heal: it.heal })),
+    cardItems: (((lastState.playerCard || {}).items || [])).slice(0, 12).map((it) => ({ name: typeof it === "string" ? it.split("×")[0] : (it && it.name), count: typeof it === "object" ? it.count : undefined })),
+    // ★ 字段级体积探针（2026-11-14）：定位「state 回推 13MB」的膨胀字段
+    fieldSizes: (() => {
+      try {
+        return Object.keys(lastState)
+          .map(k => ({ k, n: JSON.stringify(lastState[k] ?? null).length }))
+          .sort((a, b) => b.n - a.n).slice(0, 10);
+      } catch (e) { return [{ k: "err", n: 0 }]; }
+    })(),
+    totalStateSize: (() => { try { return JSON.stringify(lastState).length; } catch (e) { return 0; } })(),
   };
 };
 // ★ dev-host 模式下，模拟 t_plugin_session_data（real host 不在，standalone 必须自己应答）
@@ -2078,6 +2137,8 @@ window.addEventListener("message", async (e) => {
       //      这里直接复用 —— _tickAtMs 写入有副作用，全 tick 只能算一次。
       lastState.floaters = lastState.floaters.filter((f) => { f.life -= _dec; return f.life > 0; });
       if (lastState.vfx) lastState.vfx = lastState.vfx.filter((v) => { v.life -= _dec; return v.life > 0; });
+      // ★ V2_2（2026-11-13）改造5/6：特效密度裁剪（与 entry.ts pushVfx 同规则：每实体≤3、野怪全局≤5）
+      vfxPruneDensity(lastState);
       // ★ V2（2026-11-13）：过期徽章清理 + buff 到期 + 指示区衰减（与 entry.ts step() 一致）
       v2TickCleanup(lastState, _dec);
       // ★ 技能 cd 按真实时间折算递减（castSkill 时 dev-host 已设 cdLeft=cd）
@@ -2122,11 +2183,13 @@ window.addEventListener("message", async (e) => {
         const id = "vfx_" + lastState.tick + "_" + Math.random().toString(36).slice(2, 6);
         // ★ V2（2026-11-13）：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形只打面前）
         //   命中判定与指示区**共用** v2InAttackRange + 同一组常量 → 指示区 = 判定区
+        // ★ V2_2 射程分离：近战技能 2m / 远程技能 4m（判定与指示区同源）
         const _shape = v2AttackShape(sk);
+        const _range = v2AttackRangeOf(sk);
         const _facing = Number(me2.facing) || 0;
         // ★ V2：施放即出现攻击范围指示区（circle=粉红圆形 / cone=粉红扇形）
         v2PushRangeIndicator(lastState, {
-          shape: _shape, x: me2.x, y: me2.y, radius: V2_SKILL_RANGE_M,
+          shape: _shape, x: me2.x, y: me2.y, radius: _range,
           facing: _facing, halfAngleDeg: V2_CONE_HALF_ANGLE_DEG,
         });
         if (sk.name === "冲斩") {
@@ -2137,17 +2200,17 @@ window.addEventListener("message", async (e) => {
             color: "#fff", size: 1.6,
           });
         } else if (sk.name === "火球") {
-          // ★ 火球目标 = 范围内最近的敌人；打过去产生 dmg/飘字/命中特效
+          // ★ 火球目标 = 射程内最近的敌人（★ V2_2 远程 4m）；打过去产生 dmg/飘字/命中特效
           let target = null, minD = Infinity;
           for (const e2 of lastState.entities) {
             if (e2.side !== "enemy" || !e2.alive) continue;
             const dd = Math.hypot(e2.x - me2.x, e2.y - me2.y);
-            if (dd < minD && dd < 12) { minD = dd; target = e2; }
+            if (dd < minD && dd < _range) { minD = dd; target = e2; }
           }
           // ★ V2：cone 形状时按朝向扇形筛目标（扇形外的怪不受影响）
           if (target && _shape === "cone") {
             const ok = v2InAttackRange(_shape, me2.x, me2.y, _facing,
-              V2_CONE_HALF_ANGLE_DEG, (target).x, (target).y, V2_SKILL_RANGE_M);
+              V2_CONE_HALF_ANGLE_DEG, (target).x, (target).y, _range);
             if (!ok) target = null;
           }
           const tx = target ? target.x : me2.x + Math.cos((me2.facing || 0) * Math.PI / 180) * 10;

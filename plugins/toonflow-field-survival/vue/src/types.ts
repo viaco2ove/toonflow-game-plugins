@@ -30,6 +30,9 @@ export interface RangeIndicator {
   facing: number;
   /** 扇形半角（度） */
   halfAngleDeg: number;
+  /** ★ V2_2 改造2：该技能/物品的属性法术图标（相对 ui/ 路径）——
+   *  前端在指示区范围内画 1..N 个半透明漂浮图标模仿粒子特效 */
+  icon?: string;
   life: number;
   total: number;
 }

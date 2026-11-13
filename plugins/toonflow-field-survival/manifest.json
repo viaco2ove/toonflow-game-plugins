@@ -1,7 +1,7 @@
 {
   "id": "com.toonflow.minigame-field-survival",
   "name": "野外生存",
-  "version": "1.0.28",
+  "version": "1.0.30",
   "author": "Toonflow Team",
   "description": "在荒野中生存，寻找食物和水源，抵御野兽袭击，挑战极限生存天数。",
   "main": "entry.ts",
@@ -40,7 +40,7 @@
         "title": "击杀野怪（权威结算）",
         "kind": "action",
         "action": "attack",
-        "description": "对指定野怪发起一次普攻（与玩家点击普攻走同一条权威结算链：伤害/经验/掉落/任务计数一致）。要求目标在玩家 4m 攻击范围内；太远会失败并提示先用别的方式接近。先用 query_state 拿 entity id，再传 targetId。",
+        "description": "对指定野怪发起一次普攻（与玩家点击普攻走同一条权威结算链：伤害/经验/掉落/任务计数一致）。射程按当前主手武器：近战武器/空手 2m，远程武器 4m；太远会失败并提示先用别的方式接近。先用 query_state 拿 entity id，再传 targetId。",
         "required": ["targetId"],
         "inputSchema": {
           "type": "object",

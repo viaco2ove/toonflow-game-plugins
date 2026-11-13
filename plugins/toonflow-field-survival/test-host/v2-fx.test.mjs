@@ -189,7 +189,8 @@ section("5. R5 攻击形状 circle / cone");
     const inds = st.rangeIndicators || [];
     ok(inds.some((i) => i.shape === "circle"), "产生 shape=circle 指示区");
     const ci = inds.find((i) => i.shape === "circle");
-    eq(ci && ci.radius, 4, "指示区半径 = 4m（与判定半径一致）");
+    // ★ V2_2 射程分离：该用例技能未写 range → 近战 2m（指示区与判定同源 attackRangeOf）
+    eq(ci && ci.radius, 2, "指示区半径 = 2m（近战技能，与判定半径一致）");
   }
 
   // ② cone（朝右）：正右的怪被打，正下 90° 的怪**不受影响**
@@ -207,7 +208,8 @@ section("5. R5 攻击形状 circle / cone");
     const inds = st.rangeIndicators || [];
     const ci = inds.find((i) => i.shape === "cone");
     ok(!!ci, "产生 shape=cone 指示区");
-    eq(ci && ci.radius, 4, "cone 指示区半径 = 4m");
+    // ★ V2_2 射程分离：该用例技能未写 range → 近战 cone 2m
+    eq(ci && ci.radius, 2, "cone 指示区半径 = 2m（近战技能）");
     eq(ci && ci.halfAngleDeg, 30, "cone 指示区半角 = 30°（总 60°）");
     eq(ci && ci.facing, 0, "cone 指示区朝向 = 施放朝向");
   }
@@ -285,8 +287,138 @@ section("7. 徽章数量上限（每实体最多 2 枚）");
   ok(kinds.length <= 2 && new Set(kinds).size === kinds.length, `徽章 kind 不重复（${JSON.stringify(kinds)}）`);
 }
 
-/* ── 汇总 ─────────────────────────────────────────── */
-console.log("\n" + "═".repeat(64));
+/* ══════════════════════════════════════════════════════
+   8) V2_2 改造5/6：特效密度控制（每实体 ≤3、野怪全局 ≤5）
+   ══════════════════════════════════════════════════════ */
+section("8. V2_2 特效密度控制（每实体≤3 / 野怪全局≤5）");
+{
+  // ① 连续 4 次普攻同一目标 → 该目标（e1）身上特效最多 3 个
+  {
+    const st = newState({ px: 0, py: 0 });
+    for (let i = 0; i < 4; i++) {
+      mobOf(st).cooldown = 0;
+      await call("attack", { targetId: "e1", player: { x: 0, y: 0, facing: 0 } }, st);
+    }
+    const onMob = (st.vfx || []).filter((v) => v.entityId === "e1").length;
+    ok(onMob <= 3, `连续 4 次攻击后目标身上特效 ${onMob} ≤ 3（旧残留被立即清除，只留最新 3）`);
+  }
+  // ② 野怪攻击玩家 → 目标（玩家）身上特效 ≤3（每次攻击产生 spark+explosion 两个）
+  {
+    const st = newState({ px: 0, py: 0 });
+    for (let i = 0; i < 4; i++) {
+      mobOf(st).cooldown = 0;
+      await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+    }
+    const onPlayer = (st.vfx || []).filter((v) => v.entityId === "p1").length;
+    ok(onPlayer <= 3, `被怪连打 4 次后玩家身上特效 ${onPlayer} ≤ 3`);
+  }
+  // ③ 改造5：野怪普攻也要有普攻特效 —— 怪攻击玩家时产生怪自己 entityId 的 slash_arc（近战怪）
+  {
+    const st = newState({ px: 0, py: 0 });
+    await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+    const mobFx = (st.vfx || []).filter((v) => v.entityId === "e1");
+    ok(mobFx.length >= 1, `怪攻击时产生了怪自己的特效（${mobFx.length} 个）`);
+    ok(mobFx.some((v) => v.kind === "slash_arc"), "近战怪普攻特效为 slash_arc（此前真机从未有）");
+    ok(typeof mobFx.find((v) => v.kind === "slash_arc")?.angle === "number",
+      "野怪斩波带 angle（指向受击者，前端按 angle 画朝向）");
+  }
+  // ④ 远程怪普攻特效为 fireball
+  {
+    const st = newState({ px: 0, py: 0 });
+    (st.entities[1]).isRanged = true;
+    await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
+    const mobFx = (st.vfx || []).filter((v) => v.entityId === "e1");
+    ok(mobFx.some((v) => v.kind === "fireball"), "远程怪普攻特效为 fireball");
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   9) V2_2 改造2：攻击范围指示区带属性法术图标
+   ══════════════════════════════════════════════════════ */
+section("9. V2_2 指示区带属性图标（icon 字段下发）");
+{
+  const st = newState({
+    px: 0, py: 0,
+    skills: [{ name: "火扇", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee",
+               attack_shape: "cone", effects_type: "fire" }],
+  });
+  await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+  const ind = (st.rangeIndicators || []).at(-1);
+  ok(!!ind, "产生了指示区");
+  eq(ind && ind.shape, "cone", "指示区形状 cone");
+  // entry.ts EFFECT_ICON.fire = images/spells/fire/fireball.png
+  eq(ind && ind.icon, "images/spells/fire/fireball.png", "指示区 icon = 该技能 effects_type 对应的 spells 图");
+  // 无属性技能 → icon 缺省（前端不画粒子，只画形状）
+  const st2 = newState({
+    px: 0, py: 0,
+    skills: [{ name: "无属性", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "circle" }],
+  });
+  await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st2);
+  const ind2 = (st2.rangeIndicators || []).at(-1);
+  eq(ind2 && ind2.icon, undefined, "无 effects_type → icon 缺省（形状照画，无图标粒子）");
+}
+
+/* ══════════════════════════════════════════════════════
+   10) V2_2 射程分离：近战 2m / 远程 4m（用户实测「远近不分」）
+   ══════════════════════════════════════════════════════ */
+section("10. V2_2 射程分离（近战 2m / 远程 4m）");
+{
+  // ① 近战技能指示区 radius=2
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "近战技", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "circle" }],
+    });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+    const ind = (st.rangeIndicators || []).at(-1);
+    eq(ind && ind.radius, 2, "近战技能指示区半径 = 2m");
+  }
+  // ② 远程技能指示区 radius=4
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "远程技", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "ranged", attack_shape: "circle" }],
+    });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, st);
+    const ind = (st.rangeIndicators || []).at(-1);
+    eq(ind && ind.radius, 4, "远程技能指示区半径 = 4m");
+  }
+  // ③ 判定分离：3.5m 处的怪 —— 近战打不到（超 2m）、远程打到（≤4m）
+  {
+    const mk = () => {
+      const st = newState({ px: 0, py: 0 });
+      st.entities.push({ id: "e2", name: "远怪", side: "enemy", x: 3.5, y: 0, vx: 0, vy: 0,
+        hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 3.5, homeY: 0 });
+      return st;
+    };
+    const stM = mk();
+    stM.skills = [{ name: "近战技", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "circle" }];
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, stM);
+    eq(stM.entities.find((e) => e.id === "e2").hp, 500, "近战 2m：3.5m 处的怪不被命中");
+
+    const stR = mk();
+    stR.skills = [{ name: "远程技", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "ranged", attack_shape: "circle" }];
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 } }, stR);
+    ok(stR.entities.find((e) => e.id === "e2").hp < 500, "远程 4m：3.5m 处的怪被命中");
+  }
+  // ④ 普攻射程按主手武器：远程武器 → 4m 指示区
+  //   ⚠️ mergeBag 的 range 来自 **itemMeta**（物品对象自身 range 不读）——
+  //   与真机一致：武器的远近在系统面板「物品编辑」里配置，落 itemMeta。
+  {
+    const st = newState({ px: 0, py: 0 });
+    st.playerCard = { items: [{ name: "飞刀", count: 1, kind: "weapon", rarity: "common", price: 0, type: "atk" }] };
+    st.itemMeta = { "飞刀": {
+      power: 5, cost: 0, cd: 0, type: "atk", range: "ranged", lv: 1, buff_type: "",
+      durability: -1, durabilityLeft: -1, attribute_type: "", attribute_value: 0,
+      quantity: 1, description: "", attack_shape: "circle",
+    } };
+    await call("attack", { player: { x: 0, y: 0, facing: 0 } }, st);
+    const ind = (st.rangeIndicators || []).at(-1);
+    eq(ind && ind.radius, 4, "普攻（远程武器）指示区半径 = 4m");
+  }
+}
+
+/* ── 汇总 ─────────────────────────────────────────── */console.log("\n" + "═".repeat(64));
 console.log(`总计 ${passed + failures.length} 项断言，FAIL ${failures.length} 项`);
 if (failures.length) {
   console.log("\n失败项：");

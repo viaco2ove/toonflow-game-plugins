@@ -419,7 +419,7 @@ function applyBuff(s: FieldSurvivalState, ent: Entity | undefined,
 /* ============================================================
    ★ V2（2026-11-13）攻击形状 + 攻击范围指示区
    ------------------------------------------------------------
-   V1：所有范围攻击都是**圆形**（判定 `dist < SKILL_RANGE_M`）。
+   V1：所有范围攻击都是**圆形**（判定 `dist < attackRangeOf(技能)`）。
    V2：新增**朝向攻击类型**（cone）—— 只攻击面前的敌人。
         施放瞬间在地面画出与判定范围**完全一致**的粉红色半透明指示区：
           circle → 粉红圆形；cone → 粉红扇形（默认 60°）。
@@ -512,11 +512,13 @@ function attackShapeOf(src: any): AttackShape {
 /**
  * ★ V2：生成攻击范围指示区。
  *   ⚠️ radius 必须与命中判定用的是**同一个值**，否则指示区与判定不一致。
+ *   ★ V2_2（2026-11-13）改造2：icon = 该技能/物品的属性法术图标，
+ *     前端在指示区范围内画 1..N 个半透明漂浮图标模仿粒子特效。
  */
 function pushRangeIndicator(
   s: FieldSurvivalState,
   opts: { shape: AttackShape; x: number; y: number; radius: number;
-          facing: number; halfAngleDeg: number; lifeTicks?: number },
+          facing: number; halfAngleDeg: number; lifeTicks?: number; icon?: string },
 ): void {
   if (!Array.isArray((s as any).rangeIndicators)) (s as any).rangeIndicators = [];
   const life = Math.max(1, Math.round(opts.lifeTicks ?? RANGE_INDICATOR_TICKS));
@@ -524,6 +526,7 @@ function pushRangeIndicator(
     id: `ri_${s.tick}_${Math.random().toString(36).slice(2, 6)}`,
     shape: opts.shape, x: opts.x, y: opts.y, radius: opts.radius,
     facing: opts.facing, halfAngleDeg: opts.halfAngleDeg,
+    icon: opts.icon || undefined,
     life, total: life,
   });
   // 上限 8 个（连点也不会刷屏）
@@ -900,8 +903,19 @@ const CHEST_PICKUP_M  = 2;
  *  否则近战击杀时玩家就站在掉落点旁 → 下一帧立刻被吃掉，玩家永远「看不见地上有宝箱」。 */
 const CHEST_GRACE_TICKS = 12;
 const POTION_PICKUP_M = 2;
-/** ★ game.md：远程野怪/远程武器/远程技能 距离 4 米（此前 30 米） */
-const SKILL_RANGE_M   = 4;
+/** ★ game.md：远程野怪/远程武器/远程技能 距离 4 米（此前 30 米）
+ *  ★ V2_2（2026-11-14）：近战/远程**射程分离**（用户实测：近战和远攻的攻击范围一样、
+ *    指示区粉红半径一样，「远近不分」）——
+ *    · 近战 melee = 2 米（贴近身直觉；比野怪攻击 1m 略长，贴脸时玩家有小优势）
+ *    · 远程 ranged = 4 米（维持原值 —— 若远程 >4m 会超出野怪 4m 脱战圈，
+ *      玩家可以站在怪「永不追击」的圈外放风筝，破坏平衡）
+ *    · 指示区半径与命中判定**同源**（attackRangeOf）→ 近战小圈、远程大圈，一眼可分。 */
+const RANGED_RANGE_M  = 4;
+const MELEE_RANGE_M   = 2;
+/** 按技能/武器/物品的 range 字段取射程（缺省 = 近战 —— 拳头/无属性武器都是贴身） */
+function attackRangeOf(src: any): number {
+  return String(src?.range || "") === "ranged" ? RANGED_RANGE_M : MELEE_RANGE_M;
+}
 // ── AI 托管专用常量（移植自 cache/entry.js，确保 entry.ts 重编不丢 AI 能力）──
 const AI_MANAGED_ENGAGE_M = 13;        // AI托管角色独立索敌半径（米）
 const AI_GATHER_TICKS = 30;            // 采集中耗时（tick）
@@ -1047,6 +1061,7 @@ function num(v: unknown, d = 0): number {
 /** 技能名归一：剥离「（lv2，描述…）」等后缀 / 对象残留 */
 function cleanSkillName(v: unknown): string {
   let n = v && typeof v === "object" ? str((v as any).name ?? (v as any).skill ?? "") : str(v);
+  if (n.length > 4096) n = n.slice(0, 512); // ★ 毒名守卫（同 cleanItemName，防 7.3MB 技能名全串正则）
   n = n.replace(/\[object Object\]/g, " ");
   n = n.replace(/[（(][^）)]*[）)]/g, " ");
   n = n.replace(/\s+/g, " ").trim();
@@ -1075,7 +1090,9 @@ function splitSkillList(raw) {
   const out = [];
   let buf = "";
   let depth = 0;
-  for (const ch of String(raw)) {
+  const s0 = String(raw);
+  const s = s0.length > 4096 ? s0.slice(0, 4096) : s0; // ★ 毒串守卫：逐字符迭代 + buf 拼接对 7.3MB 串是百 ms 级
+  for (const ch of s) {
     if (ch === "\uFF08" || ch === "(") depth += 1;
     else if (ch === "\uFF09" || ch === ")") depth = Math.max(0, depth - 1);
     if (depth === 0 && "\u3001,\uFF0C;\uFF1B/|".includes(ch)) { out.push(buf); buf = ""; continue; }
@@ -1416,11 +1433,41 @@ function floater(s: FieldSurvivalState, text: string, x: number, y: number,
   if (s.floaters.length > 30) s.floaters = s.floaters.slice(-30);
 }
 
-/** ★ game.md 打击特效：宿主侧推送 VFX 粒子（kind 与前端 drawVfxLayer 对齐） */
+/** ★ game.md 打击特效：宿主侧推送 VFX 粒子（kind 与前端 drawVfxLayer 对齐）
+ *  ★ V2_2（2026-11-13）改造5/6：特效叠加密度控制 ——
+ *    · 每个实体最多同时 3 个特效：第 4 个到达时**立即清除**该实体最旧的残留，只留最新 3 个；
+ *    · 野怪（side=enemy 的实体）产出的特效**全局**最多 5 个（密度控制，防多怪围攻刷屏）。
+ *    判定「野怪特效」= entityId 指向 side=enemy 的实体。 */
 function pushVfx(s: FieldSurvivalState, p: Record<string, any>) {
   if (!Array.isArray((s as any).vfx)) (s as any).vfx = [];
   (s as any).vfx.push({ id: `vfx_${s.tick}_${Math.random().toString(36).slice(2, 6)}`, ...p });
-  if ((s as any).vfx.length > 60) (s as any).vfx = (s as any).vfx.slice(-60);
+  const arr: any[] = (s as any).vfx;
+  // entityId → side 查找表（实体数少，每帧重建成本可忽略）
+  const sideOf = new Map<string, string>();
+  for (const e of s.entities) sideOf.set(String(e.id), e.side);
+  const MAX_PER_ENTITY = 3;   // ★ V2_2 改造5/6：单实体特效上限（第 4 个挤掉最旧）
+  const MAX_MOB_TOTAL = 5;    // ★ V2_2 改造5：野怪特效全局密度上限
+  const perEnt = new Map<string, number>();
+  let mobCount = 0;
+  const keep: any[] = [];
+  // 从最新往回扫：新特效优先保留，旧残留被挤出
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const v = arr[i];
+    const entKey = v.entityId != null ? String(v.entityId) : null;
+    if (entKey != null) {
+      const cnt = perEnt.get(entKey) || 0;
+      if (cnt >= MAX_PER_ENTITY) continue;      // 该实体残留已满 3 → 丢弃更旧的
+      perEnt.set(entKey, cnt + 1);
+    }
+    if (entKey != null && sideOf.get(entKey) === "enemy") {
+      if (mobCount >= MAX_MOB_TOTAL) continue;  // 野怪特效全局密度已满 → 丢弃最旧
+      mobCount += 1;
+    }
+    keep.push(v);
+  }
+  keep.reverse();
+  // 绝对上限兜底（无 entityId 的散特效不受每实体上限约束）
+  (s as any).vfx = keep.length > 60 ? keep.slice(-60) : keep;
 }
 
 /**
@@ -1657,6 +1704,24 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
   // ★ game.md 普攻特效：被击者白闪 + 命中火花/爆炸；攻击者小跳（amount=0 的「未命中」占位不触发）
   if (amount > 0) {
     (target as any).hitFlashMs = 250;
+    // ★ V2_2（2026-11-13）改造5：野怪普攻也要有普攻特效 ——
+    //   此前只有 mockHost/dev 桩有 pushAttackVfx（真机 damage 从没给野怪出攻击特效），
+    //   玩家被怪打时只看到自己闪红，看不到「谁打的」。补：从攻击者位置出
+    //   slash_arc（近战）/ fireball（远程），angle 指向受击者（前端读 p.angle）。
+    //   这些野怪特效受 pushVfx 的密度控制（每实体 ≤3 / 野怪全局 ≤5）。
+    if (attacker && attacker.side === "enemy") {
+      const _adx = target.x - attacker.x, _ady = target.y - attacker.y;
+      const _aAng = (Math.atan2(_ady, _adx) * 180) / Math.PI;
+      if ((attacker as any).isRanged) {
+        pushVfx(s, { kind: "fireball", entityId: attacker.id, targetEntityId: target.id,
+          x: attacker.x, y: attacker.y, targetX: target.x, targetY: target.y,
+          facing: num((attacker as any).facing, 0), life: 16, total: 16, color: "#ff8c3a", size: 1 });
+      } else {
+        pushVfx(s, { kind: "slash_arc", entityId: attacker.id,
+          x: attacker.x, y: attacker.y, facing: num((attacker as any).facing, 0), angle: _aAng,
+          life: 10, total: 10, color: "#ff7b6b", size: 1.2 });
+      }
+    }
     pushVfx(s, { kind: "spark", entityId: target.id, x: target.x, y: target.y, life: 8, total: 8, color: "#ff5a5a" });
     pushVfx(s, { kind: "explosion", entityId: target.id, x: target.x, y: target.y, life: 6, total: 6, color: "#ff8c3a" });
     if (attacker) (attacker as any).actionBobMs = 300;
@@ -3124,6 +3189,7 @@ function rollAlchemyPill(input: string, _level: number): { name: string; kind: s
 /** 物品名归一：剥离「×N」数量、「（描述…）」后缀、对象残留与货币尾注，限长 20（与 entry.js 同口径） */
 function cleanName(v: any): string {
   let n = v && typeof v === "object" ? str(v.name ?? v.item ?? v.itemName ?? "") : str(v);
+  if (n.length > 4096) n = n.slice(0, 512); // ★ 毒名守卫（同 cleanItemName，itemKey 每帧大量调用）
   n = n.replace(/\[object Object\]/g, " ");
   n = n.replace(/[（(][^）)]*[）)]/g, " ");
   n = n.replace(/[×xX*]\s*\d+\s*(个|件|尾|份|瓶|颗|张|本)?/g, " ");
@@ -3141,9 +3207,52 @@ function sameName(a: any, b: any): boolean {
   const ka = itemKey(a);
   return !!ka && ka === itemKey(b);
 }
+/**
+ * ★ V2_2（2026-11-14）物品名清洗 —— 修「连点干粮卡死/动不了」的真正根因：
+ *   参数卡物品名被「往返拼接注记」无限膨胀（实测：「北境烈酒（致幻中和剂）（致幻
+ *   中和剂）…」一条物品的名字长到 **7.3MB**，塞进 state 的 playerCard / items /
+ *   writeback 三处 → 每条 tick/点击回推都克隆+解析 24MB → 主线程被吃光）。
+ *   放大链：parseItemRaw 的**对象分支不剥注记**（name 原样带「（致幻中和剂）」）→
+ *   serializeBag 写回时 `${b.name}（${desc}）` 又拼一层 → 每次操作名字翻倍。
+ *   规则：≤60 字符不碰（正常名/正常注记一律放行）；>60 判异常 → 反复剥结尾
+ *   「（…）」层直到稳定 + 限长 40。serializeBag 写回同样清洗 → **数据自愈**。
+ *   ★ 毒名快速路径（2026-11-14 修复「一进去就卡」）：剥层正则 `[（(][^）)]*[）)]$`
+ *   对 N 层毒串每轮 replace 都要 O(n) 全串扫描 → 7.3MB 毒名 × 400 轮 = 秒级，
+ *   且 syncCardFromContext 在 sig 短路之前就跑清洗 → 每 tick 13~17s（实测），
+ *   主线程被打死。>4KB 必为膨胀数据（正常名+注记到不了 4KB），主体一定在开头
+ *   → 直接截 64 字符再走常规剥层，O(64) 完事。
+ */
+function cleanItemName(raw: unknown, forcePoison = false): string {
+  const s0 = String(raw ?? "");
+  // forcePoison：调用方已判定的毒串（如 parseItemRaw 截断后的 512 字符头），
+  //   否则截断后 ≤4096 会丢失毒标志 → 退化旧语义残留 5 层注记
+  const poisoned = forcePoison || s0.length > 4096;
+  let name = (poisoned ? s0.slice(0, 64) : s0).trim();
+  if (name.length <= 60 && !poisoned) return name;
+  if (poisoned) {
+    // 截断常切在括号中间留下未闭合「（致幻中」尾巴 → 剥层正则要求「）$」
+    // 第一轮就匹配失败 break → 先清尾巴让循环能完整剥到底
+    name = name.replace(/（[^）]*$/, "").replace(/\([^)]*$/, "").trim();
+    if (!name) return "";
+  }
+  let prev = name;
+  for (let i = 0; i < 400; i++) {
+    const stripped = prev.replace(/[（(][^）)]*[）)]\s*$/, "").trim();
+    if (!stripped || stripped === prev) break;
+    prev = stripped;
+    // 毒名剥到主体干净为止（截断后 ≤64 字符、层已有限）；非毒名保持旧语义剥到 ≤40
+    if (prev.length <= 40 && !poisoned) break;
+  }
+  // 剥层中途停下的可能留下未闭合的「（…」尾巴 → 去掉（避免写回后括号嵌套脏数据）
+  prev = prev.replace(/（[^）]*$/, "").replace(/\([^)]*$/, "").trim();
+  prev = prev.slice(0, 40);
+  // ★ 40 上限截断可能恰好切在「（」上留半个尾巴 → 再清一次（写回后括号闭合才稳定）
+  return prev.replace(/（[^）]*$/, "").replace(/\([^)]*$/, "").trim();
+}
 function parseItemRaw(raw: any): BagItem {
   if (raw && typeof raw === "object") {
-    const name = str((raw as any).name ?? (raw as any).item ?? "");
+    // ★ V2_2：对象分支同样清洗 name（此前不剥注记 → 毒名从这条路进来）
+    const name = cleanItemName(str((raw as any).name ?? (raw as any).item ?? ""));
     const kind = KIND_LIST.indexOf(String((raw as any).kind)) >= 0 ? String((raw as any).kind) : guessKind(name);
     return {
       name,
@@ -3152,10 +3261,23 @@ function parseItemRaw(raw: any): BagItem {
       rarity: normRarity((raw as any).rarity),
       heal: Math.max(0, Math.round(num((raw as any).heal, defaultHeal(name, kind)))),
       price: Math.max(0, Math.round(num((raw as any).price, 0))),
-      desc: str((raw as any).desc, "") || undefined,
+      desc: str((raw as any).desc, "").slice(0, 200) || undefined,
     };
   }
-  const text = str(raw).trim();
+  // ★ 毒串快路径（2026-11-14 修复「一进去就卡」）：>512 的物品串必为膨胀数据
+  //   （正常条目 name+注记到不了 512）；主体在开头、尾部可能挂 ×N。
+  //   摘尾部 ×N（防截断丢数量）→ cleanItemName(forcePoison) 清洗主体 →
+  //   O(512) 完事；原路径 noParen/×N 正则对 7.3MB 串是 O(n) 全串扫描。
+  const text0 = str(raw).trim();
+  if (text0.length > 512) {
+    const tm = text0.match(/[×xX*]\s*(\d+)\s*$/);
+    const cnt = tm ? Math.max(1, parseInt(tm[1], 10) || 1) : 1;
+    const body = cleanItemName(text0.slice(0, 512), true);
+    if (!body) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
+    const kind = guessKind(body);
+    return { name: body, count: cnt, kind, rarity: "common", heal: defaultHeal(body, kind), price: 0 };
+  }
+  const text = text0;
   if (!text) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
   // ★ 物品字符串归一修复：先剥括号注记（"（钓鱼累积…）"/"（鲜美的河鱼）" 等自由文本尾注），
   //   再用剥后剩下的字符串剥 ×N。原顺序反过来遇到 "银鲳×16（…）" 会因正则要求
@@ -3165,7 +3287,10 @@ function parseItemRaw(raw: any): BagItem {
   const m = noParen.match(/^(.*?)[×xX*]\s*(\d+)\s*$/);
   if (m) {
     // ★ 同下：清除 "[object Object]" 残留（带 ×N 后缀的脏条目）
-    const name = m[1].replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
+    //   ★ V2_2 毒名补漏（2026-11-14）：×N 分支此前不过 cleanItemName ——
+    //     「毒名…×N」形态（毒名在 7.3MB 末尾才出现 ×7，截断后虽丢 ×N 但
+    //     长尾形态的毒名）原样进 bag → 这是毒名放大的另一入口。
+    const name = cleanItemName(m[1].replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim());
     if (!name) return { name: "", count: 0, kind: "material", rarity: "common", heal: 0, price: 0 };
     const kind = guessKind(name);
     return { name, count: Math.max(1, parseInt(m[2], 10) || 1), kind, rarity: "common", heal: defaultHeal(name, kind), price: 0 };
@@ -3173,9 +3298,10 @@ function parseItemRaw(raw: any): BagItem {
   const p = text.match(/[（(](.*?)[)）]\s*$/);
   // ★ 清除 "[object Object]" 残留（历史脏数据经 String(obj) 写入参数卡）：
   //   清空后 name 为空 → itemsFromCard/serializeBag 过滤掉 → 下次背包重写自动清除脏条目
-  const name = noParen.replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim();
+  // ★ V2_2：name 走 cleanItemName（字符串分支的超长毒名同样清洗）
+  const name = cleanItemName(noParen.replace(/\[object Object\]/g, " ").replace(/\s+/g, " ").trim());
   const kind = guessKind(name);
-  return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? p[1] : undefined };
+  return { name, count: 1, kind, rarity: "common", heal: defaultHeal(name, kind), price: 0, desc: p ? String(p[1]).slice(0, 200) : undefined };
 }
 
 function itemsFromCard(card: any): BagItem[] {
@@ -3245,18 +3371,22 @@ function serializeBag(bag: BagItem[], cardItems?: any[]): string[] {
       const b = bag.find((y) => sameName(y.name, p.name) && !used.has(itemKey(y.name)));
       if (!b || !(b.count > 0)) return;
       used.add(itemKey(b.name));
-      const d = p.desc ? `（${p.desc}）` : "";
-      out.push(b.count > 1 ? `${b.name}×${b.count}${d}` : d ? `${b.name}${d}` : b.name);
+      // ★ V2_2：b.name 走 cleanItemName —— 毒名（7.3MB 注记拼接）在这里被清洗后
+      //   **写回参数卡** → 服务器侧毒数据随玩家操作自愈；desc 限长防同类膨胀
+      const bn = cleanItemName(b.name);
+      const d = p.desc ? `（${String(p.desc).slice(0, 120)}）` : "";
+      out.push(b.count > 1 ? `${bn}×${b.count}${d}` : d ? `${bn}${d}` : bn);
     });
     bag.forEach((b) => {
       if (!b.count || used.has(itemKey(b.name))) return;
       used.add(itemKey(b.name));
-      const d = b.desc ? `（${b.desc}）` : "";
-      out.push(b.count > 1 ? `${b.name}×${b.count}${d}` : d ? `${b.name}${d}` : b.name);
+      const bn = cleanItemName(b.name);
+      const d = b.desc ? `（${String(b.desc).slice(0, 120)}）` : "";
+      out.push(b.count > 1 ? `${bn}×${b.count}${d}` : d ? `${bn}${d}` : bn);
     });
     return out;
   }
-  return bag.filter((i) => i.name && i.count > 0).map((i) => (i.count > 1 ? `${i.name}×${i.count}` : i.name));
+  return bag.filter((i) => i.name && i.count > 0).map((i) => (i.count > 1 ? `${cleanItemName(i.name)}×${i.count}` : cleanItemName(i.name)));
 }
 
 function sellPrice(it: BagItem): number {
@@ -5043,14 +5173,17 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
   } else {
     // atk / attribute：普攻效果；attribute 是纯属性点，使用不消耗但有小跳 + 普攻特效
     // ★ V2：物品也支持攻击形状（circle / cone）——cone 时命中受朝向限制
+    // ★ V2_2 射程分离：近战物品 2m / 远程物品 4m（判定与指示区同源）
     const itShape = attackShapeOf(it);
+    const itRange = attackRangeOf(it);
     const itFacing = num((me as any).facing, 0);
     const targets = s.entities.filter((e) => e.side === "enemy" && e.alive
-      && inAttackRange(itShape, me.x, me.y, itFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+      && inAttackRange(itShape, me.x, me.y, itFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, itRange));
     // ★ V2：物品命中也出攻击范围指示区
     pushRangeIndicator(s, {
-      shape: itShape, x: me.x, y: me.y, radius: SKILL_RANGE_M,
+      shape: itShape, x: me.x, y: me.y, radius: itRange,
       facing: itFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+      icon: effectIcon(it.effects_type),
     });
     if ((it.range || "melee") === "ranged" && targets[0]) {
       pushVfx(s, { kind: "fireball", entityId: me.id, targetEntityId: targets[0].id, x: me.x, y: me.y, targetX: targets[0].x, targetY: targets[0].y, facing: me.facing, life: 16, total: 16, color: effectColor(it.effects_type, "#ff6a00"), icon: effectIcon(it.effects_type), size: 1.0 });
@@ -5138,7 +5271,41 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
     return;
   }
   // 已恢复存档：以 ctx 为底（剧情字段），但 items/money/skills 用 s 的（插件经济权威）
-  const base: Record<string, any> = restored ? { ...card } : (card as Record<string, any>);
+  const base: Record<string, any> = restored ? { ...card } : { ...(card as Record<string, any>) };
+  // ★ V2_2（2026-11-14）：物品名清洗（毒名自愈）—— ctx 参数卡的物品名可能被
+  //   「往返拼接注记」膨胀到 7.3MB（实测「北境烈酒（致幻中和剂）」×46万层），
+  //   原样进 state.playerCard → 每帧 sig() 对比都要 stringify 7MB×2 + 每条消息
+  //   回推 24MB → 主线程被吃光。这里把 base.items 每项过 parseItemRaw（内含
+  //   cleanItemName）重建简洁串 → state 自愈且不再震荡。
+  if (Array.isArray(base.items)) {
+    // ★ 毒检测改零 stringify（2026-11-14 修复「一进去就卡」）：原来每 tick 对
+    //   base.items 做 beforeLen/afterLen 两次 JSON.stringify —— 毒卡（7.3MB）时
+    //   每 tick 白扫 2×7.3MB；且这段在 sig 短路之前，state 已自愈也照样跑。
+    //   改为近似体积（字符串项取 .length，O(1)），仅当存在 >4KB 超长条目时才
+    //   认定毒卡并写 writeback —— 正常卡全程零 stringify。
+    let beforeLen = 0;
+    let hasLong = false;
+    for (const x of base.items) {
+      const L = typeof x === "string" ? x.length : (x && typeof x === "object" ? String(x?.name ?? "").length + 64 : 16);
+      beforeLen += L;
+      if (L > 4096) hasLong = true;
+    }
+    base.items = base.items.map((x: any) => {
+      const p = parseItemRaw(x);
+      if (!p.name) return x;
+      const d = p.desc ? `（${p.desc}）` : "";
+      return p.count > 1 ? `${p.name}×${p.count}${d}` : d ? `${p.name}${d}` : p.name;
+    });
+    // ★ 清洗发现毒数据（体积骤降 > 50KB）→ 主动写 writeback：宿主消费后把清洗结果
+    //   写回服务器参数卡 → **第一次 tick 即自愈**（不等玩家第一次操作）
+    if (hasLong) {
+      const afterLen = base.items.reduce((n: number, x: any) => n + (typeof x === "string" ? x.length : 64), 0);
+      if (beforeLen - afterLen > 50000) {
+        s.writeback = { ...((s.writeback || {}) as Record<string, any>), items: base.items };
+        pushEvent(s, `检测到参数卡物品数据异常膨胀（${Math.round(beforeLen / 1024)}KB），已自动清洗修复`);
+      }
+    }
+  }
   if (restored) {
     if (Array.isArray(cur.items)) base.items = cur.items;
     if (cur.money != null) base.money = cur.money;
@@ -6509,18 +6676,21 @@ export async function handle_action(
       // ★ V2（2026-11-13）：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形）
       //   朝向取客户端上报的实时 facing（玩家手动朝向），无则退化为「施放者→最近目标」。
       //   ⚠️ 指示区与判定用**同一个** inAttackRange + 同一组常量 → 不会出现「看到扇形却打到外面」。
+      //   ★ V2_2 射程分离：近战技能 2m / 远程技能 4m（判定与指示区同源 attackRangeOf）。
       const skillShape = attackShapeOf(skill);
+      const skillRange = attackRangeOf(skill);
       const skillFacing = resolveCastFacing(params, castRef, player.facing, null);
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && !e.deathMs
-        && inAttackRange(skillShape, castRef.x, castRef.y, skillFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+        && inAttackRange(skillShape, castRef.x, castRef.y, skillFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, skillRange));
       skill.cdLeft = skill.cd;
       // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
       (player as any).actionBobMs = 300;
       floater(s, skill.name, player.x, player.y - 34);
       // ★ V2：攻击范围指示区（circle=粉红圆形 / cone=粉红扇形），半径=判定半径
       pushRangeIndicator(s, {
-        shape: skillShape, x: castRef.x, y: castRef.y, radius: SKILL_RANGE_M,
+        shape: skillShape, x: castRef.x, y: castRef.y, radius: skillRange,
         facing: skillFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+        icon: effectIcon((skill as any).effects_type),
       });
       // ★ game.md 技能特效：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const fx = skillFxKind(skill);
@@ -6562,7 +6732,7 @@ export async function handle_action(
       if (s.phase !== "playing") return okResp("");
       const player = s.entities.find((e) => e.side === "player");
       if (!player || !player.alive) return okResp("");
-      // ★ 方案三：普攻——在 SKILL_RANGE_M 内找最近活敌，短冷却无消耗
+      // ★ 方案三：普攻——在主手武器射程内找最近活敌，短冷却无消耗
       //   ★ 练习假人（trainingDummy，side=neutral）也算合法攻击目标——
       //   玩家点了假人 → damage() 正常结算；kills/exp 走下面的 dummy 特判（不给经验）
       const enemies = s.entities.filter((e) =>
@@ -6578,18 +6748,20 @@ export async function handle_action(
       // 渐隐期（deathMs>0）的尸体不再可选中——否则玩家会对正在消失的尸体空挥一次
       // ★ V2（2026-11-13）：普攻的攻击形状取「主手武器的 attack_shape」（缺省 circle = V1 行为）。
       //   ⚠️ 指示区与判定必须一致：cone 时命中也受朝向限制，否则「看到扇形却打外面」比没指示更糟。
+      //   ★ V2_2 射程分离：普攻射程也按主手武器（近战武器/空手 2m，远程武器 4m）。
       const mainItem0 = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
       const atkShape = attackShapeOf(mainItem0);
+      const atkRange = attackRangeOf(mainItem0);
       const atkFacing = resolveCastFacing(params, atkRef, player.facing, null);
       const inRange = enemies.filter((e) => !e.deathMs
-        && inAttackRange(atkShape, atkRef.x, atkRef.y, atkFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+        && inAttackRange(atkShape, atkRef.x, atkRef.y, atkFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, atkRange));
       if (!inRange.length) {
         // ★ M3-2：带 targetId 时优先给精确原因（不存在 / 太远），不笼统说「附近没有敌人」
         const wantId0 = str(params?.targetId);
         if (wantId0) {
           const anywhere0 = enemies.find((e) => e.id === wantId0 && !e.deathMs);
           return okResp(anywhere0
-            ? `目标 ${anywhere0.name}（${wantId0}）距离超过攻击范围（>${SKILL_RANGE_M}m），请先靠近再攻击`
+            ? `目标 ${anywhere0.name}（${wantId0}）距离超过攻击范围（>${atkRange}m），请先靠近再攻击`
             : `目标 ${wantId0} 不存在或已死亡（可用 query_state 查看当前存活敌人）`);
         }
         return okResp("附近没有敌人");
@@ -6604,7 +6776,7 @@ export async function handle_action(
         if (!wanted) {
           const anywhere = enemies.find((e) => e.id === wantId && !e.deathMs);
           return okResp(anywhere
-            ? `目标 ${anywhere.name}（${wantId}）距离超过攻击范围（>${SKILL_RANGE_M}m），请先靠近再攻击`
+            ? `目标 ${anywhere.name}（${wantId}）距离超过攻击范围（>${atkRange}m），请先靠近再攻击`
             : `目标 ${wantId} 不存在或已死亡（可用 query_state 查看当前存活敌人）`);
         }
         target = wanted;
@@ -6614,8 +6786,9 @@ export async function handle_action(
       floater(s, "普攻", player.x, player.y - 34);
       // ★ V2：普攻也出攻击范围指示区（circle=圆形 / cone=扇形），与判定区完全一致
       pushRangeIndicator(s, {
-        shape: atkShape, x: atkRef.x, y: atkRef.y, radius: SKILL_RANGE_M,
+        shape: atkShape, x: atkRef.x, y: atkRef.y, radius: atkRange,
         facing: atkFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+        icon: effectIcon(mainItem0?.effects_type),
       });
       // ★ P2：普攻带当前武器/主手物品的 effects_type（从 playerCard 第一件 atk 装备推断，无则默认白）
       const mainItem = mainItem0;
@@ -7479,15 +7652,18 @@ export async function handle_action(
       sk.cdLeft = sk.cd;
       (meSk as any).actionBobMs = 300;
       floater(s, sk.name, meSk.x, meSk.y - 34);
-      // ★ V2：攻击范围指示区（与上面判定用同一组常量）
+      // ★ V2：攻击范围指示区（与下面判定用同一组常量）
+      //   ★ V2_2 射程分离：近战 2m / 远程 4m
+      const _skRange = attackRangeOf(sk);
       pushRangeIndicator(s, {
-        shape: attackShapeOf(sk), x: meSk.x, y: meSk.y, radius: SKILL_RANGE_M,
+        shape: attackShapeOf(sk), x: meSk.x, y: meSk.y, radius: _skRange,
         facing: num((meSk as any).facing, 0), halfAngleDeg: CONE_HALF_ANGLE_DEG,
+        icon: effectIcon((sk as any).effects_type),
       });
       const skTargets = s.entities.filter((e) => e.side === "enemy" && e.alive
         // ★ V2：攻击形状（circle / cone），cone 时命中受朝向限制（与指示区一致）
         && inAttackRange(attackShapeOf(sk), meSk.x, meSk.y, num((meSk as any).facing, 0),
-          CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+          CONE_HALF_ANGLE_DEG, e.x, e.y, _skRange));
       // ★ game.md 技能特效（与「skill」共用一套归类）：远程→火球 / 治疗→治疗环 / 加强→护盾环 / 其余→冲斩刀光
       const _fx = skillFxKind(sk);
       if (_fx === "heal") {
@@ -7820,10 +7996,12 @@ export async function handle_action(
           floater(s, sk.name, ent.x, ent.y - 34);
           const skPower = Math.max(1, Math.round(num(sk.power, 0)) + Math.round(num((ent as any).atk, 10) * 0.5));
           // ★ V2：攻击形状（circle / cone）——cone 时命中受朝向限制（与指示区一致）
+          //   ★ V2_2 射程分离：AI 角色的技能同样近战 2m / 远程 4m
           const aiShape = attackShapeOf(sk);
+          const aiRange = attackRangeOf(sk);
           const aiFacing = num((ent as any).facing, 0);
           const skTargets = s.entities.filter((e: any) => e.side === "enemy" && e.alive
-            && inAttackRange(aiShape, ent.x, ent.y, aiFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, SKILL_RANGE_M));
+            && inAttackRange(aiShape, ent.x, ent.y, aiFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, aiRange));
           const explicitId = str(params?.targetId);
           const ordered = explicitId
             ? [...skTargets].sort((a: any, b: any) => (a.id === explicitId ? -1 : b.id === explicitId ? 1 : 0))
@@ -7846,8 +8024,9 @@ export async function handle_action(
           const skT0 = ordered[0];
           // ★ V2：AI 角色放技能也出攻击范围指示区
           pushRangeIndicator(s, {
-            shape: aiShape, x: ent.x, y: ent.y, radius: SKILL_RANGE_M,
+            shape: aiShape, x: ent.x, y: ent.y, radius: aiRange,
             facing: aiFacing, halfAngleDeg: CONE_HALF_ANGLE_DEG,
+            icon: effectIcon(sk.effects_type),
           });
           pushVfx(s, skFx === "ranged"
             ? { kind: "fireball", entityId: ent.id, targetEntityId: skT0 ? skT0.id : undefined, x: ent.x, y: ent.y, targetX: skT0 ? skT0.x : ent.x, targetY: skT0 ? skT0.y : ent.y, facing: num((ent as any).facing, 0), life: 16, total: 16, color: effectColor(sk.effects_type, "#ff6a00"), icon: effectIcon(sk.effects_type), size: 1 }

@@ -342,6 +342,18 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
   //   还会让 probePluginData 的超时窗口互相挤占。同 force 级别进行中的调用直接复用。
   if (_inFlight) return _inFlight;
   if (loaded && !force) return bundle;
+  // ★ force 冷却（2026-11-14，修「连点干粮卡死」）：
+  //   App.vue 的 onHostState 在 **每条 state 消息**（10Hz tick + 每次点击）都会在
+  //   mapPackState().phase !== "ready" 时调 loadStoryMapBundle(true)。若上次拉取
+  //   miss/fail（dev-host 播种竞态 / 一次解包失败 / 无视觉包的故事），phase **永远**
+  //   非 ready → 每条消息都串行重拉 17MB（读+解压同步占用主线程 1~3 秒）
+  //   → 连点干粮时主线程被连续霸占几十秒（实测：动不了、渲染器无响应、CDP 超时）。
+  //   冷却 10s：miss/fail 场景的重拉风暴压到 10 秒一次；成功（ready）后的 force
+  //   重读（切图/进 playing）不受冷却影响。
+  if (force && _packPhase !== "ready" && Date.now() - _lastForceTryAt < FORCE_RETRY_COOLDOWN_MS) {
+    return bundle;
+  }
+  if (force) _lastForceTryAt = Date.now();
   _inFlight = (async () => {
     try {
       return await loadStoryMapBundleInner(force);
@@ -354,6 +366,10 @@ export async function loadStoryMapBundle(force = false): Promise<StoryMapBundle 
 
 /** 进行中的加载 Promise（并发去重用） */
 let _inFlight: Promise<StoryMapBundle | null> | null = null;
+/** ★ 上次 force 拉取发起时刻（miss/fail 场景的重拉冷却用） */
+let _lastForceTryAt = 0;
+/** force 重拉冷却：miss/fail 后至少间隔 10s 才真正重试（连点风暴保护） */
+const FORCE_RETRY_COOLDOWN_MS = 10000;
 
 async function loadStoryMapBundleInner(force = false): Promise<StoryMapBundle | null> {
   if (loaded && !force) return bundle;

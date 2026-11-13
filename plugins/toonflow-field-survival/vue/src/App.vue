@@ -4563,8 +4563,13 @@ function localTick(): void {
         autoApproachTarget.value = null;
       } else {
         const d2 = Math.hypot(target.x - me.x, target.y - me.y);
-        if (d2 < 4.5) {
-          // ★ 进入射程（4.5m，留 0.5m 余量）→ 自动施放当前选中的技能
+        // ★ V2_2 射程分离（2026-11-14）：进入射程的判据按**该技能的射程**算——
+        //   近战技能 2m / 远程技能 4m（与宿主 attackRangeOf 同口径），各留 0.5m 余量。
+        //   此前写死 4.5m：近战技能会在 2m 外「自动施放」→ 被宿主判超程拒收。
+        const _aaSk = (s.skills || [])[aa.skillIdx] || {};
+        const _aaReach = (_aaSk.range === "ranged" ? 4 : 2) + 0.5;
+        if (d2 < _aaReach) {
+          // ★ 进入射程（技能射程 + 0.5m 余量）→ 自动施放当前选中的技能
           autoApproachTarget.value = null;
           castSkill(aa.skillIdx);
         } else {
@@ -5399,16 +5404,18 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
  *        玩家看不到血掉到哪了。做法：**血条从实体层挪到 VFX 层之后单独画**。
  *   实体绘制时只调 recordHpBar() 记下位置，真正绘制在 drawHpBarsOverlay()。
  */
-type HpBarRec = { hp: number; maxHp: number; x: number; y: number; w: number; color: string };
+type HpBarRec = { hp: number; maxHp: number; x: number; y: number; w: number; color: string; alpha: number };
 /** 本帧待绘制的血条（每次 render 开始时清空） */
 let hpBarBuffer: HpBarRec[] = [];
 
-/** 记录一条血条（实体绘制阶段调用，不立即画） */
+/** 记录一条血条（实体绘制阶段调用，不立即画）
+ *  ★ V2_2（2026-11-13）改造3：野怪血条改半透明（alpha 0.55），玩家/队友保持不透明 ——
+ *    需求原文「野怪头上的血条改成半透明」。 */
 function recordHpBar(e: any, x: number, y: number, w: number, color: string): void {
   const hp = Number(e?.hp ?? 0);
   const maxHp = Number(e?.maxHp ?? 0);
   if (!maxHp || maxHp <= 0) return;
-  hpBarBuffer.push({ hp, maxHp, x, y, w, color });
+  hpBarBuffer.push({ hp, maxHp, x, y, w, color, alpha: e?.side === "enemy" ? 0.55 : 1 });
 }
 
 /** ★ 在 VFX 层之后统一补画血条 —— 保证特效再浓也能看清血量 */
@@ -5417,6 +5424,8 @@ function drawHpBarsOverlay(ctx: CanvasRenderingContext2D): void {
   const barH = 4;
   ctx.save();
   for (const b of hpBarBuffer) {
+    // ★ V2_2 改造3：野怪血条半透明（alpha 在 recordHpBar 按阵营给）
+    ctx.globalAlpha = b.alpha;
     const barX = b.x - b.w / 2;
     const barY = b.y;
     const ratio = Math.max(0, Math.min(1, b.hp / b.maxHp));
@@ -5470,7 +5479,9 @@ function drawVfxLayer(
     const py = wz2py(baseY);
     const progress = 1 - (p.life / p.total); // 0 → 1
     switch (p.kind) {
-      case "slash_arc":  drawSlashArc(ctx, px, py, progress, p.angle ?? 0, p.color || "#ffffff"); break;
+      // ★ V2_2：斩波朝向 fallback —— entry.ts 各处 push 的是 facing（不是 angle），
+      //   此前真机近战斩波恒朝右（只有 mockHost 传了 angle）。这里兼容两种字段。
+      case "slash_arc":  drawSlashArc(ctx, px, py, progress, p.angle ?? p.facing ?? 0, p.color || "#ffffff"); break;
       case "fireball": {
         // 弹体：把 target 世界米转成屏幕像素再插值
         let baseTx = p.targetX, baseTy = p.targetY;
@@ -5672,11 +5683,14 @@ function drawClickFxLayer(
 /** 弧形斩波：1/4 圆弧白刃，旋转消失；angle = 度数（0=右 90=下 180=左 270=上）；color = 主色调（effects_type） */
 function drawSlashArc(ctx: CanvasRenderingContext2D, px: number, py: number, p: number, angleDeg = 0, color = "#ffffff"): void {
   ctx.save();
-  const r = 26 + p * 12;     // 弧半径
-  const alpha = vfxA(Math.max(0, 1 - p * 1.1));
+  // ★ V2_2（2026-11-13）改造4：颜色效果半径减半（26+p*12 → 13+p*6）——
+  //   用户反馈斩波环太大、盖住角色和法术图标；减半后环贴着角色，图标能看清。
+  const r = 13 + p * 6;
+  // ★ 改造4：更加透明度化（在全局 0.45 系数上再乘 0.65 → 净 ≈0.29）
+  const alpha = vfxA(Math.max(0, 1 - p * 1.1) * 0.65);
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = color;
-  ctx.lineWidth = 6;
+  ctx.lineWidth = 5;
   ctx.lineCap = "round";
   ctx.shadowColor = color;
   ctx.shadowBlur = 8;
@@ -5844,9 +5858,13 @@ function drawIconBurst(
   ctx.restore();
   if (!img) return;
   // 图标：0.7× → 1.5× 放大，前 70% 时间显示
+  // ★ V2_2（2026-11-13）改造1：图标 alpha **不再乘全局 0.45 系数** ——
+  //   V1 要求「使用时显示出来属性特效（图标）」，此前图标与环一起被压到 0.45，
+  //   实际几乎看不见（用户截图 img_2 证实）。图标单独保持高可见度（0.95 起步），
+  //   环/斩波仍按全局系数弱化，主次分明。
   const scale = 0.7 + p * 0.8;
   const size = 26 * scale;
-  const alpha = vfxA(Math.max(0, 1 - p * 1.2));
+  const alpha = Math.min(1, Math.max(0, 1 - p * 1.2) * 0.95);
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha = alpha;

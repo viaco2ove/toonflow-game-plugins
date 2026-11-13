@@ -49,3 +49,28 @@ export function spellIcon(src: string): HTMLImageElement | null {
 export function clearSpellIconCache(): void {
   spellIconCache.clear();
 }
+
+/**
+ * ★ V2_2（2026-11-13）effects_type → 法术图标路径表（与 entry.ts 的 EFFECT_ICON 同一份，
+ *   前端需要独立一份：技能/物品面板的「属性特效」下拉要显示图标）。
+ *   key 为空串 = 未设置属性 → 无图标。
+ */
+export const EFFECT_ICON: Record<string, string> = {
+  normal: "images/spells/enchantment/sure_blade.png",
+  fire: "images/spells/fire/fireball.png",
+  water: "images/spells/ice/freeze.png",
+  thunder: "images/spells/air/lightning_bolt.png",
+  wind: "images/spells/air/tornado.png",
+  earth: "images/spells/earth/iron_shot.png",
+  metal: "images/spells/earth/iron_shot.png",
+  wood: "images/spells/poison/poison_arrow.png",
+  light: "images/spells/restoration/minor_heal.png",
+  dark: "images/spells/necromancy/agony.png",
+  poison: "images/spells/poison/alistairs_intoxication.png",
+  bleed: "images/spells/necromancy/bolt_of_draining.png",
+};
+
+/** 解析 effects_type 的法术图标路径；缺省/未知 → ""（无图标） */
+export function effectIcon(effectsType: unknown): string {
+  return EFFECT_ICON[String(effectsType || "")] || "";
+}

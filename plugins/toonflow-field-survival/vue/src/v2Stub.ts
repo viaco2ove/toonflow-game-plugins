@@ -21,14 +21,23 @@ export const V2_HURT_ENEMY_COLOR = "#ff4d4d";
 export const V2_BUFF_COLOR = "#5fe57a";
 export const V2_HURT_LABEL = "伤";
 export const V2_BUFF_LABEL = "buff";
-/** 攻击射程（米）—— 与 entry.ts 的 SKILL_RANGE_M 一致 */
-export const V2_SKILL_RANGE_M = 4;
+/** 攻击射程（米）—— ★ V2_2 射程分离（2026-11-14，与 entry.ts 同口径）：
+ *  近战 2m / 远程 4m（远程维持原值，避免超出野怪 4m 脱战圈放风筝破坏平衡） */
+export const V2_MELEE_RANGE_M = 2;
+export const V2_RANGED_RANGE_M = 4;
+/** 兼容旧引用（= 远程射程） */
+export const V2_SKILL_RANGE_M = V2_RANGED_RANGE_M;
 /** 扇形半角（度）—— 与 entry.ts 的 CONE_HALF_ANGLE_DEG 一致 */
 export const V2_CONE_HALF_ANGLE_DEG = 30;
 /** 指示区存活时长（tick）—— 与 entry.ts 的 RANGE_INDICATOR_TICKS 一致 */
 export const V2_RANGE_INDICATOR_TICKS = 12;
 /** hurt 徽章存活时长（tick）—— 与 entry.ts 的 HURT_BADGE_TICKS 一致 */
 export const V2_HURT_BADGE_TICKS = 15;
+
+/** ★ V2_2 射程分离：按技能/物品 range 字段取射程（与 entry.ts attackRangeOf 同逻辑） */
+export function v2AttackRangeOf(src: any): number {
+  return String(src?.range || "") === "ranged" ? V2_RANGED_RANGE_M : V2_MELEE_RANGE_M;
+}
 
 /** 桩侧的实体（宽松类型，兼容 mockHost / vite.config 的实体结构） */
 export interface V2Entity {

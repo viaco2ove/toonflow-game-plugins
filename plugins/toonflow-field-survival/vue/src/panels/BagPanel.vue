@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue";
+import EffectTypeSelect from "./EffectTypeSelect.vue";
 
 /** 背包面板：game.md 物品系统
  *  - 与用户动态参数卡「物品」同步（App.vue sysBagItems 已合并 itemMeta）
@@ -22,15 +23,7 @@ const ATTR_TYPES = ["Defense", "Attack", "Life", "Blue"] as const;
 const ATTR_LABEL: Record<string, string> = { Defense: "防御", Attack: "攻击", Life: "生命", Blue: "蓝量" };
 const TYPE_LABEL: Record<string, string> = { atk: "攻击", heal: "治疗", buff: "强化", attribute: "属性" };
 
-/** 属性特效枚举（与 md/游戏特效.md P2 对照） */
-const EFFECT_TYPES: Array<{ v: string; label: string }> = [
-  { v: "", label: "默认" },
-  { v: "normal", label: "普通" },
-  { v: "fire", label: "火" }, { v: "water", label: "水" }, { v: "thunder", label: "雷" },
-  { v: "wind", label: "风" }, { v: "earth", label: "土" }, { v: "metal", label: "金" }, { v: "wood", label: "木" },
-  { v: "light", label: "光明" }, { v: "dark", label: "黑暗" },
-  { v: "bleed", label: "出血" }, { v: "poison", label: "毒素" },
-];
+/** 属性特效枚举（含图标）已抽到 panels/EffectTypeSelect.vue（V2_2 改造1：下拉显示图标） */
 
 function durText(it: any): string {
   const d = Math.round(Number(it?.durability ?? -1));
@@ -180,8 +173,8 @@ function onMove(i: number, dir: number) { emit("move-item", i, dir); }
         </label>
         <label v-if="form.type === 'atk'">距离
           <select v-model="form.range">
-            <option value="melee">近战（冲斩特效）</option>
-            <option value="ranged">远程（火球特效）</option>
+            <option value="melee">近战·2米（冲斩特效）</option>
+            <option value="ranged">远程·4米（火球特效）</option>
           </select>
         </label>
         <label v-if="form.type === 'atk'">攻击形状
@@ -207,9 +200,8 @@ function onMove(i: number, dir: number) { emit("move-item", i, dir); }
         <label>被动数值 attribute_value<input v-model.number="form.attribute_value" type="number" /></label>
         <label>数量 quantity<input v-model.number="form.quantity" type="number" min="1" /></label>
         <label>属性特效
-          <select v-model="form.effects_type">
-            <option v-for="et in EFFECT_TYPES" :key="et.v" :value="et.v">{{ et.label }}（{{ et.v }}）</option>
-          </select>
+          <!-- ★ V2_2 改造1：带图标的自定义下拉 -->
+          <EffectTypeSelect v-model="form.effects_type" />
         </label>
         <label style="grid-column: 1 / -1">描述 description<input v-model="form.description" maxlength="60" placeholder="保留参数卡原注记，可改写" /></label>
         <div class="bpi-edit__ops">

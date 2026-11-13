@@ -25,7 +25,7 @@ import { blueprintProduct, looksLikeBlueprint } from "./shared/forgeCommon";
 // ★ V2（2026-11-13）：头顶徽章 + 攻击范围指示区 + 攻击形状判定（与 entry.ts 逐条对齐）
 import {
   v2ApplyHurt, v2ApplyBuff, v2PushRangeIndicator, v2InAttackRange, v2AttackShape,
-  v2TickCleanup, V2_SKILL_RANGE_M, V2_CONE_HALF_ANGLE_DEG,
+  v2TickCleanup, v2AttackRangeOf, V2_CONE_HALF_ANGLE_DEG,
 } from "./v2Stub";
 
 /** ★ test_state.json 加载结果（同时含 roles/monsters/materials） */
@@ -1071,8 +1071,40 @@ function effectColor(et?: string): string | null {
 function pushVfx(p: import("./types").VfxParticle): void {
   if (!state.vfx) state.vfx = [];
   state.vfx.push(p);
+  // ★ V2_2（2026-11-13）改造5/6：特效叠加密度控制（与 entry.ts pushVfx 同一规则）
+  //   · 每实体最多 3 个（第 4 个挤掉最旧残留）；野怪（side=enemy）特效全局最多 5 个
+  pruneVfxDensity();
   // ★ 防止累积超过 60 条（最长寿命 3 秒 × 2-3 个 VFX/帧 ≈ 100-200 帧上限）
   if (state.vfx.length > 60) state.vfx = state.vfx.slice(-60);
+}
+
+/** ★ V2_2：特效密度裁剪（与 entry.ts pushVfx 内联逻辑逐条对齐，改动必须同步） */
+function pruneVfxDensity(): void {
+  const arr = state.vfx;
+  if (!arr || !arr.length) return;
+  const sideOf = new Map<string, string>();
+  for (const e of state.entities) sideOf.set(String(e.id), e.side);
+  const MAX_PER_ENTITY = 3;
+  const MAX_MOB_TOTAL = 5;
+  const perEnt = new Map<string, number>();
+  let mobCount = 0;
+  const keep: any[] = [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const v: any = arr[i];
+    const entKey = v.entityId != null ? String(v.entityId) : null;
+    if (entKey != null) {
+      const cnt = perEnt.get(entKey) || 0;
+      if (cnt >= MAX_PER_ENTITY) continue;
+      perEnt.set(entKey, cnt + 1);
+    }
+    if (entKey != null && sideOf.get(entKey) === "enemy") {
+      if (mobCount >= MAX_MOB_TOTAL) continue;
+      mobCount += 1;
+    }
+    keep.push(v);
+  }
+  keep.reverse();
+  state.vfx = keep;
 }
 
 /** 让实体"小跳一下"（释放技能/使用物品时） */
@@ -1610,21 +1642,23 @@ function install(): void {
           state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "atk") {
-          // 攻击技能：找最近的敌人，50 米内；★ 空放：无目标也放特效 + 飘字
+          // 攻击技能：找最近的敌人；★ 空放：无目标也放特效 + 飘字
           // ★ V2：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形只打面前）
           //   命中判定与指示区**共用** v2InAttackRange + 同一组常量 → 指示区 = 判定区
+          // ★ V2_2 射程分离：近战技能 2m / 远程技能 4m（与 entry.ts attackRangeOf 同口径）
           const shape = v2AttackShape(slot);
+          const range = v2AttackRangeOf(slot);
           const facing = Number((me as any).facing) || 0;
           let target: Entity | null = null;
           let minD = Infinity;
           state.entities.forEach((e) => {
             if (e.side !== "enemy" || !e.alive) return;
             const dd = Math.hypot(e.x - me.x, e.y - me.y);
-            if (dd < 50 && dd < minD) { minD = dd; target = e; }
+            if (dd < range && dd < minD) { minD = dd; target = e; }
           });
           // ★ V2：攻击范围指示区（施放即出现）
           v2PushRangeIndicator(state as any, {
-            shape, x: me.x, y: me.y, radius: V2_SKILL_RANGE_M,
+            shape, x: me.x, y: me.y, radius: range,
             facing, halfAngleDeg: V2_CONE_HALF_ANGLE_DEG,
           });
           if (target) {

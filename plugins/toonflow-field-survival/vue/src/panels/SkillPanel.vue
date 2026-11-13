@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive } from "vue";
+import EffectTypeSelect from "./EffectTypeSelect.vue";
 
 const props = defineProps<{
   skills: any[];
@@ -21,15 +22,7 @@ const BUFF_LABEL: Record<string, string> = {
 };
 const TYPE_LABEL: Record<string, string> = { atk: "攻击", heal: "治疗", buff: "强化" };
 
-/** 属性特效枚举（与 md/游戏特效.md P2 对照） */
-const EFFECT_TYPES: Array<{ v: string; label: string }> = [
-  { v: "", label: "默认" },
-  { v: "normal", label: "普通" },
-  { v: "fire", label: "火" }, { v: "water", label: "水" }, { v: "thunder", label: "雷" },
-  { v: "wind", label: "风" }, { v: "earth", label: "土" }, { v: "metal", label: "金" }, { v: "wood", label: "木" },
-  { v: "light", label: "光明" }, { v: "dark", label: "黑暗" },
-  { v: "bleed", label: "出血" }, { v: "poison", label: "毒素" },
-];
+/** 属性特效枚举（含图标）已抽到 panels/EffectTypeSelect.vue（V2_2 改造1：下拉显示图标） */
 
 function cdText(cd: number) { return (cd / 10).toFixed(1) + "s"; }
 function cdLeftText(cdLeft: number) { return (cdLeft / 10).toFixed(1) + "s"; }
@@ -118,8 +111,8 @@ function onSell(s: any, i: number) {
         </label>
         <label v-if="form.type === 'atk'">距离
           <select v-model="form.range">
-            <option value="melee">近战（冲斩特效）</option>
-            <option value="ranged">远程（火球特效）</option>
+            <option value="melee">近战·2米（冲斩特效）</option>
+            <option value="ranged">远程·4米（火球特效）</option>
           </select>
         </label>
         <label v-if="form.type === 'atk'">攻击形状
@@ -135,9 +128,8 @@ function onSell(s: any, i: number) {
           </select>
         </label>
         <label>属性特效
-          <select v-model="form.effects_type">
-            <option v-for="et in EFFECT_TYPES" :key="et.v" :value="et.v">{{ et.label }}（{{ et.v }}）</option>
-          </select>
+          <!-- ★ V2_2 改造1：带图标的自定义下拉（原生 select 画不了图片） -->
+          <EffectTypeSelect v-model="form.effects_type" />
         </label>
         <label>等级 lv<input v-model.number="form.lv" type="number" min="1" /></label>
         <div class="skp-edit__ops">
