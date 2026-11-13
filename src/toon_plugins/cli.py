@@ -586,6 +586,105 @@ def build_tbg_file(source_path: str) -> dict:
         raise RuntimeError(f"不支持的 source_path: {source_path}")
 
 
+def _seed_story_task_data(client, plugin_id: str, story: str, source_dir: str, session_id: str) -> None:
+    """上传故事地图包时，自动把故事包里的主线任务链 / 任务表种进插件会话数据。
+
+    ★ 2026-11-13：修复「部署版没有主线任务」——`-u` 只写 map_visual/map_data，
+      而 entry.ensureChainDefs 读 chain_defs:<故事名>（key 不同）→ 主线页恒空。
+      dev-host 桩会自动播种（vite.config.ts seedChainDefs/seedQuestDefs），
+      真机走 CLI 上传，这里补上同样的一步，保证「本地有 = 部署有」。
+
+    规则（与 vite 桩保持一致）：
+      - 主线链 → key `chain_defs:<故事名>`，源 events/任务事件/main-quests.json
+      - 任务表 → key `quest_defs`（全局单键），源 events/任务事件/quests.json
+      - 两者都「只补不覆盖」：已有同 id 的条目保留（用户/CLI 手工调整优先）
+      - 找不到源文件就跳过（不报错）
+    """
+    if not story:
+        return
+    candidates = [
+        os.path.join(source_dir, "events", "任务事件"),
+        os.path.join(source_dir, "event", "任务事件"),
+    ]
+    tasks_dir = next((d for d in candidates if os.path.isdir(d)), None)
+    if not tasks_dir:
+        click.secho("[seed] 未找到故事包任务事件目录（events/任务事件），跳过主线链播种", fg="yellow")
+        return
+
+    def _load(name):
+        fp = os.path.join(tasks_dir, name)
+        if not os.path.isfile(fp):
+            return None
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                return _json.load(f)
+        except Exception as e:
+            click.secho(f"[seed] 读取 {name} 失败：{e}", fg="yellow")
+            return None
+
+    def _arr(obj):
+        if isinstance(obj, list):
+            return obj
+        if isinstance(obj, dict):
+            for k in ("chains", "quests", "defs"):
+                if isinstance(obj.get(k), list):
+                    return obj[k]
+        return []
+
+    def _merge(old_obj, new_arr):
+        """只补不覆盖：按 id 合并，旧条目优先"""
+        old_arr = _arr(old_obj)
+        seen = set()
+        merged = []
+        for x in old_arr:
+            sid = str((x or {}).get("id") or "")
+            seen.add(sid)
+            merged.append(x)
+        added = 0
+        for x in new_arr:
+            sid = str((x or {}).get("id") or "")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            merged.append(x)
+            added += 1
+        return merged, added
+
+    # ① 主线链
+    mq = _load("main-quests.json")
+    if mq:
+        arr = _arr(mq)
+        if arr:
+            key = "chain_defs:" + story
+            try:
+                cur = client.get_plugin_data(plugin_id, key, session_id=session_id, story=story)
+                if isinstance(cur, dict) and "value" in cur:
+                    cur = cur.get("value")
+                merged, added = _merge(cur, arr)
+                payload = {"version": (mq.get("version") if isinstance(mq, dict) else 1) or 1, "chains": merged}
+                client.set_plugin_data(plugin_id, key, payload, session_id=session_id, story=story)
+                click.secho(f"[seed] 主线任务链已播种 {key}（{len(merged)} 条，新增 {added}）", fg="green")
+            except Exception as e:
+                click.secho(f"[seed] 主线任务链播种失败（不影响地图上传）：{e}", fg="yellow")
+
+    # ② 任务表（全局 key，与 entry.ensureQuestDefs 读取口径一致）
+    qs = _load("quests.json")
+    if qs:
+        arr = _arr(qs)
+        if arr:
+            key = "quest_defs"
+            try:
+                cur = client.get_plugin_data(plugin_id, key, session_id=session_id, story=story)
+                if isinstance(cur, dict) and "value" in cur:
+                    cur = cur.get("value")
+                merged, added = _merge(cur, arr)
+                payload = {"version": (qs.get("version") if isinstance(qs, dict) else 1) or 1, "quests": merged}
+                client.set_plugin_data(plugin_id, key, payload, session_id=session_id, story=story)
+                click.secho(f"[seed] 任务表已播种 {key}（{len(merged)} 条，新增 {added}）", fg="green")
+            except Exception as e:
+                click.secho(f"[seed] 任务表播种失败（不影响地图上传）：{e}", fg="yellow")
+
+
 # ─────────────────────────────────────────────────────────────────────────
 # 插件会话数据（t_plugin_session_data）—  对应后端 POST /plugin/data
 # 用法：
@@ -682,7 +781,10 @@ def story_info(ctx, story, world_id, roles, state):
 @click.option("--value", "value_inline", default=None, help="--set 时直接给值（JSON 字符串）")
 @click.option("--value-file", "value_file", default=None, type=click.Path(exists=True), help="--set 时从文件读值（自动 JSON.parse）")
 @click.option("-u", "--upload-tbg", "upload_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
-              help="上传地图：传 .tbg/.json 文件（直接写 map_visual）或地图目录（自动 zip 打包成 .tbg 写 map_visual）。等价 --set -k map_visual --value-file <file>")
+              help="上传地图：传 .tbg/.json 文件（直接写 map_visual）或地图目录（自动 zip 打包成 .tbg 写 map_visual）。"
+              "★ 传目录时会自动播种主线任务链（chain_defs:<故事>）与任务表（quest_defs），"
+              "取自 <目录>/events/任务事件/{main-quests,quests}.json —— 不然部署版主线页为空。"
+              "等价 --set -k map_visual --value-file <file>")
 @click.option("-build", "build_tbg", default=None, type=click.Path(exists=True, file_okay=True, dir_okay=True),
               help="只构建 .tbg 文件到目录同级（不写 t_plugin_session_data），等价把 -u 的打包步骤单独跑。")
 @click.option("-role", "op_role", is_flag=True, help="读取并展示 AI 故事角色位置（dataKey=ai_story_roles）")
@@ -879,6 +981,16 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
                 click.echo(f"[plugin_data] 兼容模板已同步写入 {legacy_key}")
             except Exception as e:
                 click.secho(f"[WARN] 兼容模板 {legacy_key} 写入失败（不影响主 key）：{e}", fg="yellow")
+        # ★★ 2026-11-13 修复：上传故事地图包时**自动播种主线任务链与任务表**。
+        #   背景（真机部署踩坑）：`-u` 只写 map_visual/map_data 两个 key，
+        #   而 entry.ensureChainDefs 读的是 **chain_defs:<故事名>**（另一套 key）
+        #   → 部署版主线页恒 0/0「这个故事还没有配置主线任务链」。
+        #   dev-host 桩（vite.config.ts 的 seedChainDefs/seedQuestDefs）会自动播种，
+        #   真机（CLI 上传）没有这一步 → 本地有、部署没有。
+        #   现在 -u 传**目录**时，从目录里找 events/任务事件/*.json 自动补种；
+        #   找不到就跳过（不报错，不影响地图上传）。
+        if is_map_payload and upload_tbg and os.path.isdir(str(upload_tbg)):
+            _seed_story_task_data(client, plugin_id, story, str(upload_tbg), session_id)
     elif op == "list":
         r = client.list_plugin_data(plugin_id, session_id=session_id, story=story)
         # ToonClient._parse_response 已经把外层 data 字段剥掉了；r 本身就是
