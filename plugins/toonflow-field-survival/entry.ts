@@ -5852,7 +5852,7 @@ export async function handle_action(
   params: Record<string, any>,
   state: Record<string, any>,
   context: PluginGameContext,
-): Promise<{ code: number; message: string; state: FieldSurvivalState; response?: string; actions?: string[] }> {
+): Promise<{ code: number; message: string; state: FieldSurvivalState; response?: string; actions?: string[]; data?: Record<string, any> }> {
   lastPluginContext = context;
   const s: FieldSurvivalState =
     state && Object.keys(state).length > 0 && ((state as any).version === 2 || (state as any).version === 3 || (state as any).version === 4)
@@ -7602,6 +7602,55 @@ export async function handle_action(
       }
       pushEvent(s, `AI 刷出 ${arch.name}×${count}`);
       return okResp(`已刷出 ${arch.name}×${count}（${spawned.join(", ")}）`);
+    }
+
+    case "ai_query_state": {
+      // ★ MCP query_state 落地点（2026-11-13）：AI 可读的世界摘要。
+      //   摘要格式是**插件业务**——宿主 MCP 层只做通用转发（工具在
+      //   manifest.contributes.mcpTools 里声明 → 宿主注册表分发到本 action）。
+      //   纯读：不改 state、不出特效、不 pushEvent（read 通道不加锁、不落盘）。
+      const me = s.entities.find((e) => e.side === "player");
+      const foes = s.entities
+        .filter((e) => e.side === "enemy" && e.alive !== false && !e.deathMs)
+        .map((e) => ({
+          id: e.id,
+          name: e.name,
+          lv: e.level ?? 1,
+          hp: Math.max(0, Math.round(e.hp ?? 0)),
+          maxHp: Math.round(e.maxHp ?? e.hp ?? 0),
+          d: me ? Math.round(dist(me, e) * 10) / 10 : undefined as number | undefined,
+        }))
+        .sort((a, b) => (a.d ?? 1e9) - (b.d ?? 1e9));
+      const vfxArr: any[] = Array.isArray((s as any).vfx) ? (s as any).vfx : [];
+      const recent: string[] = Array.isArray(s.events) ? s.events.slice(-3) : [];
+      const cds = (s.skills || [])
+        .filter((k) => k && k.name && !(k as any).empty)
+        .map((k) => ({ name: k.name, cdLeft: k.cdLeft ?? 0, cd: k.cd ?? 0 }));
+      const out: string[] = [];
+      out.push(`phase=${s.phase} tick=${s.tick} 击杀=${s.kills ?? 0} 金钱=${s.money ?? 0}`);
+      if (cds.length) out.push(`技能冷却: ${cds.map((k) => `${k.name} ${k.cdLeft}/${k.cd}`).join(", ")}`);
+      if (me) {
+        out.push(
+          `玩家: ${me.name} Lv${me.level ?? 1} hp=${Math.max(0, Math.round(me.hp ?? 0))}/${Math.round(me.maxHp ?? 0)} ` +
+          `坐标=(${Math.round(me.x)}, ${Math.round(me.y)})`,
+        );
+      } else {
+        out.push("玩家: （场上无玩家实体）");
+      }
+      if (foes.length) {
+        const list = foes.slice(0, 10).map((e) =>
+          `${e.id} ${e.name} Lv${e.lv} hp=${e.hp}/${e.maxHp} 距离${e.d ?? "?"}m`);
+        out.push(`存活敌人 ${foes.length} 个（最近在前）:\n  ${list.join("\n  ")}`);
+        out.push(`最近敌人: ${foes[0].id}（${foes[0].name}，距离 ${foes[0].d ?? "?"}m）`);
+      } else {
+        out.push("存活敌人: 0 个（附近已清空，可等待刷新或用 spawn_entity 生成练习目标）");
+      }
+      out.push(`进行中特效: ${vfxArr.length} 个`);
+      if (recent.length) out.push(`最近事件: ${recent.join(" | ")}`);
+      return {
+        code: 0, message: "ok", state: s, response: out.join("\n"),
+        data: { phase: s.phase, tick: s.tick, kills: s.kills ?? 0, enemies: foes, skills: cds },
+      };
     }
 
     case "sys_party": {

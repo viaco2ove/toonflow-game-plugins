@@ -1,7 +1,7 @@
 {
   "id": "com.toonflow.minigame-field-survival",
   "name": "野外生存",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "author": "Toonflow Team",
   "description": "在荒野中生存，寻找食物和水源，抵御野兽袭击，挑战极限生存天数。",
   "main": "entry.ts",
@@ -19,6 +19,72 @@
         "id": "field-survival-cmd",
         "label": "野外生存",
         "command": "#野外生存"
+      }
+    ],
+    "mcpTools": [
+      {
+        "name": "query_state",
+        "title": "查询野外生存游戏状态",
+        "kind": "read",
+        "action": "ai_query_state",
+        "description": "读取野外生存插件的实时世界状态（内存态，无滞后）：phase / tick / 玩家（hp、等级、坐标）/ 存活敌人列表（id、名字、血量、距离，含最近敌人）/ 技能冷却 / 特效数 / 击杀数 / 金钱 / 最近事件。kill_mob 前先用它选目标（记下 entity id）。session 必填（game.sessionId）。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "successPattern": "^phase="
+      },
+      {
+        "name": "kill_mob",
+        "title": "击杀野怪（权威结算）",
+        "kind": "action",
+        "action": "attack",
+        "description": "对指定野怪发起一次普攻（与玩家点击普攻走同一条权威结算链：伤害/经验/掉落/任务计数一致）。要求目标在玩家 4m 攻击范围内；太远会失败并提示先用别的方式接近。先用 query_state 拿 entity id，再传 targetId。",
+        "required": ["targetId"],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "targetId": { "type": "string", "description": "野怪实体 id（来自 query_state 的敌人列表）" }
+          },
+          "required": ["targetId"],
+          "additionalProperties": false
+        },
+        "successPattern": "^普攻 → .+ -\\d+$"
+      },
+      {
+        "name": "clear_effect",
+        "title": "清除技能特效",
+        "kind": "action",
+        "action": "ai_clear_vfx",
+        "description": "把一个或全部打击特效从权威状态 s.vfx 移除（前端下一帧即消失）。effectId 与 all 二选一；都不传视为全部清除。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "effectId": { "type": "string", "description": "要清除的特效 id（vfx_*）" },
+            "all": { "type": "boolean", "description": "true=清除全部特效" }
+          },
+          "additionalProperties": false
+        },
+        "successPattern": "^已清除"
+      },
+      {
+        "name": "spawn_entity",
+        "title": "刷出实体（野怪）",
+        "kind": "action",
+        "action": "ai_spawn",
+        "description": "在权威状态里刷出野怪（与正常刷怪同一构造链，经验/金钱奖励一致）。类型只能用当前地图怪图鉴里的 archetypeId（不带参数会列出可用类型）；count 1~6；不带坐标时按正常刷怪规则散布在玩家 30~100m。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "archetypeId": { "type": "string", "description": "野怪图鉴 id（如 enemy_1）；缺省用图鉴第一个" },
+            "count": { "type": "integer", "minimum": 1, "maximum": 6, "description": "数量（1~6，缺省 1）" },
+            "x": { "type": "number", "description": "世界坐标 x（米），与 y 一起提供才生效" },
+            "y": { "type": "number", "description": "世界坐标 y（米），与 x 一起提供才生效" }
+          },
+          "additionalProperties": false
+        },
+        "successPattern": "^已刷出"
       }
     ]
   }
