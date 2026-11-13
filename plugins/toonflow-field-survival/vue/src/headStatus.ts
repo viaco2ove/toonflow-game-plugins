@@ -34,7 +34,7 @@ export interface HeadBadge {
 interface HeadAnchor {
   /** 屏幕像素 x */
   x: number;
-  /** 屏幕像素 y（头顶锚点） */
+  /** 屏幕像素 y：**名字上沿**（徽章紧贴其上 → 视觉上「就在头顶」） */
   y: number;
   badges: HeadBadge[];
   /** 是否有仇恨（宿主权威字段 aiState === "chase"） */
@@ -55,8 +55,8 @@ const AGGRO_COLOR = "#ff3b3b";
 const BADGE_R = 11;
 /** 血滴符号高度（逻辑像素基准） */
 const DROP_H = 12;
-/** 徽章行总高（血滴 + 圆圈） */
-const BADGE_ROW_H = 30;
+/** 徽章与名字上沿的间隙（px）—— 紧贴头顶，不要飘在半空 */
+const BADGE_GAP = 2;
 
 /**
  * 实体绘制阶段调用：记录该实体的徽章锚点（不立即绘制）。
@@ -178,20 +178,35 @@ export function drawHeadStatusLayer(ctx: CanvasRenderingContext2D, timeMs: numbe
   if (!headAnchors.length) return;
   ctx.save();
   for (const a of headAnchors) {
-    // 徽章尺寸随 zoom 缩放（用 ppm 换算，基准 20px/m ≈ 默认 zoom）
-    const k = a.ppm / 20;
+    // ★ 徽章尺寸随 zoom 缩放，但**上限收敛**（k ≤ 1.25）：
+    //   名字字号是固定的 11px（不随 zoom 变），若徽章无限放大，
+    //   zoom 变大时徽章会相对名字越来越大 → 又变成「飘在头上」。
+    //   收敛到 1.25 后，徽章始终只比名字略大一点，视觉上贴得住。
+    const k = Math.min(1.25, a.ppm / 20);
     const r = Math.max(7, Math.round(BADGE_R * k));
     const dropH = Math.max(8, Math.round(DROP_H * k));
-    const rowH = Math.max(20, Math.round(BADGE_ROW_H * k));
     const gap = Math.max(2, Math.round(3 * k));
+    // ★ 徽章**紧贴名字上沿**（a.y 就是名字上沿）→ 视觉上「在头顶」而不是飘在半空。
+    //   圆心 y = 名字上沿 - 间隙 - 半径；血滴与圆心同高。
+    const circleCy = a.y - BADGE_GAP - r;
 
-    // 徽章行整体居中于锚点 x
-    const count = Math.max(1, a.badges.length);
+    // 徽章行整体居中于锚点 x；仇恨感叹号排在徽章**右侧同一行**（不再单独抬高一行）
+    const hasBadge = a.badges.length > 0;
+    const units: Array<{ badge?: HeadBadge }> = a.badges.map((b) => ({ badge: b }));
+    if (a.aggro) units.push({});   // 感叹号占一格
+    const count = Math.max(1, units.length);
     const unitW = r * 2 + dropH * 0.72 + gap;
     const totalW = count * unitW;
     let cursorX = a.x - totalW / 2 + unitW / 2;
 
-    for (const b of a.badges) {
+    for (const u of units) {
+      if (!u.badge) {
+        // 仇恨感叹号：与徽章同行，垂直居中于徽章行
+        drawAggroMark(ctx, cursorX, circleCy, Math.max(0.8, k), timeMs);
+        cursorX += unitW;
+        continue;
+      }
+      const b = u.badge;
       // 剩余寿命比例（无 expireTick = 常驻）
       let alpha = 1;
       if (b.expireTick != null) {
@@ -201,19 +216,12 @@ export function drawHeadStatusLayer(ctx: CanvasRenderingContext2D, timeMs: numbe
       }
       // 圆圈中心
       const circleCx = cursorX + dropH * 0.36 + gap + r;
-      const circleCy = a.y - rowH + r;
       // 血滴在圆圈左侧
       const dropCx = cursorX + dropH * 0.36;
       const dropCy = circleCy;
       drawDrop(ctx, dropCx, dropCy, dropH, b.color);
       drawBadgeCircle(ctx, circleCx, circleCy, r, b, alpha);
       cursorX += unitW;
-    }
-
-    // 仇恨感叹号：徽章行再往上 22px（或无徽章时在锚点上方）
-    if (a.aggro) {
-      const markY = a.y - (a.badges.length ? rowH + 16 * k : 14 * k);
-      drawAggroMark(ctx, a.x, markY, Math.max(0.8, k), timeMs);
     }
   }
   ctx.restore();

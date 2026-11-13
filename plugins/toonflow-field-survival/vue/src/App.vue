@@ -5262,8 +5262,11 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   recordHpBar(e, px, py + 8, Math.max(24, Math.round(dw) + 2), e.side === "enemy" ? "#d63b3b" : "#4ec74e");
 
   // ★ V2（2026-11-13）：头顶状态徽章锚点（只记位置，真正绘制在徽章层）
-  //   锚点在**名字之上**：有头像 → 头像顶再往上；无头像 → sprite 顶再往上。
-  const _badgeAnchorY = hasAvatar ? (avatarY - avatarSize - 6) : (dy - 30);
+  //   ★ 语义：**锚点 = 名字文字的上沿**（徽章圆的下缘紧贴其上 2px）→ 视觉上「刚好在头上」。
+  //   之前这里算的是「头像顶再往上」/「sprite 顶再往上」，叠加徽章自身的行高后
+  //   实际比名字高 30px 以上（用户反馈：位置太高，不在头上）。
+  //   名字字号固定 11px → 文字上沿 ≈ 基线 - 19（font ascent）。
+  const _badgeAnchorY = headY - 19;
   recordHeadBadge(e, px, _badgeAnchorY, Number((state.value as any)?.tick) || 0, pixelsPerMeter);
 
   // ★ 关闭死亡淡出的 ctx.save()（if 块内打开的）
@@ -5376,8 +5379,11 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
   //   ★ 血条实际绘制被挪到 drawHpBarsOverlay()（VFX 层之后），这里只记录位置。
   recordHpBar(e, px, dy - 6, Math.max(24, Math.round(dw) + 2), "#d63b3b");
 
-  // ★ V2（2026-11-13）：头顶状态徽章锚点（野怪名字在 dy-26，徽章在名字之上）
-  recordHeadBadge(e, px, dy - 40, Number((state.value as any)?.tick) || 0, pixelsPerMeter);
+  // ★ V2（2026-11-13）：头顶状态徽章锚点
+  //   ★ 语义：**锚点 = 名字文字的上沿**（与角色同一口径）。
+  //   野怪名字画在 dy-26（基线），字号 11px → 文字上沿 ≈ dy-26-9 = dy-35。
+  const _badgeAnchorY = dy - 26 - 9;
+  recordHeadBadge(e, px, _badgeAnchorY, Number((state.value as any)?.tick) || 0, pixelsPerMeter);
 
   // ★ 关闭死亡淡出的 ctx.save()
   if ((e as any).deathMs && (e as any).deathMs > 0) ctx.restore();
