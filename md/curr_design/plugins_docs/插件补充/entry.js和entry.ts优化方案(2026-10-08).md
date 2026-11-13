@@ -1,4 +1,7 @@
-# entry.js 和 entry.ts 优化方案 (2026-10-08)
+# entry.js 和 entry.ts 优化方案 (2026-10-08 · 2026-11-12 状态更新)
+
+> **结论未变**：方案 A+B 已落地，第二/三阶段基本不需要做（详见文末「已完成 vs 未完成」）。
+> **2026-11-12 新增**：文末补一节「2026-11-12 现状核对」，记录本方案各条目的真实落地状态与行数变化。
 
 > 前置文档：[`entry.js和entry.ts 的关系和说明.md`](./entry.js和entry.ts 的关系和说明(2026-10-07).md)（现象溯源）、[`插件工作机制.md`](./插件工作机制.md)（运行模型）
 > 关联：本次修复在 2026-10-07 暴露出"插件拟真安装一致性"系列问题（[bugs/插件的拟真安装一致性问题.md](../../curr_design/toonflow-field-survival/bugs/插件的拟真安装一致性问题.md)）
@@ -406,3 +409,37 @@ npm run dev or npm run debug  or npm run debug -- --story 赦夜人冥夜走廊-
 3. **CI hook**（如果想长期保证）：加 `.husky/pre-commit` 跑 9 行 bash
 
 **不需要做的**：方案 C（前端入口迁移）/ 方案 B.4（dev-host 同源，三入口 rebuild 已隐含）/ 方案 D（跨插件影响大，不在单点推动）
+
+---
+
+## 2026-11-12 现状核对
+
+### 本方案各条目的真实状态
+
+| 条目 | 状态 | 实证 |
+|---|---|---|
+| entry.js 由 entry.ts 单一生成 | ✅ | `entry.ts` 8160 行 → `entry.js` 6588 行（bundle） |
+| entry.js 已 gitignore | ✅ | `.gitignore:102` → `/plugins/toonflow-field-survival/entry.js` |
+| `entry.js.bak_*` / `entry.js.new` 已归档/清理 | ✅ | 插件目录下已无这些文件 |
+| 三入口 `ensureEntryConsistency()` | ✅ | `pluginEntryConsistency.ts` + `PluginExecutor.clearEntryCache()` + `POST /plugin/rebuild` + CLI `rebuild_entry()` + vite `configureServer` 调 rebuild |
+| `entryModuleCache` mtime 失效 | ✅ | `PluginExecutor.ts` 缓存项含 `sourcePath` + `mtimeMs`，命中条件含 mtime 比对 |
+| 修订 `插件设计.md` § 2.1/4/5.1/6.1 | ✅ | （此前已完成） |
+| git hook 校验 entry.js | ⬜ 未做 | 程序性保证已落地，属防御性加固，价值降低 |
+| PR review checklist | ⬜ 未做 | 文档性，可选 |
+
+### 新增的落地纪律（2026-11-12 复盘）
+
+复测中再次踩到「改了不生效」的坑，成因都是**部署链路的复制粘贴步骤被漏掉**：
+
+```bash
+# 正确姿势：改 entry.ts 后三步
+cd plugins/toonflow-field-survival
+npx esbuild entry.ts --bundle --format=esm --platform=node --target=node18 --outfile=entry.js
+cp entry.js "D:/Users/viaco/tools/Toonflow-game/toonflow-app-run-db/plugins/1/com.toonflow.minigame-field-survival/entry.js"
+# 然后重跑回归断言确认行为
+```
+
+三条要点：
+1. **安装副本路径用 `manifest.id`**（`com.toonflow.minigame-field-survival`），不是文件夹名 `toonflow-field-survival`。
+2. **本地起后端用 `npm run local`**（NODE_ENV=local → `env/.env.local`）；裸 `npx tsx src/app.ts` 走 `env/.env.dev`（路径为空）→ 插件目录解析错 → 「entry 模块加载失败」。
+3. **entry.js 改动会被 mtime 失效自动热加载**（不用重启 60002），但**只改 entry.ts 不编译**则后端跑老代码。

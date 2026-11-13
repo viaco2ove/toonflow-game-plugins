@@ -1,4 +1,13 @@
-# entry.js 和 entry.ts 的关系和说明（2026-10-07 版）
+# entry.js 和 entry.ts 的关系和说明（2026-10-07 版 · 2026-11-12 状态更新）
+
+> **2026-11-12 现状**：本文的「现象溯源」仍然成立，但**风险已处置**：
+> - `entry.js` 已是 **entry.ts 的 esbuild 编译产物**，且**已 gitignore**（`.gitignore:102`）
+> - `entry.js.bak_*` / `entry.js.new` 备份文件**已清理**
+> - 一致性由 `ensureEntryConsistency()` **程序性保证**（CLI 装 / 网页装 / vue 启动三个入口）
+> - `PluginExecutor.loadEntryModule` 已改 **mtime 失效** → 改了 entry.js 不用重启 60002
+> - 行数现状：`entry.ts` 8160 行 → `entry.js` 6588 行
+>
+> **一句话铁律**：只改 `entry.ts`，**永不手改 `entry.js`**。
 
 ## 设计初衷（参考插件设计.md）
 
@@ -73,10 +82,12 @@ toonflow-field-survival 是"野外生存"插件，开发中发生了**约定漂�
 - 60002 后端 `loadEntryModule("entry.js")` → 拿到 esbuild 编译出的 `handle_action` → 处理 /plugin/tick
 - 两条链路是**独立**的，entry.js 只服务于后端
 
-**潜在风险**：
-1. esbuild 必须现编 entry.js 才能跑，但仓库里 entry.js 是手写版本——一旦有 AI 改 entry.ts 不重编译，**前端仍然用 game.html 跑（不受影响）**，但**后端会跑老 entry.js**——出现"前端行为正确 / 后端行为错乱"的诡异 bug
-2. entry.js 与 entry.ts 内容已经漂移（行数差 786 行），谁也不知道改 entry.ts 的人同步没同步 entry.js
-3. `entry.js.bak_*` / `entry.js.new` 这些备份名说明历史上手工直接编辑过 entry.js，**回滚时连带的 entry.ts 改动会丢失**
+**潜在风险（2026-11-12 已处置，括号内是处置方式）**：
+1. ~~esbuild 必须现编 entry.js 才能跑，但仓库里 entry.js 是手写版本~~ → **已解决**：entry.js 现编 + gitignore + 三入口 `ensureEntryConsistency()` + mtime 失效
+2. ~~entry.js 与 entry.ts 内容已经漂移~~ → **已解决**：entry.js 由 entry.ts 单一生成，行数差是 bundle 的正常结果
+3. ~~`entry.js.bak_*` / `entry.js.new` 备份名说明历史上手工直接编辑过 entry.js~~ → **已解决**：备份文件已清理，且仓库里 `entry.js.md` 明确写着"entry.js 不上传 git，不要当业务文件修改"
+
+> 处置细节与四套方案对比见 [`entry.js和entry.ts优化方案(2026-10-08).md`](./entry.js和entry.ts优化方案(2026-10-08).md)。
 
 **建议（按改动量排序）**：
 
