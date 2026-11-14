@@ -215,6 +215,43 @@ section("5. R5 攻击形状 circle / cone");
     eq(ci && ci.facing, 0, "cone 指示区朝向 = 施放朝向");
   }
 
+  // ②b ★ 2026-11-14 八方向（用户验收「只有四方向没有八方向」）：
+  //    玩家斜向移动 facing=45° → cone 判定/指示区都朝右下 45°；
+  //    cast 带 aim（前端点击点）时精确指向（atan2 任意角度）
+  {
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "扇技能", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "cone" }],
+    });
+    // 右下 45°、1.4m 处的怪（2m 近战 cone 内）
+    st.entities.push({ id: "e45", name: "怪45", side: "enemy", x: 1, y: 1, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 1, homeY: 1 });
+    // 正右 1m 的怪（45° 扇形外：与 45° 夹角 45° > 半角 30°）
+    st.entities.push({ id: "e0", name: "怪0", side: "enemy", x: 1, y: 0, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 1, homeY: 0 });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 45 } }, st);
+    const e45 = st.entities.find((e) => e.id === "e45");
+    const e0 = st.entities.find((e) => e.id === "e0");
+    ok(e45.hp < 500, `八方向：facing=45° 时右下 45° 的怪被打（${e45.hp}）`);
+    eq(e0.hp, 500, "八方向：正右的怪（与 45° 夹角 45°>30°）不受影响");
+    const ci45 = (st.rangeIndicators || []).find((i) => i.shape === "cone");
+    eq(ci45 && ci45.facing, 45, "八方向：指示区朝向 = 45°");
+  }
+  {
+    // aim 精确指向：player.facing=0（右）但 aim 指向正下 → 扇形应朝下（aim 优先）
+    const st = newState({
+      px: 0, py: 0,
+      skills: [{ name: "扇技能", power: 10, cost: 0, cd: 0, cdLeft: 0, type: "atk", range: "melee", attack_shape: "cone" }],
+    });
+    st.entities.push({ id: "eD", name: "怪下", side: "enemy", x: 0, y: 1.5, vx: 0, vy: 0,
+      hp: 500, maxHp: 500, atk: 6, level: 1, facing: 0, cooldown: 0, alive: true, homeX: 0, homeY: 1.5 });
+    await call("skill", { index: 0, player: { x: 0, y: 0, facing: 0 }, aim: { x: 0, y: 2 } }, st);
+    const eD = st.entities.find((e) => e.id === "eD");
+    ok(eD.hp < 500, `aim 优先：facing=0 但 aim 指向下 → 正下的怪被打（${eD.hp}）`);
+    const ciA = (st.rangeIndicators || []).find((i) => i.shape === "cone");
+    eq(ciA && ciA.facing, 90, "aim 优先：指示区朝向 = 90°（aim atan2 精确角）");
+  }
+
   // ③ 指示区 = 判定区：cone 时半径外的怪也不受影响
   {
     const st = newState({

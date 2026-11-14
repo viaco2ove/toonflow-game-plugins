@@ -2798,7 +2798,7 @@ function onRightClick(e: MouseEvent) {
     .filter(({ d }) => d < 1.5)
     .sort((a, b) => a.d - b.d)[0]?.e;
   if (clicked) { sfx.swing(); sendTick("attack", { targetId: clicked.id }); }
-  else { sfx.swing(); sendTick("attack", {}); }   // 无目标时让后端就近找（entry.ts 会返回"附近没有敌人"）
+  else { sfx.swing(); sendTick("attack", { aim: { x: tx, y: ty } }); }   // ★ 2026-11-14：点击地面普攻 → 带 aim 精确朝向（cone 扇形指向准星）
 }
 
 /** 点击地面特效入队（超出上限则丢弃最旧的，避免连点导致数组无限增长） */
@@ -4214,9 +4214,8 @@ function followMoveToPath(me: Entity): boolean {
     const step = Math.min(d, LOCAL_MOVE_SPEED_M * TICK_DT);
     me.x += (ddx / d) * step;
     me.y += (ddy / d) * step;
-    me.facing = (Math.abs(ddx) > Math.abs(ddy))
-      ? (ddx > 0 ? 0 : 180)
-      : (ddy > 0 ? 90 : 270);
+    // ★ 八方向 snap（同移动，2026-11-14）
+    me.facing = snapFacing8((Math.atan2(ddy, ddx) * 180) / Math.PI);
     return true;
   }
   clearMoveTo();
@@ -4524,8 +4523,10 @@ function localTick(): void {
       const len = Math.hypot(dx, dy) || 1;
       me.x += (dx / len) * LOCAL_MOVE_SPEED_M * TICK_DT;
       me.y += (dy / len) * LOCAL_MOVE_SPEED_M * TICK_DT;
-      // facing 统一角度制：0=右 90=下 180=左 270=上（与渲染层 dirIndex / facingLeft 一致）
-      me.facing = (dx > 0 ? 0 : dx < 0 ? 180 : dy > 0 ? 90 : 270);
+      // ★ 验收修复（2026-11-14）：facing 改八方向 snap（原实现量化四方向，斜向移动时
+      //   扇形指示区/朝向判定只有 0/90/180/270 → 用户实测「只有四方向没有八方向」）。
+      //   0=右 90=下 180=左 270=上（与渲染层 dirIndex / facingLeft 一致）
+      me.facing = snapFacing8((Math.atan2(dy, dx) * 180) / Math.PI);
       // 摇杆接管 → 放弃点击寻路（含路径队列）
       if (input.value.moveTo || moveToPath.length) clearMoveTo();
     } else if (input.value.moveTo) {
@@ -4546,9 +4547,8 @@ function localTick(): void {
           const step = Math.min(dist, LOCAL_MOVE_SPEED_M * TICK_DT);
           me.x += (ddx / dist) * step;
           me.y += (ddy / dist) * step;
-          me.facing = (Math.abs(ddx) > Math.abs(ddy))
-            ? (ddx > 0 ? 0 : 180)
-            : (ddy > 0 ? 90 : 270);
+          // ★ 八方向 snap（同移动，2026-11-14）
+          me.facing = snapFacing8((Math.atan2(ddy, ddx) * 180) / Math.PI);
         }
       }
     }

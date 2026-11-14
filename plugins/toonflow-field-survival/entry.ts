@@ -513,13 +513,31 @@ function resolveCastFacing(
   params: any, castRef: { x: number; y: number }, fallbackFacing: number,
   target?: { x: number; y: number } | null,
 ): number {
-  const poseFacing = num(params?.player?.facing, NaN);
-  if (Number.isFinite(poseFacing)) return poseFacing;
+  // ★ 优先级（2026-11-14）：瞄准点 > 客户端 facing > fallback —— 有明确目标时精确
+  //   指向（八方向+任意斜角），否则用玩家朝向（已改八方向 snap）
   if (target) {
     const dx = target.x - castRef.x, dy = target.y - castRef.y;
     if (Math.hypot(dx, dy) > 0.01) return (Math.atan2(dy, dx) * 180) / Math.PI;
   }
+  const poseFacing = num(params?.player?.facing, NaN);
+  if (Number.isFinite(poseFacing)) return poseFacing;
   return fallbackFacing;
+}
+
+/** ★ 2026-11-14：解析施放朝向的「瞄准点」——
+ *  ① params.aim {x,y}：前端点击地面施放时的精确世界坐标（绿色准星位置）
+ *  ② params.targetId / params.targets[0]：目标实体当前坐标
+ *  都没有 → null（退回玩家 facing，八方向） */
+function aimPointOf(params: any, s: FieldSurvivalState, castRef: { x: number; y: number }): { x: number; y: number } | null {
+  const ax = num(params?.aim?.x, NaN), ay = num(params?.aim?.y, NaN);
+  if (Number.isFinite(ax) && Number.isFinite(ay)) return { x: ax, y: ay };
+  const wantId = str(params?.targetId)
+    || (Array.isArray(params?.targets) && params.targets.length ? str(params.targets[0]) : "");
+  if (wantId) {
+    const e = s.entities.find((x) => x.id === wantId && x.alive !== false);
+    if (e) return { x: e.x, y: e.y };
+  }
+  return null;
 }
 
 /** ★ V2：读技能/物品的攻击形状（缺省 circle —— V1 行为，向下兼容） */
@@ -6701,12 +6719,16 @@ export async function handle_action(
         ? { x: num(params.player.x, player.x), y: num(params.player.y, player.y) }
         : player;
       // ★ V2（2026-11-13）：攻击形状（circle=圆形 V1 行为 / cone=朝向扇形）
-      //   朝向取客户端上报的实时 facing（玩家手动朝向），无则退化为「施放者→最近目标」。
+      //   朝向优先级（★ 2026-11-14 验收修复「只有四方向没有八方向」）：
+      //   ① params.aim（前端点击目标点，atan2 精确角度，八方向+任意斜角）
+      //   ② 客户端上报 facing（已改八方向 snap）
+      //   ③ fallback：玩家当前朝向。
       //   ⚠️ 指示区与判定用**同一个** inAttackRange + 同一组常量 → 不会出现「看到扇形却打到外面」。
       //   ★ V2_2 射程分离：近战技能 2m / 远程技能 4m（判定与指示区同源 attackRangeOf）。
       const skillShape = attackShapeOf(skill);
       const skillRange = attackRangeOf(skill);
-      const skillFacing = resolveCastFacing(params, castRef, player.facing, null);
+      const aimPt0 = aimPointOf(params, s, castRef);
+      const skillFacing = resolveCastFacing(params, castRef, player.facing, aimPt0);
       const targets = s.entities.filter((e) => e.side === "enemy" && e.alive && !e.deathMs
         && inAttackRange(skillShape, castRef.x, castRef.y, skillFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, skillRange));
       skill.cdLeft = skill.cd;
@@ -6779,7 +6801,9 @@ export async function handle_action(
       const mainItem0 = mergeBag(itemsFromCard(s.playerCard || {}), s.bagMeta, s.bagOrder, s.itemMeta).find((x) => (x.type || "") === "atk");
       const atkShape = attackShapeOf(mainItem0);
       const atkRange = attackRangeOf(mainItem0);
-      const atkFacing = resolveCastFacing(params, atkRef, player.facing, null);
+      // ★ 2026-11-14：瞄准点（targetId 实体坐标 / 前端点击地面 aim）> 八方向 facing
+      const atkAim = aimPointOf(params, s, atkRef);
+      const atkFacing = resolveCastFacing(params, atkRef, player.facing, atkAim);
       const inRange = enemies.filter((e) => !e.deathMs
         && inAttackRange(atkShape, atkRef.x, atkRef.y, atkFacing, CONE_HALF_ANGLE_DEG, e.x, e.y, atkRange));
       if (!inRange.length) {
