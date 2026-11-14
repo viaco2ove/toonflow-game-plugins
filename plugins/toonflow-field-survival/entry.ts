@@ -1498,7 +1498,7 @@ function skillFxKind(skill: { name: string; type?: string; range?: string }): "m
 function resolveAIGather(s: any, ent: any, g: any) {
   ent._aiGatherArrived = { zoneName: String(g.zoneName || ""), tick: s.tick, reqId: String(g.reqId || "") };
   pushEvent(s, ent.name + " 到达" + (g.zoneName || "野外") + "，开始采集");
-  floater(s, "采集中...", ent.x, ent.y - 30);
+  floater(s, "采集中...", ent.x, ent.y - 1.5);
   pushVfx(s, { kind: "spark", entityId: ent.id, x: ent.x, y: ent.y, life: 10, total: 10, color: "#9CFF6B" });
   if (!s.aiGatherCd || typeof s.aiGatherCd !== "object") s.aiGatherCd = {};
   s.aiGatherCd[ent.id + "|" + (g.zoneName || "_")] = s.tick + AI_GATHER_COOLDOWN_TICKS;
@@ -1511,7 +1511,7 @@ function resolveAIInteract(s: any, ent: any, it: any) {
   const tgt = s.entities.find((e: any) => e.id === it.targetId && e.alive);
   if (!tgt) return false;
   pushEvent(s, `${ent.name} 与 ${tgt.name} 交谈`);
-  floater(s, "…", tgt.x, tgt.y - 30);
+  floater(s, "…", tgt.x, tgt.y - 1.5);
   if (!Array.isArray(s.aiTalks)) s.aiTalks = [];
   s.aiTalks.push({
     id: `t_${s.tick}_${Math.random().toString(36).slice(2, 6)}`,
@@ -1623,7 +1623,7 @@ function dropKillChest(s: FieldSurvivalState, target: Entity): void {
     tier: 1,
     bornTick: Math.round(num(s.tick, 0)),
   } as Chest);
-  floater(s, "掉落宝箱", cx, cy - 40);
+  floater(s, "掉落宝箱", cx, cy - 2);
   pushEvent(s, `${target.name} 掉落了一个宝箱`);
 }
 
@@ -1727,7 +1727,7 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
     if (attacker) (attacker as any).actionBobMs = 300;
     // ★ V2：飘字带色（玩家受击=粉红 / 敌怪受击=红）+ 头顶 hurt 徽章
     const hurtColor = target.side === "enemy" ? HURT_ENEMY_COLOR : HURT_PLAYER_COLOR;
-    floater(s, `-${Math.round(amount)}`, target.x, target.y - 24, { kind: "damage", color: hurtColor });
+    floater(s, `-${Math.round(amount)}`, target.x, target.y - 1.2, { kind: "damage", color: hurtColor });
     setHeadBadge(s, target, {
       kind: "hurt",
       color: hurtColor,
@@ -2795,7 +2795,7 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       // ★ 野怪击杀奖励：开箱物资真的进背包（原本只进 s.drops 日志，暗核点不到「使用」）
       addBagItemToCard(s, drop, 1);
       floater(s, `宝箱 +${expGain}exp`, c.x, c.y);
-      floater(s, `+${drop}`, c.x, c.y - 22);
+      floater(s, `+${drop}`, c.x, c.y - 1.1);
       pushEvent(s, `打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱`);
     }
   });
@@ -2805,7 +2805,7 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     if (dist(player, p) >= POTION_PICKUP_M) return true;
     const before = player.hp;
     player.hp = clamp(player.hp + p.heal, 0, player.maxHp);
-    floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 24);
+    floater(s, `+${Math.round(player.hp - before)}`, player.x, player.y - 1.2);
     pushEvent(s, `拾取血瓶，恢复 ${Math.round(player.hp - before)} 点生命`);
     return false;
   });
@@ -3559,7 +3559,7 @@ function checkPlayerLevelUp(s: FieldSurvivalState): number {
   const card = (s.playerCard || {}) as Record<string, any>;
   const desc = resolveLevelDesc(card, lv);      // ④ 等级称号
   syncPlayerCardStats(s, desc == null ? {} : { level_desc: desc });
-  floater(s, `Lv.${lv} ↑`, me.x, me.y - 40);
+  floater(s, `Lv.${lv} ↑`, me.x, me.y - 2);
   pushEvent(s, `升级到 Lv.${lv}（经验 ${exp}/${playerNextExp(lv)}，HP/MP 已按公式补满）`);
   return ups;
 }
@@ -3583,7 +3583,7 @@ function restorePlayerFull(s: FieldSurvivalState, reason: string): void {
   const note = `${reason}：🎉 恭喜您已恢复到最佳状态（HP ${Math.round(me.hp)}/${Math.round(me.maxHp)}，MP ${Math.round(num(me.mp, 0))}/${Math.round(num(me.maxMp, 0))}）`;
   other.push(note);
   syncPlayerCardStats(s, { other });
-  floater(s, "满血满蓝", me.x, me.y - 40);
+  floater(s, "满血满蓝", me.x, me.y - 2);
   pushEvent(s, note);
 }
 
@@ -5124,7 +5124,7 @@ async function grantCoreSkill(s: FieldSurvivalState, ctx?: PluginGameContext): P
   const tLabel = m.type === "heal" ? "治疗" : m.type === "buff" ? `强化(${m.buff_type || "-"})` : (m.range === "ranged" ? "远程" : "近战");
   pushEvent(s, isUp ? `暗核共鸣：「${picked}」提升至 lv${newLv}（${tLabel}）` : `暗核解析完成：习得「${picked}」（${tLabel}·lv${newLv}）`);
   if (me) {
-    floater(s, isUp ? `${picked} lv${newLv}` : `习得 ${picked}`, me.x, me.y - 60);
+    floater(s, isUp ? `${picked} lv${newLv}` : `习得 ${picked}`, me.x, me.y - 3);
     pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(m.effects_type, "#9CCFFF"), icon: effectIcon(m.effects_type), size: 1.0 });
   }
   return isUp ? `，「${picked}」提升至 lv${newLv}` : `，湮源解析出技能「${picked}」`;
@@ -5147,7 +5147,7 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
   s.axeMode = false;
   const t = it.type || "heal";
   (me as any).actionBobMs = 300;
-  floater(s, `使用 ${it.name}`, me.x, me.y - 34);
+  floater(s, `使用 ${it.name}`, me.x, me.y - 1.7);
   let consumed = true;
   let msg = `使用 ${it.name}`;
   if (isCoreItem(s, it)) {
@@ -5155,7 +5155,7 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
     //   技能本身由 handle_action 在本次请求里异步问 AI 后写入（_pendingCoreGrant 标记）
     gainPlayerExp(s, CORE_USE_EXP);
     pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor((it as any).effects_type, "#9CCFFF"), icon: effectIcon((it as any).effects_type), size: 1.0 });
-    floater(s, `+${CORE_USE_EXP}exp`, me.x, me.y - 52);
+    floater(s, `+${CORE_USE_EXP}exp`, me.x, me.y - 2.6);
     pushEvent(s, `吸收 ${it.name}，+${CORE_USE_EXP} 经验`);
     msg += `，湮源吸收 +${CORE_USE_EXP} 经验`;
     if (Math.random() < CORE_SKILL_P) (s as any)._pendingCoreGrant = true;
@@ -5164,7 +5164,7 @@ function useBagItem(s: FieldSurvivalState, name: string): string {
     const before = me.hp;
     if (heal > 0) me.hp = clamp(me.hp + heal, 0, me.maxHp);
     pushVfx(s, { kind: "heal_ring", entityId: me.id, x: me.x, y: me.y, life: 18, total: 18, color: effectColor(it.effects_type, "#7CFFB2"), icon: effectIcon(it.effects_type), size: 1.0 });
-    if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 52); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
+    if (heal > 0) { floater(s, `+${Math.round(me.hp - before)}`, me.x, me.y - 2.6); msg += `，恢复 ${Math.round(me.hp - before)} 生命`; }
   } else if (t === "buff") {
     pushVfx(s, { kind: "buff_ring", entityId: me.id, x: me.x, y: me.y, life: 30, total: 30, color: effectColor(it.effects_type, "#9CCFFF"), icon: effectIcon(it.effects_type), size: 1.0 });
     // ★ V2：施加 buff → 头顶绿色徽章（圈内=物品的 effects_type 图标，无则「buff」）
@@ -5929,7 +5929,7 @@ function grantPartyExp(s: FieldSurvivalState, expGain: number): void {
     }
   });
   const lead = s.entities.find((e) => e.id === party[0]);
-  if (lead) floater(s, `队伍 +${share}exp`, lead.x, lead.y - 26);
+  if (lead) floater(s, `队伍 +${share}exp`, lead.x, lead.y - 1.3);
 }
 
 /** 系统数据 → t_plugin_session_data */
@@ -6685,7 +6685,7 @@ export async function handle_action(
       skill.cdLeft = skill.cd;
       // ★ v5：通用特效（无专属特效时）—— 角色小跳 + 飘字
       (player as any).actionBobMs = 300;
-      floater(s, skill.name, player.x, player.y - 34);
+      floater(s, skill.name, player.x, player.y - 1.7);
       // ★ V2：攻击范围指示区（circle=粉红圆形 / cone=粉红扇形），半径=判定半径
       pushRangeIndicator(s, {
         shape: skillShape, x: castRef.x, y: castRef.y, radius: skillRange,
@@ -6783,7 +6783,7 @@ export async function handle_action(
       }
       const dmg = Math.max(1, Math.round(player.atk * 0.6));
       (player as any).actionBobMs = 200;
-      floater(s, "普攻", player.x, player.y - 34);
+      floater(s, "普攻", player.x, player.y - 1.7);
       // ★ V2：普攻也出攻击范围指示区（circle=圆形 / cone=扇形），与判定区完全一致
       pushRangeIndicator(s, {
         shape: atkShape, x: atkRef.x, y: atkRef.y, radius: atkRange,
@@ -6847,7 +6847,7 @@ export async function handle_action(
       patchCard(s, { items: serializeBag(nextBag, card.items), money: Math.round(num(card.money, 0)) + gain });
       pushEvent(s, `卖出 ${name}×${sold}，获得 ${gain} 金钱`);
       const me = playerEntity(s);
-      if (me) floater(s, `+${gain} 金`, me.x, me.y - 30);
+      if (me) floater(s, `+${gain} 金`, me.x, me.y - 1.5);
       await persistSys(context, s);
       return okResp(`卖出 ${name}×${sold}（+${gain} 金）`);
     }
@@ -7651,7 +7651,7 @@ export async function handle_action(
       if (sk.cdLeft > 0) return okResp(`${sk.name} 冷却中`);
       sk.cdLeft = sk.cd;
       (meSk as any).actionBobMs = 300;
-      floater(s, sk.name, meSk.x, meSk.y - 34);
+      floater(s, sk.name, meSk.x, meSk.y - 1.7);
       // ★ V2：攻击范围指示区（与下面判定用同一组常量）
       //   ★ V2_2 射程分离：近战 2m / 远程 4m
       const _skRange = attackRangeOf(sk);
@@ -7749,7 +7749,7 @@ export async function handle_action(
       patchCard(s, { skills: flat, money: Math.round(num(card.money, 0)) + GAIN });
       pushEvent(s, `售出「${skill}」，获得 ${GAIN} 金`);
       const me = playerEntity(s);
-      if (me) floater(s, `+${GAIN} 金`, me.x, me.y - 30);
+      if (me) floater(s, `+${GAIN} 金`, me.x, me.y - 1.5);
       await persistSys(context, s);
       return okResp(`卖出「${skill}」（+${GAIN} 金）`);
     }
@@ -7872,7 +7872,7 @@ export async function handle_action(
       noteQuestGather(s, good.name, ask);
       pushEvent(s, `购买 ${good.name}×${ask}，花费 ${cost} 金钱`);
       const me = playerEntity(s);
-      if (me) floater(s, `-${cost} 金`, me.x, me.y - 30);
+      if (me) floater(s, `-${cost} 金`, me.x, me.y - 1.5);
       await persistSys(context, s);
       return okResp(`购买 ${good.name}×${ask}`);
     }
@@ -7892,7 +7892,7 @@ export async function handle_action(
       addBagItemToCard(s, addName, addCount);
       pushEvent(s, `获得 ${addName}×${addCount}`);
       const meAdd = playerEntity(s);
-      if (meAdd) floater(s, `+${addName}`, meAdd.x, meAdd.y - 30);
+      if (meAdd) floater(s, `+${addName}`, meAdd.x, meAdd.y - 1.5);
       await persistSys(context, s);
       return okResp(`获得 ${addName}×${addCount}`);
     }
@@ -7916,7 +7916,7 @@ export async function handle_action(
       else if (bagArr.length < AI_BAG_MAX_SLOTS) bagArr.push({ name: aiName, count: aiCount });
       else return okResp(`${aiEnt.name} 私藏已满（${AI_BAG_MAX_SLOTS} 格），${aiName} 未能收入`);
       pushEvent(s, `${aiEnt.name} 采集获得 ${aiName}×${aiCount}`);
-      floater(s, `+${aiName}`, aiEnt.x, aiEnt.y - 30);
+      floater(s, `+${aiName}`, aiEnt.x, aiEnt.y - 1.5);
       // ★ 私藏随 entities 回推即持久，不走 persistSys（那是玩家角色卡专用）
       return okResp(`${aiEnt.name} 获得 ${aiName}×${aiCount}`);
     }
@@ -7993,7 +7993,7 @@ export async function handle_action(
           sk.cdLeft = Math.max(1, Math.round(num(sk.cd, 5)));
           (ent as any).mp = Math.max(0, num((ent as any).mp, 0) - skCost);
           (ent as any).actionBobMs = 300;
-          floater(s, sk.name, ent.x, ent.y - 34);
+          floater(s, sk.name, ent.x, ent.y - 1.7);
           const skPower = Math.max(1, Math.round(num(sk.power, 0)) + Math.round(num((ent as any).atk, 10) * 0.5));
           // ★ V2：攻击形状（circle / cone）——cone 时命中受朝向限制（与指示区一致）
           //   ★ V2_2 射程分离：AI 角色的技能同样近战 2m / 远程 4m
@@ -8618,7 +8618,7 @@ export async function handle_action(
       if (drExp > 0) {
         const me = playerEntity(s);
         gainPlayerExp(s, drExp);
-        if (me) floater(s, `+${drExp} 经验`, me.x, me.y - 30);
+        if (me) floater(s, `+${drExp} 经验`, me.x, me.y - 1.5);
         pushEvent(s, `击碎 ${drName}，获得 ${drExp} 经验`);
         await persistSys(context, s);
       }

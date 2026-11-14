@@ -623,7 +623,7 @@ function v2ApplyHurt(st, target, amount, src) {
   const color = target.side === "enemy" ? V2_HURT_ENEMY_COLOR : V2_HURT_PLAYER_COLOR;
   st.floaters.push({
     id: "f" + st.tick + "_h" + Math.random().toString(36).slice(2, 6),
-    text: "-" + Math.round(amount), x: target.x, y: target.y - 10,
+    text: "-" + Math.round(amount), x: target.x, y: target.y - 1.2,
     life: 20, kind: "damage", color,
   });
   v2SetHeadBadge(st, target, {

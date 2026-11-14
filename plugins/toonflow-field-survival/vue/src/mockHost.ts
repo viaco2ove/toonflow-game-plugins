@@ -511,7 +511,7 @@ function mockTickChests(state: any, player: any): void {
     state.money += moneyGain;
     state.drops.push(drop);
     state.floaters.push({ id: "f" + state.tick + "_o", text: `宝箱 +${expGain}exp`, x: c.x, y: c.y, life: 30, kind: "drop", color: "#ffd76a" });
-    state.floaters.push({ id: "f" + state.tick + "_o2", text: `+${drop}`, x: c.x, y: c.y - 12, life: 30, kind: "drop", color: "#ffd76a" });
+    state.floaters.push({ id: "f" + state.tick + "_o2", text: `+${drop}`, x: c.x, y: c.y - 0.8, life: 30, kind: "drop", color: "#ffd76a" });
     state.events.push(`[mock] 打开宝箱：${drop}，+${expGain} 经验，+${moneyGain} 金钱`);
   }
 }
@@ -1639,7 +1639,7 @@ function install(): void {
           me.hp = Math.min(me.maxHp, me.hp + actual);
           pushRingVfx(me, "heal_ring", "#5fe57a");
           bobEntity(me);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 1.2, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "atk") {
           // 攻击技能：找最近的敌人；★ 空放：无目标也放特效 + 飘字
@@ -1694,7 +1694,7 @@ function install(): void {
               angle,
             });
             bobEntity(me);
-            state.floaters.push({ id: "f" + state.tick, text: slot.name, x: me.x, y: me.y - 10, life: 20, kind: "text", color: "#cfd8e3" });
+            state.floaters.push({ id: "f" + state.tick, text: slot.name, x: me.x, y: me.y - 1.2, life: 20, kind: "text", color: "#cfd8e3" });
             state.events.push("[mock] " + slot.name + "（空放，无目标）");
           }
         } else if (slot.type === "buff") {
@@ -1703,7 +1703,7 @@ function install(): void {
           setTimeout(() => { if (me) me.def = Math.max(0, (me.def || 0) - 10); }, 6000);
           pushRingVfx(me, "buff_ring", "#f5c542");
           bobEntity(me);
-          state.floaters.push({ id: "f" + state.tick, text: "+DEF", x: me.x, y: me.y - 10, life: 20, kind: "buff", color: "#f5c542" });
+          state.floaters.push({ id: "f" + state.tick, text: "+DEF", x: me.x, y: me.y - 1.2, life: 20, kind: "buff", color: "#f5c542" });
           // ★ V2：施加 buff → 头顶绿色徽章（圈内=技能图标，无则「buff」）
           v2ApplyBuff(state as any, me as any, { name: slot.name, icon: (slot as any).icon });
           state.events.push("[mock] " + slot.name + "，DEF+10（持续 6 秒）");
@@ -1735,14 +1735,14 @@ function install(): void {
           me.hp = Math.min(me.maxHp, me.hp + actual);
           pushRingVfx(me, "heal_ring", "#5fe57a");
           bobEntity(me);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 10, life: 20, kind: "heal_hp", color: "#5fe57a" });
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "HP", x: me.x, y: me.y - 1.2, life: 20, kind: "heal_hp", color: "#5fe57a" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "HP");
         } else if (slot.type === "mp") {
           const actual = Math.min(slot.mp, me.maxMp - me.mp);
           me.mp = Math.min(me.maxMp, me.mp + actual);
           pushRingVfx(me, "heal_ring", "#5eb5ff");
           bobEntity(me);
-          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "MP", x: me.x, y: me.y - 10, life: 20, kind: "heal_mp", color: "#5eb5ff" });
+          state.floaters.push({ id: "f" + state.tick, text: "+" + actual + "MP", x: me.x, y: me.y - 1.2, life: 20, kind: "heal_mp", color: "#5eb5ff" });
           state.events.push("[mock] " + slot.name + "，恢复 " + actual + "MP");
         } else if (slot.type === "atk") {
           // 炸药：5 米内所有敌人受到范围伤害
@@ -1757,7 +1757,7 @@ function install(): void {
               e.hp = Math.max(0, e.hp - dmg);
               flashEntity(e);
               knockbackEntity(e, me.x, me.y);
-              state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 10, life: 20, kind: "damage", color: "#ff8c3a" });
+              state.floaters.push({ id: "f" + state.tick + e.id, text: "-" + dmg, x: e.x, y: e.y - 1.2, life: 20, kind: "damage", color: "#ff8c3a" });
               if (e.hp <= 0) {
                 e.alive = false;
                 e.deathMs = 400;  // ★ 打击感：死亡淡出 400ms

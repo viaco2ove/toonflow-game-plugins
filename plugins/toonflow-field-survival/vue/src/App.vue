@@ -6375,20 +6375,44 @@ function render() {
   }
 
   // —— 飘字（屏幕像素）——
+  // ★ V2_2 验收修复（2026-11-14）：R2/R3「扣血值」用户实测看不到。两层根因：
+  //   ① 调用点的 y 偏移是**米级**（damage: target.y - 24 等）——历史写法按「像素」
+  //     直觉，但 wz2py 按 1m=sx(≈20px) 转换 → 飘字画在实体头顶上方 480px，飞出
+  //     可视区（canvas 像素统计红字确实画了，就是画在屏幕外）；
+  //   ② 14px 字在高分画布战斗特效中太小。
+  //   修复：渲染时按 floater.x 找同列实体锚定（画在其头顶上方固定 46px，多条
+  //   按 bornTick 错层），找不到实体才退回原转换并钳到画布内；字号分级加大。
   s.floaters.forEach((f) => {
     const fx = wx2px(f.x);
-    const fy = wz2py(f.y);
+    let anchor: Entity | undefined;
+    let anchorDist = Infinity;
+    for (const e of s.entities || []) {
+      if (Math.abs(e.x - f.x) > 0.8) continue;
+      const dy = Math.abs(e.y - f.y);
+      if (dy < anchorDist) { anchorDist = dy; anchor = e; }
+    }
+    let fy: number;
+    if (anchor && anchorDist < 40) {
+      fy = wz2py(anchor.y) - 46;
+    } else {
+      fy = wz2py(f.y);
+      fy = Math.max(70, Math.min(H - 90, fy));
+    }
     ctx.save();
     // ★ 按 kind/color 决定颜色（飘字颜色不再是统一白字）
     const fill = f.color || "#fff";
+    const isDmg = f.kind === "damage";
+    const size = isDmg ? 22 : f.kind === "heal_hp" || f.kind === "heal_mp" ? 18 : 16;
     ctx.globalAlpha = Math.min(1, f.life / 12);
     ctx.fillStyle = fill;
-    ctx.strokeStyle = "rgba(0,0,0,.6)";
-    ctx.lineWidth = 3;
-    ctx.font = "bold 14px sans-serif";
+    ctx.strokeStyle = "rgba(0,0,0,.75)";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "rgba(0,0,0,.55)";
+    ctx.shadowBlur = 4;
+    ctx.font = `bold ${size}px 'Microsoft YaHei', sans-serif`;
     ctx.textAlign = "center";
-    ctx.strokeText(f.text, fx, fy - 40);
-    ctx.fillText(f.text, fx, fy - 40);
+    ctx.strokeText(f.text, fx, fy);
+    ctx.fillText(f.text, fx, fy);
     ctx.restore();
   });
 
