@@ -2798,7 +2798,7 @@ function onRightClick(e: MouseEvent) {
     .filter(({ d }) => d < 1.5)
     .sort((a, b) => a.d - b.d)[0]?.e;
   if (clicked) { sfx.swing(); sendTick("attack", { targetId: clicked.id }); }
-  else { sfx.swing(); sendTick("attack", { aim: { x: tx, y: ty } }); }   // ★ 2026-11-14：点击地面普攻 → 带 aim 精确朝向（cone 扇形指向准星）
+  else { sfx.swing(); sendTick("attack", {}); }   // ★ R5 验收修正（2026-11-14）：扇形方向严格 = 玩家朝向，不带 aim（不做自动索敌/准星转向）
 }
 
 /** 点击地面特效入队（超出上限则丢弃最旧的，避免连点导致数组无限增长） */
