@@ -1807,6 +1807,25 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
         //   文案要区分，否则玩家会以为站桩假人被永久打死了。
         pushEvent(s, `${target.name} 重新立了起来`);
       }
+    } else if (target.side === "ally") {
+      /* ★ 2026-11-14 死亡自动脱队：组队/托管的 ally 阵亡 → 自动移出队伍 + 清 AI 托管标记。
+       *   「死了的话就自动脱离队伍吧」——否则 partyIds 挂着死实体 id，跟随循环找不到人
+       *   （表现为「跟随不跟随」），角色面板勾选与实际状态也对不上。
+       *   尸体照常淡出，随后从实体表移除（见下方 filter）；召唤 / 重新勾选组队即满血复活
+       *   （sys_party → tpAllyNear）。 */
+      const wasInParty = Array.isArray(s.partyIds) ? s.partyIds.indexOf(target.id) >= 0 : false;
+      const wasManaged = (target as any)._aiManaged === true;
+      if (Array.isArray(s.partyIds)) {
+        s.partyIds = s.partyIds.filter((x) => String(x) !== String(target.id));
+      }
+      delete (target as any)._aiManaged;
+      delete (target as any)._aiMoveTo;
+      delete (target as any)._aiMoveToTick;
+      delete (target as any)._aiAttackTarget;
+      delete (target as any)._aiAttackTick;
+      if (wasInParty || wasManaged) {
+        pushEvent(s, `${target.name} 阵亡，已脱离队伍（可重新召唤 / 组队复活）`);
+      }
     } else if (target.side === "enemy") {
       s.kills += 1;
       // 优先地图 archetype 的赏金（map-gener agent 产出）
@@ -2614,6 +2633,12 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       const p = navStep(enemyNav, a.x, a.y, dstX - a.x, dstY - a.y, step, AI_NAV_R);
       a.x = p.x;
       a.y = p.y;
+      /* ★ 2026-11-14 修复「跟随角色飞出地图」：navStep 直接给定位姿，后面的统一积分阶段
+       *   还会按 vx/vy 再推一次 —— 若 vx 残留着上一次 moveTowards 的速度，角色就会
+       *   在 navStep 定位之外**每拍匀速漂移**（实测裴勇 vx=-4.8 恒定，一路飞到 -1222m）。
+       *   位置已被 navStep 定死 → 速度必须清零。 */
+      a.vx = 0;
+      a.vy = 0;
       if (Math.abs(dstX - a.x) > 2) a.facing = dstX > a.x ? 0 : 180;
     } else if (target) {
       moveTowards(a, target.x, target.y, speed * 0.92);
@@ -2640,6 +2665,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
       const p = navStep(enemyNav, a.x, a.y, mv.x - a.x, mv.y - a.y, step, AI_NAV_R);
       a.x = p.x;
       a.y = p.y;
+      // ★ 同「跟随角色飞出地图」修复：navStep 定位后清速度，防统一积分阶段叠加漂移
+      a.vx = 0;
+      a.vy = 0;
       if (Math.abs(mv.x - a.x) > 2) a.facing = mv.x > a.x ? 0 : 180;
     } else {
       moveTowards(a, mv.x, mv.y, speed * 0.8);
@@ -2657,6 +2685,24 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   //   结果：宿主 damage() 把血打到 113，前端合并时用自己的 185 覆盖回来 →
   //   **伤害被完全抹掉**（实测连打 3 刀「伤害 72」，血量恒 185）。
   standDummyRegen(s);
+  // ★ 2026-11-14 组队跟随回血：跟随玩家的存活 ally 缓慢恢复（约 1.5% maxHp/秒）。
+  //   「跟随队伍后要慢慢自己回血」——只在队伍中（partyIds）生效，AI 托管未入队不回；
+  //   静默回（不飘字不报事件，避免刷屏），死亡淡出期不回（复活走召唤/组队流程）。
+  {
+    const _party = Array.isArray(s.partyIds) ? s.partyIds : [];
+    console.log(`[regen-debug] tick=${s.tick} party=${JSON.stringify(_party)} ents=${s.entities.length} pei=${JSON.stringify(s.entities.find((x) => x.id === "npc_1") ? { hp: s.entities.find((x) => x.id === "npc_1").hp, side: s.entities.find((x) => x.id === "npc_1").side } : null)}`);
+    if (_party.length) {
+      for (const a of s.entities) {
+        if (a.id === "npc_1") console.log(`[regen-debug] tick=${s.tick} side=${a.side} alive=${a.alive} hp=${a.hp}/${a.maxHp} inParty=${_party.indexOf(a.id) >= 0} deathMs=${(a as any).deathMs}`);
+        if (a.side !== "ally" || !a.alive) continue;
+        if ((a as any).deathMs != null) continue;
+        if (_party.indexOf(a.id) < 0) continue;
+        const maxHp = Math.max(1, Math.round(num(a.maxHp, a.hp) || 1));
+        if (a.hp >= maxHp) continue;
+        a.hp = Math.min(maxHp, a.hp + Math.max(1, Math.round(maxHp * 0.0015)));
+      }
+    }
+  }
   enemies.forEach((e) => {
     const ex = e as any;
     //  ★ 练习假人「站桩模式」：站桩 = 站着挨打，**不追击、不攻击**。
@@ -2769,6 +2815,14 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     } else if (e.side === "enemy" && enemyNav) {
       // 宿主自己刷的敌怪也走同一套碰撞（只加碰撞，边界夹取保持原逻辑不变）
       moveEnemyCollide(e, clampX(nx) - e.x, clampY(ny) - e.y);
+    } else if (e.side === "ally") {
+      /* ★ 2026-11-14 修复「跟随角色飞出地图」第二道防线：ally 与本地敌怪同口径
+       *   夹进**当前关卡 bounds**（±29/±19），而不是世界 ±1490 ——
+       *   此前 ally 走 clampX(±1490)，任何来源的速度失控（残留 vx / 击退叠加）都能
+       *   把角色一路送出地图几百米（实测 -1222m）。夹回后跟随循环会自然走回玩家身边。 */
+      const p = clampToBound(s, nx, ny);
+      if (enemyNav) moveEnemyCollide(e, p.x - e.x, p.y - e.y);
+      else { e.x = p.x; e.y = p.y; }
     } else {
       e.x = clampX(nx);
       e.y = clampY(ny);
@@ -2843,7 +2897,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
 
   // ★ v4 区域刷新：敌人复活改为「随区域刷新机制重新生成」——
   //   先把本帧阵亡的敌人实体从世界移除（不再保留 alive=false 的残留实体）
-  s.entities = s.entities.filter((e) => !(e.side === "enemy" && e.alive === false));
+  //   ★ 2026-11-14：阵亡的组队 ally 同口径移除（死亡时已自动脱队，角色回「未上场」，
+  //   召唤/重新组队时由 spawnRoleEntity 重新生成并满血复活——见 tpAllyNear）。
+  s.entities = s.entities.filter((e) => !((e.side === "enemy" || e.side === "ally") && e.alive === false));
 
   // ★ v4 每个区域各自维护刷新计时：玩家离开该区域 45 秒后刷新一次野怪
   //   （城镇安全区不刷新；不再用 enemies.length===0 触发清场补波）
@@ -5693,9 +5749,12 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       name: role.name,
       side,
       enemy: side === "enemy",
-      level: Math.max(1, Math.round(num(e ? (e as any).level : num(role.initial_level, num(old?.level, 1)), 1))),
-      hp: Math.round(e ? (e as any).hp : num(old?.hp, num(pc?.hp, 0))),
-      maxHp: Math.round(e ? (e as any).maxHp : num(old?.maxHp, num(pc?.maxHp, 0))),
+      /* ★ 2026-11-14 未上场角色卡片兜底：实体不存在（从未上场/阵亡已移除）时，
+       *   血量/等级回退到角色卡数据（roles 的 hp/level）——此前一律 0/0、Lv.1，
+       *   面板显示「HP 0/0 Lv.1」，召唤/组队复活后数值又突变。 */
+      level: Math.max(1, Math.round(num(e ? (e as any).level : num(role.initial_level, num(role.level, num(old?.level, 1))), 1))),
+      hp: Math.round(e ? (e as any).hp : num(old?.hp, num(pc?.hp, num(role.hp, 0)))),
+      maxHp: Math.round(e ? (e as any).maxHp : num(old?.maxHp, num(pc?.maxHp, num(role.hp, 0)))),
       exp: Math.round(num(old?.exp, 0)),
       alive: e ? !!(e as any).alive : (old ? old.alive !== false : true),
       mapName: side === "player" ? (levelName || old?.mapName || "") : (((e as any) && (e as any).mapName) || old?.mapName || ""),
@@ -5790,6 +5849,42 @@ function spawnRoleEntity(s: FieldSurvivalState, role: any): Entity | null {
  *  只有组队中的角色跟随玩家跨图（落点 = 玩家身边）；脱离队伍就地留下。
  *  非组队角色从当前实体表摘除、停进 s.parked[地图名]，玩家回到该图时原坐标归队。 */
 const START_MAP_NAME = "Mulberry Town";
+
+/**
+ * ★ 2026-11-14 组队/召唤共通收尾：把角色 TP 到玩家身边（角度均分，避免扎堆），
+ *   顺带复活（hp<=0 → 满血，maxHp 缺失按等级兜底）+ 清残留移动状态。
+ *   此前「组队跟随」从 parked 接回后保留旧坐标（可能停在 -150m 外的老位置），
+ *   跟随循环 0.8m/s 爬几分钟才到——用户观感就是「点了跟随不跟随」。
+ *   入队语义 = 跟在玩家身边，直接贴身最符合直觉。 */
+function tpAllyNear(s: FieldSurvivalState, e: any): void {
+  if (!e) return;
+  const me = playerEntity(s);
+  if (me) {
+    const allyCount = s.entities.filter((ee) => ee.side === "ally" && ee.id !== e.id).length;
+    const ang = (allyCount / Math.max(1, allyCount + 1)) * Math.PI * 2 + rnd(0, Math.PI * 0.5);
+    const d = 2 + Math.random() * 2;
+    const p = clampToBound(s, me.x + Math.cos(ang) * d, me.y + Math.sin(ang) * d);
+    e.x = p.x;
+    e.y = p.y;
+    e.homeX = e.x;
+    e.homeY = e.y;
+  }
+  // 清残留移动状态（速度/击退/AI 移动指令——防上一局的漂移速度把角色再送走）
+  e.vx = 0;
+  e.vy = 0;
+  delete (e as any).knockbackVx;
+  delete (e as any).knockbackVy;
+  delete (e as any)._aiMoveTo;
+  delete (e as any)._aiMoveToTick;
+  // 复活（召唤/重新组队要复活）：只对「死亡角色」（alive=false / 死亡淡出期）生效——
+  //   活着的低血角色不满血（交给跟随回血慢慢恢复）；maxHp<=0 的残缺卡按等级兜底。
+  if (e.alive === false || (e as any).deathMs != null) {
+    if (!(num(e.maxHp, 0) > 0)) e.maxHp = 60 + Math.max(1, num(e.level, 1)) * 15;
+    e.alive = true;
+    e.hp = Math.max(1, Math.round(num(e.maxHp, 1)));
+    (e as any).deathMs = undefined;
+  }
+}
 /** 角色唯一键：id 优先，退化到 name */
 function roleKeyOf(e: any): string {
   return String((e && (e.id || e.name)) || "");
@@ -6615,6 +6710,7 @@ export async function handle_action(
 
     case "tick": {
       if (s.phase !== "playing") return okResp("");
+      console.log(`[tick-debug] case tick phase=${s.phase} party=${JSON.stringify(s.partyIds)} ents=${s.entities.length}`);
       // ★ P1 打击感：震屏/顿帧衰减（每 tick -1 帧）
       if (s.screenShake !== undefined && s.screenShake > 0) {
         s.screenShake -= 1;
@@ -6658,7 +6754,9 @@ export async function handle_action(
       syncPlayerCardStats(s); // ★ game.md 等级系统：等级/经验/HP/MP → 动态角色卡（变化才回写）
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
+      console.log(`[tick-debug] before-step pose=${JSON.stringify(params?.player || null)}`);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
+      console.log(`[tick-debug] after-step hp1=${JSON.stringify((s.entities.find((e) => e.id === "npc_1") || ({} as any)).hp)} party=${JSON.stringify(s.partyIds)}`);
       // ★ 角色驻留地图：检测到玩家换图后，非组队角色留在原图（停车），组队角色跟来
       if (s.levelName && s.levelName !== (s as any)._levelAt) {
         handleLevelChange(s, true);
@@ -8250,30 +8348,18 @@ export async function handle_action(
         const role = (s.roles as any[] || []).find((r) => String(r?.id) === rid || String(r?.name) === rid);
         e = spawnRoleEntity(s, role) || undefined as any;
       }
-      if (e && (follow || summon)) (e as any).mapName = s.levelName || (e as any).mapName;
+      if (e && (follow || summon)) {
+        (e as any).mapName = s.levelName || (e as any).mapName;
+        // ★ 组队/召唤都贴身：parked 接回的旧坐标（可能停在几十米外）与新生成实体的
+        //   默认落点都不再使用，直接 TP 玩家身边 + 复活（见 tpAllyNear 注释）。
+        tpAllyNear(s, e);
+      }
 
       // ★ 召唤模式：只把角色传到玩家旁边并设为友方，不入队、不跟随
       if (summon) {
         if (e) {
           if (!(e as any)._baseSide) (e as any)._baseSide = e.side;
           e.side = "ally";
-          if (!e.alive) { e.alive = true; e.hp = e.maxHp; }
-          // TP 到玩家身边（角度均分分布，避免多个 ally 扎堆）
-          const me = playerEntity(s);
-          if (me) {
-            // 统计已存在的 ally 数量，用于角度均分（0-index）
-            const allyCount = s.entities.filter((ee) => ee.side === "ally" && ee.id !== e.id).length;
-            const ang = (allyCount / Math.max(1, allyCount + 1)) * Math.PI * 2 + rnd(0, Math.PI * 0.5);
-            const dist = 2 + Math.random() * 2;
-            const allyXBase =0;
-            const allyYBase =0;
-            // const p = clampToBound(s, me.x + Math.cos(ang) * dist, me.y + Math.sin(ang) * dist);
-            const p = clampToBound(s, allyXBase + Math.cos(ang) * dist, allyYBase + Math.sin(ang) * dist);
-            e.x = p.x;
-            e.y = p.y;
-            (e as any).homeX = e.x;
-            (e as any).homeY = e.y;
-          }
         }
         ensureNpcCards(s, s.levelName || "");
         pushEvent(s, `${e?.name || rid} 已召唤到你身边（不加入队伍）`);
