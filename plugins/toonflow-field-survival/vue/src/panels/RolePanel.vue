@@ -225,7 +225,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
 .rlc-bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.12); overflow: hidden; margin: 3px 0; }
 .rlc-bar__hp { display: block; height: 100%; background: linear-gradient(90deg, #ff6b6b, #ffb04a); }
 .rlc-meta { font-size: 10px; color: #93a2b3; }
-.rlc-ops { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+.rlc-ops { display: flex; flex-direction: row; gap: 4px; align-items: flex-end; }
 .rlc-btn { padding: 3px 8px; border-radius: 5px; border: 1px solid #5a9bff; background: #2f6fd0; color: #fff; font-size: 11px; cursor: pointer; }
 .rlc-btn:disabled { border-color: #4a5563; background: #3a434f; color: #8b98a6; cursor: not-allowed; }
 .rlc-btn--summon { border-color: #7acc7a; background: #2a7a2a; }

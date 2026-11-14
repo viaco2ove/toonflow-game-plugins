@@ -185,5 +185,5 @@ messages = [
 - [ai托管.agent.传入参数.md](./ai托管.agent.传入参数.md) — `agent.run()` 的 input 契约
 - [ai托管.agent.传出参数.md](./ai托管.agent.传出参数.md) — LLM 输出的解析与校验
 - [ai托管.agent.用户提示词.md](./ai托管.agent.用户提示词.md) — 前端 brain.ts 动态拼接部分
-- [ai托管.开发计划.plancheck.md](../ai托管.开发计划.plancheck.md) — 落地步骤
+- [ai托管.开发计划.plancheck.md](../V1/ai托管.开发计划.plancheck.md) — 落地步骤
 - [ai托管.运行机制.md](./ai托管.运行机制.md) — 三层架构现状与 `sys_brain` 断链分析

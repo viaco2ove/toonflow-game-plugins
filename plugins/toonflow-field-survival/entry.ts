@@ -2645,6 +2645,35 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     } else if (doMove) {
       moveTowards(a, moveX, moveY, speed * 0.8);
     }
+    /* ★ 2026-11-15 跟随脱困：navStep 是贪心八向局部避障（不做 A*），凹形建筑/围墙会把
+     *   跟随者卡在局部极小值——玩家在墙另一侧时永远绕不过来（实测截图：裴勇卡在建筑
+     *   上沿、玩家在下方，跟随失败）。navResolve 有贴墙滑行，纯「零位移」检测会漏报
+     *   抖动，故用「无接近」检测：每 15 tick（1.5s）采样一次，未贴身(>4.5m)且到玩家
+     *   的距离没有缩短 ≥0.8m（真绕行 1.5s 必接近更多）→ 连续 2 次（3s）→ tpAllyNear
+     *   贴身 TP（与组队/召唤同款落点）。TP 后贴身 → away 不成立 → 计数自然清零。 */
+    if (partyIds.indexOf(a.id) >= 0) {
+      const gap = Math.hypot(a.x - player.x, a.y - player.y);
+      if (gap > ALLY_FOLLOW_GAP_M + 2) {
+        const t = s.tick as number;
+        if ((a as any)._flAt != null && t - (a as any)._flAt >= 15) {
+          const lastGap = (a as any)._flGap as number;
+          (a as any)._flStuck = (gap > (lastGap as number) - 0.8) ? (((a as any)._flStuck as number || 0) + 1) : 0;
+          (a as any)._flAt = t;
+          (a as any)._flGap = gap;
+          if ((a as any)._flStuck >= 2) {
+            tpAllyNear(s, a);
+            (a as any)._flStuck = 0;
+          }
+        } else if ((a as any)._flAt == null) {
+          (a as any)._flAt = t;
+          (a as any)._flGap = gap;
+        }
+      } else {
+        (a as any)._flStuck = 0;
+        (a as any)._flAt = null;
+        (a as any)._flGap = null;
+      }
+    }
     if (target && dist(a, target) < ALLY_ATK_M && a.cooldown <= 0) {
       damage(s, target, a.atk, a);
       a.cooldown = 30;
@@ -2690,10 +2719,8 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   //   静默回（不飘字不报事件，避免刷屏），死亡淡出期不回（复活走召唤/组队流程）。
   {
     const _party = Array.isArray(s.partyIds) ? s.partyIds : [];
-    console.log(`[regen-debug] tick=${s.tick} party=${JSON.stringify(_party)} ents=${s.entities.length} pei=${JSON.stringify(s.entities.find((x) => x.id === "npc_1") ? { hp: s.entities.find((x) => x.id === "npc_1").hp, side: s.entities.find((x) => x.id === "npc_1").side } : null)}`);
     if (_party.length) {
       for (const a of s.entities) {
-        if (a.id === "npc_1") console.log(`[regen-debug] tick=${s.tick} side=${a.side} alive=${a.alive} hp=${a.hp}/${a.maxHp} inParty=${_party.indexOf(a.id) >= 0} deathMs=${(a as any).deathMs}`);
         if (a.side !== "ally" || !a.alive) continue;
         if ((a as any).deathMs != null) continue;
         if (_party.indexOf(a.id) < 0) continue;
@@ -2963,6 +2990,8 @@ export interface NpcCard {
   /** ★ game.md 等级系统：蓝量 / 下级升级所需经验（= 等级*100） */
   mp?: number; maxMp?: number; next_level_exp?: number;
   mapName: string; x: number; y: number; inParty: boolean; avatarPath?: string;
+  /** ★ AI 托管勾选回显：RolePanel 勾选框 :checked="!!c.aiManaged" 读此字段（2026-11-15） */
+  aiManaged?: boolean;
   /** ★ 实体立绘（与 avatarPath 独立：data:URL 时 canvas 走自定义图） */
   customSprite?: { image: string; prompt?: string; source?: "ai" | "upload" | "preset"; createdAt?: number } | null;
   /** ★ game.md 角色卡：动态参数卡（结构化字段由前端展开渲染，实时值已由宿主覆盖） */
@@ -5761,6 +5790,9 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100)),
       y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100)),
       inParty: party.indexOf(String(role.id)) >= 0,
+      /* ★ AI 托管回显：实体在场读 _aiManaged 标志；实体不在场（阵亡移除/未上场）沿用旧卡片值，
+       *   否则勾选后重开面板（实体恰好被移除的瞬间）会闪断勾选。 */
+      aiManaged: !!(e ? (e as any)._aiManaged : old?.aiManaged),
       /** ★ 头像通道与实体形象（customSprite）严格分离：更换实体形象不得影响悬浮头像 */
       avatarPath: (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined,
       /** ★ 实体立绘通道（独立于头像：data:URL 时 canvas 走 customSprite 渲染） */
@@ -6710,7 +6742,6 @@ export async function handle_action(
 
     case "tick": {
       if (s.phase !== "playing") return okResp("");
-      console.log(`[tick-debug] case tick phase=${s.phase} party=${JSON.stringify(s.partyIds)} ents=${s.entities.length}`);
       // ★ P1 打击感：震屏/顿帧衰减（每 tick -1 帧）
       if (s.screenShake !== undefined && s.screenShake > 0) {
         s.screenShake -= 1;
@@ -6754,9 +6785,7 @@ export async function handle_action(
       syncPlayerCardStats(s); // ★ game.md 等级系统：等级/经验/HP/MP → 动态角色卡（变化才回写）
       ensureNpcCards(s, s.levelName || "");
       if (s.tick % SYS_PERSIST_EVERY_TICKS === 0) void persistSys(context, s);
-      console.log(`[tick-debug] before-step pose=${JSON.stringify(params?.player || null)}`);
       step(s, params?.input || params, params?.player);   // ★ fix③：把客户端上报的权威位姿透传给 step
-      console.log(`[tick-debug] after-step hp1=${JSON.stringify((s.entities.find((e) => e.id === "npc_1") || ({} as any)).hp)} party=${JSON.stringify(s.partyIds)}`);
       // ★ 角色驻留地图：检测到玩家换图后，非组队角色留在原图（停车），组队角色跟来
       if (s.levelName && s.levelName !== (s as any)._levelAt) {
         handleLevelChange(s, true);

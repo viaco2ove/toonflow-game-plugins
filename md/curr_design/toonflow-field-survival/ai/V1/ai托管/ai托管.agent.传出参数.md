@@ -208,4 +208,4 @@ function moveTowards(e, tx, ty, speed) {
 - [ai托管.agent.系统提示词.md](./ai托管.agent.系统提示词.md) — 输出格式的规范来源
 - [ai托管.agent.传入参数.md](./ai托管.agent.传入参数.md) — input 契约与并发约束
 - [ai托管.agent.用户提示词.md](./ai托管.agent.用户提示词.md) — 动态感知结构
-- [ai托管.开发计划.plancheck.md](../ai托管.开发计划.plancheck.md) — P0-④ 避障修复的落地步骤
+- [ai托管.开发计划.plancheck.md](../V1/ai托管.开发计划.plancheck.md) — P0-④ 避障修复的落地步骤
