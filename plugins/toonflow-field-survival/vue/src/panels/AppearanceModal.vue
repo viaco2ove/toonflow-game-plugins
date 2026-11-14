@@ -392,6 +392,10 @@ watch(
             <div v-else-if="gen && gen.status === 'error'" class="apm-tip apm-tip--err">
               上次生成失败：{{ gen.message || "未知错误" }}
             </div>
+            <!-- ★ 2026-11-14 带参考图降级提示：宿主 i2i 无权限会去图重试，这里把说明亮出来 -->
+            <div v-else-if="gen && gen.status === 'done' && gen.message && gen.message !== '生成成功' && gen.message !== '程序生成成功'" class="apm-tip">
+              {{ gen.message }}
+            </div>
             <div v-else class="apm-tip apm-tip--dim">
               参考图会作为「角色外观参考」发给图片模型；只用文字也能生成。
             </div>

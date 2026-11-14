@@ -51,6 +51,23 @@ export function clearSpellIconCache(): void {
 }
 
 /**
+ * ★ 2026-11-14 修复「插件安装后技能图标不显示」：
+ *   属性特效下拉（EffectTypeSelect.vue）原先把 **裸相对路径** 直接塞进
+ *   `<img :src="iconSrc(o.v)">`，绕过了 resolveAssetPath()。
+ *   在宿主安装态（iframe 基址 = /plugin/getAsset）浏览器会把
+ *   "images/spells/x.png" 解析成 /plugin/images/spells/x.png → 无 token → 401
+ *   「未提供token」→ 图标空白（canvas 特效层走 spellIcon() 所以是好的，
+ *   只有 <img> 标签这条路坏）。
+ *
+ *   修法：所有 <img :src> 一律用本函数取 URL，不再自己拼裸路径。
+ *   @param src 插件内相对路径（如 images/spells/fire/fireball.png）
+ */
+export function spellIconSrc(src: string): string {
+  if (!src) return "";
+  return resolveAssetPath(src);
+}
+
+/**
  * ★ V2_2（2026-11-13）effects_type → 法术图标路径表（与 entry.ts 的 EFFECT_ICON 同一份，
  *   前端需要独立一份：技能/物品面板的「属性特效」下拉要显示图标）。
  *   key 为空串 = 未设置属性 → 无图标。

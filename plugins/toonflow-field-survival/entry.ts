@@ -5552,7 +5552,7 @@ async function generateSpriteByAI(
   context: PluginGameContext | undefined,
   prompt: string,
   refImages: string[],
-): Promise<{ ok: boolean; image?: string; error?: string; matting?: string }> {
+): Promise<{ ok: boolean; image?: string; error?: string; matting?: string; note?: string }> {
   const run = context?.tsApi?.agent?.run;
   if (!run) return { ok: false, error: "宿主未接入 AI（agent 通道不可用）" };
   // 参考图必须是后端可读的形态（data:URL / http(s)）；插件内相对路径后端读不到
@@ -5583,7 +5583,9 @@ async function generateSpriteByAI(
     const img = str(out.url || out.image || out.dataUrl || out.base64 || out.path, "");
     if (!img) return { ok: false, error: "生图 agent 未返回图片" };
     const image = /^(data:|https?:|\/)/i.test(img) ? img : `data:image/png;base64,${img}`;
-    return { ok: true, image, matting: str(out.matting, "") || undefined };
+    // ★ 2026-11-14 参考图降级说明：宿主带图失败会去图重试（refDropped），透传 note 给面板提示
+    const note = str(out.note, "");
+    return { ok: true, image, matting: str(out.matting, "") || undefined, note: note || undefined };
   } catch (e: any) {
     return { ok: false, error: String(e?.message || e) };
   }
@@ -7347,7 +7349,7 @@ export async function handle_action(
 
       /* ★ 2026-10-20：programmatic=true → 本地程序生成（不调图片模型、不烧额度）。
        *   AI 生成失败不再有 mock 兜底（用户明确要求去掉），失败直接报错。 */
-      let r: { ok: boolean; image?: string; error?: string; matting?: string };
+      let r: { ok: boolean; image?: string; error?: string; matting?: string; note?: string };
       if (programmatic) {
         try {
           r = { ok: true, image: renderSpriteProgrammatically(prompt), matting: "local" };
@@ -7384,7 +7386,11 @@ export async function handle_action(
         gal.splice(dropAt, 1);
       }
       s.spriteGallery = gal;
-      s.spriteGen = { status: "done", message: programmatic ? "程序生成成功" : "生成成功", at: Date.now() };
+      s.spriteGen = {
+        status: "done",
+        message: programmatic ? "程序生成成功" : (r.note ? "生成成功，" + r.note : "生成成功"),
+        at: Date.now(),
+      };
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
       await persistSys(context, s);
       pushEvent(s, `${programmatic ? "程序生成" : "生成"}实体形象：${prompt.slice(0, 16)}`);

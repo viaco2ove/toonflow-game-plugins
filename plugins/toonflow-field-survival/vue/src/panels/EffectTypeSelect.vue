@@ -10,7 +10,7 @@
  * 图标走 spellIcon 缓存 + resolveAssetPath（getAsset 安装态自动拼 token）。
  */
 import { ref, computed, onMounted, onBeforeUnmount } from "vue";
-import { EFFECT_ICON, spellIcon } from "../spellIcon";
+import { EFFECT_ICON, spellIcon, spellIconSrc } from "../spellIcon";
 
 const props = defineProps<{ modelValue?: string }>();
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
@@ -43,7 +43,9 @@ function iconReady(v: string): boolean {
   return !!spellIcon(p);
 }
 function iconSrc(v: string): string {
-  return EFFECT_ICON[v] || "";
+  // ★ 必须走 spellIconSrc（内部 resolveAssetPath）：裸相对路径在宿主安装态
+  //   会被解析成 /plugin/images/... → 401 无 token → 图标空白。
+  return spellIconSrc(EFFECT_ICON[v] || "");
 }
 function onDocClick(ev: MouseEvent) {
   if (!open.value) return;

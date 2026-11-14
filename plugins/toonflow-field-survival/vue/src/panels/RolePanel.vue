@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { getLevelDisplayName } from "../mapConfig";
+import { resolveAssetPath } from "../assets";
 
 const props = defineProps<{
   player: any;
@@ -9,6 +10,16 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
+
+/**
+ * ★ 2026-11-14 修复「插件安装后头像不显示」：
+ *   avatarPath 是宿主下发的**原始路径**（插件内相对路径或站内绝对路径），
+ *   直接塞 <img :src> 在宿主安装态会被解析成 /plugin/images/... → 401 无 token。
+ *   统一走 resolveAssetPath（与 App.vue roleAvatar / AppearanceModal 一致）。
+ */
+function avatarOf(p: string | undefined | null): string {
+  return p ? resolveAssetPath(p) : "";
+}
 
 function hpPct(c: any) {
   const max = Number(c.maxHp) || 0;
@@ -105,7 +116,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
 <template>
   <div class="rlc">
     <div v-if="player" class="rlc-card rlc-card--me">
-      <img v-if="player.avatarPath" class="rlc-avatar" :src="player.avatarPath" alt="" />
+      <img v-if="player.avatarPath" class="rlc-avatar" :src="avatarOf(player.avatarPath)" alt="" />
       <div v-else class="rlc-avatar rlc-avatar--ph">我</div>
       <div class="rlc-main">
         <div class="rlc-name">
@@ -147,7 +158,7 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
       class="rlc-card"
       :class="{ 'rlc-card--dead': !c.alive, 'rlc-card--enemy': c.enemy }"
     >
-      <img v-if="c.avatarPath" class="rlc-avatar" :src="c.avatarPath" alt="" />
+      <img v-if="c.avatarPath" class="rlc-avatar" :src="avatarOf(c.avatarPath)" alt="" />
       <div v-else class="rlc-avatar rlc-avatar--ph">{{ (c.name || "?").slice(0, 1) }}</div>
       <div class="rlc-main">
         <div class="rlc-name">
