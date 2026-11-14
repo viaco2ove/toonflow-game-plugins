@@ -161,9 +161,10 @@ section("4. R4 buff 生效中 → 绿色徽章 + buffs 列表");
   ok((playerOf(st).buffs || []).includes("护盾"), `buffs 列表含该技能（${JSON.stringify(playerOf(st).buffs)}）`);
   ok(playerOf(st).buffUntilTick > st.tick, `有到期 tick（${playerOf(st).buffUntilTick}）`);
 
-  // 到期清理：把 tick 推到过期
-  const until = playerOf(st).buffUntilTick;
-  st.tick = until + 1;
+  // 到期清理：★ 2026-11-14 buff 主计时改真实时间戳 buffUntilMs（挂机档 1Hz 免疫）
+  //   → 模拟过期 = 把 buffUntilMs 设到过去（旧 tickUntil 型仅兼容旧存档）
+  ok(playerOf(st).buffUntilMs != null, "buffUntilMs 真实时间戳存在（新计时）");
+  playerOf(st).buffUntilMs = Date.now() - 1;
   await call("tick", { player: { x: 0, y: 0, facing: 0 } }, st);
   ok(!badge(st, playerOf(st), "buff"), "到期后 buff 徽章消失");
   ok(!(playerOf(st).buffs || []).includes("护盾"), "到期后 buffs 列表同步清空");

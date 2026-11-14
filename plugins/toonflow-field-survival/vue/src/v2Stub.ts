@@ -51,6 +51,8 @@ export interface V2Entity {
   headBadges?: any[];
   buffs?: string[];
   buffUntilTick?: number;
+  /** ★ 验收修复（2026-11-14）：buff 到期真实时间戳（挂机档 1Hz 免疫，与 entry.ts 同步） */
+  buffUntilMs?: number;
   buffName?: string;
   aiState?: string;
 }
@@ -139,22 +141,30 @@ export function v2ApplyHurt(
  */
 export function v2ApplyBuff(
   st: V2State, ent: V2Entity | undefined,
-  opts: { name: string; icon?: string; durationTicks?: number },
+  opts: { name: string; icon?: string; durationTicks?: number; durationMs?: number },
 ): void {
   if (!ent || !opts?.name) return;
-  const dur = Math.max(1, Math.round(opts.durationTicks ?? 300));
+  // ★ 验收修复（2026-11-14）：主计时改真实时间戳 buffUntilMs（挂机档 1Hz 下 300tick=5 分钟
+  //   「一直存在不消失」）；徽章 expireTick 保持 tick 型仅作前端渐隐参考
+  const durMs = opts.durationMs != null
+    ? Math.max(1000, Math.round(opts.durationMs))
+    : opts.durationTicks != null
+      ? Math.max(1000, Math.round(opts.durationTicks * 100))
+      : 30000;
+  const durTicks = Math.max(1, Math.round(durMs / 100));
   const list = Array.isArray(ent.buffs) ? ent.buffs.slice() : [];
   if (!list.includes(opts.name)) list.push(opts.name);
   ent.buffs = list;
   ent.buffName = opts.name;
-  ent.buffUntilTick = st.tick + dur;
+  ent.buffUntilTick = st.tick + durTicks;
+  ent.buffUntilMs = Date.now() + durMs;
   v2SetHeadBadge(st, ent, {
     kind: "buff",
     color: V2_BUFF_COLOR,
     icon: opts.icon || undefined,
     label: V2_BUFF_LABEL,
     bornTick: st.tick,
-    expireTick: st.tick + dur,
+    expireTick: st.tick + durTicks,
   });
 }
 
@@ -185,8 +195,13 @@ export function v2TickCleanup(st: V2State, dec: number): void {
     st.rangeIndicators = st.rangeIndicators.filter((r: any) => { r.life -= dec; return r.life > 0; });
   }
   // 实体：buff 到期 + 徽章过期
+  // ★ 验收修复（2026-11-14）：主判断改真实时间戳 buffUntilMs；buffUntilTick 保留兼容
+  const _nowMs = Date.now();
   for (const e of st.entities) {
-    if (e.buffUntilTick != null && st.tick >= e.buffUntilTick) {
+    const buffExpired = (e.buffUntilMs != null && _nowMs >= e.buffUntilMs)
+      || (e.buffUntilMs == null && e.buffUntilTick != null && st.tick >= e.buffUntilTick);
+    if (buffExpired) {
+      e.buffUntilMs = undefined;
       e.buffUntilTick = undefined;
       const bn = e.buffName || "";
       if (bn && Array.isArray(e.buffs)) e.buffs = e.buffs.filter((n: string) => n !== bn);

@@ -329,8 +329,11 @@ interface Entity {
   headBadges?: HeadBadge[];
   /** ★ V2：生效中的 buff 名称列表（AI sensor 读；此前只 push 不删，现由 buffUntilTick 驱动过期） */
   buffs?: string[];
-  /** ★ V2：buff 到期 tick（到点后清 buffs + 清 buff 徽章） */
+  /** ★ V2：buff 到期 tick（旧字段，tickUntil 型在挂机档 1Hz 会拖长 10 倍 → 已被 buffUntilMs 取代，保留兼容旧存档） */
   buffUntilTick?: number;
+  /** ★ V2 验收修复（2026-11-14）：buff 到期**真实时间戳**（Date.now 基准）——
+   *  tickUntil 型在挂机档 1Hz 下 300 tick = 5 分钟「一直存在不消失」；ms 型对 tick 频率免疫 */
+  buffUntilMs?: number;
   /** ★ V2：当前 buff 名（过期时用于从 buffs 列表移除） */
   buffName?: string;
 }
@@ -369,8 +372,12 @@ const HURT_LABEL = "伤";               // 圆圈内文字兜底（受击）
 const BUFF_LABEL = "buff";             // 圆圈内文字兜底（增益）
 /** ★ V2：hurt 徽章存活时长（tick）= 1.5 秒 */
 const HURT_BADGE_TICKS = 15;
-/** ★ V2：buff 默认时长（tick）= 30 秒 */
+/** ★ V2：buff 默认时长（tick）= 30 秒 @10Hz（旧基准，仅用于折算徽章 expireTick） */
 const BUFF_DURATION_TICKS = 300;
+/** ★ V2 验收修复（2026-11-14）：buff 默认时长 = **30 秒真实时间** ——
+ *  旧 buffUntilTick 是 tickUntil 型，挂机档 3 秒无输入掉 1Hz 后 300 tick = 5 分钟，
+ *  用户实测「加完 buff 后 buff 技能图样一直存在不消失」。改 buffUntilMs 后对 tick 频率免疫 */
+const BUFF_DURATION_MS = 30000;
 
 /** ★ V2：写/替换头顶徽章（同 kind 只留一枚 → 「最新图样」天然成立） */
 function setHeadBadge(s: FieldSurvivalState, ent: Entity | undefined, badge: HeadBadge): void {
@@ -398,21 +405,32 @@ function clearHeadBadge(s: FieldSurvivalState, ent: Entity | undefined, kind: "h
  *   统一走这里后： buffs 列表、头顶徽章、到期 tick 三者始终同源。
  */
 function applyBuff(s: FieldSurvivalState, ent: Entity | undefined,
-                   opts: { name: string; icon?: string; durationTicks?: number }): void {
+                   opts: { name: string; icon?: string; durationTicks?: number; durationMs?: number }): void {
   if (!ent || !opts?.name) return;
-  const dur = Math.max(1, Math.round(opts.durationTicks ?? BUFF_DURATION_TICKS));
+  // ★ 验收修复（2026-11-14）：主计时改**真实时间戳** buffUntilMs —— tickUntil 型
+  //   （buffUntilTick）在挂机档 1Hz 下 300 tick = 5 分钟（用户实测「一直存在不消失」）。
+  //   durationMs 缺省 30s；旧 durationTicks 参数保留兼容（调用方给 ticks 时按 100ms/tick 折 ms）。
+  const durMs = opts.durationMs != null
+    ? Math.max(1000, Math.round(opts.durationMs))
+    : opts.durationTicks != null
+      ? Math.max(1000, Math.round(opts.durationTicks * TICK_MS_MS))
+      : BUFF_DURATION_MS;
+  // 徽章 expireTick 按「最后一次 tick 的真实节奏」折算，仅作前端渐隐参考；主清理由 buffUntilMs 驱动
+  const dms = Math.max(TICK_MS_MS, Math.round(num((s as any)._tickDeltaMs, TICK_MS_MS)));
+  const durTicks = Math.max(1, Math.round(durMs / dms));
   const list = Array.isArray(ent.buffs) ? ent.buffs.slice() : [];
   if (!list.includes(opts.name)) list.push(opts.name);
   ent.buffs = list;
   ent.buffName = opts.name;
-  ent.buffUntilTick = s.tick + dur;
+  ent.buffUntilTick = s.tick + durTicks;   // 旧字段同步写（兼容外部读取）
+  ent.buffUntilMs = Date.now() + durMs;
   setHeadBadge(s, ent, {
     kind: "buff",
     color: BUFF_COLOR,
     icon: opts.icon || undefined,
     label: BUFF_LABEL,
     bornTick: s.tick,
-    expireTick: s.tick + dur,
+    expireTick: s.tick + durTicks,
   });
 }
 
@@ -2493,6 +2511,9 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
      修法与 cdLeft 同源：tickDeltaMs 折算真实经过时间 → _dec，实体循环用它衰减。
      ⚠️ tickDeltaMs 有副作用（写 _tickAtMs），全 step 只能调这一次 —— 所以提到最前。 */
   const _dec = Math.max(1, Math.round(tickDeltaMs(s) / TICK_MS_MS));
+  // ★ 缓存最后一次 tick 的真实节奏（ms/tick），供 applyBuff 折算徽章 expireTick 等
+  //   tick 型时长（tickDeltaMs 有副作用不能重复调用，read only 这里）
+  (s as any)._tickDeltaMs = _dec * TICK_MS_MS;
 
   /* ★ 关键修复（坐标双写）：玩家位姿的权威在客户端。
      game.html 每 100ms 已在本地推进一次玩家坐标，并通过 tick 参数的 player 字段上报；
@@ -2717,7 +2738,13 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
     }
     // ★ V2（2026-11-13）：buff 到期 → 从 buffs 列表移除 + 清头顶 buff 徽章
     //   现状 buffs 只 push 不删（永不过期）→ 「buff 生效期间」无法界定、徽章会永挂。
-    if (e.buffUntilTick != null && s.tick >= e.buffUntilTick) {
+    //   ★ 验收修复（2026-11-14）：主判断改真实时间戳 buffUntilMs（挂机档 1Hz 免疫）；
+    //     buffUntilTick 保留兼容旧存档（旧数据无 buffUntilMs 时按 tick 判断）。
+    const _nowMs = Date.now();
+    const buffExpired = (e.buffUntilMs != null && _nowMs >= e.buffUntilMs)
+      || (e.buffUntilMs == null && e.buffUntilTick != null && s.tick >= e.buffUntilTick);
+    if (buffExpired) {
+      e.buffUntilMs = undefined;
       e.buffUntilTick = undefined;
       const bn = e.buffName || "";
       if (bn && Array.isArray(e.buffs)) e.buffs = e.buffs.filter((n: string) => n !== bn);
