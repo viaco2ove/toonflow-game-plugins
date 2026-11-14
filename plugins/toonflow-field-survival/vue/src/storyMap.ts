@@ -181,8 +181,10 @@ function inIframe(): boolean {
 /** 地图包单次读取超时（毫秒）。17MB tbg 经「iframe → 宿主 → 后端 → 宿主 → iframe」全链
  *  （含 23MB 级 JSON 的 postMessage 结构化克隆），旧值 2000ms 在开局拥塞下无余量——
  *  实测空闲基线 0.2~0.5s，而进入 playing 的同刻切图 / chunk 加载 / 游戏 tick 全在抢主线程
- *  与后端，读取耗时可数倍放大，2s 上限会把「慢」误杀成「没有」。 */
-const MAP_READ_TIMEOUT_MS = 10000;
+ *  与后端，读取耗时可数倍放大，2s 上限会把「慢」误杀成「没有」。
+ *  ★ 2026-11-14 再调：局域网/弱网部署（WiFi RTT 100ms+、9.2MB 包 JSON 传输 30s+ 级）
+ *  10s 依旧不够 → 60s。读取失败会走「重试→miss→回退默认地图」链，代价是进错图。 */
+const MAP_READ_TIMEOUT_MS = 60000;
 /** force 强制重读（进入 playing 时）遇到传输故障的额外重试次数；确诊 miss 不重试 */
 const MAP_READ_RETRY_TIMES = 2;
 /** 重试间隔（毫秒）：给开局瞬时拥塞一个退避窗口 */
