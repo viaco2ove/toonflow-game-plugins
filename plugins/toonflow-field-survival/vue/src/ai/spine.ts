@@ -38,6 +38,15 @@ function sendAICommand(roleId: string, params: Record<string, unknown>): void {
   }
 }
 
+/**
+ * ★ 2026-11-15：停止某角色的当前 AI 动作（面板删/改执行中的步、交给 AI 重排时调用）。
+ *   entry 的 stop 语义 = 清 _aiMoveTo/_aiAttackTarget 但**保留托管标记**（unmanage 才取消托管），
+ *   正好符合「中断旧动作、托管保持」的需求。角色不在场时 entry 返回提示、无副作用。
+ */
+export function stopEntityAction(roleId: string): void {
+  sendAICommand(roleId, { action: "stop" });
+}
+
 /** 写一个本地预览 entity（仅用于 dev-host 调试显示，不持久） */
 function patchEntityForDevPreview(entity: Entity, state: GameState, action: AIAction): void {
   // 尝试在 state.entities 中找 entity 真实副本（dev-host 模式下 entry.js 回推会覆盖，

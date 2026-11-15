@@ -333,6 +333,16 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
 
   // ★ v6：收集候选托管角色（供调度器做战斗态「最近 N 个」筛选）
   const managed = candidates.filter((e) => isAIEnabled(e.id));
+  // ★ 限频诊断：每 100 tick（10s）dump 一次候选/托管名单（排查「某角色不被驱动」）
+  if (currentTick - (tickAllAIs as any)._lastDiag > 100) {
+    (tickAllAIs as any)._lastDiag = currentTick;
+    debugChainDump("tick_candidates", {
+      tick: currentTick,
+      candidates: candidates.map((e) => e.id).slice(0, 10),
+      managedIds: managed.map((e) => e.id).slice(0, 10),
+      planLens: managed.map((e) => `${e.id}:${getPlan(getOrCreateAIState(e)).length}${getOrCreateAIState(e).awaitingPlan ? "(awaiting)" : ""}`).slice(0, 10),
+    });
+  }
 
   for (const entity of candidates) {
     if (!isAIEnabled(entity.id)) continue;

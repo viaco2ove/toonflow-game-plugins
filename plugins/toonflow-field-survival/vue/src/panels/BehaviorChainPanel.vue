@@ -136,6 +136,7 @@ import {
   getPlan, getHistory, getPlanVersion, sanitizeAction, PLAN_MAX,
 } from "../ai/plan";
 import { scheduleBehaviorChainsSave } from "../ai/persistence";
+import { stopEntityAction } from "../ai/spine";
 import type { AIAction, AIActionType, PlanStep } from "../ai/types";
 
 const props = defineProps<{
@@ -163,6 +164,8 @@ const RESULT_TEXT: Record<string, string> = { done: "✓", failed: "✗", interr
 
 /* —— 响应式：planVersion 轮询（aiStates 非 reactive） —— */
 const version = ref(0);
+/** 秒级心跳：驱动「重排中…已等待 Xs」的显示刷新（version 只在计划变化时 bump） */
+const clockTick = ref(0);
 /** 托管状态每拍重算（isAIEnabled 读普通 Map 无响应性，prop 快照会过期） */
 const managedLive = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -173,6 +176,7 @@ watch(() => props.open, (o) => {
     pollTimer = setInterval(() => {
       version.value = getPlanVersion();
       managedLive.value = isAIEnabled(props.entityId);
+      clockTick.value++;
     }, 400);
   } else {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -187,6 +191,15 @@ const state = computed(() => getAllAIStates().get(props.entityId));
 const plan = computed<PlanStep[]>(() => { void version.value; return state.value ? getPlan(state.value) : []; });
 const history = computed(() => { void version.value; return state.value ? getHistory(state.value) : []; });
 const planSource = computed(() => state.value?.planSource || "ai");
+/** ★ 重排进行中（awaitingPlan=true = 已请求、LLM 未回来）+ 已等待秒数 */
+const planBusy = computed(() => { void version.value; void clockTick.value; return !!state.value?.awaitingPlan; });
+const awaitingSec = computed(() => {
+  void version.value; void clockTick.value;
+  const t = state.value?.planReqAt;
+  return t ? Math.max(0, Math.round((Date.now() - t) / 1000)) : 0;
+});
+/** ★ 最近一次重排失败原因（面板错误条显示） */
+const planError = computed(() => { void version.value; return state.value?.planError || ""; });
 
 /* —— 历史翻页（page 0 = 最近 5 条，页码增大 = 更早） —— */
 const pageSize = 5;
@@ -200,12 +213,17 @@ const lastStepId = computed(() => plan.value.length ? plan.value[plan.value.leng
 /* —— 删除 / 重排 / 清历史 —— */
 function onRemove(p: PlanStep): void {
   const s = state.value; if (!s) return;
-  removePlanStep(s, p.id);
+  // ★ 执行中的步被删 → 立即中断（removePlanStep 清 currentAction），
+  //   并向 entry 发 stop 清掉残留的移动/攻击目标（否则角色继续走向旧目标最多 60s）
+  const wasActive = removePlanStep(s, p.id);
+  if (wasActive) stopEntityAction(props.entityId);
   scheduleBehaviorChainsSave();
 }
 function onAITakeover(): void {
   const s = state.value; if (!s) return;
   requestAIReplan(s);
+  // 重排是异步的：立即中断当前动作（计划已清空，旧动作没有归属）
+  stopEntityAction(props.entityId);
   scheduleBehaviorChainsSave();
 }
 function onClearHistory(): void {
@@ -290,7 +308,9 @@ function saveForm(): void {
   if (!action) { formErr.value = "动作参数不完整（检查类型与必填项）"; return; }
   const note = form.value.note.trim() || defaultNote(action);
   if (form.value.stepId) {
-    replacePlanStep(s, form.value.stepId, action, note);
+    // ★ 执行中的步被改 → 中断旧动作 + 停 entry 移动，新内容下一拍重新执行
+    const wasActive = replacePlanStep(s, form.value.stepId, action, note);
+    if (wasActive) stopEntityAction(props.entityId);
   } else {
     const id = insertPlanStep(s, form.value.afterId, action, note);
     if (!id) { formErr.value = "插入失败（计划步数已达上限）"; return; }
@@ -360,6 +380,8 @@ function paramsText(a: AIAction): string {
 .bc-mini:disabled { opacity: .45; cursor: default; }
 .bc-mini:hover:not(:disabled) { background: #3a4056; }
 .bc-empty { color: #7d8398; font-size: 12px; padding: 8px 4px; text-align: center; background: rgba(255,255,255,.02); border-radius: 6px; }
+/* ★ 重排失败原因条（黄底警示） */
+.bc-err-bar { margin-bottom: 8px; padding: 6px 10px; background: rgba(255, 212, 121, .1); border: 1px solid rgba(255, 212, 121, .35); border-radius: 6px; color: #ffd479; font-size: 12px; line-height: 1.5; }
 /* 计划步 */
 .bc-step { display: flex; align-items: center; gap: 8px; padding: 6px 8px; margin-bottom: 4px; background: rgba(255,255,255,.03); border: 1px solid #363b4e; border-radius: 7px; }
 .bc-step--active { border-color: #4a7bd6; background: rgba(74,123,214,.12); }

@@ -4706,20 +4706,33 @@ function localTick(): void {
     const pcLevel = (s as any).playerCombat?.level;
     setPlayerCombatLevel(pcLevel === "engaged" || pcLevel === "skirmish" ? pcLevel : "none");
     tickIntervalEvents();
-    // ★ 2026-11-15 托管状态自愈（修「行为链计划不执行」）：
-    //   entry 的 _aiManaged 标记是**私有字段，不随 state push 下发** → 前端无法直接读；
-    //   而卡片 aiManaged 来自 buildCard 读实体 _aiManaged —— 实体不在场时卡片为 false，
-    //   会出现「前端开着、卡片没标」的错位 → 之前用卡片做双向判断会误关托管。
-    //   ★ 改为**以前端态为唯一权威**：前端开着就周期性补发 _mark_managed（幂等，
-    //     服务端只是再置一次 true）；前端没开就发 stop 清干净。
-    //   实测症状：刷新后 entry 标记残留/丢失 → 裴勇 plan 停在第 1 步不动。
+    // ★ 2026-11-15 托管状态自愈（v2，修「刷新后勾选还在但 AI 没跑/面板显示未托管」）：
+    //   卡片 aiManaged 现在读**角色级名单 s.aiManagedIds**（entry 权威、随 sys_state 持久化）——
+    //   页面刷新后前端 aiStates.enabled 重置为 false，但名单还在 → 卡片显示勾选、
+    //   前端却不驱动（重排按钮 disabled、行为链不动）。自愈补上反向：
+    //   卡片说托管中而前端没开 → 自动 enableAI + 补发 _mark_managed（幂等）。
     try {
       const cards = ((s as any)?.npcCards || []) as any[];
       for (const c of cards) {
         if (!c?.id) continue;
         const id = String(c.id);
-        if (isAIEnabled(id)) {
-          // 托管中：每 ~30 拍补发一次 _mark_managed（保证 entry 侧接管）
+        const cardManaged = !!c.aiManaged;
+        const localOn = isAIEnabled(id);
+        if (cardManaged && !localOn) {
+          // 反向自愈：entry 名单说托管中 → 前端补开（用卡片数据建临时实体）
+          const ent = (s.entities || []).find((x: any) => String(x.id) === id) || {
+            id: c.id, name: c.name, side: "ally",
+            x: c.x || 0, y: c.y || 0,
+            hp: c.hp || 50, maxHp: c.maxHp || 50,
+            mp: c.mp || 30, maxMp: c.maxMp || 30,
+            level: c.level || 1, atk: 10, def: 5, alive: true,
+            mapName: c.mapName || currentLevelName.value,
+          };
+          enableAI(ent, "勇敢冲锋型");
+          runSysCmd("ai_command", { roleId: id, action: "_mark_managed" });
+          console.info("[ai] 托管自愈：entry 名单有标记 → 前端补开", id);
+        } else if (localOn) {
+          // 正向自愈：前端开着 → 每 ~30 拍补发 _mark_managed（保证 entry 侧接管）
           const st = (window as any).__FS_AI_MARK__ = (window as any).__FS_AI_MARK__ || {};
           const last = st[id] || 0;
           if (s.tick - last > 30) {
