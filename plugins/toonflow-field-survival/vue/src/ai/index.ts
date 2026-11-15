@@ -19,6 +19,7 @@ import type { Entity, GameState } from "../types";
 import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, callBrainDetailed, evaluateBrainTrigger, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
 import { takeNextPlanStep, finishPlanStep, getPlan, bumpPlanVersion, PLAN_MIN } from "./plan";
 import { scheduleBehaviorChainsSave, debugChainDump } from "./persistence";
+import { generateDynamicContent } from "./dynamic";
 import { executeAction, isActionComplete } from "./spine";
 import {
   BRAIN_BUDGET,
@@ -205,7 +206,7 @@ function finishCurrentAction(aiState: AIState, entity: Entity): void {
  *   情况会让判定永远不成立 → 该步永久「执行中」，后续步骤全部排队（行为链看起来卡死）。
  *   超时作废是最后一道保险，保证行为链永远向前走。
  */
-const STEP_TIMEOUT_TICKS = 300;
+const STEP_TIMEOUT_TICKS = 150;   // ★ 2026-11-15 二调 300→150：卡墙 15s 放弃更符合直觉
 function checkStepTimeout(aiState: AIState, entity: Entity, currentTick: number): void {
   if (!aiState.currentAction) return;
   if (aiState.actionStartedTick == null) {
@@ -225,6 +226,10 @@ function checkStepTimeout(aiState: AIState, entity: Entity, currentTick: number)
 /** ★ 主循环入口：每 tick 由 App.vue 调用（同步版本，fire-and-forget LLM 调用） */
 export function tickAllAIs(state: GameState, currentTick: number): void {
   if (!state) return;
+  // ★ 2026-11-15：本局已结束（phase=over）→ **完全停手**。
+  //   否则托管角色会在结算后继续发 ai_command（实测空转 19919 次），
+  //   既刷屏又让「空计划」永远得不到真正的新计划（over 阶段 entry 不推进世界）。
+  if ((state as any).phase === "over") return;
 
   // ★ v6：把宿主权威的玩家战斗状态同步给地图集覆盖模块（用于钳制与选档）
   const pc = (state as any).playerCombat;
@@ -346,8 +351,26 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
 
   for (const entity of candidates) {
     if (!isAIEnabled(entity.id)) continue;
+    const aiState0 = getOrCreateAIState(entity);
+    // ★ 2026-11-15：角色不在场（parked 别图/未召唤/阵亡移除）→ 跳过**动作执行**。
+    //   候选里的 npcCards 补充实体是临时的（不在 state.entities）——对它执行
+    //   ai_command 会被 entry 拒绝（"实体 xxx 不在场上"底栏刷屏，实测裴勇）。
+    //   ★ 但**计划生成仍要跑**：否则不在场的角色计划永远空着（面板显示「一个都没有」），
+    //     上场后也无计划可走 → 这里只放行「计划耗尽 → 请求新计划」，不执行任何动作。
+    const onstage = !!(state.entities || []).find((e) => e.id === entity.id);
+    if (!onstage) {
+      const len0 = getPlan(aiState0).length;
+      const tooShort0 = len0 > 0 && len0 < PLAN_MIN && aiState0.planSource !== "user";
+      if ((!len0 || tooShort0) && !aiState0.awaitingPlan) {
+        aiState0.awaitingPlan = true;
+        aiState0.planReqAt = Date.now();
+        enqueueBrainTask(entity.id, entity.name, "P2", "plan_exhausted");
+        debugChainDump("enqueue_plan_exhausted_offstage", { entityId: entity.id, planLen: len0 });
+      }
+      continue;
+    }
 
-    const aiState = getOrCreateAIState(entity);
+    const aiState = aiState0;
 
     // 检查当前动作是否完成
     // ★ V2 行为链：完成时统一走 finishCurrentAction（写历史 + 落库防抖）
@@ -398,6 +421,33 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
       // ★ V2 行为链（2026-11-15）：有计划 → 按计划走（不烧 LLM）
       const nextAction = takeNextPlanStep(aiState, state);
       if (nextAction) {
+        // ★ V2.1「留空 = 执行时 AI 动态生成」：内容留空的社交/沉淀动作 → 执行前先让 LLM
+        //   按上下文（最近聊天/短信 + 行为链历史与计划）现场生成内容。
+        //   同步取用：已生成过（_dynFilled）直接用；否则触发异步生成并**本拍先跳过**
+        //   （等下一拍用生成好的内容执行，避免空发短信/空台词）。
+        if (nextAction.dynamic) {
+          const filled = aiState._dynFilled as AIAction | undefined;
+          if (filled && filled.type === nextAction.type) {
+            Object.assign(nextAction, filled);
+            delete (aiState as any)._dynFilled;
+          } else {
+            if (!aiState._dynPending) {
+              aiState._dynPending = true;
+              void generateDynamicContent(entity, nextAction, state, aiState).then((gen) => {
+                aiState._dynFilled = gen;
+                aiState._dynPending = false;
+                console.info(`[ai] ${entity.name}: 动态生成 ${gen.type} 内容`, gen.smsText || gen.lineText || JSON.stringify(gen.cardFields || {}));
+              }).catch(() => { aiState._dynPending = false; });
+            }
+            // 本拍不执行这步（内容还没生成好）→ 把它退回 pending，下一拍再取
+            const plan0 = getPlan(aiState);
+            const act0 = plan0.find((p) => p.id === aiState.activeStepId);
+            if (act0) act0.status = "pending";
+            aiState.activeStepId = undefined;
+            aiState.currentAction = null;
+            continue;
+          }
+        }
         try {
           executeAction(entity, nextAction, state);
           aiState.currentAction = nextAction;
@@ -462,7 +512,9 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
     if (task.reason === "plan_exhausted" || aiState.awaitingPlan) {
       const r = await callBrainDetailed(entity, state, { planMode: true });
       if (r.plan && r.plan.length) {
-        const first = takeNextPlanStep(aiState, state);
+        // ★ 角色不在场 → 只生成计划、不执行首步（entry 会拒绝"实体不在场"的命令 → 底栏刷屏）
+        const onstageNow = !!(state.entities || []).find((e) => e.id === entity.id);
+        const first = onstageNow ? takeNextPlanStep(aiState, state) : null;
         if (first) {
           try {
             executeAction(entity, first, state);
@@ -476,7 +528,17 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
         debugChainDump("plan_generated", { entityId: entity.id, steps: r.plan.length, gotLLM: r.gotLLM });
         console.info(`[ai] ${entity.name}: 新计划 ${r.plan.length} 步${r.gotLLM ? "" : "（程序化兜底）"}`);
       } else {
-        aiState.awaitingPlan = false;   // 生成失败 → 下拍重新入队
+        // ★ 区分两种「没有计划」：
+        //   a) 用户编辑保留（callBrainDetailed 返回 plan=null 且用户 source=user 且**计划非空**）
+        //      → 不重排；b) 生成失败或计划为空 → awaitingPlan=false，下拍重新入队。
+        //   ★ 必须判「计划非空」：删/改到最后一步 → 计划空 + source=user（曾被标记），
+        //     若此时按「用户编辑保留」处理 → 计划永远空着、AI 空转死循环。
+        if (aiState.planSource === "user" && getPlan(aiState).length > 0) {
+          aiState.awaitingPlan = false;   // 用户计划在执行 → 不再重排
+          console.info(`[ai] ${entity.name}: 保留用户编辑的计划，不重排`);
+        } else {
+          aiState.awaitingPlan = false;   // 生成失败/空计划 → 下拍重新入队
+        }
       }
       return;
     }

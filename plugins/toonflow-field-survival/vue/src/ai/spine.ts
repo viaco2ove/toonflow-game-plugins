@@ -13,7 +13,8 @@
 
 import type { AIAction, AIState, Entity, GameState } from "../types";
 import { getOrCreateAIState } from "./brain";
-import { sendTick } from "../bridge";
+import { sendTick, sendChat } from "../bridge";
+import { receiveFromAI } from "../sms/store";
 
 /** 动作执行结果 */
 export interface ActionResult {
@@ -171,7 +172,18 @@ export function executeSkill(entity: Entity, action: AIAction, state: GameState)
 /** 执行交互（与 NPC 对话）：走 interact 通道，宿主到点后触发对话事件 */
 export function executeInteract(entity: Entity, action: AIAction, state: GameState): ActionResult {
   const tid = action.target?.id;
-  if (!tid) return { success: false, message: "交互目标无效" };
+  const hasCoord = action.target?.x !== undefined && action.target?.y !== undefined;
+  // ★ 2026-11-15：地图 NPC（mapnpc_* 前缀，纯前端渲染实体）**不在服务端实体表**，
+  //   发 interact 会被 entry 拒（"目标不在场"）→ 角色站着不动、该步永远「执行中」
+  //   （实测：武飞卡在「与镇民#163 交谈」距 3.6m 不动）。
+  //   判定 mapnpc 前缀 → 强制降级为「走到目标坐标」：发 move（entry 驱动移动有效），
+  //   走到 2m 内由 isActionComplete 判完成。
+  const isMapNpc = !!tid && String(tid).startsWith("mapnpc");
+  if (!tid || isMapNpc) {
+    if (!hasCoord) return { success: false, message: "交互目标无效（地图 NPC 无坐标）" };
+    sendAICommand(entity.id, { action: "move", x: action.target!.x, y: action.target!.y });
+    return { success: true, message: `前往 ${action.target?.name || "目标"}（${action.target!.x.toFixed(0)},${action.target!.y.toFixed(0)}）` };
+  }
   sendAICommand(entity.id, {
     action: "interact",
     targetId: tid,
@@ -279,6 +291,47 @@ export function executeWait(action: AIAction): ActionResult {
   return { success: true, message: `待命` };
 }
 
+/** ★ V2.1 发短信（2026-11-15，用户需求）：行为链显式让角色给玩家私聊或某群发一条短信。
+ *  复用 sms/store.receiveFromAI（AI 发短信唯一入口，自带会话自动创建与冷却）。
+ *  冷却（单聊 60s/群 3min）内发送会返回 null → 记失败（超时兜底会推进，不卡链）。 */
+export function executeSendSms(entity: Entity, action: AIAction): ActionResult {
+  const text = String(action.smsText || "").trim();
+  if (!text) return { success: false, message: "短信内容为空" };
+  const to = String(action.smsTo || "player");
+  try {
+    const msg = receiveFromAI(entity.id, entity.name, to, text);
+    if (!msg) return { success: false, message: `短信发送受限（冷却中或群不存在）: ${to}` };
+    return { success: true, message: `已发短信 → ${to === "player" ? "玩家" : to}` };
+  } catch (e) {
+    console.warn("[ai] 发短信异常:", e);
+    return { success: false, message: "短信通道异常" };
+  }
+}
+
+/** ★ V2.1 发台词：往当前故事的对话流里增加该角色的台词（bridge.sendChat → 宿主聊天框）。 */
+export function executeSayLine(entity: Entity, action: AIAction): ActionResult {
+  const text = String(action.lineText || "").trim();
+  if (!text) return { success: false, message: "台词为空" };
+  try {
+    sendChat(entity.name || entity.id, text);
+    return { success: true, message: `${entity.name}：「${text.slice(0, 20)}${text.length > 20 ? "…" : ""}」` };
+  } catch (e) {
+    console.warn("[ai] 发台词异常:", e);
+    return { success: false, message: "台词通道异常" };
+  }
+}
+
+/** ★ V2.1 更新角色卡：把行为链经历沉淀进角色卡的关键信息字段
+ *  （role_key_information 角色关键信息 / executing_task 正在执行的任务 / other 其他）。
+ *  落地：entry 的 ai_command.update_card（写 s.cardUpdates 角色级覆盖表 + 合并进 npcCards，
+ *  随 sys_state 持久化——直接改 npcCards 会被 ensureNpcCards 按 roles 重建冲掉）。 */
+export function executeUpdateCard(entity: Entity, action: AIAction): ActionResult {
+  const f = action.cardFields;
+  if (!f || !Object.keys(f).length) return { success: false, message: "无角色卡更新字段" };
+  sendAICommand(entity.id, { action: "update_card", fields: f });
+  return { success: true, message: `角色卡已更新（${Object.keys(f).length} 项）` };
+}
+
 /** ★ 主编排 */
 export function executeAction(
   entity: Entity,
@@ -306,6 +359,12 @@ export function executeAction(
       return executeWait(action);
     case "follow":
       return executeFollow(entity, action, state);
+    case "sendSms":
+      return executeSendSms(entity, action);
+    case "sayLine":
+      return executeSayLine(entity, action);
+    case "updateCard":
+      return executeUpdateCard(entity, action);
     default:
       return { success: false, message: `未知动作: ${action.type}` };
   }
@@ -335,15 +394,27 @@ export function isActionComplete(entity: Entity, state: GameState, action: AIAct
   }
 
   if (action.type === "interact") {
-    if (!action.target?.id) return true;
-    const t = (state.entities || []).find((e) => e.id === action.target?.id);
-    if (!t || t.alive === false) return true;
-    // 走到 NPC 身边即可完成交互（宿主在同一 tick 结算对话）
-    return Math.hypot(t.x - entity.x, t.y - entity.y) <= INTERACT_M;
+    // ★ mapnpc_* 前缀 = 地图 NPC（不在服务端实体表）→ 用 action.target 坐标判距离
+    const isMapNpc = !!action.target?.id && String(action.target.id).startsWith("mapnpc");
+    if (action.target?.id && !isMapNpc) {
+      const t = (state.entities || []).find((e) => e.id === action.target?.id);
+      if (!t || t.alive === false) return true;
+      // 走到 NPC 身边即可完成交互（宿主在同一 tick 结算对话）
+      return Math.hypot(t.x - entity.x, t.y - entity.y) <= INTERACT_M;
+    }
+    // 无 id 或地图 NPC：有坐标 → 走到坐标 2m 内算完成
+    if (action.target?.x !== undefined && action.target?.y !== undefined) {
+      return Math.hypot(action.target.x - entity.x, action.target.y - entity.y) <= INTERACT_M;
+    }
+    return true;
   }
 
   if (action.type === "useSkill" || action.type === "useItem") {
     // 瞬发动作：发一次即完成
+    return true;
+  }
+  // ★ V2.1 发短信/发台词/更新角色卡：同瞬发（发完即完成）
+  if (action.type === "sendSms" || action.type === "sayLine" || action.type === "updateCard") {
     return true;
   }
 

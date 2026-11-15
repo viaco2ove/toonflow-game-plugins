@@ -38,6 +38,8 @@
               <div class="bc-step__main">
                 <div class="bc-step__note">{{ p.note }}</div>
                 <div class="bc-step__meta">{{ typeText(p.action.type) }}<template v-if="paramsText(p.action)"> · {{ paramsText(p.action) }}</template></div>
+                <!-- ★ 2026-11-15：执行中的步实时显示「角色正在干嘛」（距目标几米/交互中/待命…） -->
+                <div v-if="p.status === 'active' && activeStatus" class="bc-step__live">{{ activeStatus }}</div>
               </div>
               <!-- ★ 2026-11-15：执行中的步也开放 删/改/插（用户需求）——
                    删/改会立即中断当前动作并停掉 entry 侧移动，改后从该步重新执行 -->
@@ -107,6 +109,35 @@
               <span class="bc-row__label">时长（秒）</span>
               <input v-model="form.duration" class="bc-input" type="number" min="1" max="30" />
             </label>
+            <!-- ★ V2.1 发短信 -->
+            <label v-if="needField('smsTo')" class="bc-row">
+              <span class="bc-row__label">发给</span>
+              <select v-model="form.smsTo" class="bc-input">
+                <option v-for="t in smsTargets" :key="t.value" :value="t.value">{{ t.label }}</option>
+              </select>
+            </label>
+            <label v-if="needField('smsText')" class="bc-row">
+              <span class="bc-row__label">短信内容</span>
+              <input v-model="form.smsText" class="bc-input" maxlength="200" placeholder="留空 = 执行时由 AI 按上下文生成" />
+            </label>
+            <!-- ★ V2.1 发台词 -->
+            <label v-if="needField('lineText')" class="bc-row">
+              <span class="bc-row__label">台词</span>
+              <input v-model="form.lineText" class="bc-input" maxlength="200" placeholder="留空 = 执行时由 AI 按上下文生成" />
+            </label>
+            <!-- ★ V2.1 更新角色卡 -->
+            <label v-if="needField('cardFields')" class="bc-row">
+              <span class="bc-row__label">关键信息</span>
+              <input v-model="form.cardKeyInfo" class="bc-input" maxlength="200" placeholder="留空 = 执行时由 AI 按上下文生成" />
+            </label>
+            <label v-if="needField('cardFields')" class="bc-row">
+              <span class="bc-row__label">当前任务</span>
+              <input v-model="form.cardTask" class="bc-input" maxlength="200" placeholder="角色卡 · 正在执行的任务" />
+            </label>
+            <label v-if="needField('cardFields')" class="bc-row">
+              <span class="bc-row__label">其他</span>
+              <input v-model="form.cardOther" class="bc-input" maxlength="200" placeholder="角色卡 · 其他备注" />
+            </label>
             <label class="bc-row">
               <span class="bc-row__label">备注</span>
               <input v-model="form.note" class="bc-input" maxlength="16" placeholder="一句中文（≤16 字，面板显示用）" />
@@ -137,6 +168,7 @@ import {
 } from "../ai/plan";
 import { scheduleBehaviorChainsSave } from "../ai/persistence";
 import { stopEntityAction } from "../ai/spine";
+import { listConversations } from "../sms/store";
 import type { AIAction, AIActionType, PlanStep } from "../ai/types";
 
 const props = defineProps<{
@@ -144,6 +176,8 @@ const props = defineProps<{
   entityId: string;
   entityName: string;
   managed: boolean;
+  /** 游戏主 state（App.vue 的响应式 state）：实体实时位置/血量，用于「执行中」状态行 */
+  gameState?: any;
 }>();
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
 
@@ -157,6 +191,9 @@ const ACTION_TYPES: Array<{ value: AIActionType; label: string }> = [
   { value: "flee", label: "撤退" },
   { value: "wait", label: "等待" },
   { value: "follow", label: "跟随玩家" },
+  { value: "sendSms", label: "发短信" },
+  { value: "sayLine", label: "发台词" },
+  { value: "updateCard", label: "更新角色卡" },
 ];
 
 const TYPE_TEXT: Record<string, string> = Object.fromEntries(ACTION_TYPES.map((t) => [t.value, t.label]));
@@ -201,6 +238,58 @@ const awaitingSec = computed(() => {
 /** ★ 最近一次重排失败原因（面板错误条显示） */
 const planError = computed(() => { void version.value; return state.value?.planError || ""; });
 
+/** ★ 2026-11-15「执行中」实时状态：角色到底在干嘛（用户需求）——
+ *  按 active 步类型 + 实体实时位置算一句话（移动中距目标几米 / 交互中 / 等待剩几秒 /
+ *  未上场挂起…）。400ms 轮询（version+clockTick）驱动刷新。 */
+const activeStatus = computed(() => {
+  void version.value; void clockTick.value;
+  const st = state.value;
+  if (!st) return "";
+  const step = getPlan(st).find((p) => p.status === "active");
+  if (!step) return "";
+  const a = step.action;
+  const gs = props.gameState;
+  const ent = (gs?.entities || []).find((e: any) => String(e.id) === String(props.entityId));
+  if (!ent) return "角色未上场 · 动作挂起（召唤或上场后继续）";
+  const tx = a.target?.x, ty = a.target?.y;
+  const dist = tx != null && ty != null ? Math.hypot(tx - ent.x, ty - ent.y) : null;
+  const fmt = (d: number) => d.toFixed(1) + "m";
+  switch (a.type) {
+    case "move":
+    case "flee":
+      return dist != null ? `正在移动 · 距目标 ${fmt(dist)}` : "正在移动";
+    case "gather":
+      if (dist == null) return "前往采集区";
+      return dist <= 1.3 ? `到达采集区 · 采集中（${a.zoneName || a.target?.name || ""}）` : `前往采集区 ${a.zoneName || ""} · 距 ${fmt(dist)}`;
+    case "interact": {
+      if (a.target?.id) {
+        const t = (gs?.entities || []).find((e: any) => e.id === a.target?.id);
+        if (!t) return `寻找 ${a.target?.name || "目标"}…`;
+        const d = Math.hypot(t.x - ent.x, t.y - ent.y);
+        return d <= 2 ? `与 ${t.name} 交互中…` : `走向 ${t.name} · 距 ${fmt(d)}`;
+      }
+      if (dist != null) return dist <= 2 ? `已到达 ${a.target?.name || "目标位置"}` : `走向 ${a.target?.name || "目标位置"} · 距 ${fmt(dist)}`;
+      return "前往目标";
+    }
+    case "attack": {
+      const t = (gs?.entities || []).find((e: any) => e.id === a.target?.id);
+      if (!t) return `寻找目标 ${a.target?.name || ""}…`;
+      const d = Math.hypot(t.x - ent.x, t.y - ent.y);
+      return d <= 2.5 ? `交战中 · 目标HP ${t.hp ?? "?"}/${t.maxHp ?? "?"}` : `追击 ${t.name} · 距 ${fmt(d)}`;
+    }
+    case "wait": {
+      const left = Math.max(0, Math.ceil(((st.cooldownUntil || 0) - Date.now()) / 1000));
+      return left > 0 ? `原地待命 · 剩 ${left}s` : "原地待命";
+    }
+    case "follow": {
+      const p = (gs?.entities || []).find((e: any) => e.side === "player");
+      return p ? `跟随玩家 · 距 ${fmt(Math.hypot(p.x - ent.x, p.y - ent.y))}` : "跟随中";
+    }
+    default:
+      return "执行中";
+  }
+});
+
 /* —— 历史翻页（page 0 = 最近 5 条，页码增大 = 更早） —— */
 const pageSize = 5;
 const histPage = ref(0);
@@ -243,6 +332,10 @@ const form = ref({
   note: "",
   targetName: "", zoneName: "", x: "", y: "",
   skillName: "", itemName: "", duration: "3",
+  // ★ V2.1 三种社交/沉淀动作
+  smsTo: "player", smsText: "",
+  lineText: "",
+  cardKeyInfo: "", cardTask: "", cardOther: "",
 });
 
 function startEdit(p: PlanStep): void {
@@ -259,12 +352,18 @@ function startEdit(p: PlanStep): void {
     skillName: a.skillName || "",
     itemName: a.itemName || "",
     duration: a.duration ? String(Math.round(a.duration / 1000)) : "3",
+    smsTo: a.smsTo || "player",
+    smsText: a.smsText || "",
+    lineText: a.lineText || "",
+    cardKeyInfo: a.cardFields?.role_key_information || "",
+    cardTask: a.cardFields?.executing_task || "",
+    cardOther: a.cardFields?.other || "",
   };
   formErr.value = "";
   mode.value = "form";
 }
 function startCreate(afterId: string | null): void {
-  form.value = { stepId: "", afterId, type: "move", note: "", targetName: "", zoneName: "", x: "", y: "", skillName: "", itemName: "", duration: "3" };
+  form.value = { stepId: "", afterId, type: "move", note: "", targetName: "", zoneName: "", x: "", y: "", skillName: "", itemName: "", duration: "3", smsTo: "player", smsText: "", lineText: "", cardKeyInfo: "", cardTask: "", cardOther: "" };
   formErr.value = "";
   mode.value = "form";
 }
@@ -277,6 +376,11 @@ function needField(f: string): boolean {
   if (f === "skillName") return t === "useSkill";
   if (f === "itemName") return t === "useItem";
   if (f === "duration") return t === "wait";
+  // ★ V2.1 三种社交/沉淀动作
+  if (f === "smsTo") return t === "sendSms";
+  if (f === "smsText") return t === "sendSms";
+  if (f === "lineText") return t === "sayLine";
+  if (f === "cardFields") return t === "updateCard";
   return false;
 }
 
@@ -299,11 +403,31 @@ function buildAction(): AIAction | null {
   if (f.skillName.trim()) action.skillName = f.skillName.trim();
   if (f.itemName.trim()) action.itemName = f.itemName.trim();
   if (f.type === "wait") action.duration = Math.max(1, Math.min(30, Number(f.duration) || 3)) * 1000;
+  // ★ V2.1 三种社交/沉淀动作
+  if (f.type === "sendSms") {
+    action.smsTo = f.smsTo || "player";
+    action.smsText = f.smsText;
+  }
+  if (f.type === "sayLine") action.lineText = f.lineText;
+  if (f.type === "updateCard") {
+    const cf: Record<string, string> = {};
+    if (f.cardKeyInfo.trim()) cf.role_key_information = f.cardKeyInfo.trim();
+    if (f.cardTask.trim()) cf.executing_task = f.cardTask.trim();
+    if (f.cardOther.trim()) cf.other = f.cardOther.trim();
+    action.cardFields = cf;
+  }
   return sanitizeAction(action);
 }
 
 function saveForm(): void {
-  const s = state.value; if (!s) return;
+  const s = state.value;
+  if (!s) {
+    // ★ 2026-11-15 诊断：角色不在 aiStates 里（未托管/未上场）→ 之前**静默 return**
+    //   （面板却切回列表，看起来"保存成功"）→ 用户以为改了，其实什么都没改。
+    formErr.value = `角色 ${props.entityId} 不在 AI 托管状态里，无法保存行为链（请先勾选「AI托管」）`;
+    console.warn("[behavior-chain] saveForm: 角色不在 aiStates，保存失败", props.entityId);
+    return;
+  }
   const action = buildAction();
   if (!action) { formErr.value = "动作参数不完整（检查类型与必填项）"; return; }
   const note = form.value.note.trim() || defaultNote(action);
@@ -315,6 +439,7 @@ function saveForm(): void {
     const id = insertPlanStep(s, form.value.afterId, action, note);
     if (!id) { formErr.value = "插入失败（计划步数已达上限）"; return; }
   }
+  console.info("[behavior-chain] 已保存行为步", action.type, "planLen=", getPlan(s).length);
   scheduleBehaviorChainsSave();
   mode.value = "list";
 }
@@ -350,8 +475,33 @@ function paramsText(a: AIAction): string {
   if (a.itemName) parts.push(a.itemName);
   if (a.type === "wait" && a.duration) parts.push(`${Math.round(a.duration / 1000)}秒`);
   if (a.target?.x != null && a.target?.y != null) parts.push(`(${Math.round(a.target.x)},${Math.round(a.target.y)})`);
+  // ★ V2.1 三种社交/沉淀动作
+  if (a.type === "sendSms") parts.push(a.smsTo === "player" ? "→ 玩家" : `→ ${a.smsTo}`);
+  if (a.type === "sayLine" && a.lineText) parts.push(`「${a.lineText.slice(0, 10)}${a.lineText.length > 10 ? "…" : ""}」`);
+  if (a.type === "updateCard" && a.cardFields) parts.push(Object.keys(a.cardFields).map((k) => CARD_FIELD_LABEL[k] || k).join("/"));
+  // ★ 内容留空 → 标注「AI 动态生成」（执行时现场生成）
+  if (a.dynamic) parts.push("✎ AI动态生成");
   return parts.join(" ");
 }
+
+/** ★ V2.1 角色卡可更新字段标签 */
+const CARD_FIELD_LABEL: Record<string, string> = {
+  role_key_information: "关键信息",
+  executing_task: "正在执行的任务",
+  other: "其他",
+};
+
+/** ★ V2.1 短信目标列表：私聊玩家 + 现有群（sendSms 表单下拉） */
+const smsTargets = computed(() => {
+  void clockTick.value;
+  const out: Array<{ value: string; label: string }> = [{ value: "player", label: "私聊玩家" }];
+  try {
+    for (const c of listConversations()) {
+      if (c.type === "group") out.push({ value: c.id.startsWith("group:") ? c.id : `group:${c.id}`, label: `群：${c.name}` });
+    }
+  } catch { /* 短信模块未就绪 */ }
+  return out;
+});
 </script>
 
 <style scoped>
@@ -391,6 +541,8 @@ function paramsText(a: AIAction): string {
 .bc-step__note { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bc-step--active .bc-step__note { color: #9fc3ff; }
 .bc-step__meta { font-size: 11px; color: #7d8398; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ★ 执行中实时状态行（绿色小字，400ms 刷新） */
+.bc-step__live { font-size: 11px; color: #8ee6a1; margin-top: 2px; }
 .bc-step__run { font-size: 11px; color: #8ee6a1; flex: none; }
 .bc-step__ops { display: flex; gap: 4px; flex: none; }
 .bc-step__ops button { background: #2e3345; color: #c9cede; border: 1px solid #454b60; border-radius: 5px; font-size: 11px; padding: 2px 7px; cursor: pointer; }

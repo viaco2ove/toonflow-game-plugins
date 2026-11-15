@@ -19,6 +19,7 @@ export const HISTORY_MAX = 50;
 /** 合法动作类型白名单（与 AIActionType 一致） */
 const ACTION_TYPES: ReadonlySet<string> = new Set<string>([
   "move", "attack", "gather", "interact", "useSkill", "useItem", "flee", "wait", "follow",
+  "sendSms", "sayLine", "updateCard",
 ]);
 
 let idSeq = 0;
@@ -72,6 +73,30 @@ export function sanitizeAction(raw: any): AIAction | null {
   if (type === "wait" && Number.isFinite(Number(raw.duration))) {
     action.duration = Math.max(500, Math.min(30000, Math.round(Number(raw.duration))));
   }
+  // ★ V2.1 三种社交/沉淀动作的参数裁剪
+  //   ★ 内容留空 → dynamic=true（执行时由 AI 现场生成，用户需求）
+  if (type === "sendSms") {
+    const to = String(raw.smsTo || raw.to || "player").trim() || "player";
+    action.smsTo = to.startsWith("group:") || to === "player" ? to.slice(0, 40) : "player";
+    action.smsText = String(raw.smsText || raw.text || "").slice(0, 200);
+    if (!action.smsText) action.dynamic = true;
+  }
+  if (type === "sayLine") {
+    action.lineText = String(raw.lineText || raw.text || "").slice(0, 200);
+    if (!action.lineText) action.dynamic = true;
+  }
+  if (type === "updateCard") {
+    const f = raw.cardFields || raw.fields;
+    const out: Record<string, string> = {};
+    if (f && typeof f === "object") {
+      for (const k of ["role_key_information", "executing_task", "other"]) {
+        const v = (f as any)[k];
+        if (typeof v === "string" && v.trim()) out[k] = v.slice(0, 200);
+      }
+    }
+    action.cardFields = Object.keys(out).length ? out : undefined;
+    if (!action.cardFields) action.dynamic = true;
+  }
   return action;
 }
 
@@ -114,10 +139,13 @@ export function parsePlanResponse(
 //   - gather 无 zoneName 且无坐标 → 无法执行（会走去 (0,0)）
 //   - interact 无 target（既无 id 也无 name）→ 无法执行
 //   - attack 无 target（既无 id 也无 name）→ 无法执行
-//   这些步留着只会在执行时静默失败/空转 → 解析阶段就丢，让 LLM 的其余步正常跑。
+//   ★ V2.1 变更：sendSms/sayLine/updateCard **内容留空不再丢弃** —— 标记 dynamic=true，
+//     执行时由 AI 按上下文现场生成内容（用户需求：「留空代表执行时 ai 动态生成」）。
+//     但「收件目标」缺失（短信连发给谁都没说）仍丢弃。
 if ((action.type === "gather" && action.target?.x === undefined && !action.zoneName)
   || (action.type === "interact" && !action.target?.id && !action.target?.name)
-  || (action.type === "attack" && !action.target?.id && !action.target?.name)) {
+  || (action.type === "attack" && !action.target?.id && !action.target?.name)
+  || (action.type === "sendSms" && !action.smsTo)) {
   continue;
 }
 const note = String(rawStep.note || rawStep.context || action.context || action.type).slice(0, 24);
@@ -242,8 +270,10 @@ export function takeNextPlanStep(
         action.target = { ...(action.target || {}), id: String(ent.id), name: String(ent.name || name) };
         if (action.target.x === undefined && Number.isFinite(ent.x)) action.target.x = ent.x;
         if (action.target.y === undefined && Number.isFinite(ent.y)) action.target.y = ent.y;
-      } else {
+      } else if (!(action.type === "interact" && action.target?.x !== undefined)) {
         // 目标不在场上 → 该步记 failed，取再下一个
+        // ★ interact 有坐标的例外：降级为「走到坐标」（地图 NPC/镇民不在服务端实体表，
+        //   但 LLM 会给出坐标——executeInteract 降级发 move，走到 2m 内算完成）
         s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
         plan = s.plan;
         pushHistory(s, step.note, action.type, "failed");
@@ -266,15 +296,15 @@ export function takeNextPlanStep(
       idx = s.plan.findIndex((p) => p.status === "pending");
       continue;
     }
-    // ★ 2026-11-15 interact 无目标 id **且**场上找不到同名实体 → 跳过
-    //   （否则执行后 isActionComplete 直接 return true → 瞬间"完成"，反复空转）
-    if (action.type === "interact" && !action.target?.id) {
-      s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
-      plan = s.plan;
-      pushHistory(s, step.note, action.type, "failed");
-      idx = s.plan.findIndex((p) => p.status === "pending");
-      continue;
-    }
+    // ★ 2026-11-15 interact 无目标 id：有坐标 → 保留（executeInteract 降级为走到坐标，
+//   支持地图 NPC/镇民——它们不在服务端实体表）；既无 id 也无坐标 → 跳过
+if (action.type === "interact" && !action.target?.id && action.target?.x === undefined) {
+  s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
+  plan = s.plan;
+  pushHistory(s, step.note, action.type, "failed");
+  idx = s.plan.findIndex((p) => p.status === "pending");
+  continue;
+}
     step.status = "active";
     s.activeStepId = step.id;
     s.awaitingPlan = false;
@@ -326,7 +356,11 @@ export function removePlanStep(s: AIState, stepId: string): boolean {
     pushHistory(s, plan[idx].note, plan[idx].action.type, "interrupted");
   }
   s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
-  s.planSource = "user";
+  // ★ 2026-11-15 修正：删完最后一步 → 计划为空。此时**不能**标记 planSource="user"：
+  //   「用户编辑过 → AI 不自动重排」的保护规则会让空计划永远不重排 → AI 空转死循环
+  //   （实测：夜见/聂小可 plan=0 + source=user，ai_command 发了 8107 次）。
+  //   只有计划里还剩步（用户真的改过内容）才标记 user。
+  if (s.plan.length) s.planSource = "user";
   bumpPlanVersion();
   return wasActive;
 }

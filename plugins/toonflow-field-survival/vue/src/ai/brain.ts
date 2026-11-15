@@ -20,7 +20,8 @@ import type {
   PlanStep,
 } from "./types";
 import { IDLE_INTERVAL_WITH_RESOURCES } from "./types";
-import { parsePlanResponse, buildFallbackPlan, setPlan } from "./plan";
+import { parsePlanResponse, buildFallbackPlan, setPlan, getPlan } from "./plan";
+import { setDynamicLlmCaller } from "./dynamic";
 import type { PlanZone } from "./plan";
 import { checkEmergency, updatePerception } from "./sensor";
 import { readMapKnowledge } from "./mapKnowledge";
@@ -605,12 +606,27 @@ export async function callBrainDetailed(
       const zones: PlanZone[] = (perception.resources || []).map((r) => ({ zoneName: r.zoneName, position: { x: r.position.x, y: r.position.y } }));
       const parsed = raw ? parsePlanResponse(raw, { zones, characterName: aiState.characterName }) : null;
       if (parsed) {
+        // ★ 2026-11-15 竞态保护：LLM 计划返回时若用户在这期间编辑过计划
+        //   （planSource="user"）且**用户计划还非空** → 不覆盖用户的编辑。
+        //   ★ 必须加「计划非空」条件：删/改到最后一步会让计划变空，若此时仍按
+        //     source=user 保护 → AI 计划被永久丢弃 → 行为链永远空着（AI 空转死循环，
+        //     实测 ai_command 发了 8107 次）。空计划必须接受 AI 的新计划。
+        if (aiState.planSource === "user" && getPlan(aiState).length > 0) {
+          aiState.planError = undefined;
+          console.info("[ai-brain] 计划生成完成但用户已编辑过 → 保留用户计划，放弃本次 AI 计划");
+          return { decision: null, gotLLM: true, plan: null as any };
+        }
         setPlan(aiState, parsed.steps, "ai", parsed.goal || undefined);
         aiState.planError = undefined;
         addMemory(aiState, "system", `制定新计划：${parsed.goal || parsed.steps.length + "步"}`);
         return { decision: null, gotLLM: true, plan: parsed.steps };
       }
       // 解析失败 / 空响应 → 程序化兜底计划（保证行为链不空转）+ 写失败原因
+      // ★ 用户已编辑过计划（source=user）且计划**非空** → 同样不覆盖（同上）
+      if (aiState.planSource === "user" && getPlan(aiState).length > 0) {
+        console.info("[ai-brain] 计划生成失败但用户已编辑过 → 保留用户计划");
+        return { decision: null, gotLLM: false, plan: null as any, failReason: raw ? "parse" : "gate" };
+      }
       const player = (state.entities || []).find((e) => e.side === "player");
       const steps = buildFallbackPlan(
         { nearby: { enemies: perception.nearby.enemies }, resources: (perception.resources || []).map((r) => ({ zoneName: r.zoneName, position: { x: r.position.x, y: r.position.y } })) },
@@ -731,7 +747,7 @@ ${state.goal}
 
 ## 硬性约束
 1. **plan 数组必须 5~8 步**（不得少于 5 步）
-2. type 只能是：move / attack / gather / interact / useSkill / useItem / flee / wait / follow
+2. type 只能是：move / attack / gather / interact / useSkill / useItem / flee / wait / follow / sendSms / sayLine / updateCard
 3. 每步必须有 **note**（≤16 字中文，面板直接显示给玩家看）
 4. move/gather 用 **zoneName**（上面列出的资源地名）或 target 坐标；attack 用 **target.name**（敌人名）；useSkill 用 **skillName**；useItem 用 **itemName**；interact 用 **target.name**（NPC 名）；wait 可带 **duration**（毫秒）
 5. ★ **target.name 必须是真实存在的名字**（从上面「周围敌人 / 周围NPC」列表里照抄）。
@@ -739,8 +755,15 @@ ${state.goal}
    周围没有 NPC 时**不要**产出 interact 步。
 6. ★ **move/gather 必须有 zoneName 或坐标**。不许产出没有 zoneName 的 gather（如"采集 资源"）。
 7. 附近没有可采集资源时**不要**产出 gather 步，改用 move/wait/follow。
-8. 结合性格与环境：有威胁先自保/战斗，安全时采集/巡逻/跟随玩家，像该角色会做的事
-9. 只输出一个 JSON 对象，不要解释、不要代码块围栏之外的内容
+8. ★ **sendSms（发短信）**：type=sendSms，字段 smsTo（"player" 或 "group:<群ID>"）+ smsText（≤200 字，必填）
+   - 短信有冷却（同一人 60 秒 / 同群 3 分钟），**不要连续多步发短信**（最多 1 步）
+9. ★ **sayLine（发台词）**：type=sayLine，字段 lineText（台词正文，≤200 字，必填）
+   - 台词会直接出现在当前故事的对话流里（角色当众说话）
+10. ★ **updateCard（更新角色卡）**：type=updateCard，字段 cardFields（对象，可含 role_key_information 关键信息 / executing_task 正在执行的任务 / other 备注，至少填一个）
+   - 用于把你这轮经历**沉淀进角色卡**。只在你确实获得了新信息时用（不要每轮都更新）。
+11. 三种社交动作**总计最多 2 步**（行为链主体仍应是行动：移动/战斗/采集/交互）。
+12. 结合性格与环境：有威胁先自保/战斗，安全时采集/巡逻/跟随玩家，像该角色会做的事
+13. 只输出一个 JSON 对象，不要解释、不要代码块围栏之外的内容
 `;
 }
 
@@ -754,6 +777,8 @@ let llmCaller: (entityName: string, systemPrompt: string, userPrompt: string) =>
 /** 注册 LLM 调用器 */
 export function setLLMCaller(fn: typeof llmCaller): void {
   llmCaller = fn;
+  // ★ V2.1 动态生成（内容留空 → 执行时 AI 生成）复用同一条 LLM 通道
+  setDynamicLlmCaller(fn as any);
 }
 
 /** 取出当前已注册的 LLM 调用器（ai/chatCommand.ts 的 #ai 自由文本路径使用） */

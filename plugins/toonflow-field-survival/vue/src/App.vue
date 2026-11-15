@@ -9852,6 +9852,7 @@ watch(() => state.value?.phase, (p) => {
       :entity-id="behaviorChainEntityId"
       :entity-name="behaviorChainEntityName"
       :managed="behaviorChainManaged"
+      :game-state="state"
       @close="showBehaviorChain = false"
     />
   </div>

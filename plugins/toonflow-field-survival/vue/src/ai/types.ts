@@ -14,7 +14,10 @@ export type AIActionType =
   | "useItem"    // 使用物品
   | "flee"       // 撤退
   | "wait"       // 原地等待
-  | "follow";    // 跟随目标
+  | "follow"     // 跟随目标
+  | "sendSms"    // ★ V2.1 发短信（私聊玩家或群）
+  | "sayLine"    // ★ V2.1 发台词（进当前故事对话流）
+  | "updateCard"; // ★ V2.1 更新角色卡（关键信息字段）
 
 /** AI 感知目标 */
 export interface AIPosition {
@@ -41,6 +44,18 @@ export interface AIAction {
   duration?: number;        // 预估执行时长 ms
   priority: number;         // 0-100，越高越优先
   context: string;          // 执行原因（供大脑理解）
+  /** ★ V2.1 发短信：目标（"player"=私聊玩家，或 "group:<群id>"）与内容 */
+  smsTo?: string;
+  smsText?: string;
+  /** ★ V2.1 发台词：台词内容（进当前故事对话流） */
+  lineText?: string;
+  /** ★ V2.1 更新角色卡：关键信息字段（role_key_information/executing_task/other） */
+  cardFields?: Record<string, string>;
+  /**
+   * ★ V2.1 动态生成标记：内容留空 → **执行时由 AI 现场生成**（短信正文/台词/角色卡字段）。
+   *   用户只说「发短信」不写内容时，AI 执行到这一步才按上下文（最近聊天/短信/行为链）生成。
+   */
+  dynamic?: boolean;
 }
 
 /** 记忆条目 */
@@ -125,6 +140,10 @@ export interface AIState {
   activeStepId?: string;
   /** ★ V2 行为链：当前动作开始时的 tick（超时作废兜底用） */
   actionStartedTick?: number;
+  /** ★ V2.1 动态生成：已生成好内容待执行的动作（内容留空 → 执行前 LLM 生成） */
+  _dynFilled?: AIAction;
+  /** ★ V2.1 动态生成：生成中（避免同拍重复发起） */
+  _dynPending?: boolean;
   /** ★ V2 行为链：最近一次计划生成的失败信息（面板显示；成功时清空） */
   planError?: string;
   /** 紧急状态标志 */

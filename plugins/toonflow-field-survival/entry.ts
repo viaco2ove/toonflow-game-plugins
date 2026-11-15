@@ -5763,6 +5763,11 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
     let pc: Record<string, any> | null = null;
     if (pcRaw && typeof pcRaw === "object") {
       pc = { ...pcRaw };
+      // ★ V2.1 行为链「更新角色卡」：合并角色级覆盖表（ai_command.update_card 写入，
+      //   随 sys_state 持久化）——roles 是宿主只读快照，覆盖表是唯一的角色卡写回通道。
+      const _cu = (s as any).cardUpdates as Record<string, Record<string, string>> | undefined;
+      const _upd = _cu?.[String(role.id)];
+      if (_upd && typeof _upd === "object") Object.assign(pc, _upd);
       pc.level = Math.max(1, Math.round(num(e ? (e as any).level : num(role.initial_level, num(pc.level, 1)), 1)));
       if (e) {
         pc.hp = Math.round(num((e as any).hp, num(pc.hp, 0)));
@@ -6112,6 +6117,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       party: s.partyIds || [],
       // ★ 2026-11-15：AI 托管名单（角色级）随系统数据持久化 —— 刷新页面后勾选状态不丢
       aiManagedIds: Array.isArray(s.aiManagedIds) ? s.aiManagedIds.map(String) : [],
+      // ★ V2.1 行为链「更新角色卡」覆盖表（角色级关键信息字段）
+      cardUpdates: (s as any).cardUpdates && typeof (s as any).cardUpdates === "object" ? (s as any).cardUpdates : {},
       npcCards: s.npcCards || [],
       bagMeta: s.bagMeta || {},
       bagOrder: s.bagOrder || [],
@@ -6233,6 +6240,8 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     if (Array.isArray(d.party)) s.partyIds = [];
     // ★ 2026-11-15：恢复 AI 托管名单（角色级）—— 刷新页面后勾选状态保持
     if (Array.isArray(d.aiManagedIds)) s.aiManagedIds = d.aiManagedIds.map(String);
+    // ★ V2.1：恢复行为链「更新角色卡」覆盖表
+    if (d.cardUpdates && typeof d.cardUpdates === "object") (s as any).cardUpdates = d.cardUpdates;
     if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
     if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
@@ -8126,6 +8135,34 @@ export async function handle_action(
       }
       const ent = s.entities.find((x: any) => x.id === rid);
       if (!ent) return okResp(`ai_command: 实体 ${rid} 不在场上`);
+      // ★ V2.1 行为链「更新角色卡」（2026-11-15，用户需求）：把行为链经历沉淀进
+      //   角色卡关键信息字段。写 s.cardUpdates（角色级覆盖表，随 sys_state 持久化）+
+      //   立即合并进当前 npcCards——直接改 npcCards 会被 ensureNpcCards 按 roles 重建冲掉，
+      //   所以覆盖表在 buildCard 时合并（见 ensureNpcCards）。
+      if (cmd === "update_card") {
+        const fields = params?.fields;
+        if (!fields || typeof fields !== "object") return okResp("update_card: 缺少 fields");
+        // ★ 用对象判定（不是 Array.isArray —— cardUpdates 是 {角色id: {字段: 值}} 映射）
+        if (!((s as any).cardUpdates && typeof (s as any).cardUpdates === "object")) (s as any).cardUpdates = {};
+        const map = (s as any).cardUpdates as Record<string, Record<string, string>>;
+        const cur = map[rid] || {};
+        const next = { ...cur };
+        let n = 0;
+        for (const k of ["role_key_information", "executing_task", "other"]) {
+          const v = (fields as any)[k];
+          if (typeof v === "string" && v.trim()) { next[k] = v.slice(0, 200); n++; }
+        }
+        if (!n) return okResp("update_card: 无有效字段");
+        map[rid] = next;
+        // 立即合并进当前卡片（下一拍 ensureNpcCards 重建时也会从覆盖表带上）
+        const c = (s.npcCards || []).find((x: any) => String(x.id) === rid);
+        if (c) {
+          const pc = (c.parameterCardJson && typeof c.parameterCardJson === "object") ? { ...c.parameterCardJson } : {};
+          Object.assign(pc, next);
+          c.parameterCardJson = pc;
+        }
+        return okResp(`角色卡已更新: ${rid}（${n} 项）`);
+      }
       switch (cmd) {
         case "move": {
           const tx = Number(params?.x);

@@ -68,3 +68,8 @@ mockHost.ts 不改（无新增 action；pluginData mock 已有）
 构建部署（铁律）：cd vue && npm run build → cp ui/game.html 到安装副本 toonflow-app-run-db/plugins/1/com.toonflow.minigame-field-survival/ui/game.html（前端改动必须 cp，见构建部署记忆）
 浏览器实测（bsk 进 5175 游戏）：勾 AI托管 → 点「行为链」→ 面板出现 ≥5 步计划（LLM 生成）→ 观察角色按计划顺序执行、历史滚动 → 删/改/插各试一次 → 刷新页面 → 计划与历史恢复
 回归确认：#ai 聊天指令、短信回复、AI 频率配置面板不受影响（单步决策路径未动）
+
+# 行为增加
+- 发短信（发到某个群或者私聊用户）
+- 更新角色卡（根据聊天，短信，行为链更新角色卡的一些信息主要是关键信息字段）。
+- 发台词(往当前故事的台词列表里增加该角色的台词)
