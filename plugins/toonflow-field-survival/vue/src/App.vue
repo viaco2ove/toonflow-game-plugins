@@ -32,6 +32,10 @@ import SystemPanel from "./SystemPanel.vue";
 import ForgeAlchemyPanel from "./panels/ForgeAlchemyPanel.vue";
 import { opCraft, opUpgrade, opDissolve, type ForgeOpsDeps } from "./forgeOps";
 import AppearanceModal from "./panels/AppearanceModal.vue";
+import BehaviorChainPanel from "./panels/BehaviorChainPanel.vue";
+import { setBehaviorChainStore, loadBehaviorChains } from "./ai/persistence";
+import { getAIStateSnapshot } from "./ai/brain";
+import { predictSkillFx, type PredVfx, type PredFloater, type PredRangeIndicator } from "./skillFxPredict";
 import QuestPanel from "./panels/QuestPanel.vue";
 import {
   TILESET_URL, TILESET_COLS, TILE_SIZE, tileSrcRect, assetUrl, mobKeyFor,
@@ -1846,6 +1850,19 @@ function onSysAIToggle(id: string, on: boolean) {
     sysNotice.value = `${id} 已关闭 AI 托管`;
   }
 }
+
+/* ★ V2 行为链面板（2026-11-15，ai托管V2.md）：打开某角色的行为计划/历史面板 */
+const showBehaviorChain = ref(false);
+const behaviorChainEntityId = ref("");
+const behaviorChainEntityName = ref("");
+function onSysAIChain(id: string) {
+  if (!id) return;
+  const card = (((state.value as any)?.npcCards || []) as any[]).find((c: any) => String(c?.id) === id);
+  behaviorChainEntityId.value = String(id);
+  behaviorChainEntityName.value = String(card?.name || id);
+  showBehaviorChain.value = true;
+}
+const behaviorChainManaged = computed(() => isAIEnabled(behaviorChainEntityId.value));
 
 /** 召唤：把角色召唤到用户旁边（不加入队伍、不跟随，仅传送到身边设为友方） */
 function onSysSummon(card: any) {
@@ -6289,7 +6306,7 @@ function render() {
   // —— ★ V2（2026-11-13）攻击范围指示区层（在迷雾之后、实体之前）——
   //   circle=粉红圆形 / cone=粉红扇形。是**地面投影**，画在实体之下 →
   //   不能盖住怪和玩家（否则看起来像角色被染色）。
-  drawRangeIndicatorLayer(ctx, (s as any).rangeIndicators, wx2px, wz2py, sx,
+  drawRangeIndicatorLayer(ctx, [...((s as any).rangeIndicators || []), ...localRangeInd.value], wx2px, wz2py, sx,
     (typeof performance !== "undefined" ? performance.now() : Date.now()));
 
   // —— 实体（按 y 排序做前后遮挡，sprite 像素尺寸直接 draw）——
@@ -6302,6 +6319,7 @@ function render() {
   const _nowMs = (typeof performance !== "undefined" ? performance.now() : Date.now());
   const dtSec = Math.max(0.001, Math.min(0.1, lastRenderAt ? (_nowMs - lastRenderAt) / 1000 : 0.016));
   lastRenderAt = _nowMs;
+  decayLocalPrediction(dtSec);   // ★ 乐观释放：本地旁路条目帧衰减（服务端 push 交接前由本地驱动生命周期）
   const aliveIds = new Set<string>();
   s.entities.forEach((e) => { if (e.alive !== false) aliveIds.add(e.id); });
   Array.from(displayPos.keys()).forEach((id) => { if (!aliveIds.has(id)) displayPos.delete(id); });
@@ -6340,7 +6358,7 @@ function render() {
     });
 
   // —— VFX 粒子层（在飘字之前、实体之后）——
-  drawVfxLayer(ctx, s.vfx, wx2px, wz2py);
+  drawVfxLayer(ctx, [...(s.vfx || []), ...localVfx.value], wx2px, wz2py);
 
   // —— ★ 血条补画层（在 VFX 之后）——保证打击特效下也能看清血量 ——
   drawHpBarsOverlay(ctx);
@@ -6382,7 +6400,7 @@ function render() {
   //   ② 14px 字在高分画布战斗特效中太小。
   //   修复：渲染时按 floater.x 找同列实体锚定（画在其头顶上方固定 46px，多条
   //   按 bornTick 错层），找不到实体才退回原转换并钳到画布内；字号分级加大。
-  s.floaters.forEach((f) => {
+  [...(s.floaters || []), ...localFloaters.value].forEach((f) => {
     const fx = wx2px(f.x);
     let anchor: Entity | undefined;
     let anchorDist = Infinity;
@@ -7911,6 +7929,65 @@ const itemPage = computed(() => state.value?.items.slice((state.value.itemPage |
 const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / QUICKBAR_PAGE_SIZE)));
 const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / QUICKBAR_PAGE_SIZE)));
 
+/* ★ 技能乐观释放（2026-11-15，技能特效设计V2_2.md）：
+ *   「点击前备好数据、点击立刻释放、释放完再判断和处理」——施法表现（技能名飘字 /
+ *   范围指示 / 施法光效 / CD 置位）在点击帧本地立即生效，服务端结算结果照常 push
+ *   回来接管（伤害数字 / 震屏 / 击退 / 命中保持服务端权威，数值必须真实）。
+ *   本地条目走渲染旁路数组（不污染 state），push 到达时同 kind+entityId 交接给服务端条目。 */
+const localVfx = ref<PredVfx[]>([]);
+const localFloaters = ref<PredFloater[]>([]);
+const localRangeInd = ref<PredRangeIndicator[]>([]);
+/** 本地 CD 递减计时器句柄（乐观置位后驱动 cdLeft 递减；服务端 push 每 tick 权威覆盖） */
+let localCdTimer: ReturnType<typeof setInterval> | null = null;
+
+/** 应用一次乐观预测：旁路条目入队 + 本地 CD 置位（push 到达后被服务端值无缝覆盖） */
+function applyLocalPrediction(p: NonNullable<ReturnType<typeof predictSkillFx>>, slotIdx: number): void {
+  localVfx.value = [...localVfx.value, p.vfx];
+  localFloaters.value = [...localFloaters.value, p.floater];
+  localRangeInd.value = [...localRangeInd.value, p.rangeIndicator];
+  const skills = (state.value as any)?.skills;
+  if (Array.isArray(skills) && skills[slotIdx] && !(skills[slotIdx] as any).empty) {
+    (skills[slotIdx] as any).cdLeft = p.cdTicks;
+  }
+  if (!localCdTimer) {
+    localCdTimer = setInterval(() => {
+      const arr = (state.value as any)?.skills;
+      if (!Array.isArray(arr)) return;
+      let anyCd = false;
+      for (const k of arr) {
+        if ((k as any)?.cdLeft > 0) { k.cdLeft = Math.max(0, k.cdLeft - 1); if (k.cdLeft > 0) anyCd = true; }
+      }
+      if (!anyCd) { if (localCdTimer) { clearInterval(localCdTimer); localCdTimer = null; } }
+    }, 100);
+  }
+}
+
+/** push 交接：服务端同 kind+entityId 条目到达 → 移除对应本地旁路条目（服务端接管，防双份特效） */
+function reconcileLocalPrediction(incoming: any): void {
+  if (!incoming || typeof incoming !== "object") return;
+  const inVfx = Array.isArray(incoming.vfx) ? incoming.vfx : [];
+  if (localVfx.value.length && inVfx.length) {
+    const taken = new Set(inVfx.map((v: any) => `${v.kind}|${v.entityId}`));
+    localVfx.value = localVfx.value.filter((lv) => !taken.has(`${lv.kind}|${lv.entityId}`));
+  }
+  const inFlt = Array.isArray(incoming.floaters) ? incoming.floaters : [];
+  if (localFloaters.value.length && inFlt.length) {
+    const takenF = new Set(inFlt.map((f: any) => String(f.text || "")));
+    localFloaters.value = localFloaters.value.filter((lf) => !takenF.has(lf.text));
+  }
+  const inRi = Array.isArray(incoming.rangeIndicators) ? incoming.rangeIndicators : [];
+  if (localRangeInd.value.length && inRi.length) {
+    localRangeInd.value = localRangeInd.value.filter((lr) => !inRi.some((r: any) => String(r.shape || "") === lr.shape && Math.abs(Number(r.x) - lr.x) < 0.5 && Math.abs(Number(r.y) - lr.y) < 0.5));
+  }
+}
+/** 本地旁路条目帧衰减（tick 口径：1 tick = 100ms → life 每 100ms 减 1） */
+function decayLocalPrediction(dtSec: number): void {
+  const dec = Math.max(0, dtSec * 10);
+  if (localVfx.value.length) localVfx.value = localVfx.value.filter((v) => (v.life -= dec) > 0);
+  if (localFloaters.value.length) localFloaters.value = localFloaters.value.filter((f) => (f.life -= dec) > 0);
+  if (localRangeInd.value.length) localRangeInd.value = localRangeInd.value.filter((r) => (r.life -= dec) > 0);
+}
+
 /** ★ 技能目标（本地权威）：由前端按自己那份坐标系选出「30 米内最近的至多 3 只」，
  *   随 skill 请求一并下发；宿主优先按这份 id 清单结算，避免宿主侧野怪/玩家坐标
  *   不同源时"明明贴脸却打空、反而打中远处野怪"。 */
@@ -7930,6 +8007,26 @@ function castSkill(i: number) {
   // ★ 空格子（补齐用的占位）点了不施放
   const slot: any = skillPage.value[i];
   if (!slot || slot.empty || !slot.name) return;
+  // ★ 乐观释放 ①本地 CD 门槛：冷却中点击不发包（与服务端判定一致，杜绝「冷却中」回执）
+  if ((slot.cdLeft || 0) > 0) return;
+  // ★ 乐观释放 ②点击帧立即表现：预测数据（技能表/位姿/最近敌）点击前已就绪，这里只做组装
+  try {
+    const me = (state.value?.entities || []).find((e: any) => e.side === "player") as any;
+    const pose = lastLocalPose || (me ? { x: me.x, y: me.y, facing: me.facing } : null);
+    if (me && pose) {
+      const enemyIds = pickSkillTargets();
+      const nearest = (state.value?.entities || []).find((e: any) => String(e.id) === enemyIds[0]);
+      const pred = predictSkillFx(slot, {
+        id: String(me.id), x: pose.x, y: pose.y, facing: Number(pose.facing || me.facing || 0),
+      }, nearest ? { id: String(nearest.id), x: nearest.x, y: nearest.y } : null);
+      if (pred) {
+        const globalIdx = (state.value.skillPage || 0) * QUICKBAR_PAGE_SIZE + i;
+        applyLocalPrediction(pred, globalIdx);
+      }
+    }
+  } catch (e) {
+    console.warn("[skill] 乐观预测失败（不影响真实释放）:", e);
+  }
   sfx.skill();
   sendTick("skill", {
     index: i,
@@ -8329,10 +8426,15 @@ onMounted(async () => {
   // ★ AI 托管运行时配置（用户可调，落库 t_plugin_session_data）
   //   必须在 AI 开始工作前加载，否则开局头几轮用默认间隔跑。
   await loadUserAISettings();
+  // ★ V2 行为链（2026-11-15）：注入持久化桥 + 恢复存档（计划/历史跨刷新续接）
+  setBehaviorChainStore(makeAIConfigStore());
+  await loadBehaviorChains();
   // ★ 只读调试钩子：bsk/E2E 自动化巡检用（evaluate 里摸不到 Vue 内部实例，
   //   生产构建下 __vue_app__._instance 在隔离世界不可读）。只读 getter，无副作用。
   (window as any).__FS_DEBUG__ = {
     get state() { return state.value; },
+    /** ★ V2 行为链调试：读某角色的 AIState（计划/历史/托管） */
+    ai: (id: string) => getAIStateSnapshot(id),
     get mapCfg() { return mapCfg.value; },
     /** ★ 短信回复链路诊断：calls/sent/busySkips（见 brainDiag 注释） */
     get brain() { return { ...brainDiag, busy: brainBusy, waiters: brainResultWaiters.length }; },
@@ -8747,6 +8849,8 @@ onMounted(async () => {
       })();
     }
   }
+  // ★ 乐观释放交接：服务端同 kind+entityId 条目到达 → 移除本地旁路条目（服务端接管，防双份特效）
+  reconcileLocalPrediction(incoming);
   state.value = incoming;
     ready.value = true;
 
@@ -9626,6 +9730,7 @@ watch(() => state.value?.phase, (p) => {
         @follow="onSysFollow"
         @summon="onSysSummon"
         @ai-toggle="onSysAIToggle"
+        @ai-chain="onSysAIChain"
         @set-flag="onSysSetFlag"
         @del-flag="onSysDelFlag"
         @fire-event="onSysFireEvent"
@@ -9669,6 +9774,15 @@ watch(() => state.value?.phase, (p) => {
       @clear="onAppearanceClear"
       @flip="onAppearanceFlip"
       @upload-bind="onAppearanceUploadBind"
+    />
+
+    <!-- ★ V2 行为链面板（ai托管V2.md）：角色行为计划 + 历史的可视化编辑 -->
+    <BehaviorChainPanel
+      :open="showBehaviorChain"
+      :entity-id="behaviorChainEntityId"
+      :entity-name="behaviorChainEntityName"
+      :managed="behaviorChainManaged"
+      @close="showBehaviorChain = false"
     />
   </div>
 </template>

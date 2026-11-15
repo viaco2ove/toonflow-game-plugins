@@ -70,6 +70,29 @@ export interface AIEnabledState {
   goals?: string[];       // 角色目标列表
 }
 
+/** ★ V2 行为链：计划中的一步（面板可见/可编辑） */
+export interface PlanStep {
+  id: string;
+  /** 一句话人类可读描述（面板展示用，LLM 产出或程序化生成） */
+  note: string;
+  /** 可执行动作（翻译成 ai_command 下发） */
+  action: AIAction;
+  status: "pending" | "active" | "done" | "skipped";
+  createdAt: number;
+}
+
+/** ★ V2 行为链：已完成的动作历史（面板「已做的事」） */
+export interface HistoryEntry {
+  id: string;
+  note: string;
+  type: string;
+  finishedAt: number;
+  result: "done" | "interrupted" | "failed";
+}
+
+/** ★ V2 行为链：计划的来源（user = 用户编辑过，AI 不自动覆盖） */
+export type PlanSource = "ai" | "user";
+
 /** ★ 完整的 AI 运行时状态（per entity） */
 export interface AIState {
   /** 是否启用 AI 托管 */
@@ -88,6 +111,16 @@ export interface AIState {
   currentAction: AIAction | null;
   /** 动作队列 */
   actionQueue: AIAction[];
+  /** ★ V2 行为链：待执行的计划（按序推进；空 = 等 LLM 生成 / 用户编辑） */
+  plan?: PlanStep[];
+  /** ★ V2 行为链：已完成动作历史（最新的在前） */
+  history?: HistoryEntry[];
+  /** ★ V2 行为链：当前计划来源 */
+  planSource?: PlanSource;
+  /** ★ V2 行为链：已发起计划生成请求，等待 LLM 回来（防重复入队） */
+  awaitingPlan?: boolean;
+  /** ★ V2 行为链：计划生成请求发起时间（超时重试用） */
+  planReqAt?: number;
   /** 紧急状态标志 */
   emergency: EmergencyFlags;
   /** 性格设定 */

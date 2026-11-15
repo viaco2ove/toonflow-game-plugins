@@ -17,6 +17,8 @@
 import type { AIGameEvent, AIState, AIAction, LLMDecision } from "./types";
 import type { Entity, GameState } from "../types";
 import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, callBrainDetailed, evaluateBrainTrigger, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
+import { takeNextPlanStep, finishPlanStep, getPlan, bumpPlanVersion } from "./plan";
+import { scheduleBehaviorChainsSave, debugChainDump } from "./persistence";
 import { executeAction, isActionComplete } from "./spine";
 import {
   BRAIN_BUDGET,
@@ -67,6 +69,7 @@ export function enableAI(entity: Entity, personality: string = "勇敢冲锋型"
   s.cooldownUntil = 0;
   // ★ 立即设置 enabled
   setAIEnabled(entity.id, true, personality);
+  debugChainDump("enableAI", { entityId: entity.id, name: entity.name });
   console.info(`[ai] ✅ 启用 AI 托管: ${entity.name} (${entity.id})`, { level: entity.level, hp: entity.hp, mp: entity.mp });
   return true;
 }
@@ -173,6 +176,20 @@ export function registerAILLM(
   fn: (entityName: string, systemPrompt: string, userPrompt: string) => Promise<string>,
 ): void {
   setLLMCaller(fn);
+}
+
+/**
+ * ★ V2 行为链：统一的动作完成处理（2026-11-15）
+ * 两处完成点（循环顶部空档检测 + continue 分支完成检测）共用：
+ * 写历史（finishPlanStep 对无计划状态是 no-op）→ 清 currentAction → 防抖落库。
+ */
+function finishCurrentAction(aiState: AIState, entity: Entity): void {
+  console.info(`[ai] ${entity.name}: ${aiState.currentAction?.type || "?"} 完成`);
+  finishPlanStep(aiState, "done");
+  aiState.currentAction = null;
+  aiState.gatherStartedAt = undefined;
+  bumpPlanVersion();
+  scheduleBehaviorChainsSave();
 }
 
 /** ★ 主循环入口：每 tick 由 App.vue 调用（同步版本，fire-and-forget LLM 调用） */
@@ -293,16 +310,20 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
     const aiState = getOrCreateAIState(entity);
 
     // 检查当前动作是否完成
+    // ★ V2 行为链：完成时统一走 finishCurrentAction（写历史 + 落库防抖）
     if (aiState.currentAction && isActionComplete(entity, state, aiState.currentAction)) {
-      aiState.currentAction = null;
+      finishCurrentAction(aiState, entity);
     }
 
     if (!aiState.currentAction) {
       // ★ v6 阶段一：评估「该不该思考」（纯本地，不烧 token）
+      //   —— 紧急层每拍必查（即使有计划，低血逃跑也不能等计划步走完）
       const trigger = evaluateBrainTrigger(entity, state);
 
       if (trigger.emergency) {
         // 紧急层：直接执行，不排队、不烧 LLM、不受预算/熔断限制
+        // ★ V2 语义：紧急是「临时行为」——只占用空档，不销毁计划；
+        //   紧急动作完成 → 下轮 takeNextPlanStep 从计划断点继续。
         aiState.mode = "emergency";
         aiState.currentAction = trigger.emergency;
         try {
@@ -313,7 +334,36 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
         continue;
       }
 
+      // ★ V2 行为链（2026-11-15）：有计划 → 按计划走（不烧 LLM）
+      const nextAction = takeNextPlanStep(aiState, state);
+      if (nextAction) {
+        try {
+          executeAction(entity, nextAction, state);
+          aiState.currentAction = nextAction;
+        } catch (e) {
+          console.warn("[ai] 计划步执行异常:", e);
+          finishPlanStep(aiState, "failed");
+          scheduleBehaviorChainsSave();
+        }
+        continue;
+      }
+
+      // 计划已空 → 请求生成新计划（≥5 步）；等待中带 45s 超时重试
+      if (!getPlan(aiState).length) {
+        if (!aiState.awaitingPlan) {
+          aiState.awaitingPlan = true;
+          aiState.planReqAt = Date.now();
+          enqueueBrainTask(entity.id, entity.name, "P1", "plan_exhausted");
+          debugChainDump("enqueue_plan_exhausted", { entityId: entity.id });
+        } else if (Date.now() - (aiState.planReqAt || 0) > 45_000) {
+          aiState.awaitingPlan = false;   // 超时 → 下拍重新入队
+        }
+        continue;
+      }
+
       if (trigger.should) {
+        // ★ V2：正常情况下空档已被「计划推进 / 计划生成等待」接管，走到这里只有
+        //   防御性边界（计划步全卡等异常态）——保留原单步决策兜底，行为与 V2 前一致。
         // ★ 入队（不立即发起）—— 由 pumpBrainScheduler 逐个发起，避免 chatResult 单槽位冲突
         enqueueBrainTask(entity.id, entity.name, trigger.priority, trigger.reason);
       }
@@ -327,9 +377,7 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
         }
         // 检查完成
         if (isActionComplete(entity, state, aiState.currentAction)) {
-          console.info(`[ai] ${entity.name}: ${aiState.currentAction.type} 完成`);
-          aiState.currentAction = null;
-          aiState.gatherStartedAt = undefined;
+          finishCurrentAction(aiState, entity);
         }
       } catch (e) {
         console.warn("[ai] continue action 异常:", e);
@@ -360,6 +408,30 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
     const entity = candidates.find((e) => e.id === task.entityId);
     if (!entity) return;
     const aiState = getOrCreateAIState(entity);
+    // ★ V2 行为链：计划耗尽 → 生成新计划（≥5 步），首步立即执行
+    //   task.reason 判定之外再看 awaitingPlan——队列去重可能保留旧 reason
+    //   （「同角色已在队列只升优先级」场景），awaitingPlan 是权威意图。
+    if (task.reason === "plan_exhausted" || aiState.awaitingPlan) {
+      const r = await callBrainDetailed(entity, state, { planMode: true });
+      if (r.plan && r.plan.length) {
+        const first = takeNextPlanStep(aiState, state);
+        if (first) {
+          try {
+            executeAction(entity, first, state);
+            aiState.currentAction = first;
+          } catch (e) {
+            console.warn("[ai] 计划首步执行异常:", e);
+            finishPlanStep(aiState, "failed");
+          }
+        }
+        scheduleBehaviorChainsSave();
+        debugChainDump("plan_generated", { entityId: entity.id, steps: r.plan.length, gotLLM: r.gotLLM });
+        console.info(`[ai] ${entity.name}: 新计划 ${r.plan.length} 步${r.gotLLM ? "" : "（程序化兜底）"}`);
+      } else {
+        aiState.awaitingPlan = false;   // 生成失败 → 下拍重新入队
+      }
+      return;
+    }
     const decision = await callBrain(entity, state);
     if (decision) {
       // ★ 通信(短信)：先分发短信（与动作执行解耦 —— 短信失败不影响动作）

@@ -180,6 +180,8 @@ function hasCard(c: any) { return !!c?.parameterCardJson && typeof c.parameterCa
           <input type="checkbox" :checked="!!c.aiManaged" :disabled="!canParty(c)" @change="emit('ai-toggle', c.id, ($event.target as HTMLInputElement).checked)" />
           AI托管
         </label>
+        <!-- ★ V2 行为链（ai托管V2.md）：查看/编辑该角色的 AI 行为计划与历史 -->
+        <button class="rlc-btn rlc-btn--chain" title="查看与编辑该角色的 AI 行为计划（行为链）" @click="emit('ai-chain', c.id)">行为链</button>
       </div>
       <!-- ★ 动态参数卡（友方/中立/敌对全部可看） -->
       <div v-if="isOpen(c.id)" class="rlc-param">

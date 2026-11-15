@@ -227,6 +227,7 @@ const defaultSettings: AISettings = { ...DEFAULT_AI_SETTINGS };
         @follow="(id: string, on: boolean) => emit('follow', id, on)"
         @summon="(c: any) => emit('summon', c)"
         @ai-toggle="(id: string, on: boolean) => emit('ai-toggle', id, on)"
+        @ai-chain="(id: string) => emit('ai-chain', id)"
         @open-appearance="(c: any) => emit('open-appearance', c)"
       />
       <EventPanel

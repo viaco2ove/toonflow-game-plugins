@@ -17,8 +17,11 @@ import type {
   AIPerception,
   AIState,
   LLMDecision,
+  PlanStep,
 } from "./types";
 import { IDLE_INTERVAL_WITH_RESOURCES } from "./types";
+import { parsePlanResponse, buildFallbackPlan, setPlan } from "./plan";
+import type { PlanZone } from "./plan";
 import { checkEmergency, updatePerception } from "./sensor";
 import { readMapKnowledge } from "./mapKnowledge";
 import { readMapIntervalOverride } from "./mapInterval";
@@ -492,6 +495,14 @@ export interface BrainCallOptions {
    *     实测 3 连 silent）。动作仍输出 wait（ghost/keepAction 语义不变）。
    */
   proactiveSms?: boolean;
+  /**
+   * ★ V2 行为链：计划生成模式（2026-11-15，ai托管V2.md）。
+   * 一次 LLM 调用产出整份计划（≥5 步）而非单步动作：
+   *   - 返回 { plan } 而不写 currentAction（调用方取 plan 首步执行）
+   *   - 解析失败 → buildFallbackPlan 程序化兜底
+   *   - 摊薄 LLM 成本：调度器单槽位一次调用 = 5+ 步
+   */
+  planMode?: boolean;
 }
 
 /** ★ callBrainDetailed 的详细版：额外告诉调用方「这次是不是真的拿到了 LLM 响应」 */
@@ -522,6 +533,8 @@ export interface BrainCallResult {
   decision: LLMDecision | null;
   /** true = 真的拿到了 LLM 的 JSON 响应；false = 走了程序化兜底 */
   gotLLM: boolean;
+  /** ★ V2 行为链：planMode 时的产出（≥5 步计划）；非 planMode 为 undefined */
+  plan?: PlanStep[];
 }
 
 /**
@@ -581,6 +594,37 @@ export async function callBrainDetailed(
   // ★ keepAction 模式不推进心跳计时 —— 否则一次短信回复会把动作决策推迟一整轮
   if (!keepAction) aiState.lastBrainTick = Date.now();
 
+  // ★ V2 行为链：计划生成模式（2026-11-15）——一次调用产出 ≥5 步计划，
+  //   不写 currentAction（调用方 takeNextPlanStep 取首步）。原单步路径完全不受影响。
+  if (opts?.planMode) {
+    try {
+      const systemPrompt = buildSystemPrompt(aiState, perception);
+      const userPrompt = buildPlanUserPrompt(aiState, perception);
+      const raw = await callLLM(entity.name, systemPrompt, userPrompt);
+      const zones: PlanZone[] = (perception.resources || []).map((r) => ({ zoneName: r.zoneName, position: { x: r.position.x, y: r.position.y } }));
+      const parsed = raw ? parsePlanResponse(raw, { zones, characterName: aiState.characterName }) : null;
+      if (parsed) {
+        setPlan(aiState, parsed.steps, "ai", parsed.goal || undefined);
+        addMemory(aiState, "system", `制定新计划：${parsed.goal || parsed.steps.length + "步"}`);
+        return { decision: null, gotLLM: true, plan: parsed.steps };
+      }
+      // 解析失败 / 空响应 → 程序化兜底计划（保证行为链不空转）
+      const player = (state.entities || []).find((e) => e.side === "player");
+      const steps = buildFallbackPlan(
+        { nearby: { enemies: perception.nearby.enemies }, resources: (perception.resources || []).map((r) => ({ zoneName: r.zoneName, position: { x: r.position.x, y: r.position.y } })) },
+        player ? { x: player.x, y: player.y } : undefined,
+      );
+      setPlan(aiState, steps, "ai", "程序化日程");
+      console.warn("[ai-brain] 计划解析失败，走程序化兜底计划:", raw ? "parse" : "empty");
+      return { decision: null, gotLLM: false, plan: steps, failReason: raw ? "parse" : "gate" };
+    } catch (e) {
+      console.warn("[ai-brain] 计划生成异常:", e);
+      const steps = buildFallbackPlan({ nearby: { enemies: perception.nearby.enemies }, resources: [] });
+      setPlan(aiState, steps, "ai", "程序化日程");
+      return { decision: null, gotLLM: false, plan: steps, failReason: "gate" };
+    }
+  }
+
   try {
     const systemPrompt = buildSystemPrompt(aiState, perception);
     const userPrompt = buildUserPrompt(aiState, perception, entity.id, {
@@ -624,6 +668,69 @@ export async function callBrainDetailed(
     }
     return { decision, gotLLM: false, failReason: "gate" };
   }
+}
+
+/**
+ * ★ V2 行为链：构建计划生成的 User Prompt（2026-11-15，ai托管V2.md）
+ * 输出契约 = { "goal", "plan": [ {type, note, ...参数} × 5~8 ] }
+ * note 是一句中文（面板展示用）。
+ */
+function buildPlanUserPrompt(state: AIState, perception: AIPerception): string {
+  const recentMemory = state.memory.slice(-3).map((m) => {
+    const ago = Math.round((Date.now() - m.timestamp) / 1000);
+    const agoText = ago < 60 ? `${ago}秒前` : `${Math.round(ago / 60)}分钟前`;
+    return `- ${m.description} (${agoText})`;
+  }).join("\n");
+
+  return `## 你的身份
+- 名字：${state.characterName}（Lv.${state.characterLevel}，性格：${state.personality}）
+
+## 当前情况
+
+### 环境感知
+- 周围敌人：${perception.nearby.enemies.length}只${perception.nearby.enemies.length ? " (" + perception.nearby.enemies.slice(0, 3).map((e) => `${e.name} HP:${e.hp}/${e.maxHp} 距${e.distance}米`).join(", ") + ")" : ""}
+- 周围NPC：${perception.nearby.npcs.length}个
+- 自身状态：HP ${perception.self.hp}/${perception.self.maxHp}，MP ${perception.self.mp}/${perception.self.maxMp}，位置 (${perception.self.position.x.toFixed(1)}, ${perception.self.position.y.toFixed(1)})
+
+### 附近可采集资源
+${perception.resources.length ? perception.resources.map((r) => `  - ${r.zoneName} (${r.type}, ${r.distance}米)`).join("\n") : "  - 暂无"}
+
+### 玩家战况
+${(perception.world?.playerCombatLevel || "none") !== "none" ? "- ★ 玩家正在战斗中，计划应偏向支援/跟随/战斗" : "- 玩家当前未在战斗"}
+
+### 角色记忆（最近3件事）
+${recentMemory || "- 暂无"}
+
+### 当前目标
+${state.goal}
+
+## 输出格式
+
+为该角色制定接下来的**行为计划**（像一个人的日程安排，步骤之间要连贯合理）。
+请以JSON格式输出：
+
+\`\`\`json
+{
+  "goal": "这轮计划的总目标（15字内）",
+  "plan": [
+    { "type": "move",   "note": "前往灰狼野区",     "zoneName": "灰狼野区" },
+    { "type": "gather", "note": "采集草药",         "zoneName": "灰狼野区" },
+    { "type": "attack", "note": "攻击灰狼",         "target": { "name": "灰狼" } },
+    { "type": "useSkill", "note": "对敌使用技能",   "skillName": "技能名" },
+    { "type": "follow", "note": "跟随玩家" },
+    { "type": "wait",   "note": "原地警戒",         "duration": 3000 }
+  ]
+}
+\`\`\`
+
+## 硬性约束
+1. **plan 数组必须 5~8 步**（不得少于 5 步）
+2. type 只能是：move / attack / gather / interact / useSkill / useItem / flee / wait / follow
+3. 每步必须有 **note**（≤16 字中文，面板直接显示给玩家看）
+4. move/gather 用 **zoneName**（上面列出的资源地名）或 target 坐标；attack 用 **target.name**（敌人名）；useSkill 用 **skillName**；useItem 用 **itemName**；interact 用 **target.name**（NPC 名）；wait 可带 **duration**（毫秒）
+5. 结合性格与环境：有威胁先自保/战斗，安全时采集/巡逻/跟随玩家，像该角色会做的事
+6. 只输出一个 JSON 对象，不要解释、不要代码块围栏之外的内容
+`;
 }
 
 /**
