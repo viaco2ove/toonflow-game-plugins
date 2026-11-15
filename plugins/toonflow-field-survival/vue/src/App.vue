@@ -1833,10 +1833,32 @@ function onSysAIToggle(id: string, on: boolean) {
     }
   }
   if (on) {
+    // ★ 2026-11-15：先用卡片数据构造临时实体（角色可能不在场 → 没有 entities 条目，
+    //   之前直接 return 导致「勾了没反应」）。enableAI 需要 entity 对象来建 aiState。
+    if (!ent) {
+      const card = (((state.value as any)?.npcCards || []) as any[]).find((c: any) => String(c?.id) === id);
+      if (card) {
+        ent = {
+          id: card.id, name: card.name, side: "ally",
+          x: card.x || 0, y: card.y || 0,
+          hp: card.hp || 50, maxHp: card.maxHp || 50,
+          mp: card.mp || 30, maxMp: card.maxMp || 30,
+          level: card.level || 1, atk: 10, def: 5, alive: true,
+          mapName: card.mapName || currentLevelName.value,
+        };
+      }
+    }
     if (ent) {
       enableAI(ent as any, "勇敢冲锋型");
-      // ★ 通知 entry.js 设 _aiManaged 标记（让 ally 循环驱动这个 entity）
+      // ★ 通知 entry 设角色级托管标记（让 ally 循环驱动这个 entity）
       runSysCmd("ai_command", { roleId: id, action: "_mark_managed" });
+      // ★ 2026-11-15 本地立即回显勾选：卡片 aiManaged 来自服务端（下拍才刷新），
+      //   不本地置位的话会出现「勾了 → 面板重开又弹回未勾」的错觉。
+      try {
+        const cards = ((state.value as any)?.npcCards || []) as any[];
+        const card = cards.find((c: any) => String(c?.id) === id);
+        if (card) card.aiManaged = true;
+      } catch { /* 忽略：下拍服务端会覆盖 */ }
       sysNotice.value = `${ent.name || id} 已启用 AI 托管`;
       console.info(`[ai] 🎯 触发首次决策 for ${ent.name}`, ent);
     } else {
@@ -1844,9 +1866,17 @@ function onSysAIToggle(id: string, on: boolean) {
     }
   } else {
     disableAI(id);
-    // 关闭 AI 托管：发 stop 清除 _aiMoveTo / _aiAttackTarget / _aiManaged
+    // 关闭 AI 托管：发 unmanage 清除 _aiMoveTo / _aiAttackTarget / _aiManaged
+    // ★ 用 unmanage 而非 stop —— stop 的语义已改为「只停当前动作、保留托管」
+    //   （否则目标死亡时 spine 发的 stop 会把托管一起关掉，行为链计划卡住不推进）
     // 不动组队状态 —— 组队跟随是独立功能
-    runSysCmd("ai_command", { roleId: id, action: "stop" });
+    runSysCmd("ai_command", { roleId: id, action: "unmanage" });
+    // ★ 本地立即回显取消勾选（同上，避免重开面板又显示勾选）
+    try {
+      const cards = ((state.value as any)?.npcCards || []) as any[];
+      const card = cards.find((c: any) => String(c?.id) === id);
+      if (card) card.aiManaged = false;
+    } catch { /* 忽略 */ }
     sysNotice.value = `${id} 已关闭 AI 托管`;
   }
 }
@@ -1860,6 +1890,8 @@ function onSysAIChain(id: string) {
   const card = (((state.value as any)?.npcCards || []) as any[]).find((c: any) => String(c?.id) === id);
   behaviorChainEntityId.value = String(id);
   behaviorChainEntityName.value = String(card?.name || id);
+  // ★ 行为链面板 z-index(10002) 高于系统面板(9997) → 直接浮在系统面板**前面**，
+  //   系统面板保持打开（关掉它反而要重新打开才能看角色卡）。
   showBehaviorChain.value = true;
 }
 const behaviorChainManaged = computed(() => isAIEnabled(behaviorChainEntityId.value));
@@ -4674,6 +4706,31 @@ function localTick(): void {
     const pcLevel = (s as any).playerCombat?.level;
     setPlayerCombatLevel(pcLevel === "engaged" || pcLevel === "skirmish" ? pcLevel : "none");
     tickIntervalEvents();
+    // ★ 2026-11-15 托管状态自愈（修「行为链计划不执行」）：
+    //   entry 的 _aiManaged 标记是**私有字段，不随 state push 下发** → 前端无法直接读；
+    //   而卡片 aiManaged 来自 buildCard 读实体 _aiManaged —— 实体不在场时卡片为 false，
+    //   会出现「前端开着、卡片没标」的错位 → 之前用卡片做双向判断会误关托管。
+    //   ★ 改为**以前端态为唯一权威**：前端开着就周期性补发 _mark_managed（幂等，
+    //     服务端只是再置一次 true）；前端没开就发 stop 清干净。
+    //   实测症状：刷新后 entry 标记残留/丢失 → 裴勇 plan 停在第 1 步不动。
+    try {
+      const cards = ((s as any)?.npcCards || []) as any[];
+      for (const c of cards) {
+        if (!c?.id) continue;
+        const id = String(c.id);
+        if (isAIEnabled(id)) {
+          // 托管中：每 ~30 拍补发一次 _mark_managed（保证 entry 侧接管）
+          const st = (window as any).__FS_AI_MARK__ = (window as any).__FS_AI_MARK__ || {};
+          const last = st[id] || 0;
+          if (s.tick - last > 30) {
+            st[id] = s.tick;
+            runSysCmd("ai_command", { roleId: id, action: "_mark_managed" });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ai] 托管状态自愈异常:", e);
+    }
     // ★ AI 托管系统：每 tick 检查 AI 角色（异步、不阻塞游戏循环）
     void tickAllAIs(s, s.tick || 0);
     const portals = (mapCfg.value?.decorations || []).filter((d: any) => (d as any).kind === "portal");

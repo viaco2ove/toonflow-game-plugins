@@ -341,7 +341,12 @@ export function isActionComplete(entity: Entity, state: GameState, action: AIAct
   if (action.type === "move" || action.type === "flee") {
     if (action.target?.x === undefined || action.target?.y === undefined) return true;
     const dist = Math.hypot(action.target.x - entity.x, action.target.y - entity.y);
-    return dist < 0.8;  // 0.8米内视为到达
+    // ★ 2026-11-15 放宽到达判定：0.8m → 1.8m。宿主移动是「速度 3m/s × tick 0.1s」，
+    //   末帧常停在 1~2m 处（且导航避障会绕到目标侧方），0.8m 永远不满足 →
+    //   行为链这一步永久「执行中」，后续全部排队（实测：裴勇卡在「前出侦察周边」，
+    //   距目标 (20,8) 只差 1.9m 却永不完成）。
+    //   1.8m 与交互判定 AI_INTERACT_M=2m 同量级，视觉上仍在目标附近。
+    return dist < 1.8;
   }
 
   if (action.type === "attack") {

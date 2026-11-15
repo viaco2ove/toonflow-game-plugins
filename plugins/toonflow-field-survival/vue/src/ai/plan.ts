@@ -110,7 +110,17 @@ export function parsePlanResponse(
       const z = zones.find((zz) => zz.zoneName === action.zoneName);
       if (z) action.target = { ...(action.target || {}), x: z.position.x, y: z.position.y, name: z.zoneName };
     }
-    const note = String(rawStep.note || rawStep.context || action.context || action.type).slice(0, 24);
+    // ★ 2026-11-15 丢弃「参数缺失」的动作（LLM 不听话时的兜底）：
+//   - gather 无 zoneName 且无坐标 → 无法执行（会走去 (0,0)）
+//   - interact 无 target（既无 id 也无 name）→ 无法执行
+//   - attack 无 target（既无 id 也无 name）→ 无法执行
+//   这些步留着只会在执行时静默失败/空转 → 解析阶段就丢，让 LLM 的其余步正常跑。
+if ((action.type === "gather" && action.target?.x === undefined && !action.zoneName)
+  || (action.type === "interact" && !action.target?.id && !action.target?.name)
+  || (action.type === "attack" && !action.target?.id && !action.target?.name)) {
+  continue;
+}
+const note = String(rawStep.note || rawStep.context || action.context || action.type).slice(0, 24);
     steps.push({
       id: genId("step"),
       note,
@@ -197,7 +207,27 @@ export function takeNextPlanStep(
   s: AIState,
   world: { entities?: Array<{ id?: string; name?: string; side?: string; x?: number; y?: number; alive?: boolean }> },
 ): AIAction | null {
-  const plan = getPlan(s);
+  let plan = getPlan(s);
+  // ★ 2026-11-15 修复「两步同时执行中」：active 步必须唯一。
+  //   存档恢复的旧 active 步（刷新前中断的执行）没有 activeStepId 归属，
+  //   会与新取的步并存 → 面板显示两个「执行中」，finishPlanStep 只清第一个。
+  //   规则：已有 active 步时不再取新步（执行完自然接下一步）；孤儿 active 步
+  //   （activeStepId 为空 = 恢复自存档）先归位为 pending。
+  const activeIdx = plan.findIndex((p) => p.status === "active");
+  if (activeIdx >= 0) {
+    const activeStep = plan[activeIdx];
+    if (!s.activeStepId || s.activeStepId !== activeStep.id) {
+      // ★ 孤儿 active 步（存档恢复）：目标坐标是**恢复前的旧位置**，角色早已走远
+      //   → isActionComplete（0.8m）永远不满足 → 这一步永久卡住、后续全部排队。
+      //   故直接作废（记 failed 历史）并继续取下一步，而不是归位等它完成。
+      s.plan = [...plan.slice(0, activeIdx), ...plan.slice(activeIdx + 1)];
+      plan = s.plan;
+      pushHistory(s, activeStep.note, activeStep.action.type, "interrupted");
+      bumpPlanVersion();
+    } else {
+      return null;   // 已有在执行的步 → 本拍不取新步
+    }
+  }
   let idx = plan.findIndex((p) => p.status === "pending");
   while (idx >= 0) {
     const step = plan[idx];
@@ -214,9 +244,10 @@ export function takeNextPlanStep(
         if (action.target.y === undefined && Number.isFinite(ent.y)) action.target.y = ent.y;
       } else {
         // 目标不在场上 → 该步记 failed，取再下一个
-        plan.splice(idx, 1);
+        s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
+        plan = s.plan;
         pushHistory(s, step.note, action.type, "failed");
-        idx = plan.findIndex((p) => p.status === "pending");
+        idx = s.plan.findIndex((p) => p.status === "pending");
         continue;
       }
     }
@@ -226,7 +257,26 @@ export function takeNextPlanStep(
       action.duration = 2000;
       step.note = `${step.note}（目标无效，原地等待）`;
     }
+    // ★ 2026-11-15 gather 无区域/坐标 → 无效步（executeGather 会去 (0,0) 乱跑）
+    //   → 记 failed 跳过（LLM 偶尔产出「采集 资源」这种没有 zoneName 的空步）
+    if (action.type === "gather" && action.target?.x === undefined && !action.zoneName) {
+      s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
+      plan = s.plan;
+      pushHistory(s, step.note, action.type, "failed");
+      idx = s.plan.findIndex((p) => p.status === "pending");
+      continue;
+    }
+    // ★ 2026-11-15 interact 无目标 id **且**场上找不到同名实体 → 跳过
+    //   （否则执行后 isActionComplete 直接 return true → 瞬间"完成"，反复空转）
+    if (action.type === "interact" && !action.target?.id) {
+      s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
+      plan = s.plan;
+      pushHistory(s, step.note, action.type, "failed");
+      idx = s.plan.findIndex((p) => p.status === "pending");
+      continue;
+    }
     step.status = "active";
+    s.activeStepId = step.id;
     s.awaitingPlan = false;
     bumpPlanVersion();
     return action;
@@ -234,14 +284,16 @@ export function takeNextPlanStep(
   return null;
 }
 
-/** 当前 active 步完成：写历史 + 从计划移除 */
+/** 当前 active 步完成：写历史 + 从计划移除
+ *  ★ 用新数组替换（原地 splice 不会触发面板 computed 重算 —— 见 removePlanStep 注释） */
 export function finishPlanStep(s: AIState, result: "done" | "failed" | "interrupted" = "done"): void {
   const plan = getPlan(s);
   const idx = plan.findIndex((p) => p.status === "active");
-  if (idx < 0) return;
+  if (idx < 0) { s.activeStepId = undefined; return; }
   const step = plan[idx];
   step.status = result === "done" ? "done" : "failed";
-  plan.splice(idx, 1);
+  s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
+  s.activeStepId = undefined;
   pushHistory(s, step.note, step.action.type, result);
   bumpPlanVersion();
 }
@@ -255,25 +307,48 @@ function pushHistory(s: AIState, note: string, type: string, result: HistoryEntr
 /* —— 面板编辑操作（全部同步生效 + 落库由调用方防抖） —— */
 
 /** 删除计划步 */
-export function removePlanStep(s: AIState, stepId: string): void {
+/** 删除计划步
+ *  ★ 2026-11-15：用**新数组替换**而不是 splice 原地改 —— 面板的 plan 是 computed，
+ *    依赖 aiStates 里同一个数组引用；原地改引用不变 → Vue 认为值没变 → 面板不刷新
+ *    （实测：删掉了但界面仍显示 5 步）。
+ *  ★ 2026-11-15（用户需求）：**执行中的步也允许删** —— 删时清掉 currentAction，
+ *    返回 true 表示「动了执行中的步」，调用方应向 entry 发 stop（清残留移动目标，
+ *    否则角色会继续走向旧目标最多 60s）。 */
+export function removePlanStep(s: AIState, stepId: string): boolean {
   const plan = getPlan(s);
   const idx = plan.findIndex((p) => p.id === stepId);
-  if (idx < 0) return;
-  if (plan[idx].status === "active") return;   // 执行中的步不允许删（等它完成/失败）
-  plan.splice(idx, 1);
-  bumpPlanVersion();
-}
-
-/** 替换计划步内容（编辑保存） */
-export function replacePlanStep(s: AIState, stepId: string, action: AIAction, note: string): void {
-  const plan = getPlan(s);
-  const idx = plan.findIndex((p) => p.id === stepId);
-  if (idx < 0) return;
-  if (plan[idx].status === "active") return;
-  plan[idx].action = action;
-  plan[idx].note = note.slice(0, 24);
+  if (idx < 0) return false;
+  const wasActive = plan[idx].status === "active";
+  if (wasActive) {
+    s.currentAction = null;
+    s.activeStepId = undefined;
+    s.actionStartedTick = undefined;
+    pushHistory(s, plan[idx].note, plan[idx].action.type, "interrupted");
+  }
+  s.plan = [...plan.slice(0, idx), ...plan.slice(idx + 1)];
   s.planSource = "user";
   bumpPlanVersion();
+  return wasActive;
+}
+
+/** 替换计划步内容（编辑保存）
+ *  ★ 执行中的步也允许改：改后重置为 pending 并清当前动作 → 下一拍重新取它执行。 */
+export function replacePlanStep(s: AIState, stepId: string, action: AIAction, note: string): boolean {
+  const plan = getPlan(s);
+  const idx = plan.findIndex((p) => p.id === stepId);
+  if (idx < 0) return false;
+  const wasActive = plan[idx].status === "active";
+  if (wasActive) {
+    s.currentAction = null;
+    s.activeStepId = undefined;
+    s.actionStartedTick = undefined;
+  }
+  const next = plan.slice();
+  next[idx] = { ...next[idx], action, note: note.slice(0, 24), status: wasActive ? "pending" : next[idx].status };
+  s.plan = next;
+  s.planSource = "user";
+  bumpPlanVersion();
+  return wasActive;
 }
 
 /** 在 afterId 之后插入新步（afterId=null = 插到最前）；返回新步 id */
@@ -281,13 +356,15 @@ export function insertPlanStep(s: AIState, afterId: string | null, action: AIAct
   const plan = getPlan(s);
   if (plan.length >= PLAN_MAX) return null;
   const step: PlanStep = { id: genId("step"), note: note.slice(0, 24), action, status: "pending", createdAt: Date.now() };
+  let next: PlanStep[];
   if (afterId == null) {
-    plan.unshift(step);
+    next = [step, ...plan];
   } else {
     const idx = plan.findIndex((p) => p.id === afterId);
     if (idx < 0) return null;
-    plan.splice(idx + 1, 0, step);
+    next = [...plan.slice(0, idx + 1), step, ...plan.slice(idx + 1)];
   }
+  s.plan = next;
   s.planSource = "user";
   s.awaitingPlan = false;
   bumpPlanVersion();
@@ -300,11 +377,13 @@ export function clearHistory(s: AIState): void {
   bumpPlanVersion();
 }
 
-/** 清空计划并请求 AI 重排（面板「交给 AI 重排」按钮）——主循环空档时自动入队 plan_exhausted */
+/** 清空计划并请求 AI 重排（面板「交给 AI 重排」按钮）——主循环空档时自动入队 plan_exhausted
+ *  ★ 2026-11-15：清上次失败信息 + 记录请求时刻（面板显示「重排中…已等待 Xs」） */
 export function requestAIReplan(s: AIState): void {
   s.plan = [];
   s.planSource = "ai";
   s.awaitingPlan = false;
   s.planReqAt = undefined;
+  s.planError = undefined;
   bumpPlanVersion();
 }

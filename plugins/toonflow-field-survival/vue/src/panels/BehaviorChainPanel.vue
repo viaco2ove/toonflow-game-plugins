@@ -17,10 +17,16 @@
           <section class="bc-sec">
             <div class="bc-sec__head">
               <span>行为计划（{{ plan.length }} 步 · {{ planSource === 'user' ? '用户编辑' : 'AI 制定' }}）</span>
-              <button class="bc-mini" :disabled="!managed" title="清空当前计划，让 AI 重新制定一份" @click="onAITakeover">交给 AI 重排</button>
+              <button class="bc-mini" :disabled="!managed || planBusy" :title="planBusy ? 'AI 正在制定新计划…' : '清空当前计划，让 AI 重新制定一份'" @click="onAITakeover">
+                {{ planBusy ? `重排中… ${awaitingSec}s` : "交给 AI 重排" }}
+              </button>
             </div>
+            <!-- ★ 重排失败原因（LLM 失败/解析失败/通道繁忙） -->
+            <div v-if="planError" class="bc-err-bar">{{ planError }}</div>
             <div v-if="!plan.length" class="bc-empty">
-              暂无计划{{ managed ? " —— AI 正在制定，稍候刷新" : "（勾选 AI托管 后由 AI 制定，或点下方「添加行为」手动创建）" }}
+              {{ planBusy
+                ? `AI 正在制定新计划…（已等待 ${awaitingSec} 秒${awaitingSec > 45 ? "，通道繁忙时最长约 1 分钟，超时自动重试" : ""}）`
+                : managed ? "暂无计划 —— 将由 AI 自动制定" : "（勾选 AI托管 后由 AI 制定，或点下方「添加行为」手动创建）" }}
             </div>
             <div
               v-for="(p, i) in plan"
@@ -33,10 +39,12 @@
                 <div class="bc-step__note">{{ p.note }}</div>
                 <div class="bc-step__meta">{{ typeText(p.action.type) }}<template v-if="paramsText(p.action)"> · {{ paramsText(p.action) }}</template></div>
               </div>
-              <div v-if="p.status === 'active'" class="bc-step__run">▶ 执行中</div>
-              <div v-else class="bc-step__ops">
-                <button title="删除此步" @click="onRemove(p)">删</button>
-                <button title="改变此步" @click="startEdit(p)">改</button>
+              <!-- ★ 2026-11-15：执行中的步也开放 删/改/插（用户需求）——
+                   删/改会立即中断当前动作并停掉 entry 侧移动，改后从该步重新执行 -->
+              <div class="bc-step__ops">
+                <span v-if="p.status === 'active'" class="bc-step__run">▶ 执行中</span>
+                <button title="删除此步（执行中的步会被立即中断）" @click="onRemove(p)">删</button>
+                <button title="改变此步（执行中的步会被中断并以新内容重新执行）" @click="startEdit(p)">改</button>
                 <button title="在此步后插入" @click="startCreate(p.id)">插</button>
               </div>
             </div>
@@ -327,7 +335,10 @@ function paramsText(a: AIAction): string {
 </script>
 
 <style scoped>
-.bc-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 3000; display: flex; align-items: center; justify-content: center; }
+/* ★ z-index 必须高于系统面板（.sys-panel = 9997）——否则从角色页点「行为链」打开的
+   面板会被系统面板整个盖住（用户反馈：点击没反应，关掉系统面板才看见）。
+   取 10002：高于锻造/炼丹(10000)、形象弹窗(10001)。 */
+.bc-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 10002; display: flex; align-items: center; justify-content: center; }
 .bc-panel {
   width: 400px; max-width: 92vw; max-height: 82vh; display: flex; flex-direction: column;
   background: linear-gradient(180deg, #23252e 0%, #1b1d25 100%);

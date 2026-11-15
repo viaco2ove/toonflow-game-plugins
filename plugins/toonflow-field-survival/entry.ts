@@ -1814,9 +1814,14 @@ function damage(s: FieldSurvivalState, target: Entity, amount: number, attacker?
        *   尸体照常淡出，随后从实体表移除（见下方 filter）；召唤 / 重新勾选组队即满血复活
        *   （sys_party → tpAllyNear）。 */
       const wasInParty = Array.isArray(s.partyIds) ? s.partyIds.indexOf(target.id) >= 0 : false;
-      const wasManaged = (target as any)._aiManaged === true;
+      const wasManaged = (target as any)._aiManaged === true
+        || (Array.isArray(s.aiManagedIds) && s.aiManagedIds.map(String).indexOf(String(target.id)) >= 0);
       if (Array.isArray(s.partyIds)) {
         s.partyIds = s.partyIds.filter((x) => String(x) !== String(target.id));
+      }
+      // ★ 2026-11-15：阵亡 → 同步移出角色级托管名单（死了不再托管；复活/重新勾选可再开）
+      if (Array.isArray(s.aiManagedIds)) {
+        s.aiManagedIds = s.aiManagedIds.filter((x: any) => String(x) !== String(target.id));
       }
       delete (target as any)._aiManaged;
       delete (target as any)._aiMoveTo;
@@ -2573,13 +2578,16 @@ function step(s: FieldSurvivalState, input: any, poseHint?: any) {
   // ★ v5：只有「组队跟随」勾选中的角色才跟随用户参战；未组队的原地待命
   const partyIds = Array.isArray(s.partyIds) ? s.partyIds : [];
   // ★ AI 托管：把 _aiManaged 标记的角色也加入驱动列表（即使不在 partyIds）
-  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && (partyIds.indexOf(e.id) >= 0 || (e as any)._aiManaged));
+  //   ★ 2026-11-15：改读**角色级名单 s.aiManagedIds**（权威）——实体级 _aiManaged 只是镜像，
+  //     召唤/上场时实体是新建的（没有 _aiManaged）→ 托管状态丢失。
+  const _managedIds: string[] = Array.isArray(s.aiManagedIds) ? s.aiManagedIds.map(String) : [];
+  const allies = s.entities.filter((e) => e.side === "ally" && e.alive && (partyIds.indexOf(e.id) >= 0 || _managedIds.indexOf(String(e.id)) >= 0 || (e as any)._aiManaged));
 
   allies.forEach((a, i) => {
     // ★ AI 托管：检查是否设了 AI 目标（_aiMoveTo / _aiAttackTarget）；否则用默认行为
     const aiTarget = (a as any)._aiAttackTarget ? s.entities.find((e: any) => e.id === (a as any)._aiAttackTarget && e.alive) : null;
     const aiMove = (a as any)._aiMoveTo;
-    const isAIManaged = !!(a as any)._aiManaged;
+    const isAIManaged = !!(a as any)._aiManaged || _managedIds.indexOf(String(a.id)) >= 0;
 
     // 攻击目标：AI 指定 > （入队角色锚玩家 4m / AI托管角色独立感知 13m）
     let target: Entity | null = aiTarget;
@@ -5790,9 +5798,11 @@ function ensureNpcCards(s: FieldSurvivalState, levelName: string): void {
       x: Math.round(e ? (e as any).x : num(old?.x, Math.random() * 100)),
       y: Math.round(e ? (e as any).y : num(old?.y, Math.random() * 100)),
       inParty: party.indexOf(String(role.id)) >= 0,
-      /* ★ AI 托管回显：实体在场读 _aiManaged 标志；实体不在场（阵亡移除/未上场）沿用旧卡片值，
-       *   否则勾选后重开面板（实体恰好被移除的瞬间）会闪断勾选。 */
-      aiManaged: !!(e ? (e as any)._aiManaged : old?.aiManaged),
+      /* ★ AI 托管回显：RolePanel 勾选框 :checked="!!c.aiManaged" 读此字段（2026-11-15）
+       ★ 2026-11-15 改读**角色级名单 s.aiManagedIds**（权威）：
+         原来读实体私有字段 _aiManaged —— 角色不在场（未上场/阵亡移除）时读不到，
+         勾选状态随「关掉系统面板再打开」丢失（用户反馈：勾了又显示未托管）。 */
+      aiManaged: (Array.isArray(s.aiManagedIds) ? s.aiManagedIds.map(String) : []).indexOf(String(role.id)) >= 0,
       /** ★ 头像通道与实体形象（customSprite）严格分离：更换实体形象不得影响悬浮头像 */
       avatarPath: (e && (e as any).avatarPath) || role.avatarPath || (old && old.avatarPath) || undefined,
       /** ★ 实体立绘通道（独立于头像：data:URL 时 canvas 走 customSprite 渲染） */
@@ -6100,6 +6110,8 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
     await api.set(SYS_DATA_KEY, {
       ring: s.ring || { items: [], skills: [] },
       party: s.partyIds || [],
+      // ★ 2026-11-15：AI 托管名单（角色级）随系统数据持久化 —— 刷新页面后勾选状态不丢
+      aiManagedIds: Array.isArray(s.aiManagedIds) ? s.aiManagedIds.map(String) : [],
       npcCards: s.npcCards || [],
       bagMeta: s.bagMeta || {},
       bagOrder: s.bagOrder || [],
@@ -6219,6 +6231,8 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
     // ★ game.md 组队跟随：队伍只在本次会话内由角色卡面板勾选决定，
     //   不再恢复旧存档（旧版本曾把全部友方角色自动编入队伍，恢复会继承错误的自动跟随）
     if (Array.isArray(d.party)) s.partyIds = [];
+    // ★ 2026-11-15：恢复 AI 托管名单（角色级）—— 刷新页面后勾选状态保持
+    if (Array.isArray(d.aiManagedIds)) s.aiManagedIds = d.aiManagedIds.map(String);
     if (Array.isArray(d.npcCards)) s.npcCards = d.npcCards;
     if (d.bagMeta && typeof d.bagMeta === "object") s.bagMeta = d.bagMeta;
     if (Array.isArray(d.bagOrder)) s.bagOrder = d.bagOrder.map(String);
@@ -8091,9 +8105,27 @@ export async function handle_action(
       // ★ AI 托管通道：前端 AI 决策系统 → sendTick → 改 state（每 tick 由 AI 重新决策覆盖，不需持久化）
       const rid = str(params?.roleId || params?.entityId);
       if (!rid) return okResp("ai_command: 缺少 roleId");
+      // ★ 2026-11-15：托管标记存**角色级** s.aiManagedIds（权威），实体级 _aiManaged 只是镜像。
+      //   原因：_mark_managed 原本要求实体在场（s.entities.find）→ 未上场/已阵亡的角色
+      //   勾了「AI托管」却没标记 → 卡片回显 false → 用户看到「勾选了却显示未托管」，
+      //   而且关掉系统面板再打开（重新拉卡片）就丢。角色级名单与在场与否无关。
+      const cmd = String(params?.action || params?.type || "");
+      if (cmd === "_mark_managed" || cmd === "unmanage") {
+        if (!Array.isArray(s.aiManagedIds)) s.aiManagedIds = [];
+        const set = new Set(s.aiManagedIds.map(String));
+        if (cmd === "_mark_managed") set.add(rid);
+        else set.delete(rid);
+        s.aiManagedIds = Array.from(set);
+        // 同步实体镜像（在场时才有意义）
+        const entM = s.entities.find((x: any) => x.id === rid);
+        if (entM) {
+          if (cmd === "_mark_managed") (entM as any)._aiManaged = true;
+          else delete (entM as any)._aiManaged;
+        }
+        return okResp(cmd === "_mark_managed" ? `AI 托管标记: ${rid}` : `AI 托管已关闭: ${rid}`);
+      }
       const ent = s.entities.find((x: any) => x.id === rid);
       if (!ent) return okResp(`ai_command: 实体 ${rid} 不在场上`);
-      const cmd = String(params?.action || params?.type || "");
       switch (cmd) {
         case "move": {
           const tx = Number(params?.x);
@@ -8111,14 +8143,29 @@ export async function handle_action(
           return okResp(`AI 攻击: ${ent.name} → ${targetId}`);
         }
         case "stop": {
+          // ★ 2026-11-15 语义拆分：**stop 只停当前动作，不再取消 AI 托管**。
+          //   此前 stop 会 delete _aiManaged → 目标死亡/离场时 spine.executeAttack
+          //   发 stop（只该停攻击）→ 整个托管被静默关掉 → 行为链计划停在当前步
+          //   不再推进（实测：裴勇 plan 卡在第 1 步，aiManaged 变 false）。
+          //   取消托管改用独立的 unmanage 动作（前端关闭托管时发）。
+          delete (ent as any)._aiMoveTo;
+          delete (ent as any)._aiMoveToTick;
+          delete (ent as any)._aiAttackTarget;
+          delete (ent as any)._aiAttackTick;
+          return okResp(`AI 停止: ${ent.name}`);
+        }
+        case "unmanage": {
+          // ★ 取消 AI 托管（前端关闭勾选时发）：清动作 + 清托管标记
+          //   （标记本身在 ai_command 入口处已按角色级名单处理）
           delete (ent as any)._aiMoveTo;
           delete (ent as any)._aiMoveToTick;
           delete (ent as any)._aiAttackTarget;
           delete (ent as any)._aiAttackTick;
           delete (ent as any)._aiManaged;
-          return okResp(`AI 停止: ${ent.name}`);
+          return okResp(`AI 托管已关闭: ${ent.name}`);
         }
         case "_mark_managed": {
+          // ★ 已在 ai_command 入口处按角色级名单处理（此处仅兼容旧路径）
           (ent as any)._aiManaged = true;
           return okResp(`AI 托管标记: ${ent.name}`);
         }
@@ -8417,7 +8464,10 @@ export async function handle_action(
           (s.parked[mapName] as any[]).push({ id: e.id, name: e.name, x: e.x, y: e.y, mapName });
           e.side = (e as any)._baseSide || "spectator";
           // ★ 取消组队：同步清理 AI 托管标记，避免 entry.ts 重编译后残留 _aiManaged 仍被主循环接管
-          delete (e as any)._aiManaged;
+          //   ★ 2026-11-15：**不再取消托管** —— 组队跟随与 AI 托管是**两个独立功能**
+          //     （前端 UI 上也是两个独立勾选框）。取消组队只应停掉「跟随战斗」，
+          //     托管由用户单独勾选/取消（用户反馈：取消组队把 AI 托管也取消了）。
+          //     清的是「托管下的移动/攻击目标」，不是托管本身。
           delete (e as any)._aiMoveTo;
           delete (e as any)._aiMoveToTick;
           delete (e as any)._aiAttackTarget;

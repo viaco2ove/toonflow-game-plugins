@@ -121,6 +121,12 @@ export interface AIState {
   awaitingPlan?: boolean;
   /** ★ V2 行为链：计划生成请求发起时间（超时重试用） */
   planReqAt?: number;
+  /** ★ V2 行为链：当前执行中的计划步 id（active 步唯一性由它保证） */
+  activeStepId?: string;
+  /** ★ V2 行为链：当前动作开始时的 tick（超时作废兜底用） */
+  actionStartedTick?: number;
+  /** ★ V2 行为链：最近一次计划生成的失败信息（面板显示；成功时清空） */
+  planError?: string;
   /** 紧急状态标志 */
   emergency: EmergencyFlags;
   /** 性格设定 */

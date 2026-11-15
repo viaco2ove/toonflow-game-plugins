@@ -17,7 +17,7 @@
 import type { AIGameEvent, AIState, AIAction, LLMDecision } from "./types";
 import type { Entity, GameState } from "../types";
 import { getOrCreateAIState, setAIEnabled, isAIEnabled, removeAIState, callBrain, callBrainDetailed, evaluateBrainTrigger, notifyAIEvent, getAllAIStates, getAIStateSnapshot, setLLMCaller, pushAIEvent } from "./brain";
-import { takeNextPlanStep, finishPlanStep, getPlan, bumpPlanVersion } from "./plan";
+import { takeNextPlanStep, finishPlanStep, getPlan, bumpPlanVersion, PLAN_MIN } from "./plan";
 import { scheduleBehaviorChainsSave, debugChainDump } from "./persistence";
 import { executeAction, isActionComplete } from "./spine";
 import {
@@ -67,6 +67,11 @@ export function enableAI(entity: Entity, personality: string = "勇敢冲锋型"
   s.lastBrainTick = 0;
   s.brainInterval = 3000;  // 首次启用用 3 秒间隔
   s.cooldownUntil = 0;
+  // ★ 2026-11-15：重新启用托管时清掉「等待生成计划」的闸门 —— 否则恢复自存档的
+  //   awaitingPlan=true 会让「计划为空 → 入队 plan_exhausted」被跳过
+  //   → LLM 永不被调用 → 行为链一直没有计划（实测：enableAI 后 sys_brain=0）。
+  s.awaitingPlan = false;
+  s.planReqAt = undefined;
   // ★ 立即设置 enabled
   setAIEnabled(entity.id, true, personality);
   debugChainDump("enableAI", { entityId: entity.id, name: entity.name });
@@ -188,6 +193,31 @@ function finishCurrentAction(aiState: AIState, entity: Entity): void {
   finishPlanStep(aiState, "done");
   aiState.currentAction = null;
   aiState.gatherStartedAt = undefined;
+  aiState.actionStartedTick = undefined;
+  bumpPlanVersion();
+  scheduleBehaviorChainsSave();
+}
+
+/**
+ * ★ 2026-11-15 步骤超时兜底：任何一步执行超过 STEP_TIMEOUT_TICKS（默认 30s = 300 tick）
+ *   → 强制作废推进。
+ *   背景：完成判定依赖「距离目标」等几何条件，宿主导航避障/目标不可达/目标已消失等
+ *   情况会让判定永远不成立 → 该步永久「执行中」，后续步骤全部排队（行为链看起来卡死）。
+ *   超时作废是最后一道保险，保证行为链永远向前走。
+ */
+const STEP_TIMEOUT_TICKS = 300;
+function checkStepTimeout(aiState: AIState, entity: Entity, currentTick: number): void {
+  if (!aiState.currentAction) return;
+  if (aiState.actionStartedTick == null) {
+    aiState.actionStartedTick = currentTick;
+    return;
+  }
+  if (currentTick - aiState.actionStartedTick < STEP_TIMEOUT_TICKS) return;
+  console.warn(`[ai] ${entity.name}: 步骤超时（${currentTick - aiState.actionStartedTick} tick）→ 作废推进`);
+  finishPlanStep(aiState, "interrupted");
+  aiState.currentAction = null;
+  aiState.gatherStartedAt = undefined;
+  aiState.actionStartedTick = undefined;
   bumpPlanVersion();
   scheduleBehaviorChainsSave();
 }
@@ -314,6 +344,8 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
     if (aiState.currentAction && isActionComplete(entity, state, aiState.currentAction)) {
       finishCurrentAction(aiState, entity);
     }
+    // ★ 超时兜底：完成判定永不成立时（目标不可达/已消失/导航绕远）强制作废推进
+    checkStepTimeout(aiState, entity, currentTick);
 
     if (!aiState.currentAction) {
       // ★ v6 阶段一：评估「该不该思考」（纯本地，不烧 token）
@@ -334,6 +366,25 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
         continue;
       }
 
+      // ★ 计划已空 / 步数不足 → 请求生成新计划（≥5 步）；等待中带 45s 超时重试
+      //   ★ 用户编辑过的计划（planSource="user"）**不重排**：用户删到只剩 2 步是他的意愿，
+      //   AI 擅自重排会覆盖用户编辑。
+      //   ★ 判定必须在「取下一步」**之前**：否则有 pending 步时永远先执行旧步，
+      //   步数不足的重排分支形同虚设（旧 4 步计划会一直跑下去）。
+      const planLen = getPlan(aiState).length;
+      const planTooShort = planLen > 0 && planLen < PLAN_MIN && aiState.planSource !== "user";
+      if (!planLen || planTooShort) {
+        if (!aiState.awaitingPlan) {
+          aiState.awaitingPlan = true;
+          aiState.planReqAt = Date.now();
+          enqueueBrainTask(entity.id, entity.name, "P1", "plan_exhausted");
+          debugChainDump("enqueue_plan_exhausted", { entityId: entity.id, planLen });
+        } else if (Date.now() - (aiState.planReqAt || 0) > 45_000) {
+          aiState.awaitingPlan = false;   // 超时 → 下拍重新入队
+        }
+        continue;
+      }
+
       // ★ V2 行为链（2026-11-15）：有计划 → 按计划走（不烧 LLM）
       const nextAction = takeNextPlanStep(aiState, state);
       if (nextAction) {
@@ -344,19 +395,6 @@ export function tickAllAIs(state: GameState, currentTick: number): void {
           console.warn("[ai] 计划步执行异常:", e);
           finishPlanStep(aiState, "failed");
           scheduleBehaviorChainsSave();
-        }
-        continue;
-      }
-
-      // 计划已空 → 请求生成新计划（≥5 步）；等待中带 45s 超时重试
-      if (!getPlan(aiState).length) {
-        if (!aiState.awaitingPlan) {
-          aiState.awaitingPlan = true;
-          aiState.planReqAt = Date.now();
-          enqueueBrainTask(entity.id, entity.name, "P1", "plan_exhausted");
-          debugChainDump("enqueue_plan_exhausted", { entityId: entity.id });
-        } else if (Date.now() - (aiState.planReqAt || 0) > 45_000) {
-          aiState.awaitingPlan = false;   // 超时 → 下拍重新入队
         }
         continue;
       }

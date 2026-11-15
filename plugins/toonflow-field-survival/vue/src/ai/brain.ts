@@ -596,6 +596,7 @@ export async function callBrainDetailed(
 
   // ★ V2 行为链：计划生成模式（2026-11-15）——一次调用产出 ≥5 步计划，
   //   不写 currentAction（调用方 takeNextPlanStep 取首步）。原单步路径完全不受影响。
+  //   ★ 成功清 planError；失败写具体原因（面板显示「重排失败原因」）。
   if (opts?.planMode) {
     try {
       const systemPrompt = buildSystemPrompt(aiState, perception);
@@ -605,22 +606,27 @@ export async function callBrainDetailed(
       const parsed = raw ? parsePlanResponse(raw, { zones, characterName: aiState.characterName }) : null;
       if (parsed) {
         setPlan(aiState, parsed.steps, "ai", parsed.goal || undefined);
+        aiState.planError = undefined;
         addMemory(aiState, "system", `制定新计划：${parsed.goal || parsed.steps.length + "步"}`);
         return { decision: null, gotLLM: true, plan: parsed.steps };
       }
-      // 解析失败 / 空响应 → 程序化兜底计划（保证行为链不空转）
+      // 解析失败 / 空响应 → 程序化兜底计划（保证行为链不空转）+ 写失败原因
       const player = (state.entities || []).find((e) => e.side === "player");
       const steps = buildFallbackPlan(
         { nearby: { enemies: perception.nearby.enemies }, resources: (perception.resources || []).map((r) => ({ zoneName: r.zoneName, position: { x: r.position.x, y: r.position.y } })) },
         player ? { x: player.x, y: player.y } : undefined,
       );
       setPlan(aiState, steps, "ai", "程序化日程");
+      aiState.planError = raw
+        ? "AI 返回格式异常，已先生成程序化日程（可点「交给 AI 重排」再试）"
+        : "AI 通道繁忙（被其他对话占用），已先生成程序化日程（可稍后重试）";
       console.warn("[ai-brain] 计划解析失败，走程序化兜底计划:", raw ? "parse" : "empty");
       return { decision: null, gotLLM: false, plan: steps, failReason: raw ? "parse" : "gate" };
     } catch (e) {
       console.warn("[ai-brain] 计划生成异常:", e);
       const steps = buildFallbackPlan({ nearby: { enemies: perception.nearby.enemies }, resources: [] });
       setPlan(aiState, steps, "ai", "程序化日程");
+      aiState.planError = `AI 调用出错：${(e as any)?.message || e}（已生成程序化日程）`;
       return { decision: null, gotLLM: false, plan: steps, failReason: "gate" };
     }
   }
@@ -689,7 +695,7 @@ function buildPlanUserPrompt(state: AIState, perception: AIPerception): string {
 
 ### 环境感知
 - 周围敌人：${perception.nearby.enemies.length}只${perception.nearby.enemies.length ? " (" + perception.nearby.enemies.slice(0, 3).map((e) => `${e.name} HP:${e.hp}/${e.maxHp} 距${e.distance}米`).join(", ") + ")" : ""}
-- 周围NPC：${perception.nearby.npcs.length}个
+- 周围NPC：${perception.nearby.npcs.length}个${perception.nearby.npcs.length ? " (" + perception.nearby.npcs.slice(0, 5).map((n) => `${n.name} 距${n.distance}米`).join(", ") + ")" : ""}
 - 自身状态：HP ${perception.self.hp}/${perception.self.maxHp}，MP ${perception.self.mp}/${perception.self.maxMp}，位置 (${perception.self.position.x.toFixed(1)}, ${perception.self.position.y.toFixed(1)})
 
 ### 附近可采集资源
@@ -728,8 +734,13 @@ ${state.goal}
 2. type 只能是：move / attack / gather / interact / useSkill / useItem / flee / wait / follow
 3. 每步必须有 **note**（≤16 字中文，面板直接显示给玩家看）
 4. move/gather 用 **zoneName**（上面列出的资源地名）或 target 坐标；attack 用 **target.name**（敌人名）；useSkill 用 **skillName**；useItem 用 **itemName**；interact 用 **target.name**（NPC 名）；wait 可带 **duration**（毫秒）
-5. 结合性格与环境：有威胁先自保/战斗，安全时采集/巡逻/跟随玩家，像该角色会做的事
-6. 只输出一个 JSON 对象，不要解释、不要代码块围栏之外的内容
+5. ★ **target.name 必须是真实存在的名字**（从上面「周围敌人 / 周围NPC」列表里照抄）。
+   不许编造或用泛称（如"附近居民""某个NPC""资源"）——**目标不存在时该步会被直接跳过**。
+   周围没有 NPC 时**不要**产出 interact 步。
+6. ★ **move/gather 必须有 zoneName 或坐标**。不许产出没有 zoneName 的 gather（如"采集 资源"）。
+7. 附近没有可采集资源时**不要**产出 gather 步，改用 move/wait/follow。
+8. 结合性格与环境：有威胁先自保/战斗，安全时采集/巡逻/跟随玩家，像该角色会做的事
+9. 只输出一个 JSON 对象，不要解释、不要代码块围栏之外的内容
 `;
 }
 

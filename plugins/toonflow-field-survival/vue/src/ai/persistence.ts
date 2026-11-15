@@ -94,6 +94,13 @@ export async function loadBehaviorChains(): Promise<void> {
         if (Array.isArray(c.plan) && !existing.plan?.length) existing.plan = c.plan;
         if (Array.isArray(c.history) && !existing.history?.length) existing.history = c.history;
         if (c.planSource && !existing.planSource) existing.planSource = c.planSource;
+        // ★ 2026-11-15：恢复的计划若已无 pending 步（执行完/中断）→ 标记待重排，
+        //   否则角色恢复托管后永远没有计划可走（存档的旧计划卡在 active 也算无 pending）。
+        if (existing.plan?.length && !existing.plan.some((p: any) => p.status === "pending")) {
+          existing.plan = existing.plan.filter((p: any) => p.status !== "active");
+          existing.awaitingPlan = false;
+          existing.activeStepId = undefined;
+        }
       } else {
         states.set(eid, {
           enabled: false,
