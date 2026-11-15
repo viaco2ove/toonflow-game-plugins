@@ -101,6 +101,13 @@ export async function loadBehaviorChains(): Promise<void> {
           existing.awaitingPlan = false;
           existing.activeStepId = undefined;
         }
+        // ★ 空计划 + source=user 的脏状态（修复前的 bug 留下的）：必须清掉 user 标记，
+        //   否则「用户编辑过 → AI 不重排」的保护会让空计划永远空着（AI 空转死循环）。
+        if (!existing.plan?.length && existing.planSource === "user") {
+          existing.planSource = "ai";
+          existing.awaitingPlan = false;
+          console.info("[behavior-chain] 恢复：清空「空计划 + 用户编辑」脏状态，允许 AI 重排", eid);
+        }
       } else {
         states.set(eid, {
           enabled: false,
