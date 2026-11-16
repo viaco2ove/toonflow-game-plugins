@@ -251,8 +251,34 @@ export function entitySpriteTiles(entityType: string): number[] {
  *   未声明的类型，若地图对象显式带 camp=hostile 也算怪（通用规则）。
  */
 export function isKnownMobType(entityType: string): boolean {
-  return isMobType(entityType);
+  // ★ 2026-11-16 兜底：注册表（地图集 entity_types.json）为空（未装地图集/读取失败）时，
+  //   引擎通用怪词表接管 —— 否则内置图集（青云竹海 GOBLIN×9/ORC×2 等）的野怪全部被
+  //   「未识别类型」分支丢弃 → 全游戏无野怪可打（用户反馈「兜底地图野怪不出来」）。
+  if (isMobType(entityType)) return true;
+  return ENGINE_MOB_ENTITY_TYPES.has(String(entityType || "").trim().toUpperCase());
 }
+
+/** ★ 引擎通用怪词表（**引擎自己的词汇，不是任何地图集的业务**）：
+ *  地图集 entity_types.json 缺失时的野怪类型兜底；档案走通用兜底（injectMapMobsToState）。 */
+export const ENGINE_MOB_ENTITY_TYPES: Set<string> = new Set([
+  "GOBLIN", "ORC", "SKELETON", "ZOMBIE", "LICH", "GHOST", "WOLF", "BOAR", "BAT", "SNAKE", "SPIDER", "BANDIT",
+]);
+
+/** ★ 引擎通用怪中文名（头顶显示兜底；地图集未声明 entity_type 中文名时用） */
+export const ENGINE_MOB_ZH: Record<string, string> = {
+  GOBLIN: "哥布林",
+  ORC: "半兽人",
+  SKELETON: "骷髅兵",
+  ZOMBIE: "行尸",
+  LICH: "尸祖",
+  GHOST: "幽魂",
+  WOLF: "巨狼",
+  BOAR: "野猪",
+  BAT: "蝙蝠",
+  SNAKE: "毒蛇",
+  SPIDER: "毒蛛",
+  BANDIT: "山贼",
+};
 
 /**
  * ★ 「非怪类型」判定（**数据驱动 + 引擎通用词表**）。
@@ -293,6 +319,8 @@ export const ENGINE_NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   //   运行时协议以 pickup_item 为准（见 hasPickupItem），这里只是登记成
   //   「非怪类型」以免落到「未识别的 entity_type」告警分支。
   "PICKUP",
+  // ★ 出生点标记（编辑器放置类型，无交互语义）
+  "SPAWN_POINT",
 ]);
 
 /** ★ 文字标识类实体：解析成 kind="text_label" 的装饰（App.vue 按 textKind 分三种画法） */
@@ -551,7 +579,9 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           //   敌我判定交给 App.vue（camp=neutral → side=neutral，不主动攻击）。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
-          const mobName = String(props.name || obj.name || "野怪");
+          // ★ 名字兜底：Tiled 对象没写 name → 引擎通用怪中文名（哥布林/半兽人…）→「野怪」
+          const etUpper = String(props.entity_type || "").trim().toUpperCase();
+          const mobName = String(props.name || obj.name || ENGINE_MOB_ZH[etUpper] || "野怪");
           const archLevel = mobArchetypeOf(String(props.entity_type))?.level ?? 1;
           const mobLevel = Number.isFinite(props.level) ? Number(props.level) : archLevel;
           // ★ 击杀奖励：Tiled 对象属性里可写 bounty / dropTable（JSON 字符串）——
@@ -910,17 +940,23 @@ const LEVEL_FILES: Record<string, string> = {
  * 以地图的json 数据为准。这里只是默认值。
  * */
 const LEVEL_DISPLAY_NAMES: Record<string, string> = {
-  "Mulberry Town": "城镇",
-  "Mulberry Forest": "森林",
+  "Mulberry Town": "大罗宗外门",
+  "Mulberry Forest": "青云竹海",
   "Mulberry Graveyard": "乱葬岗",
   "Lich Lair": "尸祖洞府",
   "Loot Goblin Lair": "藏宝洞",
-  "Mulberry Dungeon": "锁灵塔·1层",
+  "Kingdom": "天剑宗",
+  "Orc Castle": "黑风寨",
+  "Old Forest": "古竹林",
+  "Old Graveyard": "古战场",
+  "Lich Boss": "锁魂祭坛",
+  "Tainted Forest": "瘴雾林",
+  "Mulberry Dungeon 1": "锁灵塔·1层",
   "Mulberry Dungeon 2": "锁灵塔·2层",
   "Mulberry Dungeon 3": "锁灵塔·3层",
   "Mulberry Dungeon 4": "锁灵塔·4层",
   "Mulberry Dungeon 5": "锁灵塔·5层",
-  "Forest Dungeon": "竹海秘境·1层",
+  "Forest Dungeon 1": "竹海秘境·1层",
   "Forest Dungeon 2": "竹海秘境·2层",
   "Forest Dungeon 3": "竹海秘境·3层",
   "Forest Dungeon 4": "竹海秘境·4层",
@@ -931,16 +967,44 @@ const LEVEL_DISPLAY_NAMES: Record<string, string> = {
  *
  * 优先级：
  *   ① 当前故事的 map_visual 包（storyMap.mapFiles）—— 23 关，来自 .tbg 解包
- *   ② LEVEL_FILES 硬编码（兜底，仅 mulberryTown / 模板默认关卡）
- *   ③ 空数组（都拿不到就退到 ui/maps 兜底，关卡列表只有当前关）
+ *   ② 内置图集兜底 FALLBACK_LEVELS —— 与 ui/maps 里的图一一对应（2026-11-16 修复：
+ *      此前 LEVEL_FILES 清空后这里返回 []，未装地图集的故事关卡清单瘫痪，
+ *      地图面板只剩存档残留的旧节点，玩家被困在城镇安全区去不了有野怪的野区）
+ *   ③ 空数组（连内置图集都对不上时）
  */
 export function listLevelNames(): string[] {
   // ① 优先：当前故事 .tbg 解出来的 mapFiles（mulberryTown, mulberryForest, ..., overworld 共 23 关）
   const fromStory = getStoryLevelNames();
   if (fromStory.length) return fromStory;
-  // ② 兜底：硬编码 LEVEL_FILES
-  return Object.keys(LEVEL_FILES);
+  // ② 兜底：内置图集（ui/maps）—— 名字经 levelNameToFile 的 slug 推导即可加载对应 JSON
+  return FALLBACK_LEVELS.slice();
 }
+
+/** ★ 内置图集（ui/maps）的兜底关卡清单。文件名 = levelNameToFile(关卡名) 的 slug 推导，
+ *  改 ui/maps 的文件名时必须同步这里。排序按游玩进度（城镇 → 野区 → 地牢 → BOSS）。 */
+const FALLBACK_LEVELS: string[] = [
+  "Mulberry Town",         // 大罗宗外门（城镇安全区 · 出生点，无野怪有演武假人）
+  "Mulberry Forest",       // 青云竹海（野怪：哥布林×9 / 半兽人×2）
+  "Mulberry Graveyard",    // 乱葬岗（野怪：骷髅 / 尸祖 / 幽魂）
+  "Old Forest",            // 古竹林
+  "Old Graveyard",         // 古战场
+  "Tainted Forest",        // 瘴雾林
+  "Kingdom",               // 天剑宗
+  "Orc Castle",            // 黑风寨
+  "Loot Goblin Lair",      // 藏宝洞
+  "Lich Lair",             // 尸祖洞府
+  "Lich Boss",             // 锁魂祭坛
+  "Mulberry Dungeon 1",    // 锁灵塔·1层
+  "Mulberry Dungeon 2",    // 锁灵塔·2层
+  "Mulberry Dungeon 3",    // 锁灵塔·3层
+  "Mulberry Dungeon 4",    // 锁灵塔·4层
+  "Mulberry Dungeon 5",    // 锁灵塔·5层
+  "Forest Dungeon 1",      // 竹海秘境·1层
+  "Forest Dungeon 2",      // 竹海秘境·2层
+  "Forest Dungeon 3",      // 竹海秘境·3层
+  "Forest Dungeon 4",      // 竹海秘境·4层
+  "Forest Dungeon 5",      // 竹海秘境·5层
+];
 
 /** 根据关卡英文名获取中文显示名。
  *

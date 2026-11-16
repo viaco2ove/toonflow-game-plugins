@@ -79,13 +79,22 @@
                 <option v-for="t in ACTION_TYPES" :key="t.value" :value="t.value">{{ t.label }}</option>
               </select>
             </label>
+            <!-- ★ 2026-11-16 可搜索下拉（用户需求）：NPC/目标/区域从候选列表选，也可手输 -->
             <label v-if="needField('targetName')" class="bc-row">
               <span class="bc-row__label">{{ form.type === 'interact' ? "NPC 名" : "目标名" }}</span>
-              <input v-model="form.targetName" class="bc-input" :placeholder="form.type === 'attack' ? '如：灰狼' : 'NPC 名字'" />
+              <ComboSearch
+                v-model="form.targetName"
+                :options="form.type === 'attack' ? enemyCandidates : npcCandidates"
+                :placeholder="form.type === 'attack' ? '如：灰狼（可搜索）' : 'NPC 名字（可搜索）'"
+              />
             </label>
             <label v-if="needField('zoneName')" class="bc-row">
               <span class="bc-row__label">区域名</span>
-              <input v-model="form.zoneName" class="bc-input" placeholder="如：灰狼野区（采集区/地点）" />
+              <ComboSearch
+                v-model="form.zoneName"
+                :options="zoneCandidates"
+                placeholder="如：灰狼野区（可搜索）"
+              />
             </label>
             <template v-if="needField('coord')">
               <label class="bc-row">
@@ -169,6 +178,7 @@ import {
 import { scheduleBehaviorChainsSave } from "../ai/persistence";
 import { stopEntityAction } from "../ai/spine";
 import { listConversations } from "../sms/store";
+import ComboSearch from "../components/ComboSearch.vue";
 import type { AIAction, AIActionType, PlanStep } from "../ai/types";
 
 const props = defineProps<{
@@ -178,6 +188,9 @@ const props = defineProps<{
   managed: boolean;
   /** 游戏主 state（App.vue 的响应式 state）：实体实时位置/血量，用于「执行中」状态行 */
   gameState?: any;
+  /** ★ 2026-11-16 已知角色全集（App.vue 的通讯录 npcCards∪场上∪地图 NPC）：
+   *  「对话交互」的 NPC 名候选（含 50m 外/未上场的角色） */
+  npcOptions?: Array<{ id: string; name: string }>;
 }>();
 const emit = defineEmits<{ (e: string, ...args: any[]): void }>();
 
@@ -501,6 +514,67 @@ const smsTargets = computed(() => {
     }
   } catch { /* 短信模块未就绪 */ }
   return out;
+});
+
+/* —— ★ 2026-11-16 可搜索下拉候选（用户需求：NPC 名/目标名/区域名加下拉+搜索）——
+ *  候选 value = 名字文本（行为链执行时按名字解析目标，见 spine.ts resolveByName）。
+ *  clockTick 依赖：距离说明随玩家/NPC 移动刷新。 */
+function fmtDist(dx: number, dy: number): string {
+  return Math.hypot(dx, dy).toFixed(0) + "m";
+}
+/** 「对话交互」候选：场上非玩家非敌人实体（带距离/Lv）∪ 已知角色全集（npcOptions，含未上场） */
+const npcCandidates = computed(() => {
+  void clockTick.value;
+  const gs = props.gameState;
+  const out = new Map<string, { value: string; label: string; desc?: string }>();
+  const player = (gs?.entities || []).find((e: any) => e.side === "player");
+  for (const e of (gs?.entities || []) as any[]) {
+    if (e.side === "player" || e.side === "enemy") continue;
+    if (e.alive === false) continue;
+    if (String(e.id) === String(props.entityId)) continue; // 自己不能跟自己交互
+    const name = String(e.name || e.id);
+    if (!name || out.has(name)) continue;
+    const desc: string[] = [];
+    if (e.level != null) desc.push(`Lv.${e.level}`);
+    if (player) desc.push(fmtDist(e.x - player.x, e.y - player.y));
+    out.set(name, { value: name, label: name, desc: desc.join(" · ") });
+  }
+  // 未上场/远处的已知角色（App.vue 通讯录：npcCards ∪ 地图 NPC 全集）
+  for (const c of (props.npcOptions || []) as any[]) {
+    const name = String(c?.name || "").trim();
+    if (!name || out.has(name)) continue;
+    if (String(c.id) === String(props.entityId)) continue;
+    out.set(name, { value: name, label: name, desc: "未在场" });
+  }
+  return [...out.values()];
+});
+/** 「攻击」候选：场上存活敌人（Lv/HP/距离） */
+const enemyCandidates = computed(() => {
+  void clockTick.value;
+  const gs = props.gameState;
+  const player = (gs?.entities || []).find((e: any) => e.side === "player");
+  const out: Array<{ value: string; label: string; desc?: string }> = [];
+  for (const e of (gs?.entities || []) as any[]) {
+    if (e.side !== "enemy" || e.alive === false) continue;
+    const name = String(e.name || e.id);
+    const desc: string[] = [`Lv.${e.level ?? "?"}`, `HP ${e.hp ?? "?"}`];
+    if (player) desc.push(fmtDist(e.x - player.x, e.y - player.y));
+    out.push({ value: name, label: name, desc: desc.join(" · ") });
+  }
+  return out;
+});
+/** 「区域名」候选：当前地图 zones（安全区/危险区/首领） */
+const zoneCandidates = computed(() => {
+  void clockTick.value;
+  const zones = props.gameState?.map?.zones || [];
+  const KIND_TXT: Record<string, string> = { safe: "安全区", danger: "危险区", boss: "首领" };
+  const out = new Map<string, { value: string; label: string; desc?: string }>();
+  for (const z of zones as any[]) {
+    const name = String(z?.name || "").trim();
+    if (!name || out.has(name)) continue;
+    out.set(name, { value: name, label: name, desc: KIND_TXT[String(z.kind)] || "" });
+  }
+  return [...out.values()];
 });
 </script>
 

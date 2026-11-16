@@ -6826,14 +6826,22 @@ export async function handle_action(
       //   若这里无条件 pushEvent → 事件日志每秒刷一条「当前关卡敌怪已接入宿主 AI（N 只）」，
       //   把真正的战斗事件冲掉（实测 376 tick 里刷了 35 条）。
       //   判定：本次重建的只数与上次不同，或本地敌怪世代号变了 → 才算「变了」。
+      //   ★ 2026-11-16 修正：播报只数**真敌怪**（side=enemy）——此前把中立练习假人也
+      //     算进去，城镇里一只野怪都没有却播「敌怪已接入宿主 AI（4 只）」，用户以为
+      //     野怪没刷出来（4 只全是演武场 stand/duel 假人）。纯假人重建不播报。
       if (localBuilt > 0) {
+        const hostileBuilt = s.entities.filter((e) => e.side === "enemy" && isLocalEnemyId(e.id)).length;
         const _lb = (s as any)._lastLocalBuilt ?? -1;
         const _le = num(s.localMobsEpoch, 0);
         const _lpe = (s as any)._lastLocalEpoch ?? -1;
-        if (_lb !== localBuilt || _lpe !== _le) {
+        if (hostileBuilt > 0 && (_lb !== localBuilt || _lpe !== _le)) {
           (s as any)._lastLocalBuilt = localBuilt;
           (s as any)._lastLocalEpoch = _le;
-          pushEvent(s, `当前关卡敌怪已接入宿主 AI（${localBuilt} 只）`);
+          pushEvent(s, `当前关卡敌怪已接入宿主 AI（${hostileBuilt} 只）`);
+        } else if (_lb !== localBuilt || _lpe !== _le) {
+          // 计数变了但不播报（如纯假人图）也要推进标记，避免下一处敌怪进图时误判「没变」
+          (s as any)._lastLocalBuilt = localBuilt;
+          (s as any)._lastLocalEpoch = _le;
         }
       }
       return okResp("");

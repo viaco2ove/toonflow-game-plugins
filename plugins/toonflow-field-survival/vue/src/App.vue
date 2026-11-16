@@ -2061,13 +2061,23 @@ const mapSourceLabel = computed(() => {
   const s = state.value?.mapSource;
   return s === "agent" ? "AI 地图" : s === "stored" ? "缓存地图" : s === "fallback" ? "默认地图" : "";
 });
-/** ★ 当前关卡野怪等级范围（null = 无野怪，[min, max] = 等级区间） */
+/** ★ 当前关卡野怪等级范围（null = 无野怪，[min, max] = 等级区间）
+ *  ★ 2026-11-16 修复：只数真敌怪（camp=hostile）——此前把中立练习假人（大罗宗外门
+ *    演武场 stand/duel 假人）也算进「🐾 N只」，城镇明明无敌怪却显示 4 只（用户误以为
+ *    野怪没刷出来）。等级区间同样从敌怪算（不再用含假人 0 级的 cfg.mobLevelRange）。 */
+const hostileMapMobs = computed(() =>
+  ((mapCfg.value?.mobs ?? []) as Array<any>).filter((m) => (m?.camp || "hostile") === "hostile"),
+);
 const mapMobLevelRange = computed<[number, number] | null>(() => {
-  const r = mapCfg.value?.mobLevelRange;
-  return r && r.length === 2 ? r : null;
+  const mobs = hostileMapMobs.value;
+  if (!mobs.length) return null;
+  return mobs.reduce<[number, number]>((acc, m) => {
+    const lv = Number(m?.level) || 1;
+    return [Math.min(acc[0], lv), Math.max(acc[1], lv)];
+  }, [Infinity, -Infinity]);
 });
-/** ★ 当前关卡野怪数量 */
-const mapMobCount = computed(() => mapCfg.value?.mobs?.length ?? 0);
+/** ★ 当前关卡野怪数量（中立假人不计入） */
+const mapMobCount = computed(() => hostileMapMobs.value.length);
 
 /* ---------------- 选人 ---------------- */
 // ★ v6：reactive 数组（不是 ref）—— template 自动 unwrap ref 经常让我们传错对象，
@@ -9853,6 +9863,7 @@ watch(() => state.value?.phase, (p) => {
       :entity-name="behaviorChainEntityName"
       :managed="behaviorChainManaged"
       :game-state="state"
+      :npc-options="sysSmsContacts"
       @close="showBehaviorChain = false"
     />
   </div>
