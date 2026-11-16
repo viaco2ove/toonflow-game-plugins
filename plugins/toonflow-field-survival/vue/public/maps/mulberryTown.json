@@ -9062,6 +9062,363 @@
               "type": "string"
             }
           ]
+        },
+        {
+          "id": 248,
+          "name": "",
+          "type": "",
+          "x": 704,
+          "y": 512,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SIGNBOARD",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "锻造场",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 249,
+          "name": "",
+          "type": "",
+          "x": 768,
+          "y": 448,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SIGNBOARD",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "炼丹场",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 251,
+          "name": "",
+          "type": "",
+          "x": 512,
+          "y": 64,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SKELETON",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 10,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "training_dummy",
+              "value": true,
+              "type": "bool"
+            },
+            {
+              "name": "dummy_mode",
+              "value": "stand",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 252,
+          "name": "",
+          "type": "",
+          "x": 384,
+          "y": 64,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SKELETON",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 20,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "training_dummy",
+              "value": true,
+              "type": "bool"
+            },
+            {
+              "name": "dummy_mode",
+              "value": "duel",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 253,
+          "name": "",
+          "type": "",
+          "x": 64,
+          "y": 96,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SKELETON",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 30,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "training_dummy",
+              "value": true,
+              "type": "bool"
+            },
+            {
+              "name": "dummy_mode",
+              "value": "duel",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 254,
+          "name": "",
+          "type": "",
+          "x": 224,
+          "y": 64,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "SKELETON",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 0,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "练习假人",
+              "type": "string"
+            },
+            {
+              "name": "training_dummy",
+              "value": true,
+              "type": "bool"
+            },
+            {
+              "name": "dummy_mode",
+              "value": "duel",
+              "type": "string"
+            }
+          ],
+          "_props": null
+        },
+        {
+          "id": 255,
+          "name": "",
+          "type": "",
+          "x": 672,
+          "y": 576,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "NPC",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 1,
+              "type": "int"
+            }
+          ],
+          "gid": 3865
+        },
+        {
+          "id": 256,
+          "name": "",
+          "type": "",
+          "x": 736,
+          "y": 544,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "NPC",
+              "type": "string"
+            },
+            {
+              "name": "camp",
+              "value": "neutral",
+              "type": "string"
+            },
+            {
+              "name": "level",
+              "value": 1,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "锻造大师",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "锻造大师",
+              "type": "string"
+            }
+          ],
+          "_props": null,
+          "gid": 3986
+        },
+        {
+          "id": 257,
+          "name": "",
+          "type": "",
+          "x": 768,
+          "y": 384,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "CHEST",
+              "type": "string"
+            },
+            {
+              "name": "tier",
+              "value": 1,
+              "type": "int"
+            },
+            {
+              "name": "name",
+              "value": "炼丹炉",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "炼丹炉",
+              "type": "string"
+            }
+          ],
+          "_props": null,
+          "gid": 9002
+        },
+        {
+          "id": 258,
+          "name": "任务板",
+          "type": "board",
+          "x": 832,
+          "y": 1664,
+          "width": 32,
+          "height": 32,
+          "properties": [
+            {
+              "name": "entity_type",
+              "value": "NPC",
+              "type": "string"
+            },
+            {
+              "name": "full_name",
+              "value": "任务板",
+              "type": "string"
+            },
+            {
+              "name": "name",
+              "value": "任务板",
+              "type": "string"
+            },
+            {
+              "name": "dialog",
+              "value": "BOARD",
+              "type": "string"
+            }
+          ],
+          "gid": 58
         }
       ],
       "opacity": 1,

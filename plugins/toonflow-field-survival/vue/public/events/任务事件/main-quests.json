@@ -1,0 +1,634 @@
+{
+  "version": 1,
+  "chains": [
+    {
+      "id": "MC1",
+      "title": "系统绑定",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "晨雾未散，石阶自山门蜿蜒而上。你是大罗宗宗主陆川，筑基期修为，正扫着祖师堂前的落叶。识海深处，【收徒系统】的金字提示静静悬浮。",
+      "giver": "任务板",
+      "order": 1,
+      "lockedBy": [],
+      "nodes": [
+        {
+          "id": "MC1_1",
+          "quest": {
+            "id": "MCQ101",
+            "title": "扫帚与石阶",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "落叶堆在祖师堂前的石阶上。你随手抄起那把秃了大半的扫帚——奇怪，扫帚柄上隐隐有字迹。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "祖师堂", "x": -14.5, "y": -12.0, "radius": 4, "confirm": true }
+            ],
+            "reward": { "exp": 60, "money": 20 },
+            "flags": { "done": "broom_picked" }
+          },
+          "onSuccess": ["MC1_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_2",
+          "quest": {
+            "id": "MCQ102",
+            "title": "【收徒系统】已激活",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "识海里的金字终于凝成一行：【收徒系统】绑定完成，今日宜收徒。可这事你得问清楚——藏经阁里那位「扫地的」老者最清楚。",
+            "objectives": [
+              { "kind": "talk", "target": "墨老", "uid": "169", "count": 1 }
+            ],
+            "reward": { "exp": 80, "money": 30 },
+            "flags": { "done": "phase_1_active" }
+          },
+          "onSuccess": ["MC1_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC1_3",
+          "quest": {
+            "id": "MCQ103",
+            "title": "讨个说法",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "玄尘长老迎上来，躬身一礼：「掌门，祖师堂的落叶……您都扫出神功来了。」拜师礼成，大罗宗宗主的位置，落到了你肩上。",
+            "objectives": [
+              { "kind": "talk", "target": "玄尘长老", "uid": "225", "count": 1 }
+            ],
+            "reward": { "exp": 120, "money": 50 },
+            "flags": { "done": "phase_1_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC2",
+      "title": "有人拜山",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "山门外白袍加身，折扇轻摇。天剑宗首席弟子陈南璇，把「拜师」两个字挂在了大罗宗的门口。",
+      "giver": "任务板",
+      "order": 2,
+      "lockedBy": ["MC1"],
+      "nodes": [
+        {
+          "id": "MC2_1",
+          "quest": {
+            "id": "MCQ201",
+            "title": "白衣踏阶",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "石阶尽头立着一个人。白衣胜雪，背负长剑，眉头微蹙。他自报家门：「天剑宗首席，陈南璇。听闻大罗宗收徒，特来挂单。」",
+            "objectives": [
+              { "kind": "talk", "target": "陈南璇", "uid": "163", "count": 1 }
+            ],
+            "reward": { "exp": 150, "money": 60 },
+            "flags": { "done": "chen_nanxuan_met" }
+          },
+          "onSuccess": ["MC2_2A", "MC2_2B"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_2A",
+          "quest": {
+            "id": "MCQ202A",
+            "title": "走正规礼制",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "陈南璇是讲规矩的人——正道模板，一板一眼。你唤来玄尘长老主持拜师礼，一切依着古制来。",
+            "objectives": [
+              { "kind": "talk", "target": "玄尘长老", "uid": "225", "count": 1 }
+            ],
+            "reward": { "exp": 180, "money": 70 }
+          },
+          "onSuccess": ["MC2_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_2B",
+          "quest": {
+            "id": "MCQ202B",
+            "title": "你自己拍板",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "你摆摆手，玄尘长老识趣地退下了。收徒这种事，大罗宗向来是宗主一言而决——你亲自走下石阶，把人领进山门。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "山门牌坊", "x": 20.5, "y": 17.0, "radius": 5, "confirm": true }
+            ],
+            "reward": { "exp": 180, "money": 70 },
+            "flags": { "done": "sect_join_style_free" }
+          },
+          "onSuccess": ["MC2_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC2_3",
+          "quest": {
+            "id": "MCQ203",
+            "title": "二弟子入门",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 2,
+            "desc": "收徒礼成。陈南璇僵在原地，半晌才挤出一句：「……这也叫拜师？」你笑了笑——他日后会怀念这份轻松的。",
+            "objectives": [
+              { "kind": "talk", "target": "陈南璇", "uid": "163", "count": 1 }
+            ],
+            "reward": { "exp": 220, "money": 100 },
+            "flags": { "done": "disciple_chen" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC3",
+      "title": "赐功法",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "藏经阁的玉简架前，功法以一枚玉简为凭。你得先练会它，才有资格教徒弟——尤其是那条穿花裤衩的狗。",
+      "giver": "任务板",
+      "order": 3,
+      "lockedBy": ["MC2"],
+      "nodes": [
+        {
+          "id": "MC3_1",
+          "quest": {
+            "id": "MCQ301",
+            "title": "玉简交换",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 3,
+            "desc": "玉简架上落了一层薄灰。你取下那枚写着《扫地神功》的玉简——它认你。于是你也认它。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "玉简架", "x": -13.5, "y": -2.0, "radius": 4, "confirm": true }
+            ],
+            "reward": { "exp": 200, "money": 80 },
+            "flags": { "done": "jade_slip_taken" }
+          },
+          "onSuccess": ["MC3_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_2",
+          "quest": {
+            "id": "MCQ302",
+            "title": "仔细练",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 3,
+            "desc": "《扫地神功》讲究「一扫三丈」。演武场上那几个练习假人正合适——先把式子走顺，再谈传授。",
+            "objectives": [
+              { "kind": "kill", "target": "练习假人", "count": 3 }
+            ],
+            "reward": { "exp": 260, "money": 100 }
+          },
+          "onSuccess": ["MC3_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_3",
+          "quest": {
+            "id": "MCQ303",
+            "title": "多谢师尊",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 3,
+            "desc": "陈南璇看完你演练的那一掌，沉默了很久，最后极不情愿地开口：「……多谢师尊。」",
+            "objectives": [
+              { "kind": "talk", "target": "陈南璇", "uid": "163", "count": 1 }
+            ],
+            "reward": { "exp": 280, "money": 120 }
+          },
+          "onSuccess": ["MC3_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC3_4",
+          "quest": {
+            "id": "MCQ304",
+            "title": "丢进草丛",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 3,
+            "desc": "藏经阁后门的草丛里窸窣一响。你把那枚玉简随手丢了进去——真意不在扫帚，也不在玉简，在丢出去的那一瞬。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "藏经阁后门", "x": -14.5, "y": -4.0, "radius": 5, "confirm": true }
+            ],
+            "reward": { "exp": 320, "money": 150 },
+            "flags": { "done": "phase_3_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC4",
+      "title": "黑狗捡功",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "藏经阁后院来了一位不速之客——穿着花裤衩的狗。它叼走了你的玉简，还冲你叫了一声。",
+      "giver": "任务板",
+      "order": 4,
+      "lockedBy": ["MC3"],
+      "nodes": [
+        {
+          "id": "MC4_1",
+          "quest": {
+            "id": "MCQ401",
+            "title": "花裤衩黑狗",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 4,
+            "desc": "藏经阁后院，一条穿着花裤衩的狗正咬着那枚玉简撒欢。它抬头看你，眼神里没有半分惧意。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "藏经阁后院", "x": -14.5, "y": -4.0, "radius": 6, "confirm": true }
+            ],
+            "reward": { "exp": 260, "money": 100 },
+            "flags": { "done": "phase_4_active" }
+          },
+          "onSuccess": ["MC4_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC4_2",
+          "quest": {
+            "id": "MCQ402",
+            "title": "汪！",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 4,
+            "desc": "它把玉简往你脚边一推，「汪」了一声。那意思分明是：来啊，教我。",
+            "objectives": [
+              { "kind": "talk", "target": "小白", "uid": "232", "count": 1 }
+            ],
+            "reward": { "exp": 280, "money": 110 }
+          },
+          "onSuccess": ["MC4_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC4_3",
+          "quest": {
+            "id": "MCQ403",
+            "title": "歪悟判定",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 4,
+            "timeLimitTicks": 3000,
+            "desc": "你把《扫地神功》的心法念给狗听。念到第三句，它忽然叼起扫帚，扫出了你的三倍威力——这就是歪悟。三十秒内完成，否则它就不理你了。",
+            "objectives": [
+              { "kind": "talk", "target": "小白", "uid": "232", "count": 1 }
+            ],
+            "reward": { "exp": 340, "money": 140 }
+          },
+          "onSuccess": ["MC4_4"],
+          "onFail": ["MC4_3F"]
+        },
+        {
+          "id": "MC4_3F",
+          "quest": {
+            "id": "MCQ403F",
+            "title": "狗跑没影了",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 4,
+            "desc": "你讲到一半，那条狗忽然叼着玉简一溜烟跑了。顺着后山小径追上去——它跑不远。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "后山小径", "x": 15.5, "y": 10.0, "radius": 6, "confirm": true }
+            ],
+            "reward": { "exp": 120, "money": 60 }
+          },
+          "onSuccess": ["MC4_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC4_4",
+          "quest": {
+            "id": "MCQ404",
+            "title": "认师成功",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 4,
+            "desc": "狗重新蹲回你脚边，尾巴摇得像扫帚。从今天起，它是你的大师兄——尽管它连人话都不会说。",
+            "objectives": [
+              { "kind": "talk", "target": "小白", "uid": "232", "count": 1 }
+            ],
+            "reward": { "exp": 400, "money": 180 },
+            "flags": { "done": "disciple_dog" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC5",
+      "title": "讲课任务",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "药堂弟子苏沫捧着授课任务跑来找你：三师弟、二师弟都到位了，就等大师兄开讲。",
+      "giver": "任务板",
+      "order": 5,
+      "lockedBy": ["MC4"],
+      "nodes": [
+        {
+          "id": "MC5_1",
+          "quest": {
+            "id": "MCQ501",
+            "title": "授课任务",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 5,
+            "desc": "苏沫双手捧着一卷授课任务：「掌门，弟子们都在演武场候着了。今日讲哪一课，您定。」",
+            "objectives": [
+              { "kind": "talk", "target": "苏沫", "uid": "165", "count": 1 }
+            ],
+            "reward": { "exp": 300, "money": 120 },
+            "flags": { "done": "phase_5_active" }
+          },
+          "onSuccess": ["MC5_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_2",
+          "quest": {
+            "id": "MCQ502",
+            "title": "铜磬开讲",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 5,
+            "desc": "演武场东侧立着一只古铜磬。三师弟在后山早就按捺不住——敲磬开讲，他立刻就到。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "铜磬", "x": -14.5, "y": -4.0, "radius": 5, "confirm": true }
+            ],
+            "reward": { "exp": 320, "money": 130 }
+          },
+          "onSuccess": ["MC5_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_3",
+          "quest": {
+            "id": "MCQ503",
+            "title": "封耳装睡",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 5,
+            "desc": "萧肿坐在演武场角落，双手死死捂住耳朵，眼睛闭得紧紧的：「我什么都没听见，我睡着了。」他演得并不太像。",
+            "objectives": [
+              { "kind": "talk", "target": "萧肿", "uid": "200", "count": 1 }
+            ],
+            "reward": { "exp": 340, "money": 140 }
+          },
+          "onSuccess": ["MC5_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC5_4",
+          "quest": {
+            "id": "MCQ504",
+            "title": "听得认真",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 5,
+            "desc": "苏沫是唯一坐直了身子的人。她记下了整整三页笔记，最后问你：「掌门，这一句再讲一遍可好？」",
+            "objectives": [
+              { "kind": "talk", "target": "苏沫", "uid": "165", "count": 1 }
+            ],
+            "reward": { "exp": 420, "money": 200 },
+            "flags": { "done": "phase_5_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MC6",
+      "title": "突破",
+      "chapter": "第 1 章 · 拜师大罗宗",
+      "desc": "锁灵塔的门终于开了。九层塔，层层傀儡。你要连破数层，直冲九层——这是大罗宗宗主的破境之试。",
+      "giver": "任务板",
+      "order": 6,
+      "lockedBy": ["MC5"],
+      "nodes": [
+        {
+          "id": "MC6_1",
+          "quest": {
+            "id": "MCQ601",
+            "title": "塔门未开",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 6,
+            "desc": "锁灵塔入口的石门上符纹未熄。玄尘长老摇头：「塔认宗主，不认掌门——您得先过了这一关，它才肯开。」",
+            "objectives": [
+              { "kind": "talk", "target": "玄尘长老", "uid": "225", "count": 1 }
+            ],
+            "reward": { "exp": 380, "money": 150 },
+            "flags": { "done": "phase_6_active" }
+          },
+          "onSuccess": ["MC6_2"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_2",
+          "quest": {
+            "id": "MCQ602",
+            "title": "连破数层",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryDungeon1",
+            "level": 6,
+            "timeLimitTicks": 4000,
+            "desc": "锁灵塔·一层。锁灵傀儡·壹排成五行，一招一式都是你昨天才教过的。打完它们，下行的梯子才会露出来。",
+            "objectives": [
+              { "kind": "kill", "target": "锁灵傀儡", "count": 6 }
+            ],
+            "reward": { "exp": 460, "money": 180 }
+          },
+          "onSuccess": ["MC6_3"],
+          "onFail": ["MC6_2F"]
+        },
+        {
+          "id": "MC6_2F",
+          "quest": {
+            "id": "MCQ602F",
+            "title": "塔中迷路",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryDungeon1",
+            "level": 6,
+            "timeLimitTicks": 2400,
+            "desc": "塔里的符阵把来路全换了。你在原地绕了半炷香——找准下行梯的位置，才能继续往上。四十秒内。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryDungeon1", "target": "锁灵塔·下行梯", "x": -4.5, "y": -0.5, "radius": 4, "confirm": true }
+            ],
+            "reward": { "exp": 150, "money": 70 }
+          },
+          "onSuccess": ["MC6_3"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_3",
+          "quest": {
+            "id": "MCQ603",
+            "title": "直冲九层",
+            "type": "kill",
+            "giver": "任务板",
+            "map": "mulberryDungeon5",
+            "level": 7,
+            "desc": "五层、九层，一路打上来。锁灵傀儡·伍的招式你早已烂熟——扫帚一挥，一排齐倒。",
+            "objectives": [
+              { "kind": "kill", "target": "锁灵傀儡", "count": 9 }
+            ],
+            "reward": { "exp": 700, "money": 300 }
+          },
+          "onSuccess": ["MC6_4"],
+          "onFail": []
+        },
+        {
+          "id": "MC6_4",
+          "quest": {
+            "id": "MCQ604",
+            "title": "大师兄任务",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 7,
+            "desc": "回到外门，那条穿花裤衩的狗正襟危坐——大师兄第一次板着脸给你派活：「师父，藏经阁三楼……我进不去。你去。」",
+            "objectives": [
+              { "kind": "talk", "target": "小白", "uid": "232", "count": 1 }
+            ],
+            "reward": { "exp": 900, "money": 500 },
+            "flags": { "done": "breakthrough_done" }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MS1",
+      "title": "炼丹入门",
+      "chapter": "支线 · 大罗宗日常",
+      "desc": "丹炉（半截炸过）还蹲在药堂边上。既然收了徒，总得先让他们吃饱饭——从认药开始。",
+      "giver": "任务板",
+      "order": 90,
+      "lockedBy": [],
+      "side": true,
+      "nodes": [
+        {
+          "id": "MS1_1",
+          "quest": {
+            "id": "MSQ101",
+            "title": "认药：采药×3",
+            "type": "gather",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "药堂后面的农田里长着几味常见药材。认得出、采得回，才谈得上炼丹。",
+            "objectives": [
+              { "kind": "gather", "target": "药材", "count": 3 }
+            ],
+            "reward": { "exp": 80, "money": 40 }
+          },
+          "onSuccess": ["MS1_2"],
+          "onFail": []
+        },
+        {
+          "id": "MS1_2",
+          "quest": {
+            "id": "MSQ102",
+            "title": "第一次开炉",
+            "type": "explore",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "药堂西侧的丹炉炸过一半，炉膛却还旺着。把药材丢进去——第一炉丹，成不成都算你的。",
+            "objectives": [
+              { "kind": "explore", "map": "mulberryTown", "target": "丹炉", "x": -17.5, "y": 13.0, "radius": 4, "confirm": true }
+            ],
+            "reward": { "exp": 150, "money": 90 }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    },
+    {
+      "id": "MS2",
+      "title": "锻造入门",
+      "chapter": "支线 · 大罗宗日常",
+      "desc": "锻造场里炉火通红，锻造大师抡着锤不抬头。他不收徒，但他肯给你一炉废铁练手。",
+      "giver": "任务板",
+      "order": 91,
+      "lockedBy": [],
+      "side": true,
+      "nodes": [
+        {
+          "id": "MS2_1",
+          "quest": {
+            "id": "MSQ201",
+            "title": "备料：木材×3",
+            "type": "gather",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "柴房里堆着些松木。锻炉要先烧透，木头不够，火就硬不起来。",
+            "objectives": [
+              { "kind": "gather", "target": "木材", "count": 3 }
+            ],
+            "reward": { "exp": 80, "money": 40 }
+          },
+          "onSuccess": ["MS2_2"],
+          "onFail": []
+        },
+        {
+          "id": "MS2_2",
+          "quest": {
+            "id": "MSQ202",
+            "title": "交付锻造台",
+            "type": "talk",
+            "giver": "任务板",
+            "map": "mulberryTown",
+            "level": 1,
+            "desc": "锻造大师头也不抬：「料齐了？放台上。」你把木料摞好，他终于正眼看了你一下，「还行。」",
+            "objectives": [
+              { "kind": "talk", "target": "锻造大师", "uid": "256", "count": 1 }
+            ],
+            "reward": { "exp": 150, "money": 90 }
+          },
+          "onSuccess": [],
+          "onFail": []
+        }
+      ]
+    }
+  ]
+}
