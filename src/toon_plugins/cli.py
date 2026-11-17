@@ -699,7 +699,8 @@ def _seed_story_task_data(client, plugin_id: str, story: str, source_dir: str, s
 #   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
 #       -story 赦夜人冥夜走廊-第二季 -spriteBinds -skillMeta -itemMeta
 #       → 导出 sys_state 的实体形象绑定/技能配置/物品配置到
-#         .cache/toonflow-field-survival/plugin_session_data/（spriteBinds 额外解码 PNG）
+#         .cache/toonflow-field-survival/plugin_session_data/{故事}/{时间戳}/
+#         （spriteBinds 额外解码 PNG；_export_manifest.json 记录 服务器/故事/会话/文件清单）
 # sessionId 默认为 "all"（跨会话共享，与 req.md 约定一致）；
 # 传 --session 切换到具体会话。
 # ─────────────────────────────────────────────────────────────────────────
@@ -763,12 +764,19 @@ def _decode_data_url_image(data_url, out_path):
 
 
 def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir):
-    """按故事（或指定会话）导出 sys_state 的指定字段到 out_dir。
+    """按故事（或指定会话）导出 sys_state 的指定字段。
+
+    目录结构（2026-11-18）：{base}/{story}/{YYYYMMDD_HHMMSS}/
+      · base        = --out 或 .cache/toonflow-field-survival/plugin_session_data/
+      · story       = -story 的故事名（文件系统非法字符清洗）；--session 模式无故事名时
+                      退化为 _session_<sessionId>，保证两种模式都有归属目录
+      · time        = 导出批次时间戳，同一故事多次导出互不覆盖
+    同一批次内记录 来源（服务器 / 故事 / 会话清单）到 _export_manifest.json。
 
     输出：
-      <out>/<sessionId>.<field>.json          字段原样 JSON
-      <out>/sprites/<sessionId>/<角色>.png    spriteBinds 里的 data:URL 图（便利产物）
-      <out>/_export_manifest.json             本次导出清单（时间/会话/文件列表）
+      <dir>/<sessionId>.<field>.json          字段原样 JSON
+      <dir>/sprites/<sessionId>/<角色>.png    spriteBinds 里的 data:URL 图（便利产物）
+      <dir>/_export_manifest.json             导出清单（服务器/故事/会话/字段/文件列表）
     """
     # ① 解析会话清单 --------------------------------------------------------
     sessions = []          # [(sessionId, title)]
@@ -805,7 +813,16 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
                     "sys_state 是会话级存档，sessionId=\"all\" 下不存在", fg="red")
         return
 
-    out_dir = out_dir or EXPORT_DEFAULT_DIR
+    # ② 目标目录：{base}/{story}/{time}（--session 无故事名时退化为 _session_<sid>）----
+    base_dir = out_dir or EXPORT_BASE_DIR
+    if story:
+        story_dir_name = _safe_dirname(story)
+    elif sessions:
+        story_dir_name = "_session_" + _safe_filename(sessions[0][0], "unknown")
+    else:
+        story_dir_name = "_session_unknown"
+    batch_dir_name = _export_timestamp()
+    out_dir = os.path.join(base_dir, story_dir_name, batch_dir_name)
     os.makedirs(out_dir, exist_ok=True)
     sprites_dir = os.path.join(out_dir, "sprites")
     written = []           # (path, bytes)
@@ -853,9 +870,10 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
                     elif not str(image).startswith("data:"):
                         click.echo(f"  [INFO] {role_key}: 形象是引用路径（非内嵌 data:URL）→ 不解码，JSON 里保留原值")
 
-    # ③ 导出清单 ------------------------------------------------------------
+    # ③ 导出清单（记录来源：服务器 / 故事 / 会话 / 字段 / 文件）--------------------
     manifest = {
         "exportedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S") if datetime else None,
+        "server": str(getattr(client, "base_url", "") or ""),
         "story": story or "",
         "pluginId": plugin_id,
         "sessions": [{"sessionId": s, "title": t} for s, t in sessions],
@@ -868,7 +886,9 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
         _json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     click.secho(f"\n[OK] 导出完成：{len(written)} 个 JSON + {png_count} 张图 → {os.path.relpath(out_dir, os.path.dirname(CLI_ROOT))}/"
-                f"（清单：_export_manifest.json）", fg="green")
+                f"\n     来源：server={manifest['server']}  story={manifest['story'] or '(--session 模式)'}"
+                f"  sessions={[s for s, _ in sessions]}"
+                f"\n     清单：_export_manifest.json", fg="green")
 
 
 @main.command(name="story_info")
@@ -962,14 +982,16 @@ def story_info(ctx, story, world_id, roles, state):
 @click.option("-role", "op_role", is_flag=True, help="读取并展示 AI 故事角色位置（dataKey=ai_story_roles）")
 @click.option("-position", "op_position", is_flag=True, help="配合 -role 使用，按 x/y 排序展示角色位置")
 @click.option("-spriteBinds", "sprite_binds", is_flag=True,
-              help="导出角色实体形象绑定（sys_state.spriteBinds）→ JSON + 解码 PNG 到 .cache/toonflow-field-survival/plugin_session_data/。"
+              help="导出角色实体形象绑定（sys_state.spriteBinds）→ JSON + 解码 PNG。"
+                   "目录：.cache/toonflow-field-survival/plugin_session_data/{故事}/{时间戳}/；"
                    "会话来源：-story 解析该故事的全部会话，或 --session 指定单个会话")
 @click.option("-skillMeta", "skill_meta", is_flag=True,
-              help="导出技能配置/属性特效绑定（sys_state.skillMeta）→ JSON（会话来源同上）")
+              help="导出技能配置/属性特效绑定（sys_state.skillMeta）→ JSON（目录与会话来源同上）")
 @click.option("-itemMeta", "item_meta", is_flag=True,
-              help="导出物品配置/属性特效绑定（sys_state.itemMeta）→ JSON（会话来源同上）")
+              help="导出物品配置/属性特效绑定（sys_state.itemMeta）→ JSON（目录与会话来源同上）")
 @click.option("--out", "export_out", default=None, type=click.Path(file_okay=False, dir_okay=True),
-              help="导出目录（默认 <仓库根>/.cache/toonflow-field-survival/plugin_session_data/）")
+              help="导出根目录（默认 <仓库根>/.cache/toonflow-field-survival/plugin_session_data/，"
+                   "其下按 {故事}/{时间戳} 分目录）")
 @click.pass_context
 def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
                        op_get, op_set, op_list, op_remove,
@@ -983,8 +1005,10 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
 
     导出模式（-spriteBinds / -skillMeta / -itemMeta）：从 sys_state 抽取
     实体形象绑定 / 技能配置 / 物品配置，按 -story 解析该故事全部会话（或 --session
-    指定单个会话），落盘到 .cache/toonflow-field-survival/plugin_session_data/。
-    spriteBinds 额外把 data:URL 形象图解码成 PNG（sprites/<sessionId>/<角色>.png）。
+    指定单个会话），落盘到
+      .cache/toonflow-field-survival/plugin_session_data/{故事}/{时间戳}/
+    spriteBinds 额外把 data:URL 形象图解码成 PNG（sprites/<sessionId>/<角色>.png）；
+    _export_manifest.json 记录本次导出来源（服务器 / 故事 / 会话清单 / 字段 / 文件）。
     """
     client = resolve_client(ctx.obj["env_path"])
 
