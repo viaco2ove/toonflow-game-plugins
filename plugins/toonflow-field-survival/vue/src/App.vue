@@ -2226,6 +2226,197 @@ const selectableRoles = computed<RoleOption[]>(() =>
   roles.value.filter((r) => String(r?.roleType) !== "player"),
 );
 
+/* ============================================================
+   ★ 选人数据持久化（t_plugin_session_data，dataKey = role_selection）
+   ------------------------------------------------------------
+   需求：点「开始游戏」时把 友方/观战/敌对 三组选择写进插件会话数据，
+        下次进入选人页自动回填。
+   通道：toonflowJsApi.pluginData（宿主代发 /plugin/data）。
+        维度 = 当前故事会话（宿主按 __STORY_SESSION_ID__ 定）——
+        同一故事重进小游戏（退出→再进）会读到同一条记录。
+   独立模式（mockHost / 独立预览）没有宿主代发通道 →
+        mirror 到 localStorage 兜底，本地调试也能看到回填。
+   ============================================================ */
+const ROLE_SEL_KEY = "role_selection";
+const ROLE_SEL_ALL_KEY = "role_selection_all";
+const ROLE_SEL_LS_KEY = "fs_role_selection";
+interface RoleSelection { participants: string[]; spectators: string[]; enemies: string[]; }
+/** 从库里读到的选择：可能早于 state.roles 到达，先缓存，等角色表就绪再套 */
+let savedRoleSelection: RoleSelection | null = null;
+/** 本次是否真的回填了（模板给个提示，便于确认落库生效） */
+const roleSelRestored = ref(false);
+
+/** 是否跑在宿主 iframe 里（只有 iframe 才有 pluginData 通道） */
+function hasHostPluginData(): boolean {
+  try { return window.parent !== window; } catch { return false; }
+}
+/** localStorage 兜底键：必须按故事隔离，否则 A 故事的角色 id 会把 B 故事选人填错 */
+function roleSelLsKey(): string {
+  return storyScopedKey(ROLE_SEL_LS_KEY);
+}
+/** 跨会话（scope="all"）的故事级键：新建同一故事的会话也能回填 */
+function roleSelAllKey(): string {
+  return storyScopedKey(ROLE_SEL_ALL_KEY);
+}
+function storyScopedKey(base: string): string {
+  let story = "";
+  try {
+    const e = envInfo();
+    story = String(e.storyId || e.storyName || "");
+  } catch { /* ignore */ }
+  return story ? `${base}:${story}` : base;
+}
+function asIdList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const x of v) {
+    const s = typeof x === "string" ? x : (x == null ? "" : String(x));
+    if (s) out.push(s);
+  }
+  return out;
+}
+/** 归一化：只要是「三组数组」形状就算有效记录（全空也是有效 = 用户上次一个都没选，
+ *  不能再回落到别的来源，否则清空后老选择会复活）。 */
+function normalizeRoleSelection(v: unknown): RoleSelection | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as any;
+  const shaped = Array.isArray(o.participants) || Array.isArray(o.spectators) || Array.isArray(o.enemies);
+  if (!shaped) return null;
+  return {
+    participants: asIdList(o.participants),
+    spectators: asIdList(o.spectators),
+    enemies: asIdList(o.enemies),
+  };
+}
+
+/** 读上次选择并套到三组数组上（角色表未就绪时只缓存，由 watch(selectableRoles) 补套）。
+ *  读取优先级：本次会话 → 本故事跨会话（scope="all"）→ 本故事 localStorage。
+ *  前者为空才降级，所以「用户上次显式清空」不会被老记录覆盖。 */
+async function loadRoleSelection(): Promise<void> {
+  let raw: unknown = null;
+  if (hasHostPluginData()) {
+    const api = (window as any).__TFAPI__ || toonflowJsApi;
+    try {
+      raw = await api?.pluginData?.get?.(ROLE_SEL_KEY);
+    } catch (e) {
+      console.warn("[field-survival] 读 role_selection（会话级）失败:", e);
+    }
+    if (raw == null) {
+      try {
+        raw = await api?.pluginData?.get?.(roleSelAllKey(), "all");
+      } catch (e) {
+        console.warn("[field-survival] 读 role_selection_all（跨会话）失败:", e);
+      }
+    }
+  }
+  if (raw == null) {
+    try {
+      const s = localStorage.getItem(roleSelLsKey());
+      raw = s ? JSON.parse(s) : null;
+    } catch { raw = null; }
+  }
+  savedRoleSelection = normalizeRoleSelection(raw);
+  console.info(
+    savedRoleSelection
+      ? `[field-survival] 选人数据已读到：友方${savedRoleSelection.participants.length} / 观战${savedRoleSelection.spectators.length} / 敌对${savedRoleSelection.enemies.length}`
+      : "[field-survival] 选人数据：无历史记录",
+  );
+  applyRoleSelection();
+}
+
+/** 把缓存的选择套上去：只保留当前角色表里真实存在、且可选（非用户角色）的 id */
+function applyRoleSelection(): void {
+  const valid = new Set(selectableRoles.value.map((r) => String(r.id)));
+  // 角色表还没到（宿主还没推 state.roles）→ 先不动，等 watch 再套
+  if (!valid.size) return;
+  const sel = savedRoleSelection;
+  const pick = (ids: string[]) => ids.filter((id) => valid.has(id));
+  const p = sel ? pick(sel.participants) : [];
+  const sp = sel ? pick(sel.spectators) : [];
+  const en = sel ? pick(sel.enemies) : [];
+  participants.splice(0, participants.length, ...p);
+  spectators.splice(0, spectators.length, ...sp);
+  enemies.splice(0, enemies.length, ...en);
+  roleSelRestored.value = !!(p.length || sp.length || en.length);
+  if (roleSelRestored.value) {
+    console.info(`[field-survival] 选人数据回填完成：友方${p.length} / 观战${sp.length} / 敌对${en.length}`);
+  }
+}
+
+/** 写库：点「开始游戏」时调用。
+ *  双写：① 本次会话（role_selection）② 本故事跨会话（role_selection_all, scope=all）。
+ *  后者保证同一故事「新建会话」也能回填；localStorage 给独立模式兜底。 */
+async function saveRoleSelection(): Promise<void> {
+  const sel: RoleSelection = {
+    participants: [...participants],
+    spectators: [...spectators],
+    enemies: [...enemies],
+  };
+  savedRoleSelection = normalizeRoleSelection(sel);
+  try { localStorage.setItem(roleSelLsKey(), JSON.stringify(sel)); } catch { /* ignore */ }
+  if (!hasHostPluginData()) {
+    console.info("[field-survival] 独立模式：选人数据仅存 localStorage", sel);
+    return;
+  }
+  const api = (window as any).__TFAPI__ || toonflowJsApi;
+  const brief = `友方${sel.participants.length} / 观战${sel.spectators.length} / 敌对${sel.enemies.length}`;
+  void Promise.all([
+    api.pluginData.set(ROLE_SEL_KEY, sel)
+      .then(() => console.info(`[field-survival] 选人数据已存 t_plugin_session_data(${ROLE_SEL_KEY})：${brief}`))
+      .catch((e: unknown) => console.warn("[field-survival] 存 role_selection 失败:", e)),
+    api.pluginData.set(roleSelAllKey(), { ...sel, story: String(envInfo().storyName || ""), updatedAt: Date.now() }, "all")
+      .then(() => console.info(`[field-survival] 选人数据已存跨会话(${roleSelAllKey()})：${brief}`))
+      .catch((e: unknown) => console.warn("[field-survival] 存 role_selection_all 失败:", e)),
+  ]);
+}
+
+/** ★ 本轮 select 阶段是否已处理过（防重入）：
+ *  onHostState 与 phase watch 两条路径都会调 enterSelectPhase，
+ *  宿主推送 select 时 state.value.phase 变化会额外触发一次 watch，
+ *  靠这个flag保证一轮只重置+回填一次（否则用户刚点选的角色可能被二次清空）。 */
+let selectPhaseHandled = false;
+
+/** 进入选人阶段：清空三组 + 回填上次选择 + 复位开局态。
+ *  ★ 两条触发路径都收敛到这里：
+ *    ① onHostState 收到宿主推送 phase=select（新建会话/宿主 init）
+ *    ② watch(state.phase) 本地切到 select（游戏内「退出」exitOver 本地改 phase）
+ *    此前只有 ① 会回填，导致游戏内退出回选人页时上次选择丢失——本轮补齐。 */
+function enterSelectPhase(): void {
+  if (selectPhaseHandled) return;
+  selectPhaseHandled = true;
+  // 先清空，再从 t_plugin_session_data(role_selection) 读上次选择灌入
+  // （loadRoleSelection 内部会 splice；角色表还没到时由 watch(selectableRoles) 补套）
+  participants.splice(0, participants.length);
+  spectators.splice(0, spectators.length);
+  enemies.splice(0, enemies.length);
+  roleSelRestored.value = false;
+  void loadRoleSelection();
+  // 选人阶段：确保不是全屏（用户切回来好操作）
+  toonflowJsApi.minigame.setFullscreen(false);
+  // 重新初始化地图装饰物（每次进入都重新生成）
+  initDecorations();
+  // 重置开始按钮 loading 状态（同时清掉超时计时与提示）
+  starting.value = false;
+  clearStartTimers();
+  startHint.value = "";
+  // 重置区域追踪变量
+  currentZoneName = null;
+  zoneLeftTick = 0;
+  zoneRespawnReady = false;
+}
+
+/** ★ 角色表晚到（选人页先渲染、state.roles 后到）时补套：
+ *  只在本轮还没选过任何角色时套，避免覆盖用户的点击结果。 */
+watch(
+  selectableRoles,
+  (list) => {
+    if (!list.length) return;
+    if (participants.length || spectators.length || enemies.length) return;
+    applyRoleSelection();
+  },
+  { immediate: true },
+);
+
 /** ★ 2026-10-21：选人角色来源排查日志（宿主注入 state.roles → 选人面板三组 chips）。
  *  tick 每帧都会推 state，按「id:name:roleType」签名去重，只在角色表变化时打一条。
  *  为空 = 宿主没注入角色（storyInfo 侧 world.settings.roles 为空或运行时 state.npcs 为空），
@@ -2388,6 +2579,9 @@ function startGame() {
   };
   init_game();
   starting.value = true;
+  // ★ 选人数据落库（t_plugin_session_data.role_selection）→ 下次进选人页回填。
+  //   不 await：落地是后台动作，不能拖慢开始游戏（sendTick 立刻发）。
+  void saveRoleSelection();
   sendTick("start", {
     selections: {
       participants: [...participants],
@@ -5929,7 +6123,7 @@ function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: num
    ★ P2.5 属性法术图标特效（public/images/spells 26×26 像素图标）
    ★ V2（2026-11-13）：spellIcon / 缓存已抽到 ./spellIcon.ts（与头顶徽章共用一份）
    ============================================================ */
-import { spellIcon } from "./spellIcon";
+import { spellIcon, spellIconSrc, EFFECT_ICON } from "./spellIcon";
 
 /** 属性特效图标叠加：图标 0.7×→1.5× 放大 + 同色光环淡出（叠在斩波/火球/环之上） */
 function drawIconBurst(
@@ -8007,6 +8201,26 @@ const QUICKBAR_PAGE_SIZE = 4;
 const skillPage = computed(() => state.value?.skills.slice((state.value.skillPage || 0) * QUICKBAR_PAGE_SIZE, (state.value.skillPage || 0) * QUICKBAR_PAGE_SIZE + QUICKBAR_PAGE_SIZE) || []);
 const itemPage = computed(() => state.value?.items.slice((state.value.itemPage || 0) * QUICKBAR_PAGE_SIZE, (state.value.itemPage || 0) * QUICKBAR_PAGE_SIZE + QUICKBAR_PAGE_SIZE) || []);
 const skillPages = computed(() => Math.max(1, Math.ceil((state.value?.skills.length || 0) / QUICKBAR_PAGE_SIZE)));
+/** ★ 技能/物品按钮背景图标：effects_type → spells 像素图标 URL（无特效类型则空串）
+ *   走 spellIconSrc（内部 resolveAssetPath）→ 宿主安装态自动拼 getAsset + token。 */
+function slotEffectIcon(s: any): string {
+  const t = String((s && s.effects_type) || "");
+  if (!t) return "";
+  return spellIconSrc(EFFECT_ICON[t] || "");
+}
+/** ★ 物品按钮背景图标：**槽位自带 effects_type 优先**（entry 侧 buildItems 已带），
+ *   缺失时回落到 state.itemMeta[物品名].effects_type（game.md「物品修改」持久化层）。
+ *   两处都取不到 → 空串（不铺图标）。 */
+function itemSlotEffectIcon(it: any): string {
+  const own = String((it && it.effects_type) || "");
+  if (own) return slotEffectIcon(it);
+  const imeta = (((state.value as any)?.itemMeta || {}) as Record<string, any>);
+  const nm = String((it && it.name) || "");
+  const im = imeta[nm] || imeta[nm.toLowerCase()];
+  const t = String((im && im.effects_type) || "");
+  if (!t) return "";
+  return spellIconSrc(EFFECT_ICON[t] || "");
+}
 const itemPages = computed(() => Math.max(1, Math.ceil((state.value?.items.length || 0) / QUICKBAR_PAGE_SIZE)));
 
 /* ★ 技能乐观释放（2026-11-15，技能特效设计V2_2.md）：
@@ -8945,26 +9159,9 @@ onMounted(async () => {
     //   此前每次收到 select 状态都重置，宿主/mock 的任意一次重推（如 loaded、全屏信令、
     //   兜底定时 push）都会把用户刚点选的角色清空，导致"点角色卡片没反应、选不中人"。
     if (newPhase === "select" && prevPhase !== "select") {
-      participants.splice(0, participants.length);
-      spectators.splice(0, spectators.length);
-      enemies.splice(0, enemies.length);
-      // ★ 修复②（未选择却出现同名友方角色）：
-      //   此前这里无条件把"用户角色"塞进 participants，于是 entry.js 的
-      //   `participants.forEach(...)` 为它建了一个 ally —— 玩家出生点旁凭空多出一个
-      //   与用户同名的"友方角色"。用户角色由宿主固定为玩家实体，必须留在候选之外。
-      //   （选人面板已用 selectableRoles 过滤掉它，这里同步去掉默认勾选）
-      // 选人阶段：确保不是全屏（用户切回来好操作）
-      toonflowJsApi.minigame.setFullscreen(false);
-      // 重新初始化地图装饰物（每次进入都重新生成）
-      initDecorations();
-      // 重置开始按钮 loading 状态（★ fix③：同时清掉超时计时与提示）
-      starting.value = false;
-      clearStartTimers();
-      startHint.value = "";
-      // 重置区域追踪变量
-      currentZoneName = null;
-      zoneLeftTick = 0;
-      zoneRespawnReady = false;
+      // ★ 选人数据回填 + 开局态复位：收敛到 enterSelectPhase（与本地退出路径共用，
+      //   防重入由 selectPhaseHandled 保证——本轮已处理过就直接返回）。
+      enterSelectPhase();
     }
     if (newPhase === "playing" && prevPhase !== "playing") {
       // 进入战斗：自动切全屏（runtime 时机）
@@ -9169,6 +9366,11 @@ function onSmsPageHide(): void {
 }
 
 watch(() => state.value?.phase, (p) => {
+  // ★ 选人数据回填（本地路径）：游戏内「退出」exitOver 本地把 phase 改成 select，
+  //   不经过 onHostState。这里补上触发，退出回选人页也能回填上次选择。
+  //   防重入由 enterSelectPhase 内部的 selectPhaseHandled 保证。
+  if (p === "select") enterSelectPhase();
+  else selectPhaseHandled = false;
   if (p === "playing") {
     requestAnimationFrame(() => { fitCanvas(); applyCanvasSmoothing(); render(); drawMinimap(); });
     // ★ 玩家出生点安全化（首次进入 playing）：宿主（entry.start）按 Tiled SPAWN_POINT/PLAYER
@@ -9229,6 +9431,10 @@ watch(() => state.value?.phase, (p) => {
       <header class="select__head">
         <h2>🌲 野外生存</h2>
         <p>选择友方 / 观战 / 敌对角色，然后点击开始游戏</p>
+        <!-- ★ 选人数据回填提示（t_plugin_session_data.role_selection 命中时亮） -->
+        <p v-if="roleSelRestored" class="select__restored">
+          ↩ 已回填上次选择（可直接开始，或继续调整）
+        </p>
         <!-- ★ 运行环境 + 地图集安装状态（2026-11-06）：插件一打开就感知
              ① 跑在宿主还是 debug ② 哪个故事 ③ 地图集装没装（关卡数）——
              不再等点开始才临时发现「地图集没装→兜底默认图」。 -->
@@ -9642,6 +9848,8 @@ watch(() => state.value?.phase, (p) => {
         <button v-for="(s, i) in skillPage" :key="'sk' + i" class="slot"
                 :class="{ 'slot--cd': s.cdLeft > 0, 'slot--empty': s.empty || !s.name }"
                 :title="s.name || '空技能格'" @click="castSkill(i)">
+          <span v-if="slotEffectIcon(s)" class="slot__bg" aria-hidden="true"
+                :style="{ backgroundImage: `url(${slotEffectIcon(s)})` }"></span>
           <span class="slot__name">{{ s.name }}</span>
           <span v-if="s.cdLeft > 0" class="slot__cd">{{ Math.ceil(s.cdLeft / 10) }}</span>
         </button>
@@ -9656,6 +9864,8 @@ watch(() => state.value?.phase, (p) => {
         <button v-for="(it, i) in itemPage" :key="'it' + i" class="slot"
                 :class="{ 'slot--empty': it.empty || it.count <= 0 }"
                 :title="it.empty ? '空物品格' : `${it.name} ×${it.count}`" @click="useItem(i)">
+          <span v-if="itemSlotEffectIcon(it)" class="slot__bg" aria-hidden="true"
+                :style="{ backgroundImage: `url(${itemSlotEffectIcon(it)})` }"></span>
           <span class="slot__name">{{ it.name }}</span>
           <span v-if="!it.empty" class="slot__count">×{{ it.count }}</span>
         </button>
@@ -10040,6 +10250,13 @@ body {
   margin: 0 0 16px;
   font-size: 13px;
   color: #9aa0a6;
+}
+
+/* ★ 选人数据回填提示（沿用 p 的字号，改色 + 去掉下间距） */
+.select__head p.select__restored {
+  margin: -8px 0 14px;
+  font-size: 12px;
+  color: #7fd1a0;
 }
 
 /* ★ 运行环境 + 地图集安装状态条（2026-11-06） */
@@ -11296,6 +11513,34 @@ body {
 .slot:hover {
   background: #3a3b3b;
   border-color: #6a6a6a;
+}
+
+/* ★ 技能/物品按钮背景特效图标（effects_type 对应的 spells 像素图）：
+ *   铺满整格作背景，图标本身 26×26 像素图放大后偏糊 → 用 image-rendering:pixelated
+ *   保持锐利；再压一层暗色蒙版 + 底部渐变，保证技能名/数量文字可读。 */
+.slot__bg {
+  position: absolute;
+  inset: 0;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+  image-rendering: pixelated;
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.slot__bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.25) 0%, rgba(0, 0, 0, 0.1) 45%, rgba(0, 0, 0, 0.78) 100%);
+}
+
+.slot__name,
+.slot__count {
+  position: relative;
+  z-index: 1;
 }
 
 .slot__name {

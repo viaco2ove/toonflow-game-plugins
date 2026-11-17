@@ -899,6 +899,9 @@ function materialsToItems(materials: MaterialItem[]): ItemSlot[] {
       heal: m.effectType === "heal_mp" || m.effectType === "heal_sp" ? 0 : heal,
       mp: m.effectType === "heal_mp" || m.effectType === "heal_sp" ? heal : (typeof m.stats?.lightRadius === "number" ? 0 : 0),
       type: slotType,
+      // ★ effects_type：物品按钮背景特效图标（真实链路由 entry 的 itemMeta 下发；
+      //   mock 这里按 effectType 推断一个，行为一致）
+      effects_type: mockEffectTypeOf(m),
       matId: m.matId,
       matType: m.type,
       description: m.description,
@@ -908,6 +911,19 @@ function materialsToItems(materials: MaterialItem[]): ItemSlot[] {
     });
   }
   return slots;
+}
+
+/** ★ mock：物资 effectType → 属性特效类型（给物品按钮铺图标用） */
+function mockEffectTypeOf(m: MaterialItem): ItemSlot["effects_type"] {
+  switch (m.effectType) {
+    case "heal_hp": return "light";
+    case "heal_mp":
+    case "heal_sp": return "water";
+    case "attack": return "fire";
+    case "buff": return "wood";
+    case "defense": return "earth";
+    default: return "";
+  }
 }
 
 /* ============================================================
@@ -1229,10 +1245,11 @@ function buildInitialState(roles: RoleOption[], materials: MaterialItem[] = [], 
     ? materialsToItems(materials)
     : [
         // 兜底（test_state.json 缺失时）
-        { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const },
-        { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const },
-        { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const },
-        { name: "力量+4", count: 1, heal: 0, mp: 0, type: "utility" as const },
+        // ★ effects_type：物品按钮背景特效图标用（与技能栏同一套 spells 图标）
+        { name: "血瓶", count: 3, heal: 30, mp: 0, type: "hp" as const, effects_type: "light" as const },
+        { name: "蓝瓶", count: 2, heal: 0, mp: 20, type: "mp" as const, effects_type: "water" as const },
+        { name: "炸药", count: 1, heal: 0, mp: 0, type: "atk" as const, effects_type: "fire" as const },
+        { name: "力量+4", count: 1, heal: 0, mp: 0, type: "utility" as const, effects_type: "metal" as const },
       ];
 
   return {

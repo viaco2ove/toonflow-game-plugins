@@ -633,7 +633,9 @@ interface SkillSlot { name: string; power: number; cost: number; cd: number; cdL
   empty?: boolean; }
 interface ItemSlot { name: string; count: number; heal: number; kind?: string;
   /** ★ 快捷栏占位空格（补齐到 4 的整数倍用）：前端置灰、点击无效 */
-  empty?: boolean; }
+  empty?: boolean;
+  /** ★ P2 属性特效（来自 itemMeta，按物品名索引）：前端用它给物品按钮铺法术图标背景 */
+  effects_type?: string; }
 /** ★ 实体形象图库条目（AI 生成 / 上传参考图后生成） */
 interface SpriteEntry {
   /** 图库条目 id（sp_<tick>_<rand>） */
@@ -1134,6 +1136,72 @@ function padQuickbar<T>(list: T[], padTo: number, make: () => T): T[] {
   return list;
 }
 
+/* ============================================================
+   ★ 传送目标（teleportTarget）的签发与保活
+   ---------------------------------------------------------------------
+   背景（2026-11-17 实测复现，跨图传送完全失效）：
+     「大地图 → 传送」点了之后，**后端已切图**（levelName=mulberryForest、
+     事件写了「传送至 mulberryForest」、实体被 handleLevelChange 清空），
+     **前端却仍停在桑镇**（HUD「当前：桑镇」、🐾 无野怪）→ 前后端关卡名 desync。
+
+   根因：teleportTarget 是「一次性通道」，而它的清除写在**帧 tick 的第一行**：
+       if (s.teleportTarget) s.teleportTarget = null;
+     但 sys_travel 走**慢锁**（withSlowLock）、帧 tick 走**快锁**（withSessionLock）
+     —— 两把锁**互不排斥**，却改**同一份 state 对象**。于是：
+       ① sys_travel 设了 s.teleportTarget = {...}
+       ② 下一拍帧 tick 进来，**第一行**就把它清成 null
+       ③ 该拍 WS push 给前端的 state 里已无 teleportTarget
+       ④ 前端 watch(() => state.value?.teleportTarget) 永远收不到 → 永不 switchLevel
+     实测：连续 4 次 sys_travel，teleportTarget 有 2 次直接是 null。
+
+   修法（保活而不是一拍即焚）：
+     teleportTarget 附带一个「签发时刻」（issuedAt，存在目标对象内部），
+     由**签发方**（sys_travel / sys_teleport / start）写入；
+     帧 tick 清除时**只清除够老的**目标（≥ TELEPORT_KEEP_MS），
+     新签发的目标至少存活 TELEPORT_KEEP_MS，保证前端有足够多的拍数消费到它。
+
+     为什么不能简单「多留几拍」：前端 watch 消费后会**自行把 state.value.teleportTarget
+     置 null**（App.vue:1553），且用 rev 去重（同一 rev 只传送一次），
+     所以多留几拍不会造成重复传送——但必须靠 rev 去重兜底，否则玩家会被"绑住"。
+   ============================================================ */
+
+/** 传送目标保活时长（ms）：至少覆盖十几拍，足够前端 WS 推帧到达并被 watch 消费 */
+const TELEPORT_KEEP_MS = 3000;
+
+/**
+ * 签发一个传送目标（覆盖 teleportTarget 并记录签发时刻）。
+ * 所有设 teleportTarget 的地方都必须走这里，保证带 issuedAt。
+ *
+ * ★ 签发时刻**存在目标对象内部**（而不是 state 顶层的独立字段）：
+ *   sys_travel（慢锁）与帧 tick（快锁）并发改同一份 state 对象，
+ *   若把 issuedAt 放在 state 顶层，tick 读 tp 与读 issuedAt 之间可能被
+ *   sys_travel 换掉目标 → 用**旧目标的时刻**判断**新目标**是否过期 → 误清。
+ *   绑在对象内部后，tp 与 issuedAt 始终同属一个对象 → 读写天然一致。
+ */
+function issueTeleport(s: FieldSurvivalState, tp: TeleportTarget): void {
+  s.teleportTarget = { ...tp, issuedAt: Date.now() } as TeleportTarget;
+}
+
+/**
+ * 帧 tick 里的清理：只清除**已过期**的传送目标。
+ * 新签发的（< TELEPORT_KEEP_MS）保留，等下一拍再判——这样即使有帧 tick
+ * 插在签发与前端消费之间，也不会把目标抹掉。
+ */
+function clearExpiredTeleport(s: FieldSurvivalState): void {
+  const tp = (s as any).teleportTarget as (TeleportTarget & { issuedAt?: number }) | null;
+  if (!tp) return;
+  const issuedAt = num(tp.issuedAt, 0);
+  // ★ 没签发时刻的（老存档/手写注入）→ 立即清除，保持旧的「一拍即焚」行为，
+  //   否则会永远留着（前端 rev 去重后也不会重复传送，但会污染 state 体积）。
+  if (!(issuedAt > 0)) {
+    (s as any).teleportTarget = null;
+    return;
+  }
+  if (Date.now() - issuedAt >= TELEPORT_KEEP_MS) {
+    (s as any).teleportTarget = null;
+  }
+}
+
 /** ★ 快捷栏页码夹紧：物品/技能列表变短（用光/丢弃）后，页码不能停在不存在的页上 */
 function clampQuickbarPages(s: FieldSurvivalState): void {
   const ip = Math.max(1, Math.ceil((s.items || []).length / QUICKBAR_PAGE_SIZE));
@@ -1235,7 +1303,11 @@ function buildSkills(card: Record<string, unknown> | undefined, padTo = QUICKBAR
  *   现在不设上限，只补到 4 的整数倍。
  * ★ fix④：同名合并原来写的是 `counts[counts.length-1] += p.count`，只对**连续**同名正确；
  *   背包里出现 A,B,A 这种非连续同名时，A 的数量会被加到 B 上。改为按名下标累加。 */
-function buildItems(card: Record<string, unknown> | undefined, padTo = QUICKBAR_PAGE_SIZE): ItemSlot[] {
+function buildItems(
+  card: Record<string, unknown> | undefined,
+  padTo = QUICKBAR_PAGE_SIZE,
+  itemMeta?: Record<string, ItemMeta>,
+): ItemSlot[] {
   const raw = Array.isArray(card?.items) ? (card!.items as unknown[]) : [];
   const parsed = raw.map(parseItemRaw).filter((p) => p && p.name && p.count > 0);
   const seen = new Map<string, number>(); // 归一化物品名 → 下标
@@ -1254,10 +1326,13 @@ function buildItems(card: Record<string, unknown> | undefined, padTo = QUICKBAR_
     }
   });
   const out: ItemSlot[] = names.map((name, i) => {
-    const meta = parsed.find((p) => itemKey(p.name) === itemKey(name));
-    const kind = meta?.kind || guessKind(name);
-    const heal = meta?.heal ?? defaultHeal(name, kind);
-    return { name, count: counts[i], kind, heal };
+    const raw0 = parsed.find((p) => itemKey(p.name) === itemKey(name));
+    const kind = raw0?.kind || guessKind(name);
+    const heal = raw0?.heal ?? defaultHeal(name, kind);
+    // ★ P2 属性特效：itemMeta 按展示名存（与 mergeBag 同口径），带进快捷栏槽位，
+    //   前端才能给物品按钮铺法术图标背景（此前只写在 itemMeta 里，槽位拿不到）。
+    const im = itemMeta && (itemMeta[name] || itemMeta[name.toLowerCase()]);
+    return { name, count: counts[i], kind, heal, effects_type: im?.effects_type || "" };
   });
   return padQuickbar(out, padTo, () => ({ name: "", count: 0, heal: 0, empty: true }));
 }
@@ -1326,7 +1401,7 @@ function emptyState(ctx?: PluginGameContext): FieldSurvivalState {
     floaters: [],
     vfx: [],   // ★ game.md 打击特效：宿主侧生成的战斗粒子（spark/explosion/slash_arc/fireball/heal_ring/buff_ring）
     skills: buildSkills(card),
-    items: buildItems(card),
+    items: buildItems(card, QUICKBAR_PAGE_SIZE, undefined),
     skillMeta: {},
     itemMeta: {},
     skillPage: 0,
@@ -3007,7 +3082,9 @@ export interface NpcCard {
 }
 export interface RingStore { items: BagItem[]; skills: string[]; }
 export interface MapNode { name: string; x: number; y: number; }
-export interface TeleportTarget { mapName: string; x: number; y: number; name: string; rev: number; }
+export interface TeleportTarget { mapName: string; x: number; y: number; name: string; rev: number;
+  /** ★ 签发时刻（ms）：帧 tick 只清除「已过期」的目标，防止把刚签发的传送目标抢跑抹掉 */
+  issuedAt?: number; }
 export interface SysSnapshot {
   ring: RingStore; party: string[]; npcCards: NpcCard[];
   bagMeta: Record<string, BagItem>; bagOrder: string[];
@@ -5366,7 +5443,7 @@ function patchCard(s: FieldSurvivalState, patch: Record<string, any>): void {
   s.playerCard = card;
   s.writeback = { ...((s.writeback || {}) as Record<string, any>), ...patch };
   s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-  if (Array.isArray(patch.items)) { s.items = buildItems(card); clampQuickbarPages(s); }
+  if (Array.isArray(patch.items)) { s.items = buildItems(card, QUICKBAR_PAGE_SIZE, s.itemMeta); clampQuickbarPages(s); }
   if (Array.isArray(patch.skills)) { s.skills = buildSkills(card, QUICKBAR_PAGE_SIZE, s.skillMeta); clampQuickbarPages(s); }
 }
 
@@ -5449,7 +5526,7 @@ function syncCardFromContext(s: FieldSurvivalState, ctx?: PluginGameContext): vo
     applyCardSkillOrder(cardForBuild, s.skillOrder);
   }
   s.playerCard = cardForBuild;
-  s.items = buildItems(cardForBuild);
+  s.items = buildItems(cardForBuild, QUICKBAR_PAGE_SIZE, s.itemMeta);
   s.skills = buildSkills(cardForBuild, QUICKBAR_PAGE_SIZE, s.skillMeta);
   clampQuickbarPages(s);
   // ★ 等级系统：AI 剧情在角色卡上直接改动的 等级/经验/HP/MP 回灌到玩家实体（数据一致性）
@@ -6481,7 +6558,7 @@ function normalizeQuickbarLegacy(s: FieldSurvivalState): void {
     return !!m && names.has(m[1]);
   });
   if (!badItem && !badSkill) return;
-  if (badItem && Array.isArray(card.items)) s.items = buildItems(card);
+  if (badItem && Array.isArray(card.items)) s.items = buildItems(card, QUICKBAR_PAGE_SIZE, s.itemMeta);
   if (badSkill && Array.isArray(card.skills)) s.skills = buildSkills(card, QUICKBAR_PAGE_SIZE, s.skillMeta);
   clampQuickbarPages(s);
 }
@@ -6708,7 +6785,7 @@ export async function handle_action(
       // ★ 修复：restoreSys 恢复 skillMeta 后必须重跑 buildSkills（否则 syncCardFromContext
       //   可能因 card 未变而 return，skills 仍是空 effects_type）
       s.skills = buildSkills(s.playerCard || {}, QUICKBAR_PAGE_SIZE, s.skillMeta);
-      s.items = buildItems(s.playerCard || {});   // ★ 开局重建物品栏（顺带清掉旧存档里的「备用物N」假格子）
+      s.items = buildItems(s.playerCard || {}, QUICKBAR_PAGE_SIZE, s.itemMeta);   // ★ 开局重建物品栏（顺带清掉旧存档里的「备用物N」假格子）
       clampQuickbarPages(s);
       syncCardFromContext(s, context); // ★ start 也同步参数卡
       if (str((params as any)?.levelName)) s.levelName = str((params as any).levelName, s.levelName || "");
@@ -6731,13 +6808,13 @@ export async function handle_action(
       if (s.levelName && s.levelName !== startMapName) {
         const me0 = s.entities.find((e2: any) => e2.side === "player");
         s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-        (s as any).teleportTarget = {
+        issueTeleport(s, {
           mapName: s.levelName,
           x: me0 ? (me0 as any).x : 0,
           y: me0 ? (me0 as any).y : 0,
           name: s.levelName,
           rev: s.sysRevision,
-        };
+        });
       }
       // fix: entity mapName 对齐到最终 levelName（ally/spectator 用 startMapName 初始化，
       //   但 levelName 可能是 "MulberryTown" 或其他值，handleLevelChange 依赖精确匹配）
@@ -6772,9 +6849,10 @@ export async function handle_action(
       }
       if (s.hitStopFrames !== undefined && s.hitStopFrames > 0) s.hitStopFrames -= 1;
       s.writeback = null;          // ★ v5：上一帧回写已由宿主消费，清空避免重复写
-      // ★ teleportTarget 一次性：下发一拍后立刻清除，否则每次 tick 响应都会
-      //   重新触发前端传送 watch，把玩家反复拉回目标点（表现 = 被绑住）
-      if ((s as any).teleportTarget) (s as any).teleportTarget = null;
+      // ★ teleportTarget 保活：只清除「已过期」的目标，新签发的必须活够 TELEPORT_KEEP_MS
+      //   （此前在这里无条件清空 → 与 sys_travel 抢跑，把刚签发的传送目标抹掉，
+      //     前端永远收不到 → 跨图传送失效。详见 issueTeleport 处注释。）
+      clearExpiredTeleport(s);
       s.tick += 1;
       // ★ fix⑤（缺口①）：前端上报 localEnemies（{epoch,bounds,list}）时，先据此重建当前关卡敌怪表
       const localBuilt = applyLocalEnemies(s, (params as any)?.localEnemies);
@@ -8545,13 +8623,13 @@ export async function handle_action(
         }
       }
       s.sysRevision = Math.round(num(s.sysRevision, 0)) + 1;
-      s.teleportTarget = {
+      issueTeleport(s, {
         mapName: c.mapName || s.levelName || "",
         x: c.x,
         y: c.y,
         name: c.name,
         rev: s.sysRevision,
-      };
+      });
       pushEvent(s, `传送到 ${c.name} 身边（${c.mapName || "当前地图"}）`);
       await persistSys(context, s);
       return okResp(`已传送到 ${c.name} 身边`);
@@ -8576,13 +8654,13 @@ export async function handle_action(
       const ts2 = (context && (context as any).tiledSpawn) || null;
       const useSpawn = ts2 && ts2.mapName === target && Number.isFinite(ts2.x) && Number.isFinite(ts2.y);
       // ★ 大地图传送统一走 teleportTarget 通道（前端只 watch 它；travelTarget 从无人消费，是死代码）
-      (s as any).teleportTarget = {
+      issueTeleport(s, {
         mapName: target,
         x: useSpawn ? ts2.x : 0,
         y: useSpawn ? ts2.y : 0,
         name: target,
         rev: s.sysRevision,
-      };
+      });
       pushEvent(s, `传送至「${target}」`);
       await persistSys(context, s);
       return okResp(`已传送至「${target}」`);
