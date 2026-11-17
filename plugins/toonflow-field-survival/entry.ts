@@ -6184,11 +6184,68 @@ function grantPartyExp(s: FieldSurvivalState, expGain: number): void {
   if (lead) floater(s, `队伍 +${share}exp`, lead.x, lead.y - 1.3);
 }
 
-/** 系统数据 → t_plugin_session_data */
+/**
+ * 系统数据 → t_plugin_session_data
+ *
+ * ★★ 2026-11-17 修复「数据被清空」（实体形象生成图 / 技能属性特效绑定全丢）：
+ *   本函数原本是**全量覆盖写**（api.set 直接把内存态整个盖上去）。
+ *   但帧 tick 每 20 拍无条件调一次本函数（entry.ts: SYS_PERSIST_EVERY_TICKS），
+ *   于是只要某一拍内存态里某字段是空的（开局重建、restoreSys 未跑到、
+ *   状态被 start/select 重置、跨会话切图重建等），那一拍就把 DB 里
+ *   **已经存好的真数据覆盖成空**：
+ *     · spriteGallery / spriteBinds  → 实体形象生成图与角色绑定消失
+ *     · skillMeta / itemMeta        → 技能/物品的属性特效绑定消失
+ *     · bagMeta / bagOrder          → 背包顺序与物品元数据消失
+ *   实测（2026-11-17）：本 session 的 sys_state 里 spriteGallery=[]、spriteBinds={}、
+ *   skillMeta={}、itemMeta={}，而同一用户的另一个 session 存档里数据完好。
+ *
+ *   修法：**读-改-写**（read-merge-write）——
+ *   写入前先读回 DB 里的旧值，对「本次内存态里为空」的字段**保留 DB 旧值**，
+ *   只在内存态确实有内容时才覆盖。这样即使某拍内存态残缺，也只会写回
+ *   「内存态有值的部分 + DB 保留其余部分」，不会再把已有数据擦掉。
+ *
+ *   注意：内存态**有意**清空某字段时（如 sys_skill_sell 保留 skillMeta 但
+ *   删技能名、用户主动解绑形象 sprite_bind_unbind），本函数会保留旧值。
+ *   这类「显式删除」应走专门的 action 并直接写 DB —— 现有 action 里
+ *   显式清空走的是 api.set 之外的路径，或写回的是内存态非空的新值，
+ *   不受本函数影响。真正需要「清空」的场景（spriteGallery 清空图库）
+ *   已在 sys_sprite_* action 内显式处理（见 applySpriteBindToEntities）。
+ */
 async function persistSys(context: PluginGameContext | undefined, s: FieldSurvivalState): Promise<void> {
   const api = context?.tsApi?.pluginData;
   if (!api?.set) return;
   try {
+    // ── 读回 DB 旧值（用于「内存空 → 保留旧值」的合并保护）──────────────
+    // 失败不阻断：读不到就退化成原来的全量覆盖行为。
+    let prev: any = null;
+    try {
+      const cur = await api.get(SYS_DATA_KEY);
+      if (cur && typeof cur === "object") prev = cur;
+    } catch { /* 读失败 → 退化为覆盖写 */ }
+
+    // 合并保护：内存态为空 → 用 DB 旧值顶上；内存态非空 → 用内存态。
+    //
+    // ★ 例外：用户**主动删除**（删图库最后一张 / 解绑最后一个角色）时，
+    //   内存态确实变成空，但那是**故意的**，不能被旧值顶回来。
+    //   这类 action 先置 (s as any)._sysForceEmpty = ["spriteGallery","spriteBinds",...]
+    //   显式声明「这些字段本次允许写空」，本次 persistSys 就照写。
+    const forceEmpty = new Set<string>(
+      Array.isArray((s as any)._sysForceEmpty) ? (s as any)._sysForceEmpty.map(String) : [],
+    );
+    const keepIfEmpty = <T,>(mem: T, old: any, isEmpty: (v: any) => boolean, forceKey?: string): T => {
+      if (forceKey && forceEmpty.has(forceKey)) return mem;   // 显式允许写空
+      return (isEmpty(mem) && old !== undefined && old !== null && !isEmpty(old)) ? (old as T) : mem;
+    };
+
+    const memSpriteGallery = Array.isArray(s.spriteGallery) ? s.spriteGallery : [];
+    const memSpriteBinds = (s as any).spriteBinds || {};
+    const memSkillMeta = s.skillMeta || {};
+    const memItemMeta = s.itemMeta || {};
+    const memBagMeta = s.bagMeta || {};
+    const memBagOrder = s.bagOrder || [];
+    const memSkillOrder = s.skillOrder || [];
+    const memNpcCards = s.npcCards || [];
+
     await api.set(SYS_DATA_KEY, {
       ring: s.ring || { items: [], skills: [] },
       party: s.partyIds || [],
@@ -6196,14 +6253,15 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       aiManagedIds: Array.isArray(s.aiManagedIds) ? s.aiManagedIds.map(String) : [],
       // ★ V2.1 行为链「更新角色卡」覆盖表（角色级关键信息字段）
       cardUpdates: (s as any).cardUpdates && typeof (s as any).cardUpdates === "object" ? (s as any).cardUpdates : {},
-      npcCards: s.npcCards || [],
-      bagMeta: s.bagMeta || {},
-      bagOrder: s.bagOrder || [],
-      skillOrder: s.skillOrder || [],
+      npcCards: keepIfEmpty(memNpcCards, prev?.npcCards, (v) => !Array.isArray(v) || v.length === 0, "npcCards"),
+      bagMeta: keepIfEmpty(memBagMeta, prev?.bagMeta, (v) => !v || typeof v !== "object" || Object.keys(v).length === 0, "bagMeta"),
+      bagOrder: keepIfEmpty(memBagOrder, prev?.bagOrder, (v) => !Array.isArray(v) || v.length === 0, "bagOrder"),
+      skillOrder: keepIfEmpty(memSkillOrder, prev?.skillOrder, (v) => !Array.isArray(v) || v.length === 0, "skillOrder"),
       shop: s.shopGoods || [],
       level: s.levelName || "",
-      skillMeta: s.skillMeta || {},
-      itemMeta: s.itemMeta || {},
+      // ★ 属性特效绑定（技能/物品）——空则保留 DB 旧值（2026-11-17 数据清空修复）
+      skillMeta: keepIfEmpty(memSkillMeta, prev?.skillMeta, (v) => !v || typeof v !== "object" || Object.keys(v).length === 0, "skillMeta"),
+      itemMeta: keepIfEmpty(memItemMeta, prev?.itemMeta, (v) => !v || typeof v !== "object" || Object.keys(v).length === 0, "itemMeta"),
       // ★ 2026-10-19 修复：刷新丢物品/钱
       //   旧版只存 bagMeta/bagOrder 但 itemsFromCard(card) 只读 card.items，
       //   刷新后 card.items 是默认空数组 → 商城买的东西全部消失。
@@ -6225,8 +6283,10 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
       // ★ 角色驻留地图：ally/spectator 角色停在别的地图（s.parked）→ 持久化到 t_plugin_session_data
       parked: (s as any).parked || {},
       // ★ 实体形象：生成图库 + 角色绑定（刷新后形象不丢）
-      spriteGallery: Array.isArray(s.spriteGallery) ? s.spriteGallery : [],
-      spriteBinds: (s as any).spriteBinds || {},
+      //   ★ 空则保留 DB 旧值（2026-11-17 数据清空修复）—— 图库/绑定一旦被空值覆盖，
+      //     用户生成的实体形象图就永久消失，且无法从快照恢复。
+      spriteGallery: keepIfEmpty(memSpriteGallery, prev?.spriteGallery, (v) => !Array.isArray(v) || v.length === 0, "spriteGallery"),
+      spriteBinds: keepIfEmpty(memSpriteBinds, prev?.spriteBinds, (v) => !v || typeof v !== "object" || Object.keys(v).length === 0, "spriteBinds"),
     });
     // ★ game.md 对话功能：AI 故事角色位置/地图信息单独持久化（dataKey=ai_story_roles → t_plugin_session_data），
     //   后续开新局时 AI 聊天窗口能直接读到「陈彦现在在 mulberry_forest 地图 (12.3, -5.6)」，不用再遍历 entities。
@@ -7671,6 +7731,9 @@ export async function handle_action(
       const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
       delete binds[target];
       (s as any).spriteBinds = binds;
+      // ★ 用户主动解绑 → 本次允许把 spriteBinds 写空（否则 persistSys 的
+      //   「空则保留旧值」保护会把刚解绑的旧绑定又顶回来，解绑无效）。
+      (s as any)._sysForceEmpty = ["spriteBinds"];
       applySpriteBindToEntities(s, target);
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
@@ -7696,6 +7759,9 @@ export async function handle_action(
         }
       });
       (s as any).spriteBinds = binds;
+      // ★ 用户主动删除图库条目 → 本次允许把 spriteGallery / spriteBinds 写空
+      //   （删掉最后一张时内存态为空，但那是故意的，不能被旧值顶回来）。
+      (s as any)._sysForceEmpty = ["spriteGallery", "spriteBinds"];
       // ★ 写回后再 apply——否则 spriteOverrideFor 仍能读到旧 binds（闭包引用），实体不被恢复
       toUnbind.forEach((k) => applySpriteBindToEntities(s, k));
       ensureNpcCards(s, s.levelName || "");
