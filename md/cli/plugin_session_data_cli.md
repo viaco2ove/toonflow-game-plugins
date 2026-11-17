@@ -31,5 +31,6 @@ python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦
 # 获取（t_plugin_session_data 表）角色位置和地图信息
 python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -role -position
 
-# 获取 （t_plugin_session_data 表）角色实体形象数据和技能配置和物品配置数据 到 /.cache/toonflow-field-survival/plugin_session_data
+# 获取 （t_plugin_session_data 表）角色实体形象数据和技能配置和物品配置数据 到 /.cache/toonflow-field-survival/plugin_session_data/{story}/{time}
+## /.cache/toonflow-field-survival/plugin_session_data/{story}/{time} 里还要记录那个故事 那个会话 那个服务器
 python -m toon_plugins plugin_session_data -i toonflow-field-survival -story 赦夜人冥夜走廊-第二季 -spriteBinds -skillMeta -itemMeta

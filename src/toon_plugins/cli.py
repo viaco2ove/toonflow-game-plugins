@@ -709,7 +709,24 @@ def _seed_story_task_data(client, plugin_id: str, story: str, source_dir: str, s
 # 需要一条不进数据库的取证/备份通道：按故事解析会话 → 读 sys_state → 落 JSON（+PNG）。
 # ★ CLI_ROOT 是 src/（既有约定：打包产物 plugins_tbg 用 dirname(CLI_ROOT) 做仓库根），
 #   仓库根/.cache 才是临时目录的正确位置（AGENTS.md）——所以这里也要 dirname 一级。
-EXPORT_DEFAULT_DIR = os.path.join(os.path.dirname(CLI_ROOT), ".cache", "toonflow-field-survival", "plugin_session_data")
+# ★ 目录结构（2026-11-18）：{base}/{story}/{time}/ —— 同一故事多次导出互不覆盖，
+#   每次导出在 _export_manifest.json 里记录 故事 / 会话清单 / 服务器地址。
+EXPORT_BASE_DIR = os.path.join(os.path.dirname(CLI_ROOT), ".cache", "toonflow-field-survival", "plugin_session_data")
+
+
+def _export_timestamp():
+    """导出批次目录名：YYYYMMDD_HHMMSS（datetime 不可用时退化为秒级时间戳）。"""
+    if datetime:
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+    import time as _time
+    return str(int(_time.time()))
+
+
+def _safe_dirname(name, fallback="unnamed"):
+    """目录名清洗：保留中文，只替换文件系统非法字符（Windows: \\ / : * ? " < > |）。"""
+    import re as _re
+    s = _re.sub(r'[\\/:*?"<>|]+', "_", str(name or "").strip())
+    return s or fallback
 
 
 def _unwrap_plugin_value(r):
@@ -817,7 +834,7 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 _json.dump(fv, f, ensure_ascii=False, indent=2)
             written.append((path, os.path.getsize(path)))
-            click.echo(f"  [OK] {os.path.relpath(path, CLI_ROOT)}  ({os.path.getsize(path)} bytes)")
+            click.echo(f"  [OK] {os.path.relpath(path, os.path.dirname(CLI_ROOT))}  ({os.path.getsize(path)} bytes)")
 
         # spriteBinds 便利产物：把 data:URL 形象图解码成图片文件
         if "spriteBinds" in fields:
@@ -843,14 +860,14 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
         "pluginId": plugin_id,
         "sessions": [{"sessionId": s, "title": t} for s, t in sessions],
         "fields": fields,
-        "files": [os.path.relpath(p, CLI_ROOT) for p, _ in written],
+        "files": [os.path.relpath(p, os.path.dirname(CLI_ROOT)) for p, _ in written],
         "pngDecoded": png_count,
     }
     mpath = os.path.join(out_dir, "_export_manifest.json")
     with open(mpath, "w", encoding="utf-8", newline="\n") as f:
         _json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-    click.secho(f"\n[OK] 导出完成：{len(written)} 个 JSON + {png_count} 张图 → {os.path.relpath(out_dir, CLI_ROOT)}/"
+    click.secho(f"\n[OK] 导出完成：{len(written)} 个 JSON + {png_count} 张图 → {os.path.relpath(out_dir, os.path.dirname(CLI_ROOT))}/"
                 f"（清单：_export_manifest.json）", fg="green")
 
 
