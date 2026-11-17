@@ -54,6 +54,7 @@ import {
   GROUND_GRASS_TILES, GROUND_DIRT_TILES, GROUND_SAND_TILES,
   MOB_TILES, IMG_PLAYER, IMG_ALLY, IMG_ENEMY_CHAR,
   spriteTileId, walkTileId, resolveAssetPath,
+  isSpriteAssetRef, loadSpriteAssetData,
 } from "./assets";
 import {
   TerrainScaleConfig, DEFAULT_SCALE,
@@ -1740,11 +1741,12 @@ function onOpenAppearance(c: any) {
 function onAppearancePickTarget(id: string) {
   if (id) appearanceTarget.value = id;
 }
-function onAppearanceBind(target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number }) {
+function onAppearanceBind(target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number; spriteId?: string }) {
   if (!image) return;
   const key = appearanceTargets.value.find((t) => t.id === target) ? target : "PLAYER";
   sysNotice.value = "正在更换形象…";
-  runSysCmd("sys_sprite_bind", { target: key, image, source: meta?.source, prompt: meta?.prompt, createdAt: meta?.createdAt });
+  // ★ 资产外置：spriteId（图库条目 id）优先——后端按它解析资产引用，兼容旧 image 参数
+  runSysCmd("sys_sprite_bind", { target: key, image, spriteId: meta?.spriteId, source: meta?.source, prompt: meta?.prompt, createdAt: meta?.createdAt });
 }
 function onAppearanceUploadBind(target: string, dataUrl: string) {
   if (!dataUrl) return;
@@ -3192,21 +3194,34 @@ function ensureCustomSprite(path: string): { frames: HTMLImageElement[]; ready: 
   const cached = customSpriteAnimCache.get(path);
   if (cached && cached.ready) return cached;
   if (cached) return cached;
+  const slot = { frames: [] as HTMLImageElement[], ready: false, single: true };
+  customSpriteAnimCache.set(path, slot);
+  const fillSlot = (srcUrl: string) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      // 自定义立绘一律当单图，2 帧用同一张做 walk 动画（用户看到微微的呼吸晃动）
+      slot.frames = [img];
+      slot.ready = true;
+    };
+    img.onerror = () => {
+      // 失败也标 ready（调用方会画「?」占位）
+      slot.ready = true;
+    };
+    img.src = srcUrl;
+  };
+  // ★ sprite 资产外置（2026-11-18）：`asset:<id>` 引用 → 异步取 dataURL（fetch /plugin/data
+  //   同源直取）→ 到位后填 slot；期间 slot.ready=false，调用方画占位，下一帧自动换真图。
+  if (isSpriteAssetRef(path)) {
+    loadSpriteAssetData(path.slice("asset:".length)).then((dataUrl) => {
+      if (dataUrl) fillSlot(dataUrl);
+      else slot.ready = true; // 取不到（未安装资产/接口异常）→ 占位，回退 tileset 的分支照旧
+    }).catch(() => { slot.ready = true; });
+    return slot;
+  }
   // ★ 走 resolveAssetPath：data: / http / ./ 都会被它正确处理（保留 data: 原样）
   const url = resolveAssetPath(path);
-  const img = new Image();
-  img.crossOrigin = "anonymous";
-  const slot = { frames: [img], ready: false, single: true };
-  customSpriteAnimCache.set(path, slot);
-  img.onload = () => {
-    // 自定义立绘一律当单图，2 帧用同一张做 walk 动画（用户看到微微的呼吸晃动）
-    slot.ready = true;
-  };
-  img.onerror = () => {
-    // 失败也标 ready（调用方会画「?」占位）
-    slot.ready = true;
-  };
-  img.src = url;
+  fillSlot(url);
   return slot;
 }
 
@@ -3219,8 +3234,8 @@ function drawAvatarCustomSprite(
 ) {
   const slot = ensureCustomSprite(avatarPath);
   const img = slot.frames[0];
-  if (!img.complete || img.naturalWidth === 0) {
-    // 还在加载：画一个占位胶囊，避免 entity 突然消失
+  if (!img || !img.complete || img.naturalWidth === 0) {
+    // 还在加载（含 asset: 引用异步取图期）：画一个占位胶囊，避免 entity 突然消失
     ctx.save();
     ctx.fillStyle = "rgba(160, 200, 255, 0.5)";
     ctx.fillRect(dx, dy, dw, dh);

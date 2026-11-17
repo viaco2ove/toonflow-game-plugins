@@ -659,6 +659,103 @@ const SPRITE_GEN_AGENT = "field-survival-sprite-gener";
 /** 生图 agent 超时：图片模型推理 30~90s，留足余量 */
 const SPRITE_AGENT_TIMEOUT_MS = 150000;
 
+// ── sprite 资产外置（2026-11-18 通信阻塞修复）──────────────────────────────
+// base64 图不再进 state / sys_state（实测 plugin_state 9.7MB 把每拍推送、
+// 每 20 tick 落库、每个 HTTP tick 请求全部拖到 3~5s，驱动 10Hz 掉到 3.5Hz）。
+// 每张图独立 dataKey `sprite_asset:<assetId>`，state 里只存短引用 `asset:<assetId>`。
+// 预置路径（./images/...）不资产化，原样存（本来就小）。
+const SPRITE_ASSET_PREFIX = "asset:";
+function spriteRefOf(assetId: string): string { return SPRITE_ASSET_PREFIX + assetId; }
+function spriteAssetIdOf(ref: string): string { return ref.slice(SPRITE_ASSET_PREFIX.length); }
+function isSpriteAssetRef(s: string): boolean { return s.startsWith(SPRITE_ASSET_PREFIX); }
+function spriteAssetKey(assetId: string): string { return `sprite_asset:${assetId}`; }
+
+/** 把一张图落为独立资产 key。返回是否成功——失败时调用方必须报错/保留原值，
+ *  否则 state 里会留下取不到图的坏引用。 */
+async function putSpriteAsset(api: any, assetId: string, dataUrl: string, meta?: { source?: string; createdAt?: number }): Promise<boolean> {
+  if (!api?.set || !dataUrl) return false;
+  try {
+    await api.set(spriteAssetKey(assetId), {
+      dataUrl,
+      source: meta?.source || "",
+      createdAt: Math.round(meta?.createdAt || Date.now()),
+    });
+    return true;
+  } catch { return false; }
+}
+
+/** 删除一张资产（删除图库条目 / 清空图库时联动；失败不阻断主流程） */
+async function dropSpriteAsset(api: any, assetId: string): Promise<void> {
+  if (!api?.remove || !assetId) return;
+  try { await api.remove(spriteAssetKey(assetId)); } catch { /* 残留由下次覆盖/清理兜底 */ }
+}
+
+/** 稳定 content hash（迁移旧 binds data:URL → 幂等 legacy assetId 用）：
+ *  同一张图算出同 id，restoreSys 重跑不会生成重复资产。 */
+function spriteAssetHash(s: string): string {
+  let h = 0;
+  const step = Math.max(1, Math.floor(s.length / 64));
+  for (let i = 0; i < s.length; i += step) h = ((h * 31) + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36) + "_" + s.length.toString(36);
+}
+
+/** 判断 dataURL 是否为「该外置的大图」（base64 载荷 > 4KB）——
+ *  小 dataURL（程序生成的占位 PNG 等）不值得一次独立写库，原样存。 */
+function isBigSpriteDataUrl(s: string): boolean {
+  return /^data:image\//i.test(s) && s.length > 4096;
+}
+
+/** ★ 资产外置迁移（2026-11-18）：把内存态里尚存的 inline 大 data:URL 搬到独立资产 key，
+ *  内存态改存 `asset:<id>` 引用（幂等：已是引用 / preset 路径 / 小图的原样跳过；
+ *  资产落库失败的条目保持原值，下次再试）。
+ *
+ *  调用点两处：
+ *   · restoreSys —— 新开局/重开时从 DB 读回旧格式后迁移（新会话兜底）；
+ *   · persistSys —— 每 20 tick 的落库前迁移。★ 这一处让**正在游玩的会话**
+ *     也自动瘦身（下一拍 persistSys 即完成迁移 → 内存/推送/写库全变引用版），
+ *     不必等到重新开局。 */
+async function migrateSpriteAssetsInline(api: any, s: FieldSurvivalState): Promise<void> {
+  if (!api?.set) return;
+  const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery : [];
+  // 1) 图库条目：大 data:URL → sprite_asset:<条目id>；记录「原值 → 引用」映射
+  const galImgMap = new Map<string, string>();
+  for (const g of gal) {
+    if (isBigSpriteDataUrl(g.image)) {
+      if (await putSpriteAsset(api, g.id, g.image, { source: g.source, createdAt: g.createdAt })) {
+        galImgMap.set(g.image, spriteRefOf(g.id));
+        g.image = spriteRefOf(g.id);
+      }
+    }
+  }
+  // 2) 绑定：data:URL → 命中图库映射用条目引用；孤儿图 → 内容 hash 幂等 legacy id
+  const binds = ((s as any).spriteBinds || {}) as Record<string, any>;
+  let changed = galImgMap.size > 0;
+  for (const k of Object.keys(binds)) {
+    const b = binds[k];
+    if (!b || typeof b.image !== "string" || !isBigSpriteDataUrl(b.image)) continue;
+    const hit = galImgMap.get(b.image);
+    if (hit) { b.image = hit; changed = true; continue; }
+    const aid = `lg_${spriteAssetHash(b.image)}`;
+    if (await putSpriteAsset(api, aid, b.image, { source: b.source, createdAt: b.createdAt })) {
+      b.image = spriteRefOf(aid);
+      changed = true;
+    }
+  }
+  // 3) 迁移发生了 → 立即重建实体立绘与角色卡（引用版）——否则本拍写库的
+  //    npcCards/parked 仍是迁移前 ensureNpcCards 用旧 binds 建出的 dataURL 版
+  //    （persistSys 调用点在帧内位于 ensureNpcCards 之后），要再等 20 拍才更新。
+  if (changed) {
+    (s.entities || []).forEach((e) => { if (e) applySpriteBindToEntities(s, String(e.id)); });
+    const pk: any = (s as any).parked || {};
+    Object.keys(pk).forEach((k) => {
+      (Array.isArray(pk[k]) ? pk[k] : []).forEach((pe: any) => {
+        if (pe) applySpriteBindToEntities(s, String(pe.id));
+      });
+    });
+    ensureNpcCards(s, s.levelName || "");
+  }
+}
+
 /** 形象绑定查询：返回该角色的形象 override（无则 null）。
  *  返回整条 SpriteEntry（不仅是 image），让 entity.customSprite 拿到 prompt/source */
 function spriteOverrideFor(s: FieldSurvivalState, id: unknown): { image: string; prompt?: string; source?: string; createdAt?: number } | null {
@@ -6215,6 +6312,10 @@ async function persistSys(context: PluginGameContext | undefined, s: FieldSurviv
   const api = context?.tsApi?.pluginData;
   if (!api?.set) return;
   try {
+    // ★ 资产外置迁移（2026-11-18）：每拍落库前把内存里尚存的 inline 大 data:URL
+    //   搬到独立资产 key 并改引用——正在游玩的会话由此自动瘦身（不必重新开局）。
+    //   幂等：迁移完成后此处为零开销（无 data:URL 可搬）。
+    await migrateSpriteAssetsInline(api, s);
     // ── 读回 DB 旧值（用于「内存空 → 保留旧值」的合并保护）──────────────
     // 失败不阻断：读不到就退化成原来的全量覆盖行为。
     let prev: any = null;
@@ -6436,6 +6537,9 @@ async function restoreSys(context: PluginGameContext | undefined, s: FieldSurviv
       }
       (s as any).spriteBinds = binds;
     }
+    // ★ 资产外置迁移（2026-11-18）：旧存档 sys_state 里的 inline data:URL → 独立资产 key。
+    //   幂等；搬移后由下一拍 persistSys 写回瘦身 sys_state（见 migrateSpriteAssetsInline 注释）。
+    await migrateSpriteAssetsInline(context?.tsApi?.pluginData, s);
     // ★ 任务板：恢复任务定义与玩家进度（按 id 续上，不清零）
     if (Array.isArray(d.questBoard)) {
       s.questBoard = d.questBoard.map((x: any, i: number) => normalizeQuestDef(x, i)).filter(Boolean) as QuestDef[];
@@ -7669,6 +7773,17 @@ export async function handle_action(
         createdAt: Date.now(),
         matting: r.matting,
       };
+      // ★ 资产外置：大 dataURL 不进 state，落独立 key，条目只存引用。
+      //   落库失败 → 本次生成报错（不留取不到图的坏引用）；小图（程序生成的占位）原样存。
+      if (isBigSpriteDataUrl(r.image)) {
+        const api = context?.tsApi?.pluginData;
+        if (!(await putSpriteAsset(api, entry.id, r.image, { source: "ai", createdAt: entry.createdAt }))) {
+          s.spriteGen = { status: "error", message: "形象数据保存失败，请重试", at: Date.now() };
+          s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
+          return okResp("形象数据保存失败，请重试");
+        }
+        entry.image = spriteRefOf(entry.id);
+      }
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
       gal.unshift(entry);
       // 超上限：优先淘汰「最旧的、且没被任何角色使用」的条目；全在用则保留（宁可超也不删正在用的）
@@ -7679,7 +7794,12 @@ export async function handle_action(
           if (!boundImages.has(gal[i].image)) { dropAt = i; break; }
         }
         if (dropAt < 0) break;
+        // ★ 资产外置：被淘汰条目的独立资产 key 一并清理（fire-and-forget，失败留垃圾无碍）
+        const dropEntry = gal[dropAt];
         gal.splice(dropAt, 1);
+        if (isSpriteAssetRef(dropEntry.image)) {
+          void dropSpriteAsset(context?.tsApi?.pluginData, spriteAssetIdOf(dropEntry.image));
+        }
       }
       s.spriteGallery = gal;
       s.spriteGen = {
@@ -7695,24 +7815,46 @@ export async function handle_action(
 
     case "sys_sprite_bind": {
       // 把某个形象绑定给目标角色（target = 角色 id；"PLAYER" 或空 = 用户自己）
-      // image 是 data:URL 或插件内相对路径；可选 prompt/source（preset 走 source="preset"）
+      // ★ 资产外置：优先传 spriteId（图库条目 id）→ 按条目解析引用；
+      //   兼容旧参数 image（asset: 引用 / preset 路径原样；大 data:URL 落资产再引用）
       let target = str(params?.target).trim();
-      const image = str(params?.image).trim();
+      let image = str(params?.image).trim();
+      const spriteId = str(params?.spriteId).trim();
+      const src = str(params?.source, "") as "" | "preset" | "ai" | "upload";
+      let gSource: string = src;
+      let gPrompt = str(params?.prompt, "");
+      if (spriteId) {
+        const g = (Array.isArray(s.spriteGallery) ? s.spriteGallery : []).find((x) => String(x.id) === spriteId);
+        if (!g) return okResp("图库中找不到该形象（可能已删除）");
+        image = g.image;
+        if (!gSource) gSource = (g.source as string) || "ai";
+        if (!gPrompt) gPrompt = g.prompt || "";
+      }
       if (!image) return okResp("请选择要使用的形象");
+      if (isBigSpriteDataUrl(image)) {
+        // 旧客户端 / 外部调用直接传大 dataURL → 落独立资产 key，绑定存引用
+        //（<4KB 小图不值得一次写库，原样存——与 generate/upload 的外置阈值一致）
+        const aid = `bd_${Math.round(num(s.tick, 0))}_${Math.random().toString(36).slice(2, 8)}`;
+        const api = context?.tsApi?.pluginData;
+        if (!(await putSpriteAsset(api, aid, image, { source: gSource || "upload", createdAt: Math.round(num(params?.createdAt, Date.now())) }))) {
+          return okResp("形象数据保存失败，请重试");
+        }
+        image = spriteRefOf(aid);
+        if (!gSource) gSource = "upload";
+      }
       if (!target || target === "PLAYER") {
         const pr = (Array.isArray(s.roles) ? s.roles : []).find(
           (r: any) => String(r?.roleType) === "player",
         ) as any;
         target = pr ? String(pr.id) : "PLAYER";
       }
-      const src = str(params?.source, "") as "" | "preset" | "ai" | "upload";
-      const promptText = str(params?.prompt, "");
+      const promptText = gPrompt;
       const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
       binds[target] = {
         image,
         prompt: promptText || undefined,
-        // ★ 默认 source：data:URL 走 upload；./ 或 / 开头走 preset；空时按 image 头猜
-        source: src || (/^data:/i.test(image) ? "upload" : (image.startsWith("./") || image.startsWith("/")) ? "preset" : "preset"),
+        // ★ 默认 source：asset: 引用沿用图库条目来源；./ 或 / 开头走 preset
+        source: (gSource as string) || (isSpriteAssetRef(image) ? "ai" : (image.startsWith("./") || image.startsWith("/")) ? "preset" : "preset"),
         createdAt: Math.round(num(params?.createdAt, Date.now())),
       };
       (s as any).spriteBinds = binds;
@@ -7750,6 +7892,11 @@ export async function handle_action(
       const img = gal[idx].image;
       gal.splice(idx, 1);
       s.spriteGallery = gal;
+      // ★ 资产外置：条目被删且没有任何绑定再引用 → 独立资产 key 一并清理
+      if (isSpriteAssetRef(img)) {
+        const stillBound = Object.values(s.spriteBinds || {}).some((v: any) => v && v.image === img);
+        if (!stillBound) void dropSpriteAsset(context?.tsApi?.pluginData, spriteAssetIdOf(img));
+      }
       const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
       const toUnbind: string[] = [];
       Object.keys(binds).forEach((k) => {
@@ -7781,13 +7928,24 @@ export async function handle_action(
       if (!image) return okResp("缺少翻转后的图片");
       const oldImg = gal[idx].image;
       if (oldImg === image) return okResp("图片未变化，无需翻转");
-      gal[idx] = { ...gal[idx], image };
+      // ★ 资产外置：翻转后的 dataURL 落【新】资产 key（不覆盖旧 key——
+      //   前端缓存以 assetId 为 key，同 id 换内容不会自动失效）；小图原样存
+      let newImg = image;
+      if (isBigSpriteDataUrl(image)) {
+        const aid = `${id}_f${Math.round(num(s.tick, 0))}`;
+        const api = context?.tsApi?.pluginData;
+        if (!(await putSpriteAsset(api, aid, image, { source: (gal[idx] as any).source || "ai", createdAt: Date.now() }))) {
+          return okResp("翻转保存失败，请重试");
+        }
+        newImg = spriteRefOf(aid);
+      }
+      gal[idx] = { ...gal[idx], image: newImg };
       s.spriteGallery = gal;
       const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
       const flippedTargets: string[] = [];
       Object.keys(binds).forEach((k) => {
         if (binds[k] && binds[k].image === oldImg) {
-          binds[k] = { ...binds[k], image };
+          binds[k] = { ...binds[k], image: newImg };
           flippedTargets.push(k);
         }
       });
@@ -7814,6 +7972,14 @@ export async function handle_action(
         }
       });
       (s as any).spriteBinds = binds;
+      // ★ 资产外置：图库条目的独立资产 key 一并清理（fire-and-forget）
+      gal.forEach((g) => {
+        if (isSpriteAssetRef(g.image)) void dropSpriteAsset(context?.tsApi?.pluginData, spriteAssetIdOf(g.image));
+      });
+      // ★ 用户主动清空图库 → 本次允许 spriteGallery / spriteBinds 写空
+      //   （2026-11-18 补：此前漏置 _sysForceEmpty，keepIfEmpty 会用 DB 旧值把
+      //   刚清空的图库顶回来，清空无效）
+      (s as any)._sysForceEmpty = ["spriteGallery", "spriteBinds"];
       toUnbind.forEach((k) => applySpriteBindToEntities(s, k));
       ensureNpcCards(s, s.levelName || "");
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
@@ -7834,6 +8000,14 @@ export async function handle_action(
         source: "upload",
         createdAt: Date.now(),
       };
+      // ★ 资产外置：dataURL 落独立 key，条目存引用（失败报错，不留坏引用）
+      {
+        const api = context?.tsApi?.pluginData;
+        if (!(await putSpriteAsset(api, entry.id, image, { source: "upload", createdAt: entry.createdAt }))) {
+          return okResp("形象数据保存失败，请重试");
+        }
+        entry.image = spriteRefOf(entry.id);
+      }
       const gal = Array.isArray(s.spriteGallery) ? s.spriteGallery.slice() : [];
       gal.unshift(entry);
       const boundImages = new Set(Object.values(s.spriteBinds || {}).map((v: any) => v && v.image).filter(Boolean));
@@ -7843,14 +8017,19 @@ export async function handle_action(
           if (!boundImages.has(gal[i].image)) { dropAt = i; break; }
         }
         if (dropAt < 0) break;
+        // ★ 资产外置：被淘汰条目的独立资产 key 一并清理（fire-and-forget，失败留垃圾无碍）
+        const dropEntry = gal[dropAt];
         gal.splice(dropAt, 1);
+        if (isSpriteAssetRef(dropEntry.image)) {
+          void dropSpriteAsset(context?.tsApi?.pluginData, spriteAssetIdOf(dropEntry.image));
+        }
       }
       s.spriteGallery = gal;
       s.spriteRevision = Math.round(num(s.spriteRevision, 0)) + 1;
-      // 可选：上传后立即绑定
+      // 可选：上传后立即绑定（绑定存资产引用 entry.image，不再复制 dataURL）
       if (target && target !== "PLAYER") {
         const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
-        binds[target] = { image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
+        binds[target] = { image: entry.image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
         (s as any).spriteBinds = binds;
         applySpriteBindToEntities(s, target);
         ensureNpcCards(s, s.levelName || "");
@@ -7860,7 +8039,7 @@ export async function handle_action(
         ) as any;
         const tid = pr ? String(pr.id) : "PLAYER";
         const binds = { ...((s as any).spriteBinds as Record<string, any> || {}) };
-        binds[tid] = { image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
+        binds[tid] = { image: entry.image, prompt: entry.prompt, source: "upload", createdAt: entry.createdAt };
         (s as any).spriteBinds = binds;
         applySpriteBindToEntities(s, tid);
         ensureNpcCards(s, s.levelName || "");

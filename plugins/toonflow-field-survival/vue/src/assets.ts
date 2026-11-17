@@ -275,10 +275,83 @@ export function resolveAssetPath(p: string): string {
 }
 
 // ---------------------------------------------------------------
+// sprite 资产外置（2026-11-18 通信阻塞修复）：后端 state 里形象图只存
+// `asset:<assetId>` 短引用（base64 不再随每拍推送/落库），图本体按
+// dataKey `sprite_asset:<assetId>` 存 t_plugin_session_data。
+// iframe 的 src 是 /plugin/getAsset?...&token=&sessionId=&pluginId=，
+// origin 就是后端 → 直接同源 fetch /plugin/data（无需宿主代理）。
+// ---------------------------------------------------------------
+
+const spriteAssetCache = new Map<string, string>();                 // assetId → dataURL
+const spriteAssetPending = new Map<string, Promise<string | null>>(); // 并发去重
+let spriteAssetCtx: { origin: string; token: string; sessionId: string; pluginId: string } | null | undefined;
+
+function spriteAssetRequestContext() {
+  if (spriteAssetCtx !== undefined) return spriteAssetCtx;
+  try {
+    const u = new URL(location.href);
+    if (!u.pathname.includes("getAsset")) { spriteAssetCtx = null; return null; }
+    const token = u.searchParams.get("token") || "";
+    const sessionId = u.searchParams.get("sessionId") || "";
+    const pluginId = u.searchParams.get("pluginId") || "";
+    if (!token || !sessionId || !pluginId) { spriteAssetCtx = null; return null; }
+    spriteAssetCtx = { origin: location.origin, token, sessionId, pluginId };
+  } catch { spriteAssetCtx = null; }
+  return spriteAssetCtx;
+}
+
+/** 判断是否 sprite 资产引用（asset:<assetId>） */
+export function isSpriteAssetRef(s: unknown): boolean {
+  return typeof s === "string" && s.startsWith("asset:");
+}
+
+/** 同步取 sprite 资产 dataURL：命中缓存立即返回；否则发起（去重的）异步拉取并返回 ""，
+ *  数据到位后由调用方按各自刷新机制重绘（ensureCustomSprite 的 ready 模式 / 弹窗 watch）。 */
+export function ensureSpriteAssetData(assetId: string): string {
+  const cached = spriteAssetCache.get(assetId);
+  if (cached) return cached;
+  const ctx = spriteAssetRequestContext();
+  if (!ctx) return "";
+  if (!spriteAssetPending.has(assetId)) {
+    const p = (async () => {
+      try {
+        const resp = await fetch(`${ctx.origin}/plugin/data`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${ctx.token}` },
+          body: JSON.stringify({
+            pluginId: ctx.pluginId,
+            sessionId: ctx.sessionId,
+            op: "get",
+            dataKey: `sprite_asset:${assetId}`,
+          }),
+        });
+        const j: any = await resp.json().catch(() => null);
+        const data = j?.data;
+        const v = (data && typeof data === "object" && "value" in data) ? data.value : data;
+        const dataUrl = (v && typeof v === "object") ? String(v.dataUrl || "") : (typeof v === "string" ? v : "");
+        if (dataUrl) spriteAssetCache.set(assetId, dataUrl);
+        return dataUrl || null;
+      } catch { return null; }
+      finally { spriteAssetPending.delete(assetId); }
+    })();
+    spriteAssetPending.set(assetId, p);
+  }
+  return "";
+}
+
+/** 异步等一张 sprite 资产的 dataURL（弹窗预览 / 翻转 / AI 参考图等「必须拿到图」的路径） */
+export function loadSpriteAssetData(assetId: string): Promise<string | null> {
+  const cached = spriteAssetCache.get(assetId);
+  if (cached) return Promise.resolve(cached);
+  ensureSpriteAssetData(assetId);
+  return spriteAssetPending.get(assetId) || Promise.resolve(spriteAssetCache.get(assetId) || null);
+}
+
+// ---------------------------------------------------------------
 // 野怪 / 装饰：全部用 tileset tile id（与 Rotten-Soup EntityFactory
 // 和 RandomDungeon/RandomSimplex 的 id 一致）：
 //   GOBLIN 7440  ORC 5292  RAT 2365  WILD_GOAT 2600  SNAKE 4360
-//   BAT 3704  SKELETON 2552  MINOTAUR 7080
+//   BAT 3704  SNAKE 4360  SKELETON 2552  MINOTAUR 7080
 //   树 7355  枯树 7359  宝箱 57(开=58)  灌木 1722  蘑菇 1724  花 1482
 // ---------------------------------------------------------------
 export const MOB_TILES: Record<string, number> = {

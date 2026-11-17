@@ -12,7 +12,7 @@
  */
 import { computed, ref, watch } from "vue";
 import { SPRITE_PRESETS } from "../spritePresets";
-import { resolveAssetPath } from "../assets";
+import { resolveAssetPath, loadSpriteAssetData, isSpriteAssetRef } from "../assets";
 
 interface Target {
   id: string;
@@ -38,8 +38,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "close"): void;
   (e: "pick-target", id: string): void;
-  /** 绑定：image 是 data:URL 或插件内相对路径；source/prompt 透传给后端 */
-  (e: "bind", target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number }): void;
+  /** 绑定：image 是 data:URL / 插件内相对路径 / asset: 引用；spriteId 传图库条目 id（后端优先用它解析引用）；source/prompt 透传给后端 */
+  (e: "bind", target: string, image: string, meta?: { source?: string; prompt?: string; createdAt?: number; spriteId?: string }): void;
   (e: "unbind", target: string): void;
   (e: "generate", prompt: string, refs: string[], opts?: { programmatic?: boolean }): void;
   (e: "delete", id: string): void;
@@ -89,8 +89,21 @@ const hasBind = computed(() => !!(props.binds || {})[props.targetId]);
 const gallery = computed(() => (Array.isArray(props.gallery) ? props.gallery : []));
 const extraRefs = computed(() => refs.value.filter((r) => r.kind !== "preset"));
 
+/** sprite 资产引用（asset:<id>）→ dataURL 解析缓存；未就绪返回 ""（img 空占位，
+ *  数据到位后 assetUrls 更新触发重渲染）。loadSpriteAssetData 内部有并发去重。 */
+const assetUrls = ref<Record<string, string>>({});
 function imgSrc(p: string): string {
-  return p ? resolveAssetPath(p) : "";
+  if (!p) return "";
+  if (isSpriteAssetRef(p)) {
+    const id = p.slice("asset:".length);
+    if (!assetUrls.value[id]) {
+      void loadSpriteAssetData(id).then((d) => {
+        if (d) assetUrls.value = { ...assetUrls.value, [id]: d };
+      });
+    }
+    return assetUrls.value[id] || "";
+  }
+  return resolveAssetPath(p);
 }
 function isRefOn(key: string): boolean {
   return refs.value.some((r) => r.key === key);
@@ -247,11 +260,16 @@ function flipImageHorizontal(src: string): Promise<string> {
   });
 }
 
-/** 点「反向」：本地翻转后交给后端替换图库条目 + 同步引用它的绑定 */
+/** 点「反向」：本地翻转后交给后端替换图库条目 + 同步引用它的绑定。
+ *  asset: 引用先等资产 dataURL 到位（翻转需要真实像素）。 */
 async function onFlip(g: any): Promise<void> {
   if (actionBusy.value) return;
   try {
-    const flipped = await flipImageHorizontal(imgSrc(g.image));
+    const src = isSpriteAssetRef(g.image)
+      ? await loadSpriteAssetData(g.image.slice("asset:".length)).then((d) => d || "")
+      : imgSrc(g.image);
+    if (!src) return;
+    const flipped = await flipImageHorizontal(src);
     emit("flip", String(g.id), flipped);
   } catch { /* 翻转失败（图片加载/跨域）安静忽略 */ }
 }
@@ -413,7 +431,7 @@ watch(
                   <button
                     class="apm-btn apm-btn--mini"
                     :disabled="actionBusy"
-                    @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt })"
+                    @click="emit('bind', targetId, g.image, { source: g.source || 'ai', prompt: g.prompt, createdAt: g.createdAt, spriteId: g.id })"
                   >{{ busyAction === "sys_sprite_bind" ? "更换中…" : "选用" }}</button>
                   <button
                     class="apm-btn apm-btn--mini"

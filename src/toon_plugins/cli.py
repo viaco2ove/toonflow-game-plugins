@@ -853,7 +853,10 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
             written.append((path, os.path.getsize(path)))
             click.echo(f"  [OK] {os.path.relpath(path, os.path.dirname(CLI_ROOT))}  ({os.path.getsize(path)} bytes)")
 
-        # spriteBinds 便利产物：把 data:URL 形象图解码成图片文件
+        # spriteBinds 便利产物：把形象图解码成图片文件。
+        # ★ 2026-11-18 资产外置适配：image 可能是 `asset:<assetId>` 引用
+        #   （base64 已外置到 t_plugin_session_data 的 sprite_asset:<assetId> key），
+        #   此处逐个拉回再解码；data:URL（旧格式/小图）与引用路径（preset）照旧处理。
         if "spriteBinds" in fields:
             binds = value.get("spriteBinds") or {}
             if isinstance(binds, dict) and binds:
@@ -862,6 +865,23 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
                 for role_key, bind in binds.items():
                     image = bind.get("image") if isinstance(bind, dict) else bind
                     if not isinstance(image, str) or not image:
+                        continue
+                    if image.startswith("asset:"):
+                        asset_id = image[len("asset:"):]
+                        try:
+                            ar = client.get_plugin_data(plugin_id, f"sprite_asset:{asset_id}", session_id=sid)
+                        except Exception as e:
+                            click.secho(f"  [WARN] {role_key}: 资产 sprite_asset:{asset_id} 读取失败（{e}）→ 跳过", fg="yellow")
+                            continue
+                        av = (ar or {}).get("value") if isinstance(ar, dict) else None
+                        data_url = (av or {}).get("dataUrl") if isinstance(av, dict) else None
+                        if not isinstance(data_url, str) or not data_url:
+                            click.secho(f"  [WARN] {role_key}: 资产 sprite_asset:{asset_id} 无 dataUrl → 跳过", fg="yellow")
+                            continue
+                        ok, ext = _decode_data_url_image(data_url, os.path.join(sid_dir, _safe_filename(role_key, "role")))
+                        if ok:
+                            png_count += 1
+                            click.echo(f"  [OK] sprites/{_safe_filename(sid, 'session')}/{_safe_filename(role_key, 'role')}.{ext}  (via asset:{asset_id})")
                         continue
                     ok, ext = _decode_data_url_image(image, os.path.join(sid_dir, _safe_filename(role_key, "role")))
                     if ok:
