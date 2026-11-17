@@ -245,3 +245,20 @@ class ToonClient:
         if world_id is not None:
             body["worldId"] = world_id
         return self._post("/game/storyInfo", body)
+
+    def list_worlds(self):
+        """列出当前用户的全部故事世界（POST /game/listWorlds）。
+
+        返回 list[{id, name, publishStatus, chapterCount, sessionCount, ...}]。
+        """
+        return self._post("/game/listWorlds", {})
+
+    def list_sessions(self, world_id=None):
+        """列出会话（POST /game/listSession），可按 worldId 过滤。
+
+        返回 list[{sessionId, worldId, title, status, ...}]。
+        """
+        body = {}
+        if world_id:
+            body["worldId"] = int(world_id)
+        return self._post("/game/listSession", body)

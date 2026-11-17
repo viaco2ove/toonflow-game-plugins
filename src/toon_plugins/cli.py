@@ -693,12 +693,167 @@ def _seed_story_task_data(client, plugin_id: str, story: str, source_dir: str, s
 #   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
 #       -story 赦夜人冥夜走廊-第二季 -k map_data --get
 #   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
-#       -story 赦夜人冥夜走廊-第二季 -k map_data --set --value-file map.json
+#       -story 走廊-第二季 -k map_data --set --value-file map.json
 #   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
 #       -story 赦夜人冥夜走廊-第二季 -k map_data --remove
+#   python -m toon_plugins plugin_session_data -i toonflow-field-survival \
+#       -story 赦夜人冥夜走廊-第二季 -spriteBinds -skillMeta -itemMeta
+#       → 导出 sys_state 的实体形象绑定/技能配置/物品配置到
+#         .cache/toonflow-field-survival/plugin_session_data/（spriteBinds 额外解码 PNG）
 # sessionId 默认为 "all"（跨会话共享，与 req.md 约定一致）；
 # 传 --session 切换到具体会话。
 # ─────────────────────────────────────────────────────────────────────────
+
+# sys_state 里「用户配置类」字段的导出实现（-spriteBinds / -skillMeta / -itemMeta）。
+# 背景（2026-11-17）：persistSys 覆盖写事故把某会话的 spriteBinds/skillMeta/itemMeta 抹空，
+# 需要一条不进数据库的取证/备份通道：按故事解析会话 → 读 sys_state → 落 JSON（+PNG）。
+# ★ CLI_ROOT 是 src/（既有约定：打包产物 plugins_tbg 用 dirname(CLI_ROOT) 做仓库根），
+#   仓库根/.cache 才是临时目录的正确位置（AGENTS.md）——所以这里也要 dirname 一级。
+EXPORT_DEFAULT_DIR = os.path.join(os.path.dirname(CLI_ROOT), ".cache", "toonflow-field-survival", "plugin_session_data")
+
+
+def _unwrap_plugin_value(r):
+    """get_plugin_data 回包取 value（兼容 {data:{value}} 旧信封与 {value} 新解包两种形态）。"""
+    if isinstance(r, dict) and isinstance(r.get("data"), dict) and "value" in r["data"]:
+        return r["data"].get("value")
+    return r.get("value") if isinstance(r, dict) else None
+
+
+def _safe_filename(name, fallback="unnamed"):
+    """文件名清洗：只留字母数字下划线连字符，其余替换为 _（中文角色键转写为拼音不可行，直接 _ 化）。"""
+    import re as _re
+    s = _re.sub(r"[^A-Za-z0-9_-]+", "_", str(name or "")).strip("_")
+    return s or fallback
+
+
+def _decode_data_url_image(data_url, out_path):
+    """data:image/<mime>;base64,xxx → 解码写文件；返回 (ok, ext)。非 data: URL 返回 (False, None)。"""
+    import base64 as _base64
+    s = str(data_url or "")
+    if not s.startswith("data:image/"):
+        return False, None
+    try:
+        head, b64 = s.split(",", 1)
+        ext = head[len("data:image/"):].split(";")[0] or "png"
+        if ext == "jpeg":
+            ext = "jpg"
+        raw = _base64.b64decode(b64)
+        with open(out_path + "." + ext, "wb") as f:
+            f.write(raw)
+        return True, ext
+    except Exception:
+        return False, None
+
+
+def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir):
+    """按故事（或指定会话）导出 sys_state 的指定字段到 out_dir。
+
+    输出：
+      <out>/<sessionId>.<field>.json          字段原样 JSON
+      <out>/sprites/<sessionId>/<角色>.png    spriteBinds 里的 data:URL 图（便利产物）
+      <out>/_export_manifest.json             本次导出清单（时间/会话/文件列表）
+    """
+    # ① 解析会话清单 --------------------------------------------------------
+    sessions = []          # [(sessionId, title)]
+    if session_id and session_id != "all":
+        sessions = [(session_id, "")]
+        click.echo(f"[export] 会话：--session 指定 {session_id}")
+    elif story:
+        worlds = client.list_worlds() or []
+        if isinstance(worlds, dict):   # 防御：极老后端包一层 {worlds:[...]}
+            worlds = worlds.get("worlds") or worlds.get("list") or []
+        hit = [w for w in worlds if str(w.get("name") or "") == story]
+        if not hit:
+            like = [w for w in worlds if story in str(w.get("name") or "")]
+            if len(like) == 1:
+                hit = like
+            elif len(like) > 1:
+                click.secho(f"[ERR] 故事名「{story}」模糊匹配到 {len(like)} 个世界，请用完整名称："
+                            + "、".join(str(w.get('name')) for w in like[:5]), fg="red")
+                return
+        if not hit:
+            click.secho(f"[ERR] 找不到名为「{story}」的故事（/game/listWorlds 共 {len(worlds)} 个）", fg="red")
+            return
+        world = hit[0]
+        rows = client.list_sessions(world.get("id")) or []
+        if isinstance(rows, dict):
+            rows = rows.get("sessions") or rows.get("list") or []
+        sessions = [(str(r.get("sessionId") or ""), str(r.get("title") or "")) for r in rows]
+        click.echo(f"[export] 故事「{story}」(worldId={world.get('id')}) → {len(sessions)} 个会话")
+        if not sessions:
+            click.secho("[WARN] 该故事没有任何会话（未开局过）→ 无 sys_state 可导出", fg="yellow")
+            return
+    else:
+        click.secho("[ERR] 需要 -story <故事名>（解析该故事全部会话）或 --session <gs_xxx>（单会话）；"
+                    "sys_state 是会话级存档，sessionId=\"all\" 下不存在", fg="red")
+        return
+
+    out_dir = out_dir or EXPORT_DEFAULT_DIR
+    os.makedirs(out_dir, exist_ok=True)
+    sprites_dir = os.path.join(out_dir, "sprites")
+    written = []           # (path, bytes)
+    png_count = 0
+
+    # ② 逐会话读 sys_state、抽取字段落盘 ------------------------------------
+    for sid, title in sessions:
+        if not sid:
+            continue
+        try:
+            r = client.get_plugin_data(plugin_id, "sys_state", session_id=sid, story=story)
+        except Exception as e:
+            click.secho(f"[WARN] {sid} 读 sys_state 失败：{e}", fg="yellow")
+            continue
+        value = _unwrap_plugin_value(r)
+        if not value or not isinstance(value, dict):
+            click.secho(f"[WARN] {sid} sys_state 未存储或为空（未开局 / 数据已被清）→ 跳过", fg="yellow")
+            continue
+
+        for field in fields:
+            fv = value.get(field)
+            if fv is None:
+                click.secho(f"[WARN] {sid} sys_state.{field} 不存在 → 跳过", fg="yellow")
+                continue
+            path = os.path.join(out_dir, f"{sid}.{field}.json")
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                _json.dump(fv, f, ensure_ascii=False, indent=2)
+            written.append((path, os.path.getsize(path)))
+            click.echo(f"  [OK] {os.path.relpath(path, CLI_ROOT)}  ({os.path.getsize(path)} bytes)")
+
+        # spriteBinds 便利产物：把 data:URL 形象图解码成图片文件
+        if "spriteBinds" in fields:
+            binds = value.get("spriteBinds") or {}
+            if isinstance(binds, dict) and binds:
+                sid_dir = os.path.join(sprites_dir, _safe_filename(sid, "session"))
+                os.makedirs(sid_dir, exist_ok=True)
+                for role_key, bind in binds.items():
+                    image = bind.get("image") if isinstance(bind, dict) else bind
+                    if not isinstance(image, str) or not image:
+                        continue
+                    ok, ext = _decode_data_url_image(image, os.path.join(sid_dir, _safe_filename(role_key, "role")))
+                    if ok:
+                        png_count += 1
+                        click.echo(f"  [OK] sprites/{_safe_filename(sid, 'session')}/{_safe_filename(role_key, 'role')}.{ext}")
+                    elif not str(image).startswith("data:"):
+                        click.echo(f"  [INFO] {role_key}: 形象是引用路径（非内嵌 data:URL）→ 不解码，JSON 里保留原值")
+
+    # ③ 导出清单 ------------------------------------------------------------
+    manifest = {
+        "exportedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S") if datetime else None,
+        "story": story or "",
+        "pluginId": plugin_id,
+        "sessions": [{"sessionId": s, "title": t} for s, t in sessions],
+        "fields": fields,
+        "files": [os.path.relpath(p, CLI_ROOT) for p, _ in written],
+        "pngDecoded": png_count,
+    }
+    mpath = os.path.join(out_dir, "_export_manifest.json")
+    with open(mpath, "w", encoding="utf-8", newline="\n") as f:
+        _json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+    click.secho(f"\n[OK] 导出完成：{len(written)} 个 JSON + {png_count} 张图 → {os.path.relpath(out_dir, CLI_ROOT)}/"
+                f"（清单：_export_manifest.json）", fg="green")
+
+
 @main.command(name="story_info")
 @click.option("--story", "-s", required=True, help="故事名称（如 赦夜人冥夜走廊-第二季）")
 @click.option("--worldid", "world_id", type=int, default=None, help="世界 ID（可选）")
@@ -789,15 +944,30 @@ def story_info(ctx, story, world_id, roles, state):
               help="只构建 .tbg 文件到目录同级（不写 t_plugin_session_data），等价把 -u 的打包步骤单独跑。")
 @click.option("-role", "op_role", is_flag=True, help="读取并展示 AI 故事角色位置（dataKey=ai_story_roles）")
 @click.option("-position", "op_position", is_flag=True, help="配合 -role 使用，按 x/y 排序展示角色位置")
+@click.option("-spriteBinds", "sprite_binds", is_flag=True,
+              help="导出角色实体形象绑定（sys_state.spriteBinds）→ JSON + 解码 PNG 到 .cache/toonflow-field-survival/plugin_session_data/。"
+                   "会话来源：-story 解析该故事的全部会话，或 --session 指定单个会话")
+@click.option("-skillMeta", "skill_meta", is_flag=True,
+              help="导出技能配置/属性特效绑定（sys_state.skillMeta）→ JSON（会话来源同上）")
+@click.option("-itemMeta", "item_meta", is_flag=True,
+              help="导出物品配置/属性特效绑定（sys_state.itemMeta）→ JSON（会话来源同上）")
+@click.option("--out", "export_out", default=None, type=click.Path(file_okay=False, dir_okay=True),
+              help="导出目录（默认 <仓库根>/.cache/toonflow-field-survival/plugin_session_data/）")
 @click.pass_context
 def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
                        op_get, op_set, op_list, op_remove,
                        value_inline, value_file, upload_tbg, build_tbg,
-                       op_role, op_position):
+                       op_role, op_position,
+                       sprite_binds, skill_meta, item_meta, export_out):
     """Read / write / list / remove a plugin's session data (t_plugin_session_data).
 
     The backend endpoint is POST /plugin/data; sessionId="all" is treated as
     cross-session and bypasses t_gameSession existence check.
+
+    导出模式（-spriteBinds / -skillMeta / -itemMeta）：从 sys_state 抽取
+    实体形象绑定 / 技能配置 / 物品配置，按 -story 解析该故事全部会话（或 --session
+    指定单个会话），落盘到 .cache/toonflow-field-survival/plugin_session_data/。
+    spriteBinds 额外把 data:URL 形象图解码成 PNG（sprites/<sessionId>/<角色>.png）。
     """
     client = resolve_client(ctx.obj["env_path"])
 
@@ -810,6 +980,16 @@ def plugin_session_data(ctx, plugin_id, story, session_id, data_key,
     if resolved != plugin_id:
         click.echo(f"[plugin_data] -i {plugin_id!r} → manifest.id {resolved!r}")
     plugin_id = resolved
+
+    # ★ -spriteBinds/-skillMeta/-itemMeta：从 sys_state 导出实体形象绑定 / 技能 / 物品配置
+    #   （2026-11-17 persistSys 覆盖清空事故后的取证/备份通道）
+    if sprite_binds or skill_meta or item_meta:
+        if op_get or op_set or op_list or op_remove or upload_tbg or build_tbg or op_role:
+            click.secho("[ERR] -spriteBinds/-skillMeta/-itemMeta 与 --get/--set/--list/--remove/-u/-build/-role 互斥", fg="red"); return
+        fields = [name for name, want in
+                  (("spriteBinds", sprite_binds), ("skillMeta", skill_meta), ("itemMeta", item_meta)) if want]
+        _export_session_fields(client, plugin_id, story, session_id, fields, export_out)
+        return
 
     # ★ -u/--upload-tbg 走「上传地图」快捷路径：dataKey=map_data，op=set，从文件读
     #   先于 ops 推断：用户传 -u 时不必再传 --set / -k / --value-file
