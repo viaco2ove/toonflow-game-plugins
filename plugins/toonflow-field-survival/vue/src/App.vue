@@ -7470,6 +7470,10 @@ async function onInteractionClick(): Promise<void> {
   nearInteraction.value = null;
   interactionDismissed.value = true;
   if (it.tiledId) {
+    // ★ proximity 按钮接管时不弹聊天面板 → sys_quest_talk 补发 talk 计数
+    //   （与 onChatStart 两条分支同口径；通天传授 MSQ202「交付锻造台」talk 锻造大师
+    //    uid=256 即此形态，2026-11-20 实测 0/1 卡死后补）
+    void sendSysCmdAwait("sys_quest_talk", { uid: it.tiledId, name: it.name }).catch(() => {});
     await fireInteractEvent(it.tiledId);
   }
 }
@@ -7706,6 +7710,11 @@ async function onChatStart() {
   }
   chatNpcId.value = npc.id;
   chatNpcName.value = npc.name;
+  // ★ 弹聊天面板的 NPC 同样补发 talk 计数（2026-11-20 药铺夜灯 0/1 实测）：
+  //   noteQuestTalk 只挂在 sys_chat「玩家真正发送」与 sys_quest_talk「事件接管」两条通道上，
+  //   玩家打开面板但没发送（或事件未加载走普通聊天）时进度永远 0/1。
+  //   「打开对话」就该算对话过——任务 NPC 有任务目标 uid 精确匹配，非目标 NPC 发了也无人认领，无副作用。
+  if (tiledId) void sendSysCmdAwait("sys_quest_talk", { uid: tiledId, name: npc.name }).catch(() => {});
   chatMessages.value = [];
   chatInputText.value = "";
   chatPending.value = false;

@@ -3150,6 +3150,126 @@
      "width": 32,
      "x": 960,
      "y": 320
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 330,
+     "name": "SY_CARRION",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_CARRION"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 5
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 768,
+     "y": 416
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 331,
+     "name": "SY_CARRION",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_CARRION"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 5
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 864,
+     "y": 448
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 332,
+     "name": "SY_CARRION",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_CARRION"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 5
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 992,
+     "y": 416
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 333,
+     "name": "SY_CARRION",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_CARRION"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 5
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 928,
+     "y": 512
+    },
+    {
+     "gid": 2553,
+     "height": 32,
+     "id": 334,
+     "name": "SY_CARRION",
+     "properties": [
+      {
+       "name": "entity_type",
+       "type": "string",
+       "value": "SY_CARRION"
+      },
+      {
+       "name": "level",
+       "type": "int",
+       "value": 5
+      }
+     ],
+     "rotation": 0,
+     "type": "",
+     "visible": true,
+     "width": 32,
+     "x": 800,
+     "y": 544
     }
    ],
    "opacity": 1,
@@ -3160,7 +3280,7 @@
   }
  ],
  "nextlayerid": 4,
- "nextobjectid": 330,
+ "nextobjectid": 335,
  "orientation": "orthogonal",
  "renderorder": "right-down",
  "tiledversion": "1.2.1",
