@@ -157,8 +157,18 @@ Read 打开整图 PNG、`material.txt`、`report.md`。再用本技能 `scripts/
 - 角色/NPC 走 Actors 层与 `entity_types.json`，不在 tile 层处理。
 - 原型图 ≠ 游戏内贴图；原型里出现而图集/实体表都没有的要素，先判 M/E 补素材，不能在 JSON 里凭空放 gid。
 
+## 道路和任务寻路修复
+### 例子：
+- 1.很多通道和路有空气墙，这个需要检查一下
+  - 先把碰撞掩码的现状量化：两张图的 `blockedCells`/`visionCells` 长度、阻挡格数、主连通域、以及阻挡来源（图集标志 vs 手工掩码）。
+  - 验证连通性参数
+  连通域基本完整（镇 0 孤立，废墟 1 个孤立格）。废墟有 195 格是图集标志单独判挡、镇 36 格 —— 这些可能是路面 / 地面被误标阻挡。我把阻挡网格打成 ASCII，对照通道走向看哪里被堵。
+
+- 2.主线任务我接了。但是没有寻路。怀疑是采集和钓鱼事件等没做好和主线任务没有做验证和适配。
+  采集映射表对不上：目标叫「药草」没登记，区名还是旧故事的「夜采药圃 / 木材堆」，本故事实际区名是「食堂补给区 / 木料堆 / 废墟药草」。接着看 App.vue 怎么解析 talk 目标坐标（navTargets）。
 ## 参考
 
 - `references/pipeline.md` — 后端 API 细节、落地通道参数、校验清单
+- `references/practice/<故事名>/README.md` — 各故事落地实践案例：路线抉择、碰撞/压缩做法、踩坑清单与可复用脚本
 - `assets/elements_example.json` — 原型要素清单模板
 - 上游：`../cognitive-tiles-maps/`、`../tiles-maps-editor/`、`../tile-style-change/`、`../toon-maps-modification-workflow/`

@@ -58,7 +58,19 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
      · 磁盘上已有但源目录更新 → 写 <故事>.tbg.devcache 旁路包，不覆盖已有 .tbg。
    源目录有文件更新（mtime 比包新）时自动重打，保证「地图编辑器改完 → 刷新即见」不回退。
    ============================================================ */
-const TBG_SKIP_DIRS = new Set(["test_data", "__pycache__", "node_modules", ".git"]);
+// 运行时只消费 maps/ images/ events/ data/ overrides/ 等正式素材；
+// .cache（切片/渲染临时图）、bak（历史备份）、previews（概念参考稿）不随包分发，
+// 否则临时大图会把包撑到上百 MB，触发服务端 413 Payload Too Large。
+const TBG_SKIP_DIRS = new Set(["test_data", "__pycache__", "node_modules", ".git", ".cache", "bak", "previews"]);
+
+/** 单文件跳过：原图 master、历史备份、已生成的包本体、文档表（与 CLI build_tbg_file 口径一致） */
+function tbgSkipFile(fn: string): boolean {
+  const low = fn.toLowerCase();
+  if (fn === "data.xlsx") return true;
+  if (low.endsWith(".original.png") || low.endsWith(".tbg") || low.endsWith(".tbg.devcache") || low.endsWith(".bak")) return true;
+  if (fn.includes(".pre-")) return true;
+  return false;
+}
 
 const CRC32_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -85,7 +97,7 @@ function zipDirToBuffer(dir: string): Buffer {
       if (TBG_SKIP_DIRS.has(fn)) continue;
       const childRel = rel ? rel + "/" + fn : fn;
       if (statSync(join(dir, childRel)).isDirectory()) walk(childRel);
-      else entries.push({ name: childRel, data: readFileSync(join(dir, childRel)) });
+      else if (!tbgSkipFile(fn)) entries.push({ name: childRel, data: readFileSync(join(dir, childRel)) });
     }
   };
   walk("");
@@ -159,7 +171,7 @@ function dirNewestMtimeMs(dir: string): number {
       const childRel = rel ? rel + "/" + fn : fn;
       const st = statSync(join(dir, childRel));
       if (st.isDirectory()) walk(childRel);
-      else if (st.mtimeMs > newest) newest = st.mtimeMs;
+      else if (!tbgSkipFile(fn) && st.mtimeMs > newest) newest = st.mtimeMs;
     }
   };
   walk("");

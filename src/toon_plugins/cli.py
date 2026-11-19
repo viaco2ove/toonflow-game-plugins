@@ -586,13 +586,29 @@ def install_cmd(ctx, plugin_dir, upload_mode, include_test_data, enable):
 #   - -u：产出 .tbg 后再 base64 写 t_plugin_session_data.map_visual（v6 起主 key，
 #         兼容同步写 map_data；运行时 entry 按当前故事读并注入会话）
 # ─────────────────────────────────────────────────────────────────────────
+def _tbg_skip_file(fn: str) -> bool:
+    """打包 .tbg 时跳过的单文件：原图 master、历史备份、已生成的包本体、文档表。"""
+    low = fn.lower()
+    if fn in {"data.xlsx"}:
+        return True
+    if low.endswith((".original.png", ".tbg", ".tbg.devcache", ".bak")):
+        return True
+    if ".pre-" in fn:  # maps/bak、images/bak 之外散落在外的 *.pre-时间戳 备份
+        return True
+    return False
+
+
 def build_tbg_file(source_path: str) -> dict:
     """把目录（或单个 .tbg/.json 文件）打包成 .tbg 写到 source_path 同级。
 
     返回 {"tbg_path", "tbg_bytes", "files", "size"}。
     """
     import base64, zipfile, io
-    SKIP_DIRS = {"test_data", "__pycache__", "node_modules", ".git"}
+    # 运行时只消费 maps/ images/ events/ data/ overrides/ 等正式素材；
+    # .cache（切片/渲染临时图）、bak（历史备份）、previews（概念参考稿）一律不随包分发，
+    # 否则临时大图会把包撑到上百 MB，触发服务端 413 Payload Too Large。
+    SKIP_DIRS = {"test_data", "__pycache__", "node_modules", ".git",
+                 ".cache", "bak", "previews"}
 
     if os.path.isdir(source_path):
         buf = io.BytesIO()
@@ -600,6 +616,8 @@ def build_tbg_file(source_path: str) -> dict:
             for root, dirs, files in os.walk(source_path):
                 dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
                 for fn in files:
+                    if _tbg_skip_file(fn):
+                        continue
                     fp = os.path.join(root, fn)
                     arc = os.path.relpath(fp, source_path).replace(os.sep, "/")
                     zf.write(fp, arc)
