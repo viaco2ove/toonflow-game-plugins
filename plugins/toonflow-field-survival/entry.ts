@@ -4114,9 +4114,21 @@ function noteQuestKill(s: FieldSurvivalState, mobName: string): void {
   }
 }
 
-/** ★ 物品名是否满足采集目标（原双向 includes + 别名表展开）。
+/** ★ 通用关键字 → 采集类型兜底（与前端 questGatherMap.classifyTargetKind 同规则；
+ *   只按字面关键字归类，不含任何故事物名 / 区名）。归类不出返回 null。 */
+function classifyGatherKind(name: string): "herb" | "wood" | "fish" | "ore" | null {
+  const t = str(name).trim();
+  if (/鱼|钓|渔/.test(t)) return "fish";
+  if (/木|柴|树|林/.test(t)) return "wood";
+  if (/矿|铁|石|铜|银|金/.test(t)) return "ore";
+  if (/药|草|参|芝/.test(t)) return "herb";
+  return null;
+}
+
+/** ★ 物品名是否满足采集目标（精确/双向 includes → 旧别名表展开 → 通用类型兜底）。
  *  · "夜行尸傀" 命中 "尸傀" → includes 就够
- *  · "松木" 命中 "木材" → 必须走 QUEST_GATHER_ALIAS
+ *  · "松木" 命中 "木材" → 走 QUEST_GATHER_ALIAS
+ *  · "止血草药" 命中 "药草" → 类型兜底：同属 herb 即视为同类采集物
  */
 function questGatherMatch(itemName: string, target: string): boolean {
   const nm = str(itemName).trim();
@@ -4130,6 +4142,9 @@ function questGatherMatch(itemName: string, target: string): boolean {
       if (nm === a || nm.includes(a) || a.includes(nm)) return true;
     }
   }
+  const kT = classifyGatherKind(t);
+  const kN = classifyGatherKind(nm);
+  if (kT && kT === kN) return true;
   return false;
 }
 
@@ -4473,6 +4488,29 @@ function removeBagItemFromCard(s: FieldSurvivalState, name: string, count = 1): 
   patchCard(s, { items: serializeBag(next, card.items) });
   applyBagAttributes(s);
   return take;
+}
+
+/** ★ 交付采集任务：按匹配规则（同 removeBagItemFromCard 的对账口径）从背包跨同类物品扣减。
+ *  目标是上位词（药草/木材…）而背包里是具体产出物（止血草药/松木…）时，
+ *  不再要求背包里存在与目标同名的格子。返回实际扣减数量。 */
+function removeMatchedGatherFromCard(s: FieldSurvivalState, target: string, count = 1): number {
+  const t = str(target).trim();
+  let remaining = Math.max(1, Math.round(num(count, 1)));
+  if (!t || remaining <= 0) return 0;
+  const card = (s.playerCard || {}) as Record<string, any>;
+  const bag = mergeBag(itemsFromCard(card), s.bagMeta, s.bagOrder, s.itemMeta);
+  for (const slot of bag) {
+    if (remaining <= 0) break;
+    if (!questGatherMatch(slot.name, t)) continue;
+    const take = Math.min(remaining, Math.max(0, Math.round(num(slot.count, 0))));
+    if (take <= 0) continue;
+    slot.count -= take;
+    remaining -= take;
+  }
+  const next = bag.filter((x) => Math.round(num(x.count, 0)) > 0);
+  patchCard(s, { items: serializeBag(next, card.items) });
+  applyBagAttributes(s);
+  return Math.max(0, Math.round(num(count, 1))) - remaining;
 }
 
 /** 供前端渲染的任务视图（available / active / done / turned） */
@@ -4899,13 +4937,16 @@ async function chainTurninNode(context: PluginGameContext | undefined, s: FieldS
   const p = (s.quests || {})[String(qdef.id)];
   if (!p || p.status !== "done") return "目标还没达成，先去完成任务";
   // 交付：扣物品（与 sys_quest_turnin 同规则）
-  const consume = Array.isArray(qdef.consume) && qdef.consume.length
-    ? qdef.consume
-    : (qdef.objectives || []).filter((o) => o.kind === "gather" && str(o.target))
-        .map((o) => ({ name: str(o.target), count: objNeed(o) }));
-  for (const c of consume) {
-    if (!str(c.name)) continue;
-    removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+  if (Array.isArray(qdef.consume) && qdef.consume.length) {
+    for (const c of qdef.consume) {
+      if (!str(c.name)) continue;
+      removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+    }
+  } else {
+    for (const o of qdef.objectives || []) {
+      if (o.kind !== "gather" || !str(o.target)) continue;
+      removeMatchedGatherFromCard(s, str(o.target), objNeed(o));
+    }
   }
   // 发奖
   const exp = Math.round(num(qdef.reward?.exp, 0));
@@ -7409,14 +7450,17 @@ export async function handle_action(
           : "目标未达成";
         return okResp(`「${def.title}」还没完成（${why}）`);
       }
-      // 交付：扣物品（deliver 的 consume，缺省按 gather 目标同名扣）
-      const consume = Array.isArray(def.consume) && def.consume.length
-        ? def.consume
-        : (def.objectives || []).filter((o) => o.kind === "gather" && str(o.target))
-            .map((o) => ({ name: str(o.target), count: objNeed(o) }));
-      for (const c of consume) {
-        if (!str(c.name)) continue;
-        removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+      // 交付：扣物品（deliver 的 consume 显式清单按同名扣；缺省按 gather 目标匹配同类扣）
+      if (Array.isArray(def.consume) && def.consume.length) {
+        for (const c of def.consume) {
+          if (!str(c.name)) continue;
+          removeBagItemFromCard(s, str(c.name), Math.max(1, Math.round(num(c.count, 1))));
+        }
+      } else {
+        for (const o of def.objectives || []) {
+          if (o.kind !== "gather" || !str(o.target)) continue;
+          removeMatchedGatherFromCard(s, str(o.target), objNeed(o));
+        }
       }
       // 发奖
       const exp = Math.round(num(def.reward?.exp, 0));

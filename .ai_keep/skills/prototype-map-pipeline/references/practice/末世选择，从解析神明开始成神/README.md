@@ -91,6 +91,26 @@
 - 本故事实测：瘦身前 1255 文件 / 104MB；瘦身后 **1069 文件 / tbg 4.02MB（base64 ~5.62MB）**，`map_visual:<故事>` 与兼容 `map_data:<故事>` 均落库成功，`chain_defs` 补种 8 条、`quest_defs` 12 条。
 - 校验：解包 .tbg 确认无 `.cache/ bak/ previews/` 混入、关键运行时文件（story/entity_types/compiled_dawnlike/图集 png/两张正式地图）齐全；服务端 body 上限默认 100mb（`JSON_BODY_LIMIT` 可配），包体务必留足余量。
 
+### 3.8 碰撞开关 ignoreTileFlags 与采集寻路的通用口径
+
+**碰撞：图集旧标志挡 vs 地图级掩码。**
+- 基础 dawnlike 图集把原版墙/栅栏/废墟/树木/水瓦片都标了 `blocked`；切片换皮后旧墙瓦片被铺到开放地面，旧标志仍判挡，在废墟路面连成多条横向长条空气墙。本故事的几何/道具障碍已由地图级手工掩码 `blockedCells` 表达，图集旧标志反而成为误挡来源。
+- 通用修法（`vue/src/collision.ts`）：碰撞网格加可选开关 `ignoreTileFlags`，默认 `false`（保留旧图集标志叠加，旧关卡行为不变）；地图 JSON 顶层声明 `"collision": {"ignoreTileFlags": true}` 时跳过旧图集 blocked/vision/bed 标志，只叠加地图级掩码。
+- 本故事两张正式地图（mulberryTown / mulberryForest）写了该开关；旧保留关卡不写，行为不变。掩码-only 连通性校验：镇 阻挡 538 / 可走 1870 / 孤立 0；林 阻挡 403 / 可走 1997 / 孤立 0，出生点、事件区、对象格全部可达。
+
+**采集寻路：物品→采集区映射必须运行时从故事包推导，禁止写进插件源码。**
+- 旧做法是在插件 `questGatherMap.ts` 里维护一张静态硬编码表（物品名→区名），换故事就得改插件源码，且会把故事业务漏进通用代码——已废弃。
+- 通用契约：采集区与产出物由故事包事件定义声明，插件只读不写：
+  - 事件触发器 `trigger.type = "area_enter"`、`trigger.zone`（与地图 `eventZones[].name` 逐字一致）、`trigger.ai.gather`（herb/fish/wood/ore/other）、`trigger.ai.items`（该采集区实际产出的物品名清单）。
+  - 插件侧 `gatherZonesFromEvents(target, events, mapKey?)` 从已加载事件里反查：目标物品与 `ai.items` 精确相等或双向包含即命中该区；未声明 `items` 的区不臆测产出物。
+  - AI 地图知识（`mapKnowledge.ts`）同样读 `ai.items`，在采集区摘要里带上产出清单，不写死物品名。
+- 本故事三张采集事件的 `ai.items`（故事包 `events/maps/*.events.json`）：
+  - mulberryTown `食堂补给区` herb：药草、止血草药、当归草、药品（SY_E02）
+  - mulberryTown `木料堆` wood：木料、加固木料（SY_E08；朽木仅 toast 不入包，不登记）
+  - mulberryForest `废墟药草` herb：止血草药、药草（SY_E18）
+- 配套：宿主构造前端任务视图时必须透传 objective 的 `uid`（`questView`/`chainView` 两处映射），对话寻路才能按 uid 精确命中，退化到名字匹配只是兜底。
+- 边界：当前只解析当前图已加载事件；跨图采集区寻路需落地新图后事件重载再解析，v1 不做跨图预取。
+
 ## 4. 数据与接口约定
 
 - 后端 `GET/POST /api/collections/{name}/maps/{map}`；`{name}` 是中文地图集名，URL 必须 `encodeURIComponent`。
@@ -119,6 +139,9 @@
 - 数据库 / 打包宿主同步本轮未做（用户明确后置）；当前改动只在本地 dev 生效。
 - 早期遗留：`data.xlsx` 未随 entity_types 重生成；遗留空图去留未定；黑市是否独立成图；林悦是否在地图集落实体；`images.json` 备用角色帧标签未对应新角色；图集描述 json 未补新切片条目。
 - 包内保留底图故事的旧关卡地图（`oldForest/overworld/*Dungeon*/kingdom/...` 共约 20 张）及 prefabs/utils，**按要求全部保留**，不做精简；本次瘦身只排除 `.cache/ bak/ previews/` 临时与备份素材，正式地图与既有关卡一律随包分发。
+- 后端 `entry.ts` 的 `QUEST_GATHER_ALIAS` 仍是旧故事「上位词→具体物名」硬编码别名表（木材/药材/草药 → 松木/夜合花/血参…）。本故事 MCQ101「药草」与脚本产出精确相等，不依赖该表；但按「故事业务不入插件」口径，后续应把别名展开也改为运行时从事件 `ai.items` 推导（后端需先能读到已加载事件）。保留期间旧关卡采集任务仍依赖它，删除前先确认无旧关引用。
+- 碰撞开关已在 :3000 调试宿主实况确认：日志「43×56 阻挡 538（22.3%）、主连通域 1870 / 共 1 连通域」=掩码-only 计数（叠加旧图集标志应为并集 574），证明 `ignoreTileFlags` 运行时生效、旧图集标志未再压路面；dev 通道 `mulberryTown.events.json` 实测下发 `ai.items`（E02 药草/止血草药/当归草/药品，E08 木料/加固木料）。
+- 采集寻路推导、`uid` 透传已在源码/数据/打包/resolver 单测层校验通过；**仅剩宿主点击实测**：玩家出生点距任务板(768,1504) 约 11 格，需走近任务板出「📜 任务」按钮、接 MCQ101「药草×3」后，观察采集寻路「前往」按钮是否命中食堂补给区；跨图采集区待进图后事件重载再解析。
 
 ## 7. 可复用脚本（位于地图集 `.cache/slice/`）
 

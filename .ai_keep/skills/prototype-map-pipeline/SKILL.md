@@ -5,7 +5,7 @@ agent_created: true
 ---
 
 # prototype-map-pipeline — 原型图 → 切图规划 → 落地地图 → 编辑器出图
-
+实践经验：[practice](references/practice)
 ## 定位
 
 编排层技能：把一张原型概念图（或故事设定）变成编辑器里可见的地图。
@@ -158,6 +158,7 @@ Read 打开整图 PNG、`material.txt`、`report.md`。再用本技能 `scripts/
 - 原型图 ≠ 游戏内贴图；原型里出现而图集/实体表都没有的要素，先判 M/E 补素材，不能在 JSON 里凭空放 gid。
 
 ## 道路和任务寻路修复
+实践经验：[practice](references/practice)
 ### 例子：
 - 1.很多通道和路有空气墙，这个需要检查一下
   - 先把碰撞掩码的现状量化：两张图的 `blockedCells`/`visionCells` 长度、阻挡格数、主连通域、以及阻挡来源（图集标志 vs 手工掩码）。

@@ -11,7 +11,11 @@
  *     - trigger.ai.gather = "herb" | "fish" | "wood" | "ore" | "other"
  *     - trigger.ai.items  = 该采集区实际产出的物品名清单（故事包声明）
  *
- * 未在 ai.items 里声明产出物的采集区，这里不臆测它能采到什么。
+ * 两级匹配（均为通用规则，不绑定具体故事）：
+ *   ① 物品名匹配：任务目标与事件 ai.items 逐项精确相等或双向包含；
+ *   ② 类型兜底：目标是上位词（如「药材 / 木材 / 鱼」）未命中具体物品名时，
+ *      按通用关键字归到 herb/wood/fish/ore，再匹配同类型已声明的采集区。
+ *   未在 ai.items 里声明产出物、也未声明 gather 类型的区域，这里不臆测。
  */
 
 export type GatherKind = "herb" | "fish" | "wood" | "ore" | "other";
@@ -39,10 +43,23 @@ function norm(s: unknown): string {
   return String(s ?? "").trim();
 }
 
-/** 目标物品与产出物名匹配：精确相等，或双向包含（上位词 ≈ 下位词，如「草药」≈「止血草药」） */
+/** 目标物品与产出物名匹配：精确相等，或双向包含（上位词 ≈ 下位词） */
 function matches(target: string, item: string): boolean {
   if (!target || !item) return false;
   return target === item || target.includes(item) || item.includes(target);
+}
+
+/**
+ * 通用关键字 → 采集类型兜底（不含任何故事物名 / 区名）。
+ * 目标是上位词（药材 / 木材 / 鱼 / 矿石…）时，按字面关键字归类；归类不出返回 null。
+ */
+function classifyTargetKind(target: string): GatherKind | null {
+  const t = target;
+  if (/鱼|钓|渔/.test(t)) return "fish";
+  if (/木|柴|树|林/.test(t)) return "wood";
+  if (/矿|铁|石|铜|银|金/.test(t)) return "ore";
+  if (/药|草|参|芝/.test(t)) return "herb";
+  return null;
 }
 
 /**
@@ -51,7 +68,7 @@ function matches(target: string, item: string): boolean {
  * @param target 任务目标物品名
  * @param events 当前图已加载的事件定义（eventEngine.getLoadedEvents()）
  * @param mapKey  这些事件所在地图的 level key；缺省表示当前图
- * @returns 命中的采集区列表（同区去重）；未声明 items 或未命中时返回空数组
+ * @returns 命中的采集区列表（同区去重）；未命中时返回空数组
  */
 export function gatherZonesFromEvents(
   target: string,
@@ -62,15 +79,19 @@ export function gatherZonesFromEvents(
   const seen = new Set<string>();
   const t = norm(target);
   if (!t) return out;
+  const fallbackKind = classifyTargetKind(t);
 
   for (const ev of events || []) {
     const tr = ev?.trigger;
     if (!tr || tr.type !== "area_enter" || !norm(tr.zone)) continue;
     const ai = tr.ai;
     const items = Array.isArray(ai?.items) ? ai.items.map(norm).filter(Boolean) : [];
-    // 未显式声明产出物清单 → 不臆测，跳过
-    if (!items.length) continue;
-    if (!items.some((it) => matches(t, it))) continue;
+    const zoneKind = (ai?.gather as GatherKind) || "other";
+
+    // ① 物品名命中；② 未声明 items 时，按通用类型兜底匹配同类型采集区
+    const nameHit = items.some((it) => matches(t, it));
+    const kindHit = !nameHit && fallbackKind !== null && zoneKind === fallbackKind;
+    if (!nameHit && !kindHit) continue;
 
     const zone = norm(tr.zone);
     const key = `${mapKey || ""}::${zone}`;
@@ -78,7 +99,7 @@ export function gatherZonesFromEvents(
     seen.add(key);
     out.push({
       zone,
-      kind: (ai?.gather as GatherKind) || "other",
+      kind: zoneKind,
       mapKey,
     });
   }

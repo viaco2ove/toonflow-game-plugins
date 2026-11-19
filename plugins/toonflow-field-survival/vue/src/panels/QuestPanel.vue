@@ -16,6 +16,9 @@
  *   操作：开始主线 / 接取节点 / 交任务 / 暂停 / 继续 / 放弃(=失败) / 选分支 / 从头再来
  */
 import { ref, computed } from "vue";
+// ★ 采集任务寻路：物品 → 采集区 由故事包事件定义运行时推导（与 QuestLogPanel / App.vue 同口径）
+import { gatherZonesFromEvents } from "../questGatherMap";
+import { getLoadedEvents } from "../eventEngine";
 
 const props = defineProps<{
   view: {
@@ -219,16 +222,29 @@ function nodeHasDest(n: any): boolean {
     (o.kind === "arrive" || o.kind === "explore")
     && typeof o.x === "number" && typeof o.y === "number");
 }
-/** ★ 普通委托是否可寻路：自带坐标，或目标 NPC 已被解析出来（talk 任务） */
+/** ★ 采集任务是否可寻路：目标物品在已加载事件里能解析出采集区（含跨图，落地后再解析坐标）。
+ *  与 QuestLogPanel.hasNavigableDest 同口径；规则通用，不写故事名 / 区名。 */
+function gatherNavable(x: any): boolean {
+  if (!x || x.type !== "gather") return false;
+  const unfinished = (x.objectives || []).find((o: any) =>
+    o.kind === "gather" && (Number(o.have) || 0) < (Number(o.need) || 1));
+  if (!unfinished) return false;
+  const candidates = gatherZonesFromEvents(String(unfinished.target || ""), getLoadedEvents());
+  return !!(candidates && candidates.length);
+}
+/** ★ 普通委托是否可寻路：自带坐标，或目标 NPC 已被解析出来，或为可解析的采集任务 */
 function questCanNav(q: any): boolean {
   if (!q) return false;
   if (typeof q.destX === "number" && typeof q.destY === "number") return true;
-  return !!(props.navTargets || {})[String(q.id)];
+  if ((props.navTargets || {})[String(q.id)]) return true;
+  return gatherNavable(q);
 }
-/** ★ 链节点是否可寻路：自带坐标，或目标 NPC 已被解析出来 */
+/** ★ 链节点是否可寻路：自带坐标，或目标 NPC 已被解析出来，或为可解析的采集任务 */
 function nodeCanNav(n: any): boolean {
   if (!n) return false;
-  return nodeHasDest(n) || !!(props.navTargets || {})[String(n.questId)];
+  return nodeHasDest(n)
+    || !!(props.navTargets || {})[String(n.questId)]
+    || gatherNavable(n);
 }
 /** 寻路按钮提示：talk 任务显示要找谁 */
 function navTitle(id: any, fallback: string): string {

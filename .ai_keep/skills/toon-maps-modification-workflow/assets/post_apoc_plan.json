@@ -1,0 +1,139 @@
+{
+  "_comment": "末世废墟 tile 程序化配方示例。复制后改名改色。ops 支持：fill/rect/line/dither/brick/plank/fence/tri/chalk。调色板内联 dict，颜色 [r,g,b] 或 [r,g,b,a]。",
+  "mapping": "post_apoc_tiles.json",
+  "palette": {
+    "OUTLINE": [20, 18, 24, 255],
+    "ASPHALT": [62, 64, 70, 255],
+    "ASPHALT_D": [44, 46, 52, 255],
+    "CONCRETE": [128, 126, 124, 255],
+    "CONCRETE_D": [92, 90, 88, 255],
+    "DEADBRANCH": [58, 54, 50, 255],
+    "CANVAS": [150, 138, 110, 255],
+    "CANVAS_D": [112, 102, 82, 255],
+    "SAND": [140, 124, 92, 255],
+    "SAND_D": [104, 92, 68, 255],
+    "IRON": [88, 92, 100, 255],
+    "IRON_D": [64, 68, 76, 255],
+    "CAR_BODY": [96, 86, 78, 255],
+    "CAR_D": [70, 62, 56, 255],
+    "GLASS": [72, 96, 104, 255],
+    "FOG": [84, 76, 100, 190],
+    "WOOD": [120, 86, 54, 255],
+    "WOOD_D": [88, 62, 40, 255]
+  },
+  "tiles": [
+    {
+      "name": "asphalt",
+      "desc": "开裂沥青路面（可平铺）",
+      "ops": [
+        { "op": "fill", "color": "$ASPHALT" },
+        { "op": "dither", "color": "$ASPHALT_D", "density": 3 },
+        { "op": "line", "from": [0, 15], "to": [31, 15], "color": "$ASPHALT_D" },
+        { "op": "line", "from": [15, 0], "to": [15, 14], "color": "$ASPHALT_D" },
+        { "op": "line", "from": [4, 4], "to": [11, 10], "color": [36, 38, 44, 255] },
+        { "op": "line", "from": [20, 18], "to": [27, 25], "color": [36, 38, 44, 255] },
+        { "op": "rect", "box": [0, 0, 31, 31], "outline": [50, 52, 58, 255] }
+      ]
+    },
+    {
+      "name": "concrete_ruin_wall",
+      "desc": "混凝土残墙（带剥落缺口）",
+      "ops": [
+        { "op": "rect", "box": [0, 2, 31, 31], "fill": "$CONCRETE", "outline": "$OUTLINE" },
+        { "op": "brick", "base": "$CONCRETE", "mortar": "$CONCRETE_D", "bw": 16, "bh": 8 },
+        { "op": "rect", "box": [0, 0, 7, 2], "fill": [0, 0, 0, 0] },
+        { "op": "rect", "box": [24, 0, 31, 3], "fill": [0, 0, 0, 0] },
+        { "op": "dither", "color": "$CONCRETE_D", "density": 4, "box": [2, 5, 29, 29] }
+      ]
+    },
+    {
+      "name": "dead_shrub",
+      "desc": "枯树枯丛（透明底）",
+      "ops": [
+        { "op": "line", "from": [16, 30], "to": [16, 12], "color": "$DEADBRANCH" },
+        { "op": "line", "from": [16, 20], "to": [8, 10], "color": "$DEADBRANCH" },
+        { "op": "line", "from": [16, 18], "to": [24, 8], "color": "$DEADBRANCH" },
+        { "op": "line", "from": [16, 24], "to": [10, 18], "color": "$DEADBRANCH" },
+        { "op": "line", "from": [16, 22], "to": [22, 16], "color": "$DEADBRANCH" },
+        { "op": "dither", "color": "$DEADBRANCH", "density": 2, "box": [6, 8, 26, 28] }
+      ]
+    },
+    {
+      "name": "tent",
+      "desc": "帆布帐篷（俯视三角）",
+      "ops": [
+        { "op": "rect", "box": [4, 27, 27, 30], "fill": "$CANVAS_D" },
+        { "op": "tri", "points": [[3, 28], [16, 5], [29, 28]], "fill": "$CANVAS", "outline": "$OUTLINE" },
+        { "op": "line", "from": [16, 5], "to": [16, 28], "color": "$CANVAS_D" },
+        { "op": "line", "from": [10, 16], "to": [22, 16], "color": "$CANVAS_D" }
+      ]
+    },
+    {
+      "name": "sandbag",
+      "desc": "沙袋路障（错缝堆叠袋）",
+      "ops": [
+        { "op": "rect", "box": [3, 9, 15, 17], "fill": "$SAND", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [17, 9, 29, 17], "fill": "$SAND", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [0, 19, 10, 28], "fill": "$SAND", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [11, 19, 21, 28], "fill": "$SAND", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [22, 19, 31, 28], "fill": "$SAND", "outline": "$OUTLINE" },
+        { "op": "line", "from": [3, 13], "to": [15, 13], "color": "$SAND_D" },
+        { "op": "line", "from": [17, 13], "to": [29, 13], "color": "$SAND_D" },
+        { "op": "line", "from": [0, 23], "to": [10, 23], "color": "$SAND_D" },
+        { "op": "line", "from": [11, 23], "to": [21, 23], "color": "$SAND_D" },
+        { "op": "line", "from": [22, 23], "to": [31, 23], "color": "$SAND_D" },
+        { "op": "dither", "color": "$SAND_D", "density": 4, "box": [1, 10, 30, 27] }
+      ]
+    },
+    {
+      "name": "watchtower",
+      "desc": "瞭望塔（立柱+平台+顶棚）",
+      "ops": [
+        { "op": "rect", "box": [6, 15, 8, 30], "fill": "$IRON_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [23, 15, 25, 30], "fill": "$IRON_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [4, 11, 27, 15], "fill": "$IRON", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [8, 3, 23, 10], "fill": "$CANVAS_D", "outline": "$OUTLINE" },
+        { "op": "line", "from": [6, 20], "to": [25, 20], "color": "$IRON_D" }
+      ]
+    },
+    {
+      "name": "wrecked_car",
+      "desc": "废弃轿车（俯视）",
+      "ops": [
+        { "op": "rect", "box": [4, 8, 27, 24], "fill": "$CAR_BODY", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [9, 11, 22, 21], "fill": "$CAR_D" },
+        { "op": "rect", "box": [11, 12, 20, 15], "fill": "$GLASS" },
+        { "op": "rect", "box": [11, 17, 20, 20], "fill": "$GLASS" },
+        { "op": "rect", "box": [2, 10, 5, 14], "fill": "$OUTLINE" },
+        { "op": "rect", "box": [2, 18, 5, 22], "fill": "$OUTLINE" },
+        { "op": "rect", "box": [26, 10, 29, 14], "fill": "$OUTLINE" },
+        { "op": "rect", "box": [26, 18, 29, 22], "fill": "$OUTLINE" }
+      ]
+    },
+    {
+      "name": "market_stall",
+      "desc": "黑市摊棚（篷顶+台面，俯视）",
+      "ops": [
+        { "op": "rect", "box": [5, 13, 7, 27], "fill": "$WOOD_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [24, 13, 26, 27], "fill": "$WOOD_D", "outline": "$OUTLINE" },
+        { "op": "rect", "box": [3, 20, 28, 27], "fill": "$WOOD", "outline": "$OUTLINE" },
+        { "op": "line", "from": [3, 23], "to": [28, 23], "color": "$WOOD_D" },
+        { "op": "rect", "box": [2, 4, 29, 13], "fill": "$CANVAS", "outline": "$OUTLINE" },
+        { "op": "line", "from": [9, 4], "to": [9, 13], "color": "$CANVAS_D" },
+        { "op": "line", "from": [16, 4], "to": [16, 13], "color": "$CANVAS_D" },
+        { "op": "line", "from": [23, 4], "to": [23, 13], "color": "$CANVAS_D" },
+        { "op": "rect", "box": [2, 13, 29, 15], "fill": "$CANVAS_D" }
+      ]
+    },
+    {
+      "name": "fog_patch",
+      "desc": "黑雾团块（半透明，叠 L3）",
+      "ops": [
+        { "op": "fill", "color": "$FOG" },
+        { "op": "rect", "box": [5, 5, 26, 26], "fill": [66, 58, 82, 170] },
+        { "op": "dither", "color": [52, 46, 64, 200], "density": 2 },
+        { "op": "dither", "color": [120, 110, 138, 150], "density": 3, "box": [4, 4, 27, 27] }
+      ]
+    }
+  ]
+}
