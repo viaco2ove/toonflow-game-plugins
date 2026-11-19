@@ -237,7 +237,7 @@ def _pick_session(rows):
 
 def _mapset_story_json(story):
     """定位本地地图集 story.json（workshops/.../map_design/<故事>/story.json），不存在返回 None。"""
-    repo_root = os.path.dirname(os.path.dirname(CLI_ROOT))
+    repo_root = os.path.dirname(CLI_ROOT)
     cand = os.path.join(repo_root, "workshops", "toonflow-field-survival",
                         "map_design", story, "story.json")
     return cand if os.path.isfile(cand) else None
@@ -1058,7 +1058,8 @@ def story_info(ctx, story, world_id, roles, state, bind, session_id):
     click.echo(
         f"{result.get('chapterTitle')} round={state_data.get('round')} "
         f"玩家={player.get('name')} NPC={npc_count} "
-        f"(--roles 看角色 / --state 看全量)"
+        f"session={sid or '-'} "
+        f"(--roles 看角色 / --state 看全量 / --bind 回写会话)"
     )
 
 
