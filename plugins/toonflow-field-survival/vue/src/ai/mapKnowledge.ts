@@ -36,6 +36,8 @@ export interface ZoneKnowledge {
   eventId: string;
   /** 该事件是否 repeat（可反复采） */
   repeat: boolean;
+  /** 该采集区产出的物品名清单（来自 trigger.ai.items，故事包声明） */
+  items?: string[];
 }
 
 /** 一张地图对 AI 暴露的全部知识 */
@@ -81,7 +83,7 @@ function resolveGatherKind(ev: { id: string; trigger: { zone?: string; ai?: { ga
 interface AreaEnterEvent {
   id: string;
   repeat?: boolean;
-  trigger: { type: "area_enter"; zone: string; ai?: { gather?: GatherKind } };
+  trigger: { type: "area_enter"; zone: string; ai?: { gather?: GatherKind; items?: string[] } };
 }
 
 /**
@@ -105,7 +107,10 @@ export function readMapKnowledge(): MapKnowledge {
   for (const z of zones) {
     const ev = gatherEvByZone.get(z.name);
     if (!ev) continue; // 没有 area_enter 事件的 zone 对 AI 不是采集点
-    const declared = String((ev.trigger as { ai?: { gather?: string } })?.ai?.gather || "").toLowerCase();
+    const declared = String((ev.trigger as { ai?: { gather?: string; items?: string[] } })?.ai?.gather || "").toLowerCase();
+    const items = Array.isArray((ev.trigger as { ai?: { items?: string[] } }).ai?.items)
+      ? ((ev.trigger as { ai?: { items?: string[] } }).ai!.items!).map(String).filter(Boolean)
+      : [];
     const kind = resolveGatherKind(ev);
     // 非采集类 area_enter 事件（如「拾扫帚」剧情事件）不算采集点：
     // 既没有显式声明、解析类型又是兜底 other → 跳过，避免 AI 跑过去「采集」却无产出
@@ -117,6 +122,7 @@ export function readMapKnowledge(): MapKnowledge {
       kind,
       eventId: ev.id,
       repeat: !!ev.repeat,
+      items,
     });
   }
 
@@ -136,7 +142,8 @@ function buildSummary(zones: ZoneKnowledge[], uids: string[]): string {
   if (zones.length) {
     lines.push("本图可采集地点：");
     for (const z of zones) {
-      lines.push(`- ${z.name}（${z.kind}）坐标 (${Math.round(z.x)}, ${Math.round(z.y)})${z.repeat ? "，可反复采集" : ""}`);
+      const itemPart = z.items && z.items.length ? `，产出：${z.items.join("、")}` : "";
+      lines.push(`- ${z.name}（${z.kind}）坐标 (${Math.round(z.x)}, ${Math.round(z.y)})${z.repeat ? "，可反复采集" : ""}${itemPart}`);
     }
   }
   if (uids.length) {

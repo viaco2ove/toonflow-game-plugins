@@ -14,8 +14,9 @@
  * 交付仍需回任务板领取奖励（交任务按钮会触 consume 链，那里是唯一合法入口）。
  */
 import { computed } from "vue";
-// ★ 采集任务寻路：物品 → 采集区 zone 名映射（与 App.vue questDestinations 同步）
-import { GATHER_ZONES_BY_ITEM } from "../questGatherMap";
+// ★ 采集任务寻路：物品 → 采集区 由故事包事件定义运行时推导（与 App.vue 同步）
+import { gatherZonesFromEvents } from "../questGatherMap";
+import { getLoadedEvents } from "../eventEngine";
 
 const emit = defineEmits<{
   (e: "go", id: string): void;
@@ -122,7 +123,7 @@ function hasNavigableDest(q: any): boolean {
     const unfinished = objs.find((o: any) => o.kind === "gather"
       && (Number(o.have) || 0) < (Number(o.need) || 1));
     if (!unfinished) return false;
-    const candidates = GATHER_ZONES_BY_ITEM[String(unfinished.target || "")];
+    const candidates = gatherZonesFromEvents(String(unfinished.target || ""), getLoadedEvents());
     if (!candidates || !candidates.length) return false;
     // 只要映射表登记了就能寻路（App.vue questGoToDest 会处理跨图/本地解析）
     return true;

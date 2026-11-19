@@ -200,7 +200,8 @@ export interface EventDef {
     | { type: "proximity"; uid: string; radius?: number }
     // ★ ai.gather：向 AI 托管声明「这个 zone 能采什么」（mapKnowledge 读取，可选字段）
     //   缺省时按 事件id → zone名 顺序推断。取值：herb / fish / wood / ore / other
-    | { type: "area_enter"; zone: string; ai?: { gather?: "herb" | "fish" | "wood" | "ore" | "other" } }
+    // ★ ai.items：该采集区实际产出的物品名清单（故事包声明；寻路映射据此运行时推导）
+    | { type: "area_enter"; zone: string; ai?: { gather?: "herb" | "fish" | "wood" | "ore" | "other"; items?: string[] } }
     | { type: "step_on"; x: number; y: number }
     | { type: "flag_set"; key: string }
     | { type: "kill_count"; gte: number }

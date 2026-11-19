@@ -1,81 +1,86 @@
 /**
- * questGatherMap.ts —— 采集物品 → 采集区域映射
+ * questGatherMap.ts —— 采集物品 → 采集区 运行时推导
  * =============================================
- * 职责：建立「任务目标物品 → 采集区 zone 名」的静态映射，
- *       让采集类任务也能有寻路按钮（寻路到最近的采集点）。
+ * 职责：根据任务目标物品名，在「故事包已加载的事件定义」里反查可采集的区域，
+ *       让采集类任务也能生成寻路目的地。
  *
- * 数据来源：story-pack events.json 的 trigger.zone + eventScripts 的 bag.give
+ * ★ 铁律：本文件是插件通用代码，**禁止写入任何故事名 / 区名 / 物品名**。
+ *   物品 → 采集区的对应关系全部来自故事包事件定义：
+ *     - trigger.type = "area_enter"
+ *     - trigger.zone  = 采集区名（与地图 eventZones[].name 一致）
+ *     - trigger.ai.gather = "herb" | "fish" | "wood" | "ore" | "other"
+ *     - trigger.ai.items  = 该采集区实际产出的物品名清单（故事包声明）
  *
- * ★ zone 名必须与 Tiled map 的 eventZones[].name 完全一致！
- *   目前可用的采集区（story-pack 实际定义的）：
- *   - mulberryTown：夜采药圃（herb）、木材堆（wood）
- *   - mulberryForest：林中药丛（herb）
- *   （"农田"/"喷水池"/"林场" 不在 story-pack 中，跳过）
- *
- * 映射结构：
- *   targetItem → [ { zone, gatherKind, mapKey?, note? }, ... ]
- *   - zone: 对应 trigger.zone（eventZones[].name）
- *   - gatherKind: "herb" | "fish" | "wood" | "ore"
- *   - mapKey: 该采集区所在地图的 level key；缺省 = 本图
+ * 未在 ai.items 里声明产出物的采集区，这里不臆测它能采到什么。
  */
 
-/** 采集区定义 */
+export type GatherKind = "herb" | "fish" | "wood" | "ore" | "other";
+
+/** 一个可采集区域（运行时由事件定义推导） */
 export interface GatherZone {
+  /** 采集区名（eventZones[].name） */
   zone: string;
-  kind: "herb" | "fish" | "wood" | "ore";
-  /** 该采集区所在地图的 level key；缺省表示本图 */
+  /** 采集类型 */
+  kind: GatherKind;
+  /** 所在地图 level key；缺省 = 当前图 */
   mapKey?: string;
-  note?: string;
+}
+
+/** 事件定义的最小结构（与 shared/_ctx.ts 的 area_enter 触发器对齐） */
+export interface GatherEventLike {
+  trigger?: {
+    type?: string;
+    zone?: string;
+    ai?: { gather?: GatherKind | string; items?: string[] };
+  };
+}
+
+function norm(s: unknown): string {
+  return String(s ?? "").trim();
+}
+
+/** 目标物品与产出物名匹配：精确相等，或双向包含（上位词 ≈ 下位词，如「草药」≈「止血草药」） */
+function matches(target: string, item: string): boolean {
+  if (!target || !item) return false;
+  return target === item || target.includes(item) || item.includes(target);
 }
 
 /**
- * 物品名 → 可能产出的采集区列表（同物品多处可采时选最近的）
+ * 从故事包事件定义推导：目标物品能在哪些采集区采到。
  *
- * 区名必须与当前故事地图包 eventZones[].name 完全一致。下方分两段：
- *   - 上段：旧故事（夜合花/血参/松木…）遗留映射，供仍在使用旧区名的故事复用；
- *   - 下段：《末世选择，从解析神明开始成神》本故事实际采集区：
- *       mulberryTown：食堂补给区（herb，SY_E02）、木料堆（wood，SY_E08）
- *       mulberryForest：废墟药草（herb，SY_E18）
- *     本故事主线采集目标：MCQ101「药草×3」；无钓鱼采集点。
+ * @param target 任务目标物品名
+ * @param events 当前图已加载的事件定义（eventEngine.getLoadedEvents()）
+ * @param mapKey  这些事件所在地图的 level key；缺省表示当前图
+ * @returns 命中的采集区列表（同区去重）；未声明 items 或未命中时返回空数组
  */
-export const GATHER_ZONES_BY_ITEM: Record<string, GatherZone[]> = {
-  // ── 药草类（herb）────────────────────────────────────────────
-  // ★ mulberryTown：夜采药圃 → SY_E02_night_herb.ts
-  //   产出：夜合花 35% / 血参 23% / 当归 20% / 药瓶 12% / 空手 10%
-  // ★ mulberryForest：林中药丛 → SY_E18_forest_herb.ts
-  //   产出：血参 50% / 夜合花 30% / 空手 20%
-  // 同一物品多处可采 → 数组列出所有候选，寻路时选最近/本图优先
-  "夜合花": [
-    { zone: "夜采药圃", kind: "herb", note: "桑镇·夜采药圃" },
-    { zone: "林中药丛", kind: "herb", mapKey: "mulberryForest", note: "桑林" },
-  ],
-  "血参": [
-    { zone: "夜采药圃", kind: "herb", note: "桑镇·夜采药圃" },
-    { zone: "林中药丛", kind: "herb", mapKey: "mulberryForest", note: "桑林" },
-  ],
-  "药瓶": [{ zone: "夜采药圃", kind: "herb", note: "桑镇·夜采药圃" }],
-  "当归": [{ zone: "夜采药圃", kind: "herb", note: "桑镇·夜采药圃" }],
-  "草药": [
-    { zone: "夜采药圃", kind: "herb", note: "桑镇·夜采药圃" },
-    { zone: "林中药丛", kind: "herb", mapKey: "mulberryForest", note: "桑林" },
-  ],
+export function gatherZonesFromEvents(
+  target: string,
+  events: GatherEventLike[],
+  mapKey?: string,
+): GatherZone[] {
+  const out: GatherZone[] = [];
+  const seen = new Set<string>();
+  const t = norm(target);
+  if (!t) return out;
 
-  // ── 木材类（wood）────────────────────────────────────────────
-  // ★ mulberryTown：木材堆 → SY_E08_wood_at.ts
-  //   产出：松木 2 / 沉香木 1 / 朽木 1（每次最多 3）
-  "松木":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  "沉香":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  "沉香木": [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  "朽木":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  // 上位词
-  "木材":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  "木料":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
-  "木柴":   [{ zone: "木材堆", kind: "wood", note: "桑镇" }],
+  for (const ev of events || []) {
+    const tr = ev?.trigger;
+    if (!tr || tr.type !== "area_enter" || !norm(tr.zone)) continue;
+    const ai = tr.ai;
+    const items = Array.isArray(ai?.items) ? ai.items.map(norm).filter(Boolean) : [];
+    // 未显式声明产出物清单 → 不臆测，跳过
+    if (!items.length) continue;
+    if (!items.some((it) => matches(t, it))) continue;
 
-  // ── 击杀掉落类（无固定采集区）────────────────────────────────
-  // 暗核由 DEFAULT_DROP_TABLE 击杀掉宝箱产出，无固定 zone，不提供寻路目标
-  "暗核":   [],
-
-  //禁止编写地图集的业务到插件！！！
-
-};
+    const zone = norm(tr.zone);
+    const key = `${mapKey || ""}::${zone}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      zone,
+      kind: (ai?.gather as GatherKind) || "other",
+      mapKey,
+    });
+  }
+  return out;
+}

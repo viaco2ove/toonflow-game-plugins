@@ -97,7 +97,7 @@ import type { AISettings } from "./ai/aiConfig";
 import { bakeTiledMap, eraseBakedObstacle, invalidateBake } from "./mapBake";
 import type { MapConfig } from "./mapConfig";
 // ★ 采集任务寻路：物品 → 采集区 zone 名静态映射（含跨图 mapKey）
-import { GATHER_ZONES_BY_ITEM } from "./questGatherMap";
+import { gatherZonesFromEvents } from "./questGatherMap";
 // ★ 网格碰撞（对齐 Rotten-Soup 的 Tile.blocked()）：从 tileset 的 blocked 属性建可行走网格
 import {
   loadTileFlags,
@@ -1162,7 +1162,7 @@ const talkNavTargets = computed<Record<string, TalkNavTarget>>(() => {
 });
 
 /** 当前进行中、且目的地就在本图的任务（用于画「目的地」图标 / 「到达」浮动按钮）
- *  ★ 2026-10-18 新增：gather 类任务也通过 GATHER_ZONES_BY_ITEM 映射
+ *  ★ 2026-10-18 新增：gather 类任务也通过事件定义运行时推导采集区映射
  *     找到最近的采集区，生成虚拟目的地（x/y/r 从 eventZones 实时读取）。 */
 const questDestinations = computed<any[]>(() => {
   const out: any[] = [];
@@ -1231,7 +1231,7 @@ const questDestinations = computed<any[]>(() => {
     if (!o) continue; // 全部完成了，不需要寻路
 
     const target = String(o.target || "");
-    const candidates = GATHER_ZONES_BY_ITEM[target];
+    const candidates = gatherZonesFromEvents(target, getLoadedEvents());
     if (!candidates || candidates.length === 0) continue;
 
     // 选「最近的」采集区（本图优先 → 距离最近）
@@ -1333,7 +1333,7 @@ function questGoToDest(id: string): void {
     if (q.type === "gather") {
       const go = (q.objectives || []).find((x: any) => x.kind === "gather" && (Number(x.have) || 0) < (Number(x.need) || 1));
       if (!go) { showToast("采集目标已全部达成，回任务板交付吧"); return; }
-      const candidates = GATHER_ZONES_BY_ITEM[String(go.target || "")];
+      const candidates = gatherZonesFromEvents(String(go.target || ""), getLoadedEvents());
       if (!candidates || !candidates.length) { showToast("「" + String(go.target || "") + "」没有登记采集点"); return; }
       // 本图有采集区但 questDestinations 漏判（zone 名对不上等）→ 提示
       const localCands = candidates.filter((c) => !c.mapKey);
