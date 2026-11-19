@@ -176,6 +176,13 @@ export interface TiledCollisionSource {
   blockedCells?: number[];
   /** 可选：地图级手工挡视线位图（row-major，0/1） */
   visionCells?: number[];
+  /**
+   * 可选：忽略旧图集属性表里的 blocked/vision/bed 标志，只信地图级手工掩码。
+   * 适用于切片换皮/手绘地图：旧图集把原关卡的墙/栅栏/树木瓦片标了阻挡，
+   * 换皮后这些瓦片被铺到可走地面上，旧标志会在通道/路面上形成空气墙。
+   * 默认 false（保留与旧关卡一致的图集标志叠加行为）。
+   */
+  ignoreTileFlags?: boolean;
 }
 
 /**
@@ -208,21 +215,27 @@ export function buildWalkGrid(
   const bed = new Uint8Array(cols * rows);
   const total = cols * rows;
 
-  for (const layer of tiled.layers) {
-    if (layer?.type !== "tilelayer") continue;
-    const data = decodeLayerData(layer);
-    if (!data) continue;
-    const n = Math.min(data.length, total);
-    for (let i = 0; i < n; i++) {
-      const gid = data[i];
-      if (!gid) continue;
-      const id = gid - firstGid;
-      if (id <= 1) continue; // 与 Rotten-Soup 的 `if (id > 1)` 保持一致
-      const f = flags[id];
-      if (!f) continue;
-      if (f.blocked) blocked[i] = 1;
-      if (f.vision) vision[i] = 1;
-      if (f.bed) bed[i] = 1;
+  // ★ 切片换皮地图可声明 ignoreTileFlags：旧图集阻挡标志作废，只信地图级手工掩码。
+  const ignoreFlags =
+    !!tiled.ignoreTileFlags || !!(tiled.collision && tiled.collision.ignoreTileFlags);
+
+  if (!ignoreFlags) {
+    for (const layer of tiled.layers) {
+      if (layer?.type !== "tilelayer") continue;
+      const data = decodeLayerData(layer);
+      if (!data) continue;
+      const n = Math.min(data.length, total);
+      for (let i = 0; i < n; i++) {
+        const gid = data[i];
+        if (!gid) continue;
+        const id = gid - firstGid;
+        if (id <= 1) continue; // 与 Rotten-Soup 的 `if (id > 1)` 保持一致
+        const f = flags[id];
+        if (!f) continue;
+        if (f.blocked) blocked[i] = 1;
+        if (f.vision) vision[i] = 1;
+        if (f.bed) bed[i] = 1;
+      }
     }
   }
 

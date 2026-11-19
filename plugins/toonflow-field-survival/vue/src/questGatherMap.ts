@@ -28,7 +28,16 @@ export interface GatherZone {
   note?: string;
 }
 
-/** 物品名 → 可能产出的采集区列表（同物品多处可采时选最近的） */
+/**
+ * 物品名 → 可能产出的采集区列表（同物品多处可采时选最近的）
+ *
+ * 区名必须与当前故事地图包 eventZones[].name 完全一致。下方分两段：
+ *   - 上段：旧故事（夜合花/血参/松木…）遗留映射，供仍在使用旧区名的故事复用；
+ *   - 下段：《末世选择，从解析神明开始成神》本故事实际采集区：
+ *       mulberryTown：食堂补给区（herb，SY_E02）、木料堆（wood，SY_E08）
+ *       mulberryForest：废墟药草（herb，SY_E18）
+ *     本故事主线采集目标：MCQ101「药草×3」；无钓鱼采集点。
+ */
 export const GATHER_ZONES_BY_ITEM: Record<string, GatherZone[]> = {
   // ── 药草类（herb）────────────────────────────────────────────
   // ★ mulberryTown：夜采药圃 → SY_E02_night_herb.ts
@@ -66,4 +75,7 @@ export const GATHER_ZONES_BY_ITEM: Record<string, GatherZone[]> = {
   // ── 击杀掉落类（无固定采集区）────────────────────────────────
   // 暗核由 DEFAULT_DROP_TABLE 击杀掉宝箱产出，无固定 zone，不提供寻路目标
   "暗核":   [],
+
+  //禁止编写地图集的业务到插件！！！
+
 };

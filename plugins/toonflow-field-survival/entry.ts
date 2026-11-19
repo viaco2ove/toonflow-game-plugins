@@ -4485,6 +4485,7 @@ function buildQuestView(s: FieldSurvivalState): void {
     const objectives = (def.objectives || []).map((o) => ({
       kind: o.kind,
       target: str(o.target),
+      uid: str(o.uid),
       have: p ? objHave(o, p) : 0,
       need: objNeed(o),
       confirm: o.confirm === true,
@@ -5034,6 +5035,7 @@ function buildChainView(s: FieldSurvivalState): void {
         const objectives = (qdef.objectives || []).map((o) => ({
           kind: o.kind,
           target: str(o.target),
+          uid: str(o.uid),
           have: p ? objHave(o, p) : 0,
           need: objNeed(o),
           confirm: o.confirm === true,
