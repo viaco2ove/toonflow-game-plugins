@@ -168,6 +168,16 @@ function toBool(v: unknown): boolean {
    2. Tiled 地图 → WalkGrid
    ============================================================ */
 
+export interface TiledCollisionSource {
+  width?: number;
+  height?: number;
+  layers?: any[];
+  /** 可选：地图级手工阻挡位图（row-major，0/1，长度 cols×rows），与 tile 标志 OR 叠加 */
+  blockedCells?: number[];
+  /** 可选：地图级手工挡视线位图（row-major，0/1） */
+  visionCells?: number[];
+}
+
 /**
  * 把 Tiled JSON 的全部 tilelayer 叠成一张 blocked / vision 网格。
  *
@@ -179,12 +189,12 @@ function toBool(v: unknown): boolean {
  *   实测本插件 22 张地图的最小非零 gid 均 ≥ 25（kingdom.json 为 base64 编码，已单独解码核对），
  *   所以该守卫当前不丢弃任何真实格子；保留它只是为了与参照实现保持逐行可比。
  *
- * @param tiled   Tiled JSON（来自 mapConfig.getTiledRaw()）
+ * @param tiled   Tiled JSON（来自 mapConfig.getTiledRaw()），可带 blockedCells/visionCells
  * @param flags   loadTileFlags() 的结果
  * @param firstGid Tiled tileset 的 firstgid，本插件地图为 1
  */
 export function buildWalkGrid(
-  tiled: { width?: number; height?: number; layers?: any[] } | null | undefined,
+  tiled: TiledCollisionSource | null | undefined,
   flags: TileFlagTable,
   firstGid = 1,
 ): WalkGrid | null {
@@ -214,6 +224,19 @@ export function buildWalkGrid(
       if (f.vision) vision[i] = 1;
       if (f.bed) bed[i] = 1;
     }
+  }
+
+  // ★ 地图级手工碰撞掩码（可选，与 tile 标志 OR 叠加）。
+  // 适用于切片/手绘地图：阻挡由地图数据直接给出，不必为每个 tile 在图集属性表里登记。
+  const extraBlocked = Array.isArray(tiled.blockedCells) ? tiled.blockedCells : null;
+  const extraVision = Array.isArray(tiled.visionCells) ? tiled.visionCells : null;
+  if (extraBlocked) {
+    const n = Math.min(extraBlocked.length, total);
+    for (let i = 0; i < n; i++) if (extraBlocked[i]) blocked[i] = 1;
+  }
+  if (extraVision) {
+    const n = Math.min(extraVision.length, total);
+    for (let i = 0; i < n; i++) if (extraVision[i]) vision[i] = 1;
   }
 
   let blockedCount = 0;
@@ -299,7 +322,7 @@ async function decodeBase64LayerAsync(layer: any): Promise<number[] | null> {
  * App.vue 走这一个入口即可。
  */
 export async function buildWalkGridAsync(
-  tiled: { width?: number; height?: number; layers?: any[] } | null | undefined,
+  tiled: TiledCollisionSource | null | undefined,
   flags: TileFlagTable,
   firstGid = 1,
 ): Promise<WalkGrid | null> {

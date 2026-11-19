@@ -4,8 +4,21 @@ description: 把一张概念原型图（或故事设定）落地成 toonflow 地
 agent_created: true
 ---
 
+# toonflow-game-plugins
+以管理员身份打开 PowerShell（开始菜单搜索 PowerShell → 右键“以管理员身份运行”），执行，不要重复操作：
+powershell
+```
+[Environment]::SetEnvironmentVariable('toonflow-game-plugins', 'D:\Users\xxx\tools\Toonflow-game\toonflow-game-plugins', 'Machine')
+```
+验证是否写入成功：
+
+powershell
+```
+[Environment]::GetEnvironmentVariable('toonflow-game-plugins', 'Machine')
+```
+
 # toon-maps-modification-workflow — 原型图落地地图集工作流
-[toon-maps-modification-workflow](../../../.workbuddy-ai/skills/toon-maps-modification-workflow)
+[toon-maps-modification-workflow]({toonflow-game-plugins}/.workbuddy-ai/skills/toon-maps-modification-workflow)
 使用例子 
 - /toon-maps-modification-workflow  \workshops\toonflow-field-survival\map_design\末世选择，从解析神明开始成神\maps\mulberryTown.json
 和\workshops\toonflow-field-survival\map_design\末世选择，从解析神明开始成神\maps\mulberryForest.json

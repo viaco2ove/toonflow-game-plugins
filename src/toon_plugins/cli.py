@@ -198,6 +198,51 @@ def resolve_client(env_path=None):
     return client
 
 
+def _match_world(client, story):
+    """按故事名在 /game/listWorlds 里精确 / 唯一模糊匹配世界，返回 world dict 或 None。"""
+    worlds = client.list_worlds() or []
+    if isinstance(worlds, dict):
+        worlds = worlds.get("worlds") or worlds.get("list") or []
+    hit = [w for w in worlds if str(w.get("name") or "") == story]
+    if not hit:
+        like = [w for w in worlds if story in str(w.get("name") or "")]
+        if len(like) == 1:
+            hit = like
+        elif len(like) > 1:
+            raise RuntimeError(f"故事名「{story}」模糊匹配到 {len(like)} 个世界，请用完整名称")
+    return hit[0] if hit else None
+
+
+def _world_sessions(client, story, world_id):
+    """返回 (world_id, rows)；world_id 缺省时按故事名从 listWorlds 解析。"""
+    if world_id is None:
+        w = _match_world(client, story)
+        if not w:
+            return None, []
+        world_id = w.get("id")
+    rows = client.list_sessions(world_id) or []
+    if isinstance(rows, dict):
+        rows = rows.get("sessions") or rows.get("list") or []
+    return world_id, rows
+
+
+def _pick_session(rows):
+    """挑当前会话：优先 active，其次 updateTime 最新。"""
+    if not rows:
+        return None
+    active = [r for r in rows if str(r.get("status") or "").lower() == "active"]
+    pool = active or rows
+    return sorted(pool, key=lambda r: r.get("updateTime") or 0, reverse=True)[0]
+
+
+def _mapset_story_json(story):
+    """定位本地地图集 story.json（workshops/.../map_design/<故事>/story.json），不存在返回 None。"""
+    repo_root = os.path.dirname(os.path.dirname(CLI_ROOT))
+    cand = os.path.join(repo_root, "workshops", "toonflow-field-survival",
+                        "map_design", story, "story.json")
+    return cand if os.path.isfile(cand) else None
+
+
 def _resolve_plugin_id(raw: str) -> str:
     """把「插件文件夹名」解析为运行时真正使用的 pluginId（manifest.id）。
 
@@ -916,17 +961,53 @@ def _export_session_fields(client, plugin_id, story, session_id, fields, out_dir
 @click.option("--worldid", "world_id", type=int, default=None, help="世界 ID（可选）")
 @click.option("--roles", is_flag=True, help="只显示角色列表（roles/npcs）")
 @click.option("--state", is_flag=True, help="只显示 state 顶层字段")
+@click.option("--bind", is_flag=True, help="把解析到的 sessionId 回写本地地图集 story.json")
+@click.option("--session", "session_id", default=None, help="显式指定会话 id（默认取该世界 active/最新会话）")
 @click.pass_context
-def story_info(ctx, story, world_id, roles, state):
+def story_info(ctx, story, world_id, roles, state, bind, session_id):
     """获取 /game/storyInfo 接口数据（角色、状态、动态事件等）。
+
+    注意：storyInfo 回包不含 sessionId；会话 id 需另走 /game/listSession 按 worldId 解析。
 
     用法示例：
       python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --worldid 47
       python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --roles
       python -m toon_plugins story_info -s 赦夜人冥夜走廊-第二季 --state
+      python -m toon_plugins story_info -s 末世选择，从解析神明开始成神 --worldid 48 --bind
     """
     client = resolve_client(ctx.obj["env_path"])
     result = client.story_info(story, world_id)
+
+    # 会话清单：storyInfo 不返回 sessionId，这里走 listSession 解析当前会话
+    wid, rows = _world_sessions(client, story, world_id)
+    sid = session_id
+    if not sid and rows:
+        sid = (_pick_session(rows) or {}).get("sessionId")
+
+    if bind:
+        if not sid:
+            click.secho("[ERR] 没有可绑定的会话（该世界未开局过）", fg="red", err=True)
+            sys.exit(1)
+        sp = _mapset_story_json(story)
+        if not sp:
+            click.secho(f"[ERR] 找不到本地地图集 story.json：{story}", fg="red", err=True)
+            sys.exit(1)
+        data = {}
+        try:
+            with open(sp, encoding="utf-8") as fh:
+                data = _json.load(fh)
+        except Exception:
+            pass
+        data["storyName"] = story
+        data["sessionId"] = sid
+        data["sessionId_1"] = sid
+        if wid is not None:
+            data["worldId"] = int(wid)
+        tmp = sp + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
+            _json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, sp)
+        click.secho(f"[OK] 已回写 sessionId={sid} → {sp}", fg="green")
 
     if state:
         # 只显示 state 顶层字段

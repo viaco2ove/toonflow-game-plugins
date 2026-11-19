@@ -1,0 +1,71 @@
+{
+  "_comment": "原型要素清单模板。maps[] 每张图列 elements[]；kind: terrain/structure/vegetation/prop/decoration/actor/trigger。keywords 用于在图集描述里粗筛候选 gid，候选仍需开联系表目视确认。",
+  "maps": [
+    {
+      "file": "mulberryTown.json",
+      "elements": [
+        {
+          "kind": "terrain",
+          "name": "营地沥青/碎石地面",
+          "zone": "室外空地",
+          "keywords": ["asphalt", "ground", "road", "concrete"],
+          "note": "室外草地土路换成废墟地面；室内地板/地毯保留"
+        },
+        {
+          "kind": "structure",
+          "name": "混凝土残墙",
+          "zone": "建筑外圈",
+          "keywords": ["wall", "concrete", "ruin"],
+          "note": "外墙立面砖替换；屋顶/室内保留"
+        },
+        {
+          "kind": "vegetation",
+          "name": "枯树枯丛",
+          "zone": "营地外围",
+          "keywords": ["tree", "shrub", "dead"],
+          "note": "大树冠替换为枯树；草灌替换为枯丛"
+        },
+        {
+          "kind": "prop",
+          "name": "帐篷/沙袋/瞭望塔",
+          "zone": "营地开阔地",
+          "keywords": ["tent", "sandbag", "tower"],
+          "note": "已落位道具，核对位置"
+        },
+        {
+          "kind": "decoration",
+          "name": "花蝶落叶",
+          "zone": "室外",
+          "keywords": ["flower", "leaf", "butterfly"],
+          "note": "末世场景清除"
+        }
+      ]
+    },
+    {
+      "file": "mulberryForest.json",
+      "elements": [
+        {
+          "kind": "terrain",
+          "name": "废墟瓦砾地面",
+          "zone": "整片外围",
+          "keywords": ["ground", "gravel", "rubble"],
+          "note": "水面保留"
+        },
+        {
+          "kind": "vegetation",
+          "name": "枯树",
+          "zone": "密林区域",
+          "keywords": ["tree", "dead"],
+          "note": "规则树阵需考虑疏林，避免枯树成排"
+        },
+        {
+          "kind": "prop",
+          "name": "废车/摊棚/黑雾",
+          "zone": "横路两侧/黑市",
+          "keywords": ["car", "stall", "fog"],
+          "note": "已落位，核对"
+        }
+      ]
+    }
+  ]
+}
