@@ -79,6 +79,8 @@ const error = ref('')
 // 工具
 const tool = ref('select')
 const brushTileId = ref(DEFAULT_FILL_TILE)
+// ★ 障碍笔刷模式：add=设为障碍 / clear=清除本图标记 / walkable=强制可走（拆墙）
+const blockMode = ref('add')
 const placingType = ref('NPC')
 const placingCamp = ref('neutral')
 const placingLevel = ref(1)
@@ -523,6 +525,7 @@ async function selectMap(mapName) {
     currentMapName.value = mapName
     currentMap.value = data
     selectedObj.value = null
+    maskRev.value++
     activeLayerIdx.value = 0
     history.value = [JSON.parse(JSON.stringify(data))]
     histIdx.value = 0
@@ -678,7 +681,12 @@ async function closePreview() {
 }
 
 // ─── 工具切换 ───
-function setTool(t) { tool.value = t }
+function setTool(t) {
+  tool.value = t
+  // ★ 切到障碍工具时自动打开碰撞显示：掩码/图集障碍平时不可见，
+  //   不自动开的话"画了没反应"会被当成功能失效（2026-11-20 实测反馈）
+  if (t === 'block') showCollision.value = true
+}
 
 // ─── 撤销/重做 ───
 function pushHistory() {
@@ -692,6 +700,7 @@ function undo() {
   histIdx.value--
   currentMap.value = JSON.parse(JSON.stringify(history.value[histIdx.value]))
   selectedObj.value = null
+  maskRev.value++
   isDirty.value = true
   render()
 }
@@ -700,8 +709,66 @@ function redo() {
   histIdx.value++
   currentMap.value = JSON.parse(JSON.stringify(history.value[histIdx.value]))
   selectedObj.value = null
+  maskRev.value++
   isDirty.value = true
   render()
+}
+
+// ─── 碰撞掩码辅助操作 ───
+/** 切换「忽略图集标志」：开启后运行时只信本图掩码（collision.ignoreTileFlags） */
+function toggleIgnoreFlags() {
+  if (!currentMap.value) return
+  pushHistory()
+  if (!currentMap.value.collision || typeof currentMap.value.collision !== 'object') {
+    currentMap.value.collision = {}
+  }
+  currentMap.value.collision.ignoreTileFlags = !getIgnoreTileFlags()
+  maskRev.value++
+  isDirty.value = true
+  render()
+}
+/** 把图集当前的 blocked / blocks_vision 标志一次性灌进本图掩码，作为手工编辑起点 */
+function fillMaskFromAtlas() {
+  const map = currentMap.value
+  if (!map) return
+  pushHistory()
+  const blocked = maskArr('blockedCells')
+  const vision = maskArr('visionCells')
+  const walkable = maskArr('walkableCells')
+  for (let ty = 0; ty < map.height; ty++) {
+    for (let tx = 0; tx < map.width; tx++) {
+      const idx = ty * map.width + tx
+      let atlasBlocked = false
+      let atlasVision = false
+      for (const layer of tileLayers.value) {
+        const gid = layer.data?.[idx]
+        if (!gid) continue
+        const f = dawnlike.value?.tiles?.[gid - firstGid.value]
+        if (f?.blocked) atlasBlocked = true
+        if (f?.blocks_vision) atlasVision = true
+      }
+      blocked[idx] = atlasBlocked ? 1 : 0
+      vision[idx] = atlasVision ? 1 : 0
+      walkable[idx] = 0
+    }
+  }
+  maskRev.value++
+  isDirty.value = true
+  render()
+  toast(`已从图集生成掩码：障碍 ${blocked.filter(Boolean).length} 格、挡视线 ${vision.filter(Boolean).length} 格`)
+}
+/** 清空本图全部手工碰撞掩码（不动瓦片贴图） */
+function clearMasks() {
+  const map = currentMap.value
+  if (!map) return
+  pushHistory()
+  for (const key of ['blockedCells', 'visionCells', 'walkableCells']) {
+    maskArr(key).fill(0)
+  }
+  maskRev.value++
+  isDirty.value = true
+  render()
+  toast('已清空本图碰撞掩码')
 }
 
 // ─── 调色板 ───
@@ -835,6 +902,97 @@ const tileLayers = computed(() =>
 // Tiled gid → 图像索引偏移（map 数据存 gid = 图像索引 + firstgid）
 const firstGid = computed(() => currentMap.value?.tilesets?.[0]?.firstgid ?? 1)
 
+// ─── 地图级碰撞掩码（blockedCells / visionCells / walkableCells）───
+// 与运行时 collision.ts 的 TiledCollisionSource 字段一一对应：
+//   blockedCells  手工强制障碍（OR 叠加到图集标志上）
+//   visionCells   手工挡视线
+//   walkableCells 强制可走白名单（优先级最高，图集标志与掩码都压不过它）
+function maskArr(key, create = true) {
+  const map = currentMap.value
+  if (!map) return null
+  const total = (map.width || 0) * (map.height || 0)
+  if (!Array.isArray(map[key]) || map[key].length !== total) {
+    if (!create) return null
+    map[key] = new Array(total).fill(0)
+  }
+  return map[key]
+}
+function getIgnoreTileFlags() {
+  return !!currentMap.value?.collision?.ignoreTileFlags
+}
+/** 取某格的碰撞来源状态（图集标志 / 本图掩码 / 强制可走） */
+function cellState(tx, ty) {
+  const map = currentMap.value
+  if (!map) return null
+  const total = map.width * map.height
+  const idx = ty * map.width + tx
+  if (idx < 0 || idx >= total) return null
+  const blocked = maskArr('blockedCells', false)
+  const vision = maskArr('visionCells', false)
+  const walkable = maskArr('walkableCells', false)
+  let atlasBlocked = false
+  let atlasVision = false
+  if (!getIgnoreTileFlags()) {
+    for (const layer of tileLayers.value) {
+      const gid = layer.data?.[idx]
+      if (!gid) continue
+      const f = dawnlike.value?.tiles?.[gid - firstGid.value]
+      if (f?.blocked) atlasBlocked = true
+      if (f?.blocks_vision) atlasVision = true
+    }
+  }
+  return {
+    idx,
+    atlasBlocked,
+    atlasVision,
+    maskBlocked: blocked?.[idx] === 1,
+    maskVision: vision?.[idx] === 1,
+    walkable: walkable?.[idx] === 1,
+  }
+}
+/** 障碍笔刷落笔：按 blockMode 写当前格掩码。障碍 ↔ 可走互斥；视线是独立标志，可与障碍共存 */
+function applyBlockAt(tx, ty) {
+  const map = currentMap.value
+  if (!map) return
+  const total = map.width * map.height
+  const idx = ty * map.width + tx
+  if (idx < 0 || idx >= total) return
+  const blocked = maskArr('blockedCells')
+  const vision = maskArr('visionCells')
+  const walkable = maskArr('walkableCells')
+  if (blockMode.value === 'add') {
+    blocked[idx] = 1
+    walkable[idx] = 0
+  } else if (blockMode.value === 'vision') {
+    vision[idx] = 1
+  } else if (blockMode.value === 'walkable') {
+    // 运行时白名单覆写会同时清掉 blocked/vision，落笔时同步清，保持数据与运行时一致
+    walkable[idx] = 1
+    blocked[idx] = 0
+    vision[idx] = 0
+  } else { // clear：解除本图全部手工标记，回到跟随图集/默认
+    blocked[idx] = 0
+    vision[idx] = 0
+    walkable[idx] = 0
+  }
+  maskRev.value++
+  isDirty.value = true
+}
+/** 掩码版本号：触发 maskStats 重算（数组内部 mutation 不自动触发 computed） */
+const maskRev = ref(0)
+/** 掩码统计（右侧面板展示） */
+const maskStats = computed(() => {
+  void maskRev.value
+  const b = maskArr('blockedCells', false) || []
+  const v = maskArr('visionCells', false) || []
+  const w = maskArr('walkableCells', false) || []
+  return {
+    blocked: b.filter(Boolean).length,
+    vision: v.filter(Boolean).length,
+    walkable: w.filter(Boolean).length,
+  }
+})
+
 function propsMap(obj) {
   if (!Array.isArray(obj?.properties)) return {}
   return Object.fromEntries(obj.properties.map(p => [p.name, p.value]))
@@ -902,10 +1060,6 @@ function render() {
           const sx2 = (tileId % tsCols) * TILE_SIZE
           const sy2 = Math.floor(tileId / tsCols) * TILE_SIZE
           ctx.drawImage(tileset.value.img, sx2, sy2, TILE_SIZE, TILE_SIZE, sx, sy, sz, sz)
-          if (showCollision.value && dawnlike.value?.tiles?.[tileId]?.blocked) {
-            ctx.fillStyle = 'rgba(255,0,0,0.25)'
-            ctx.fillRect(sx, sy, sz, sz)
-          }
         }
       }
       // ★ 激活层高亮：Draw/Erase 模式下给该层非空格描金色细边
@@ -934,6 +1088,58 @@ function render() {
           const sz = TILE_SIZE * zoom.value
           ctx.fillStyle = tileColorFallback(tileId)
           ctx.fillRect(sx, sy, sz, sz)
+        }
+      }
+    }
+  }
+
+  // ─── 碰撞覆盖层：图集障碍 / 本图掩码障碍 / 挡视线 / 强制可走 ───
+  if (showCollision.value) {
+    const sz = TILE_SIZE * zoom.value
+    const visL = camX.value - (W / 2) / (TILE_SIZE * zoom.value) - 1
+    const visR = camX.value + (W / 2) / (TILE_SIZE * zoom.value) + 1
+    const visT = camY.value - (H / 2) / (TILE_SIZE * zoom.value) - 1
+    const visB = camY.value + (H / 2) / (TILE_SIZE * zoom.value) + 1
+    const cy0 = Math.max(0, Math.floor(visT)), cy1 = Math.min(rows - 1, Math.ceil(visB))
+    const cx0 = Math.max(0, Math.floor(visL)), cx1 = Math.min(cols - 1, Math.ceil(visR))
+    for (let ty = cy0; ty <= cy1; ty++) {
+      for (let tx = cx0; tx <= cx1; tx++) {
+        const st = cellState(tx, ty)
+        if (!st) continue
+        const { sx, sy } = tileToScreen(tx, ty)
+        // 强制可走优先级最高（绿）
+        if (st.walkable) {
+          ctx.fillStyle = 'rgba(76,175,80,0.28)'
+          ctx.fillRect(sx, sy, sz, sz)
+          ctx.strokeStyle = 'rgba(102,187,106,0.85)'
+          ctx.lineWidth = 1
+          ctx.strokeRect(sx + 0.5, sy + 0.5, sz - 1, sz - 1)
+          continue
+        }
+        if (st.maskBlocked) {
+          // 本图手工障碍：砖红实心 + 描边（与图集来源区分）
+          ctx.fillStyle = 'rgba(214,69,65,0.30)'
+          ctx.fillRect(sx, sy, sz, sz)
+          ctx.strokeStyle = 'rgba(214,69,65,0.75)'
+          ctx.lineWidth = 1
+          ctx.strokeRect(sx + 0.5, sy + 0.5, sz - 1, sz - 1)
+        } else if (st.atlasBlocked) {
+          // 图集自带障碍：浅红、无描边
+          ctx.fillStyle = 'rgba(214,69,65,0.16)'
+          ctx.fillRect(sx, sy, sz, sz)
+        }
+        if (st.maskVision) {
+          // 本图手工挡视线：紫填充 + 描边
+          ctx.fillStyle = 'rgba(150,96,230,0.22)'
+          ctx.fillRect(sx, sy, sz, sz)
+          ctx.strokeStyle = 'rgba(150,96,230,0.7)'
+          ctx.lineWidth = 1
+          ctx.strokeRect(sx + 0.5, sy + 0.5, sz - 1, sz - 1)
+        } else if (st.atlasVision) {
+          // 图集自带挡视线：仅紫色内框
+          ctx.strokeStyle = 'rgba(150,96,230,0.55)'
+          ctx.lineWidth = 1
+          ctx.strokeRect(sx + 2.5, sy + 2.5, sz - 5, sz - 5)
         }
       }
     }
@@ -1123,11 +1329,18 @@ function onPointerDown(e) {
     return
   }
   if (e.button !== 0 || !currentMap.value) return
-  if (e.shiftKey && (tool.value === 'draw' || tool.value === 'erase')) {
+  if (e.shiftKey && (tool.value === 'draw' || tool.value === 'erase' || tool.value === 'block')) {
     // ★ Shift+左键 = 笔刷开始（按住 Shift 拖动连刷，单击 Shift 也画一格）
     isDragging = true
     lastDrawTiles = []
     const { tx, ty } = screenToTile(e.clientX, e.clientY)
+    if (tool.value === 'block') {
+      pushHistory()
+      applyBlockAt(tx, ty)
+      render()
+      updateCursor()
+      return
+    }
     const L = getTileLayer()
     if (!L) return
     pushHistory()
@@ -1174,7 +1387,7 @@ function onPointerDown(e) {
 function onPointerUpBrush(e) {
   if (e.button !== 0) return
   if (isDragging) {
-    if (tool.value === 'draw' || tool.value === 'erase') pushHistory()
+    if (tool.value === 'draw' || tool.value === 'erase' || tool.value === 'block') pushHistory()
     isDragging = false
     lastDrawTiles = []
     updateCursor()
@@ -1194,16 +1407,20 @@ function onPointerMove(e) {
     return
   }
   // ★ Shift+左键按住拖动时（isDragging）连刷；鼠标单纯移动不再绘制
-  if (isDragging && e.buttons & 1 && e.shiftKey && (tool.value === 'draw' || tool.value === 'erase')) {
+  if (isDragging && e.buttons & 1 && e.shiftKey && (tool.value === 'draw' || tool.value === 'erase' || tool.value === 'block')) {
     const { tx, ty } = screenToTile(e.clientX, e.clientY)
-    const L = getTileLayer()
-    if (!L) return
     const idx = ty * currentMap.value.width + tx
-    if (idx < 0 || idx >= L.data.length) return
+    if (idx < 0 || idx >= (currentMap.value.width * currentMap.value.height)) return
     if (lastDrawTiles.includes(idx)) return
     lastDrawTiles.push(idx)
-    L.data[idx] = tool.value === 'erase' ? DEFAULT_FILL_TILE : brushTileId.value + firstGid.value
-    isDirty.value = true
+    if (tool.value === 'block') {
+      applyBlockAt(tx, ty)
+    } else {
+      const L = getTileLayer()
+      if (!L) return
+      L.data[idx] = tool.value === 'erase' ? DEFAULT_FILL_TILE : brushTileId.value + firstGid.value
+      isDirty.value = true
+    }
     render()
     return
   }
@@ -1239,8 +1456,13 @@ function onPointerUp(e) {
     handleClick(tx, ty)
     // ★ T 键坐标显示模式：左键单击也显示坐标（与选择行为兼容）
     maybeShowCoord(e.clientX, e.clientY)
-  } else if (isDragging) {
-    if (tool.value === 'draw' || tool.value === 'erase') pushHistory()
+  }
+  // ★ Shift+单击落笔走的是 isDragging 路径，无论是否移动过鼠标都要复位，
+  //   否则 isDragging 卡在 true，之后按住 Shift 移动会"悬空连刷"。
+  //   历史快照只在"拖动过"时补：单击的快照已在 pointerdown 里压栈，
+  //   这里再压一次会让撤销需要按两次。
+  if (isDragging) {
+    if (mouseMoved && (tool.value === 'draw' || tool.value === 'erase' || tool.value === 'block')) pushHistory()
     isDragging = false
     lastDrawTiles = []
   }
@@ -1411,12 +1633,22 @@ function onKeyDown(e) {
   }
 
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return
+  // 障碍工具下：1=设障碍 2=清除 3=强制可走 4=挡视线
+  if (tool.value === 'block' && ['1', '2', '3', '4'].includes(e.key)) {
+    if (e.key === '1') blockMode.value = 'add'
+    else if (e.key === '2') blockMode.value = 'clear'
+    else if (e.key === '3') blockMode.value = 'walkable'
+    else blockMode.value = 'vision'
+    e.preventDefault()
+    return
+  }
   switch (e.key.toLowerCase()) {
     case 'v': setTool('select'); break
     case 'b': setTool('draw'); break
     case 'e': setTool('erase'); break
     case 'p': setTool('place'); break
     case 'd': setTool('erase-obj'); break
+    case 'x': setTool('block'); break
     case 'g': showGrid.value = !showGrid.value; render(); break
     case 'c': showCollision.value = !showCollision.value; render(); break
     case 't':
@@ -1548,12 +1780,20 @@ function onPropApply() {
       <button class="btn" :class="{active: tool==='erase'}" @click="setTool('erase')" title="擦除 (E)">🧹</button>
       <button class="btn" :class="{active: tool==='place'}" @click="setTool('place')" title="放置 (P)">➕</button>
       <button class="btn" :class="{active: tool==='erase-obj'}" @click="setTool('erase-obj')" title="删除对象 (D)">❌</button>
+      <button class="btn" :class="{active: tool==='block'}" @click="setTool('block')" title="障碍 (X)，Shift+左键 落笔/连刷；1=障碍 2=清除 3=强制可走">🚧</button>
     </div>
     <div class="toolbar-group" v-show="tool==='draw' || tool==='erase'">
       <label class="inline">层：</label>
       <select v-model.number="activeLayerIdx" style="max-width:130px">
         <option v-for="(l, i) in tileLayers" :key="i" :value="i">L{{ i + 1 }}: {{ l.name || '未命名' }}</option>
       </select>
+    </div>
+    <div class="toolbar-group" v-show="tool==='block'">
+      <label class="inline">模式：</label>
+      <button class="palette-cat-btn" :class="{active: blockMode==='add'}" @click="blockMode='add'" title="1 = 设为障碍（写入 blockedCells）">🚧 障碍</button>
+      <button class="palette-cat-btn" :class="{active: blockMode==='vision'}" @click="blockMode='vision'" title="4 = 设为挡视线（写入 visionCells，可与障碍共存）">👁 视线</button>
+      <button class="palette-cat-btn" :class="{active: blockMode==='clear'}" @click="blockMode='clear'" title="2 = 清除本图标记（回到跟随图集）">🧹 清除</button>
+      <button class="palette-cat-btn" :class="{active: blockMode==='walkable'}" @click="blockMode='walkable'" title="3 = 强制可走（写入 walkableCells，拆掉空气墙）">✅ 可走</button>
     </div>
     <div class="toolbar-group" v-show="tool==='place'">
       <label class="inline">类型：</label>
@@ -1723,6 +1963,28 @@ function onPropApply() {
         <div class="info-row"><span class="info-key">格数</span><span class="info-val">{{ currentMapInfo?.count || '—' }}</span></div>
         <div class="info-row"><span class="info-key">对象</span><span class="info-val">{{ currentMapInfo?.objs || '—' }}</span></div>
         <div class="info-row"><span class="info-key">图层</span><span class="info-val">{{ currentMapInfo?.layers || '—' }} 层</span></div>
+      </div>
+
+      <!-- 碰撞 / 障碍（地图级掩码：blockedCells / visionCells / walkableCells） -->
+      <div class="panel-section">
+        <div class="panel-title">碰撞 / 障碍</div>
+        <label class="prop-row" style="cursor:pointer" title="开启后运行时忽略图集自带的 blocked/vision 标志，只信本图掩码（对应 collision.ignoreTileFlags）">
+          <span class="prop-label">忽略图集标志</span>
+          <input type="checkbox" :checked="getIgnoreTileFlags()" @change="toggleIgnoreFlags">
+        </label>
+        <div class="info-row"><span class="info-key">掩码障碍</span><span class="info-val">{{ maskStats.blocked }} 格</span></div>
+        <div class="info-row"><span class="info-key">挡视线</span><span class="info-val">{{ maskStats.vision }} 格</span></div>
+        <div class="info-row"><span class="info-key">强制可走</span><span class="info-val">{{ maskStats.walkable }} 格</span></div>
+        <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
+          <button class="btn" style="flex:1" @click="fillMaskFromAtlas" title="把图集当前 blocked/blocks_vision 标志灌进本图掩码，作为手工编辑起点">从图集生成</button>
+          <button class="btn btn-danger" style="flex:1" @click="clearMasks" title="清空本图全部手工碰撞掩码（不动瓦片贴图）">清空掩码</button>
+        </div>
+        <div style="font-size:10px;color:var(--dim);line-height:1.8;margin-top:6px">
+          <span style="color:rgba(214,69,65,0.55)">■</span> 图集障碍 &nbsp;
+          <span style="color:#d64541">▩</span> 掩码障碍<br>
+          <span style="color:#66bb6a">■</span> 强制可走 &nbsp;
+          <span style="color:#9660e6">▢</span> 挡视线
+        </div>
       </div>
 
       <!-- 选中对象属性 -->
@@ -1904,8 +2166,9 @@ function onPropApply() {
       <div class="panel-section">
         <div class="panel-title">快捷键</div>
         <div style="font-size:10px;color:#555;line-height:1.9">
-          V/B/E/P/D = 工具切换<br>
+          V/B/E/P/D/X = 工具切换<br>
           G = 网格 &nbsp; C = 碰撞 &nbsp; T = 坐标<br>
+          障碍工具：1=障碍 2=清除 3=可走 4=视线，Shift+左键 落笔/连刷<br>
           Ctrl+Z/Y = 撤销/重做<br>
           Ctrl+S = 保存<br>
           Del = 删除对象<br>
@@ -1926,7 +2189,7 @@ function onPropApply() {
 
   <!-- 状态栏 -->
   <div class="statusbar">
-    <span>工具: {{ {select:'Select',draw:'Draw',erase:'Erase',place:'Place','erase-obj':'EraseObj'}[tool] }}</span>
+    <span>工具: {{ {select:'Select',draw:'Draw',erase:'Erase',place:'Place','erase-obj':'EraseObj',block:'Block'}[tool] }}{{ tool==='block' ? `（${{add:'障碍',clear:'清除',walkable:'可走',vision:'视线'}[blockMode]}）` : '' }}</span>
     <span>缩放: {{ zoom.toFixed(2) }}×</span>
     <span>相机: {{ camX.toFixed(1) }}, {{ camY.toFixed(1) }}</span>
     <span>选中: {{ selectedObjInfo ? (selectedObjInfo.props.full_name || selectedObjInfo.props.name || selectedObjInfo.entityType) : '无' }}</span>

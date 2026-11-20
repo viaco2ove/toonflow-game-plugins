@@ -97,6 +97,19 @@ npm run dev
 - `description` 字段映射到 `category`（ground/wall/water/road/decor/farm）
 - 编译结果缓存到客户端（dawnlike.value），切换地图集时重新加载
 
+### 5. 地图级碰撞掩码（编辑器可逐格编辑）
+
+障碍判定分两层，运行时 `collision.ts buildWalkGrid()` 做叠加：
+
+| 字段（地图 JSON 顶层） | 语义 | 优先级 |
+|------|------|------|
+| `blockedCells: number[]` | 手工强制障碍（row-major 0/1，长度 cols×rows），与图集 blocked 标志 OR 叠加 | 中 |
+| `visionCells: number[]` | 手工挡视线掩码 | 中 |
+| `walkableCells: number[]` | 强制可走白名单；标记格一律可通行、不挡视线，图集标志与上面两个掩码都压不过它 | 最高 |
+| `collision.ignoreTileFlags: bool` | 为真时忽略图集自带 blocked/vision 标志，只信本图掩码 | — |
+
+编辑器工具栏 🚧 障碍工具（快捷键 X）：`1` 设障碍 / `2` 清除标记 / `3` 强制可走 / `4` 挡视线，Shift+左键落笔、按住拖动连刷；右侧「碰撞 / 障碍」面板可切换忽略图集标志、从图集生成掩码、清空掩码。床格（bed）不在 walkableCells 覆写范围内。视线是独立标志，可与障碍共存；强制可走格会同时清掉障碍与视线标记。
+
 ### 5. 资源跨域
 - tileset 通过 FastAPI 直接 serve，`<img>` 标签的 crossOrigin 已设置
 - dawnlike 返回 application/json，无跨域问题（CORS 已在后端开放）

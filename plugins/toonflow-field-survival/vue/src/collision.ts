@@ -63,6 +63,10 @@ export interface WalkGrid {
   bed?: Uint8Array;
   /** 统计：床格数（调试用） */
   bedCount?: number;
+  /** ★ 强制可走白名单格（row-major，1 = 作者手动拆墙，优先级最高；调试/编辑器回显用） */
+  walkable?: Uint8Array;
+  /** 统计：强制可走格数（调试用） */
+  walkableCount?: number;
 }
 
 /* ============================================================
@@ -177,12 +181,20 @@ export interface TiledCollisionSource {
   /** 可选：地图级手工挡视线位图（row-major，0/1） */
   visionCells?: number[];
   /**
+   * 可选：地图级"强制可走"白名单（row-major，0/1），优先级最高。
+   * 标记为 1 的格子无论图集标志还是 blockedCells/visionCells 掩码，一律按可通行、不挡视线处理。
+   * 用于拆掉图集标错/换皮遗留的空气墙；床格（bed）不在此覆写范围内。
+   */
+  walkableCells?: number[];
+  /**
    * 可选：忽略旧图集属性表里的 blocked/vision/bed 标志，只信地图级手工掩码。
    * 适用于切片换皮/手绘地图：旧图集把原关卡的墙/栅栏/树木瓦片标了阻挡，
    * 换皮后这些瓦片被铺到可走地面上，旧标志会在通道/路面上形成空气墙。
    * 默认 false（保留与旧关卡一致的图集标志叠加行为）。
    */
   ignoreTileFlags?: boolean;
+  /** 嵌套写法（与顶层 ignoreTileFlags 等价，Tiled 地图常见结构） */
+  collision?: { ignoreTileFlags?: boolean };
 }
 
 /**
@@ -252,20 +264,40 @@ export function buildWalkGrid(
     for (let i = 0; i < n; i++) if (extraVision[i]) vision[i] = 1;
   }
 
+  // ★ 强制可走白名单（优先级最高）：图集标志、blockedCells/visionCells 都压不过它。
+  // 用于拆掉图集标错 / 换皮遗留的空气墙；床格（bed）不在覆写范围内。
+  const extraWalkable = Array.isArray(tiled.walkableCells) ? tiled.walkableCells : null;
+  const walkable = new Uint8Array(total);
+  if (extraWalkable) {
+    const n = Math.min(extraWalkable.length, total);
+    for (let i = 0; i < n; i++) {
+      if (extraWalkable[i]) {
+        walkable[i] = 1;
+        blocked[i] = 0;
+        vision[i] = 0;
+      }
+    }
+  }
+
   let blockedCount = 0;
   let visionCount = 0;
   let bedCount = 0;
+  let walkableCount = 0;
   for (let i = 0; i < total; i++) {
     if (blocked[i]) blockedCount++;
     if (vision[i]) visionCount++;
     if (bed[i]) bedCount++;
+    if (walkable[i]) walkableCount++;
   }
 
-  const g: WalkGrid = { cols, rows, blocked, vision, firstGid, blockedCount, visionCount, bed, bedCount };
+  const g: WalkGrid = {
+    cols, rows, blocked, vision, firstGid, blockedCount, visionCount,
+    bed, bedCount, walkable, walkableCount,
+  };
   console.info(
     `[field-survival] 碰撞网格已构建：${cols}×${rows}，` +
       `阻挡格 ${blockedCount}（${((blockedCount / total) * 100).toFixed(1)}%）、` +
-      `挡视线格 ${visionCount}、床格 ${bedCount}`,
+      `挡视线格 ${visionCount}、床格 ${bedCount}、强制可走格 ${walkableCount}`,
   );
   return g;
 }
