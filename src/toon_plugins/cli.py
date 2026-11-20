@@ -90,6 +90,12 @@ def ensure_entry_js(plugin_dir, label=""):
     """
     import subprocess
 
+    # ★ plugin_dir 可能是相对路径（`plugins -i 裸id` / `--install-all` 拼出的
+    #   plugins/<名>）。esbuild_bin 拼接与 subprocess cwd=plugin_dir 存在双重基准：
+    #   isfile 按当前 cwd 判真，执行时 cwd 已切进插件目录 → 同一相对路径解析失败
+    #   报「系统找不到指定的路径」（2026-11-20 裸 id 上传必现）。入口统一绝对化。
+    plugin_dir = os.path.abspath(plugin_dir)
+
     tag = (label + ": ") if label else ""
     js = os.path.join(plugin_dir, "entry.js")
     ts = os.path.join(plugin_dir, "entry.ts")
@@ -127,8 +133,10 @@ def ensure_entry_js(plugin_dir, label=""):
 
     click.echo("  [BUILD] " + tag + "重编 entry.js (entry.ts → entry.js) ...")
     try:
+        # errors="replace"：cmd.exe 包装器失败时输出 GBK 系统消息，编码不匹配时
+        # 不让 UnicodeDecodeError 崩掉调用线程（与上方 vue build 段同口径）
         r = subprocess.run(cmd, cwd=plugin_dir, capture_output=True, text=True,
-                           timeout=300)
+                           errors="replace", timeout=300)
     except Exception as ex:
         click.secho("  [WARN] " + tag + "entry 编译调用失败: " + str(ex), fg="yellow")
         return os.path.isfile(js)
