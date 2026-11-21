@@ -12,6 +12,7 @@
 import playerUrl from "./assets/images/player_sprites/4334.png?url";
 import allyUrl from "./assets/images/player_sprites/3858.png?url";
 import enemyUrl from "./assets/images/player_sprites/4213.png?url";
+import { toonflowJsApi } from "./toonflowJsApi";
 import { TILE_ANIM_ID } from "./assets/tilesetAnim";
 
 /**
@@ -311,7 +312,29 @@ export function ensureSpriteAssetData(assetId: string): string {
   const cached = spriteAssetCache.get(assetId);
   if (cached) return cached;
   const ctx = spriteAssetRequestContext();
-  if (!ctx) return "";
+  if (!ctx) {
+    // ★ dev-host 桩 / standalone 环境（2026-11-21 修复）：iframe URL 不带 getAsset，
+    //   拿不到直连后端的请求上下文 → 走 toonflowJsApi 的 tf_plugin_data 桥接
+    //   （dev-host 桩从自己 localStorage 里读 sprite_asset:<id>；真实宿主由宿主代发 /plugin/data）。
+    //   不补这条回退时 asset: 引用永远解析为空 → 形象面板/实体立绘裂图。
+    if (!spriteAssetPending.has(assetId)) {
+      const p = (async () => {
+        try {
+          const v = await toonflowJsApi.pluginData.get(`sprite_asset:${assetId}`);
+          const dataUrl =
+            v && typeof v === "object" ? String(v.dataUrl || "") : typeof v === "string" ? v : "";
+          if (dataUrl) spriteAssetCache.set(assetId, dataUrl);
+          return dataUrl || null;
+        } catch {
+          return null;
+        } finally {
+          spriteAssetPending.delete(assetId);
+        }
+      })();
+      spriteAssetPending.set(assetId, p);
+    }
+    return "";
+  }
   if (!spriteAssetPending.has(assetId)) {
     const p = (async () => {
       try {

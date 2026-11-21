@@ -26,6 +26,33 @@ export interface ActionResult {
 /** 当前 AI 决策的 entityId → action 缓存（用于 tick 之间追踪） */
 const pendingCommands: Map<string, { action: AIAction; sentAt: number }> = new Map();
 
+/* ★ 2026-11-21 命令级去重（修 WS 洪水）：持续动作（move/attack/gather/flee/follow/interact）
+ * 的语义是「设一次目标、服务端持续执行」——entry 收到后每拍推进 _aiMoveTo/_aiAttackTarget
+ * （到达 0.5m 自清 / 600 tick 超时 / 攻击 cd 30 tick 结算），前端每 tick 重发同一条命令
+ * 纯属浪费：每条 ai_command = 后端全量会话锁结算 + 立即全量 state 推送（PluginRealtimeHub
+ * 对 action 跳过 50ms 节流），2 个托管角色实测 ~20 条/s、下行 ~1.7MB/s（WS Messages 刷满，
+ * 2026-11-21 用户实测截图）。且重发每次都写 _aiMoveToTick/_aiAttackTick → state 永远
+ * 「有变化」→ 304 去重永不命中。
+ * 规则：同角色同 key 命令在 DEDUP_WINDOW_MS 内只发一次（窗口外放行 = 心跳兜底，防服务端
+ * 状态丢失后前端永远不发）；follow 额外按「玩家偏移 > FOLLOW_REISSUE_M」提前放行。
+ * interact 去重还顺带修一个隐患：entry 的 interact 每次重发都会重置 _aiInteract.startedTick
+ * （entry.ts ai_command.interact），到点结算类机制会被无限推迟。
+ * 瞬发动作（useSkill/useItem/sendSms/sayLine/updateCard/stop）不经此路径，行为不变。 */
+const DEDUP_WINDOW_MS = 5000;
+/** follow 重发条件：玩家位置距上次下发目标偏移超过该值（米）才刷新移动目标 */
+const FOLLOW_REISSUE_M = 1.5;
+const lastSentCmd = new Map<string, { key: string; at: number; x?: number; y?: number }>();
+
+/** 同 key 且在窗口内 → 跳过重发 */
+function shouldSkipResend(roleId: string, key: string, now: number): boolean {
+  const last = lastSentCmd.get(roleId);
+  return !!last && last.key === key && now - last.at < DEDUP_WINDOW_MS;
+}
+
+function recordSentCmd(roleId: string, key: string, at: number, x?: number, y?: number): void {
+  lastSentCmd.set(roleId, { key, at, x, y });
+}
+
 /** 通过 sendTick 桥发 ai_command */
 function sendAICommand(roleId: string, params: Record<string, unknown>): void {
   try {
@@ -80,12 +107,16 @@ export function executeMove(entity: Entity, action: AIAction, state: GameState):
   if (!action.target || action.target.x === undefined || action.target.y === undefined) {
     return { success: false, message: "移动目标无效" };
   }
+  const tx = action.target.x;
+  const ty = action.target.y;
+  const key = `move:${tx.toFixed(1)},${ty.toFixed(1)}`;
+  const now = Date.now();
+  if (shouldSkipResend(entity.id, key, now)) {
+    return { success: true, message: `→ (${tx.toFixed(1)}, ${ty.toFixed(1)})（持续执行中）` };
+  }
+  recordSentCmd(entity.id, key, now, tx, ty);
   // ★ 关键：通过 ai_command 通道让 entry.js 改真实 state
-  sendAICommand(entity.id, {
-    action: "move",
-    x: action.target.x,
-    y: action.target.y,
-  });
+  sendAICommand(entity.id, { action: "move", x: tx, y: ty });
   // dev-host 调试用：短暂反馈（会被下一 tick state 覆盖）
   patchEntityForDevPreview(entity, state, action);
   return {
@@ -111,10 +142,16 @@ export function executeAttack(entity: Entity, action: AIAction, state: GameState
     return { success: true, message: `目标已死亡` };
   }
   // 通过 ai_command 通道：entry.js 会处理追击 + 攻击判定
-  sendAICommand(entity.id, {
-    action: "attack",
-    targetId: action.target.id,
-  });
+  // ★ 去重：同目标攻击命令 5s 内只发一次（服务端攻击结算走 cd，重发不加速）
+  const atkKey = `attack:${action.target.id}`;
+  const now = Date.now();
+  if (!shouldSkipResend(entity.id, atkKey, now)) {
+    recordSentCmd(entity.id, atkKey, now);
+    sendAICommand(entity.id, {
+      action: "attack",
+      targetId: action.target.id,
+    });
+  }
   patchEntityForDevPreview(entity, state, action);
   const dist = Math.hypot(target.x - entity.x, target.y - entity.y);
   return {
@@ -137,8 +174,17 @@ export function executeGather(entity: Entity, action: AIAction, state: GameState
   }
   const tx = action.target?.x ?? 0;
   const ty = action.target?.y ?? 0;
+  const zoneName = action.zoneName || action.target?.name || "";
+  const key = `gather:${tx.toFixed(1)},${ty.toFixed(1)}:${zoneName}`;
+  const now = Date.now();
+  if (shouldSkipResend(entity.id, key, now)) {
+    return { success: true, message: `采集中 → ${zoneName} (${tx.toFixed(1)}, ${ty.toFixed(1)})` };
+  }
+  recordSentCmd(entity.id, key, now, tx, ty);
   // ★ reqId 去重：宿主到达后写 _aiGatherArrived 标记且不自删（实体字段被宿主权威持有），
   //   前端按 reqId 消费，重复推送同一标记不会重复触发采集。
+  //   ★ 2026-11-21：reqId 只在真正下发命令时生成——此前每 tick 重发都换新 reqId，
+  //   按 reqId 去重形同虚设（100ms 一个新 id）。
   const reqId = `g_${entity.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
   // 一次命令同时表达「走到哪」+「采什么」：宿主负责移动 + 到达打标记，
   // 产出（掉什么/给多少）由前端 mapKnowledge.triggerZoneGather → 地图集脚本决定。
@@ -146,7 +192,7 @@ export function executeGather(entity: Entity, action: AIAction, state: GameState
     action: "gather",
     x: tx,
     y: ty,
-    zoneName: action.zoneName || action.target?.name || "",
+    zoneName,
     reqId,
   });
   patchEntityForDevPreview(entity, state, action);
@@ -179,15 +225,25 @@ export function executeInteract(entity: Entity, action: AIAction, state: GameSta
   //   判定 mapnpc 前缀 → 强制降级为「走到目标坐标」：发 move（entry 驱动移动有效），
   //   走到 2m 内由 isActionComplete 判完成。
   const isMapNpc = !!tid && String(tid).startsWith("mapnpc");
+  const now = Date.now();
   if (!tid || isMapNpc) {
     if (!hasCoord) return { success: false, message: "交互目标无效（地图 NPC 无坐标）" };
-    sendAICommand(entity.id, { action: "move", x: action.target!.x, y: action.target!.y });
+    const key = `move:${action.target!.x.toFixed(1)},${action.target!.y.toFixed(1)}`;
+    if (!shouldSkipResend(entity.id, key, now)) {
+      recordSentCmd(entity.id, key, now, action.target!.x, action.target!.y);
+      sendAICommand(entity.id, { action: "move", x: action.target!.x, y: action.target!.y });
+    }
     return { success: true, message: `前往 ${action.target?.name || "目标"}（${action.target!.x.toFixed(0)},${action.target!.y.toFixed(0)}）` };
   }
-  sendAICommand(entity.id, {
-    action: "interact",
-    targetId: tid,
-  });
+  // ★ 去重：interact 重发还会重置 entry 侧 _aiInteract.startedTick（到点结算被无限推迟）
+  const key = `interact:${tid}`;
+  if (!shouldSkipResend(entity.id, key, now)) {
+    recordSentCmd(entity.id, key, now);
+    sendAICommand(entity.id, {
+      action: "interact",
+      targetId: tid,
+    });
+  }
   return { success: true, message: `与 ${action.target?.name || tid} 交互` };
 }
 
@@ -196,20 +252,46 @@ function findPlayer(state: GameState): Entity | null {
   return (state.entities || []).find((e) => e.side === "player") || null;
 }
 
-/** 执行跟随：持续把移动目标刷新到玩家身后（宿主每次决策都会重新下发） */
+/** 执行跟随：把移动目标刷新到玩家身后（★ 2026-11-21 去重版：
+ *  到位后不再每 tick 重发 stopMove；未到位时只有「玩家偏移 > FOLLOW_REISSUE_M」
+ *  或 5s 心跳窗口到才重发 move——服务端会持续执行 _aiMoveTo 直到到达） */
 export function executeFollow(entity: Entity, action: AIAction, state: GameState): ActionResult {
   const player = findPlayer(state);
   if (!player) {
     // 玩家不在场（切图/死亡）→ 停下等待
-    sendAICommand(entity.id, { action: "stopMove" });
+    const now0 = Date.now();
+    if (!shouldSkipResend(entity.id, "stopMove", now0)) {
+      recordSentCmd(entity.id, "stopMove", now0);
+      sendAICommand(entity.id, { action: "stopMove" });
+    }
     return { success: false, message: "玩家不在场，跟随暂停" };
   }
   const d = Math.hypot(player.x - entity.x, player.y - entity.y);
   if (d <= FOLLOW_GAP_M) {
-    // 已到位，清掉移动目标避免抖动
-    sendAICommand(entity.id, { action: "stopMove" });
+    // 已到位，清掉移动目标避免抖动（★ 去重：到位后只发一次 stopMove）
+    const now1 = Date.now();
+    if (!shouldSkipResend(entity.id, "stopMove", now1)) {
+      recordSentCmd(entity.id, "stopMove", now1);
+      sendAICommand(entity.id, { action: "stopMove" });
+    }
     return { success: true, message: `已跟随（距玩家 ${d.toFixed(1)}米）` };
   }
+  // ★ 跟随目标 = 玩家实时位置：玩家站着不动时不需要重发（key 恒定会被窗口挡住），
+  //   玩家移动超 FOLLOW_REISSUE_M 才刷新目标（服务端每拍向 _aiMoveTo 推进）
+  const now = Date.now();
+  const last = lastSentCmd.get(entity.id);
+  const movedM = !last || last.x === undefined
+    ? Infinity
+    : Math.hypot(player.x - last.x, player.y - (last.y ?? 0));
+  if (last && movedM < FOLLOW_REISSUE_M && now - last.at < DEDUP_WINDOW_MS) {
+    patchEntityForDevPreview(entity, state, {
+      ...action,
+      type: "move",
+      target: { x: player.x, y: player.y, name: player.name },
+    });
+    return { success: true, message: `跟随 ${player.name}（${d.toFixed(1)}米）` };
+  }
+  recordSentCmd(entity.id, "follow", now, player.x, player.y);
   sendAICommand(entity.id, {
     action: "move",
     x: player.x,
@@ -279,6 +361,16 @@ export function executeFlee(entity: Entity, state: GameState): ActionResult {
   const targetX = me.x + (awayX / norm) * 8;
   const targetY = me.y + (awayY / norm) * 8;
   // 边界保护
+  // ★ 去重（按 1m 粒度）：撤退目标随位移缓变，同目标 5s 内不重发（窗口外心跳放行）
+  const key = `flee:${targetX.toFixed(0)},${targetY.toFixed(0)}`;
+  const now = Date.now();
+  if (shouldSkipResend(entity.id, key, now)) {
+    return {
+      success: true,
+      message: `撤退中 → (${targetX.toFixed(1)}, ${targetY.toFixed(1)})`,
+    };
+  }
+  recordSentCmd(entity.id, key, now, targetX, targetY);
   sendAICommand(entity.id, { action: "move", x: targetX, y: targetY });
   return {
     success: true,
