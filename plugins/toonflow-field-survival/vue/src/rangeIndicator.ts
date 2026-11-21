@@ -41,17 +41,17 @@ export interface RangeIndicator {
   total: number;
 }
 
-/** 粉红半透明填充（透明度高一点、隐约可见） */
-const RANGE_FILL = "rgba(255, 143, 200, 0.28)";
-/** 粉红描边（比填充略亮，边缘更清晰） */
-const RANGE_STROKE = "rgba(255, 143, 200, 0.55)";
+/** 粉红半透明填充（★ 2026-11-22 用户反馈：遮挡感重 → 减半到隐约可见，边缘线承载可读性） */
+const RANGE_FILL = "rgba(255, 143, 200, 0.14)";
+/** 粉红描边（比填充亮，边缘清晰 → 像画在地上的魔法阵轮廓） */
+const RANGE_STROKE = "rgba(255, 143, 200, 0.38)";
 /** 2.5D 纵向压缩系数（与 App.vue 的 DEPTH 一致） */
 const DEPTH = 1.0;
 /** ★ V2_2 改造2：图标粒子数（circle=4 / cone=3，需求「1 个或多个」） */
 const PARTICLE_COUNT_CIRCLE = 4;
 const PARTICLE_COUNT_CONE = 3;
-/** 图标粒子基础尺寸（px，随 ppm 轻微缩放） */
-const PARTICLE_SIZE = 18;
+/** 图标粒子基础尺寸（px，随 ppm 轻微缩放；★ 2026-11-22 18→16 减少中心遮挡感） */
+const PARTICLE_SIZE = 16;
 
 /** 字符串 → [0,1) 确定性哈希（同一指示区每帧分布一致，不抖动） */
 function hash01(s: string, salt: number): number {
@@ -85,7 +85,8 @@ export function drawRangeIndicatorLayer(
     const total = Math.max(1, r.total || 1);
     const lifeRatio = Math.max(0, Math.min(1, (r.life || 0) / total));
     // 淡出：最后 1/3 逐渐变淡，但**不完全消失**（「隐约可见」是需求本意）
-    const alpha = 0.35 + 0.65 * lifeRatio;
+    // ★ 2026-11-22 峰值压低：0.35+0.65×ratio → 0.30+0.70×ratio（满生命 1.0，靠填充/粒子常量降遮挡）
+    const alpha = 0.30 + 0.70 * lifeRatio;
     // 轻微呼吸（幅度极小，避免误导判定边界）
     const breath = 1 + 0.02 * Math.sin((timeMs / 700) * Math.PI * 2);
 
@@ -127,8 +128,8 @@ export function drawRangeIndicatorLayer(
         const drift = Math.sin((timeMs / 600) * Math.PI * 2 + i * 1.7) * 3;
         const scale = 0.9 + 0.15 * Math.sin((timeMs / 500) * Math.PI * 2 + i * 2.3);
         const s = size * scale;
-        // 半透明：底层约 0.30，随生命末期与形状一起变淡
-        ctx.globalAlpha = 0.30 * alpha;
+        // 半透明：★ 2026-11-22 0.30 → 0.16（中心图标粒子不遮挡角色，隐约可见即可）
+        ctx.globalAlpha = 0.16 * alpha;
         ctx.drawImage(iconImg, dx - s / 2, dy + drift - s / 2, s, s);
       }
       ctx.restore();
