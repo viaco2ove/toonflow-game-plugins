@@ -108,6 +108,8 @@ export interface MapMob {
   camp: "neutral" | "hostile" | "friendly";
   /** ★ 姓名（如「低阶湮物」）：头顶显示为「哥布林(低阶湮物)」；未标注则只显示类型中文名 */
   full_name?: string;
+  /** ★ 描述（Tiled 属性 description，2026-11-22 编辑器新增）：如「床」等语义标记 */
+  description?: string;
   /** ★ 练习假人标记（Tiled 属性 training_dummy=true）：camp=neutral 但要能被打 */
   trainingDummy?: boolean;
   /** ★ 假人默认模式（Tiled 属性 dummy_mode）：stand（站桩）/ duel（模拟实战） */
@@ -145,6 +147,12 @@ export interface MapNpc {
    *  确认后发放对应物品（走 evGiveItem → sys_item_add）并令该实体 alive=false 消失。
    *  地图每次进入都会重新注入（注入逻辑忽略已死实体，但切图会清掉旧图 mapnpc_*，故会刷新）。 */
   pickupItem?: string;
+  /** ★ 描述（Tiled 属性 description，2026-11-22 编辑器新增）：如「床」等语义标记 */
+  description?: string;
+  /** ★ Tiled 属性 name（语义标记通道之一：name/full_name/description 任一为「床」即可触发睡眠） */
+  nameProp?: string;
+  /** ★ Tiled 属性 full_name（语义标记通道之一） */
+  fullName?: string;
 }
 
 /**
@@ -309,6 +317,8 @@ export const ENGINE_NON_MOB_ENTITY_TYPES: Set<string> = new Set([
   "TREE",
   "ROCK",
   "WALL",
+  // ★ 家具（编辑器放置类型）：床/桌/椅等纯装饰，见 normalizeTiledMap 的 FURNITURE 分支
+  "FURNITURE",
   "CORPSE",
   "SIGN",
   // ★ 文字标识类（建筑名称显示；编辑器侧同名类型，见 building-labels.md）
@@ -563,6 +573,11 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             dialog: typeof props.dialog === "string" ? props.dialog : undefined,
             unnamed: !interactable,
             pickupItem: isPickup ? String(props.pickup_item) : undefined,
+            // ★ 2026-11-22 用户需求：三个语义标记通道（description / name / full_name）
+            //   任一为「床」即可触发睡眠 → 运行时统一透传。
+            description: props.description != null ? String(props.description) : undefined,
+            nameProp: props.name != null ? String(props.name) : undefined,
+            fullName: props.full_name != null ? String(props.full_name) : undefined,
           });
         } else if ((normalizeCamp(props.camp) !== "neutral"
                    && (isKnownMobType(String(props.entity_type)) || normalizeCamp(props.camp) === "hostile"))
@@ -599,6 +614,8 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             level: mobLevel,
             camp: normalizeCamp(props.camp) || "hostile",
             full_name: props.full_name != null ? String(props.full_name) : undefined,
+            // ★ 2026-11-22：编辑器 description（描述）属性透传
+            description: props.description != null ? String(props.description) : undefined,
             trainingDummy: isTrainingDummy(props),
             dummyMode: props.dummy_mode != null ? String(props.dummy_mode) : undefined,
             bounty: bountyProp && typeof bountyProp === "object" && !Array.isArray(bountyProp)
@@ -613,6 +630,48 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
                   .map((d: any) => ({ name: String(d.name), w: num(d.w, 1) }))
               : undefined,
           });
+        } else if (props.entity_type === "FURNITURE") {
+          // ★ 家具（编辑器放置类型）：纯装饰物（床/桌/椅…），画 obj.gid 指向的图集贴图。
+          //   不进 npcs[]、不画头顶名字、不可交互；**无碰撞**——需要挡人的家具
+          //   请在图块层画对应 blocked 图块（床 tile 5008/5009/5016/5017 本身 blocked=true，
+          //   图块层摆放时自带碰撞 + 睡眠判定）。
+          //   注意：一张床（tile 5008+5009 两格宽）作为实体要放两个对象并排。
+          const wx = obj.x / 32 - W / 2;
+          const wz = obj.y / 32 - 1 - H / 2;
+          decorations.push({
+            id: `f_${decIdx++}`,
+            kind: "npc",
+            x: wx,
+            y: wz,
+            name: "",   // 无名字 → 绘制层不画标签，只出贴图
+            variant: obj.gid ? obj.gid - 1 : 0,
+            wanders: false,
+            seed: (decIdx * 7919) % 1000,
+            // ★ 2026-11-22：description/name/full_name 三通道透传（家具标「床」时可被运行时消费）
+            description: props.description != null ? String(props.description) : undefined,
+          } as any);
+          // ★ 2026-11-22 用户需求：带床标记（description/name/full_name 任一为「床」）的家具
+          //   → 额外进 npcs[]，这样它会成为 mapnpc_* 实体，靠近即可触发睡眠按钮
+          //   （此前家具只在 decorations 里，实体层判定看不到它）。
+          const bedMark = [props.description, props.name, props.full_name].some((v) => {
+            const s = String(v ?? "").trim().toLowerCase();
+            return s === "bed" || s === "床";
+          });
+          if (bedMark) {
+            npcs.push({
+              id: obj.id,
+              name: String(props.full_name || props.name || "床"),
+              displayName: String(props.full_name || props.name || "床"),
+              x: wx,
+              y: wz,
+              gid: obj.gid,
+              wanders: false,
+              unnamed: false,
+              description: props.description != null ? String(props.description) : undefined,
+              nameProp: props.name != null ? String(props.name) : undefined,
+              fullName: props.full_name != null ? String(props.full_name) : undefined,
+            });
+          }
         } else if (normalizeCamp(props.camp) === "neutral" && !isKnownNonMobType(String(props.entity_type))) {
           // ★ camp=neutral 的实体型对象（如中立野怪/商人怪）→ NPC 装饰物（不参战、头顶显示姓名）
           const wx = obj.x / 32 - W / 2;

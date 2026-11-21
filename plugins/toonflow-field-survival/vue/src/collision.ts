@@ -79,6 +79,41 @@ const FLAG_URLS = [
   "./compiled_dawnlike.json",
 ];
 
+/**
+ * ★ 2026-11-22 修「睡眠按钮不触发」：床铺 tile 的判定改为**属性驱动、多通道**。
+ *
+ * 背景：床格判定只认 tileset 属性 `description="bed"`，但不同图集/故事包的标注
+ * 方式不统一 → 判不到 → walkGrid.bed 全 0 → bedCount=0 → updateNearBed() 直接
+ * return → 「靠近床出睡眠按钮」永远不出现（用户实测截图）。
+ *
+ * 现按以下任一命中即视为床格（用户 2026-11-22 指定的机制）：
+ *   ① description = "bed"（原通道）
+ *   ② name = "床"
+ *   ③ full_name = "床"
+ * （②③ 是用户指定的补充标记；带空格/繁简差异时做去空白比较。）
+ */
+const BED_LABELS = new Set(["bed", "床"]);
+
+/** 属性值是否是床标记（去空白 + 小写比较；中文不受影响） */
+function isBedLabel(value: unknown): boolean {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (!v) return false;
+  return BED_LABELS.has(v);
+}
+
+/**
+ * 扫一个 tile 的 properties → 是否床格。
+ * 通道：description / name / full_name 任一为 "bed" 或 "床"。
+ */
+function tileIsBed(properties: any[] | undefined): boolean {
+  for (const p of properties ?? []) {
+    const n = String(p?.name ?? "").trim().toLowerCase();
+    if (n !== "description" && n !== "name" && n !== "full_name") continue;
+    if (isBedLabel(p?.value)) return true;
+  }
+  return false;
+}
+
 let flagsPromise: Promise<TileFlagTable> | null = null;
 
 /**
@@ -104,13 +139,13 @@ export function loadTileFlags(): Promise<TileFlagTable> {
         if (t?.id == null) continue;
         let blocked = false;
         let vision = false;
-        let bed = false;
         for (const p of t.properties ?? []) {
           const v = toBool(p?.value);
           if (p?.name === "blocked") blocked = v;
           else if (p?.name === "blocks_vision") vision = v;
-          else if (p?.name === "description" && String(p?.value ?? "").trim().toLowerCase() === "bed") bed = true;
         }
+        // ★ 2026-11-22：床判定走统一属性通道（description/name/full_name = bed/床）
+        const bed = tileIsBed(t.properties);
         out[Number(t.id)] = { blocked, vision, bed };
       }
       console.info(`[field-survival] tileset（来自 storyMap 包内）已加载: ${Object.keys(out).length} tiles`);
@@ -126,14 +161,14 @@ export function loadTileFlags(): Promise<TileFlagTable> {
           if (t?.id == null) continue;
           let blocked = false;
           let vision = false;
-          let bed = false;
           for (const p of t.properties ?? []) {
             const v = toBool(p?.value);
             if (p?.name === "blocked") blocked = v;
             else if (p?.name === "blocks_vision") vision = v;
-            // ★ game.md 床碰撞：tileset 用 description="bed" 标记床铺贴图
-            else if (p?.name === "description" && String(p?.value ?? "").trim().toLowerCase() === "bed") bed = true;
           }
+          // ★ game.md 床碰撞：tileset 用 description/name/full_name = bed/床 标记床铺贴图
+          //   （用户 2026-11-22 指定：name/full_name="床" 同样触发睡眠）
+          const bed = tileIsBed(t.properties);
           // 只记录有用的项：全 false 的 tile 等同于"无属性"，省内存
           if (blocked || vision || bed) out[Number(t.id)] = { blocked, vision, bed };
         }

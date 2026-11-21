@@ -3941,6 +3941,11 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       unnamed: npc.unnamed === true,
       // ★ 可拾取物（地图对象带 pickup_item）：靠近触发「是否拾取」提示，确认后发物品并消失
       pickupItem: npc.pickupItem || undefined,
+      // ★ 2026-11-22 用户需求：三个语义标记通道透传到实体（description / name / full_name）
+      //   → 运行时按这三个属性判断是否「床」（见 sleepProbe / nearBed 判定）。
+      desc: npc.description || undefined,
+      desc_name: npc.nameProp || undefined,
+      desc_full: npc.fullName || undefined,
     } as any);
   }
   // （装饰层无需再清理：normalizeTiledMap 已在解析时把「无名占位 NPC」提前跳过，
@@ -6286,7 +6291,13 @@ function drawBrokenOverlay(
    ============================================================ */
 import { spellIcon, spellIconSrc, EFFECT_ICON } from "./spellIcon";
 
-/** 属性特效图标叠加：图标 0.7×→1.5× 放大 + 同色光环淡出（叠在斩波/火球/环之上） */
+/** 属性特效图标叠加：图标 0.7×→1.5× 放大 + 同色光环淡出（叠在斩波/火球/环之上）
+ *  ★ 2026-11-22 用户反馈「技能刚释放时中心图案糊住角色」：
+ *    原实现把图标画在**胸口**（py-12）且 alpha 高达 0.95（V2_2 时代为「可见反馈」
+ *    特意调高）→ 第一帧整块图标压在角色身上，角色完全看不见。
+ *    改法（三处）：① 图标下移到**脚边地面**（py+2，不再压身）② 尺寸 26→18 ③
+ *    alpha 0.95→0.55（仍看得见是「属性图标」，但不遮挡角色）。
+ *    同色光环同步下移+减淡，避免又画回胸口。 */
 function drawIconBurst(
   ctx: CanvasRenderingContext2D,
   iconSrc: string,
@@ -6296,16 +6307,18 @@ function drawIconBurst(
   color: string,
 ): void {
   const img = spellIcon(iconSrc);
+  // 图标与光环的落点：角色脚下地面（+2px 微偏下），不再压胸口
+  const iy = py + 2;
   // 同色光环（图标未加载时也有反馈）
   ctx.save();
   const ringR = 10 + p * 20;
-  ctx.globalAlpha = vfxA(Math.max(0, 1 - p) * 0.7);
+  ctx.globalAlpha = vfxA(Math.max(0, 1 - p) * 0.45);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2.5;
   ctx.shadowColor = color;
   ctx.shadowBlur = 8;
   ctx.beginPath();
-  ctx.arc(px, py - 12, ringR, 0, Math.PI * 2);
+  ctx.arc(px, iy, ringR, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
   if (!img) return;
@@ -6314,14 +6327,15 @@ function drawIconBurst(
   //   V1 要求「使用时显示出来属性特效（图标）」，此前图标与环一起被压到 0.45，
   //   实际几乎看不见（用户截图 img_2 证实）。图标单独保持高可见度（0.95 起步），
   //   环/斩波仍按全局系数弱化，主次分明。
+  // ★ 2026-11-22：0.95 → 0.55（用户反馈第一帧图案遮挡角色）
   const scale = 0.7 + p * 0.8;
-  const size = 26 * scale;
-  const alpha = Math.min(1, Math.max(0, 1 - p * 1.2) * 0.95);
+  const size = 18 * scale;
+  const alpha = Math.min(1, Math.max(0, 1 - p * 1.2) * 0.55);
   if (alpha <= 0) return;
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.imageSmoothingEnabled = false;  // 像素图标保持锐利
-  ctx.drawImage(img, px - size / 2, py - 12 - size / 2, size, size);
+  ctx.drawImage(img, px - size / 2, iy - size / 2, size, size);
   ctx.restore();
 }
 /* ---------------- 地表噪声（多样化地表，模块级纯函数） ---------------- */
@@ -7451,18 +7465,50 @@ function currentSendMs(ts: number): number {
 }
 
 /* ---------------- ★ game.md 床碰撞 → 睡眠按钮 ---------------- */
-/** 玩家是否紧邻床铺（tileset description=bed 的 blocked 格），随 tick 10Hz 刷新 */
+/** 玩家是否紧邻床铺（随 tick 10Hz 刷新） */
 const nearBed = ref(false);
+
+/** ★ 2026-11-22 用户需求：床的判定标记有三条通道 —— description / name / full_name，
+ *  任一为「床」即视为床（编辑器可给实体填这三个字段）。
+ *  与图块层判定（collision.ts 的 tileIsBed）共用同一套标记语义。 */
+const BED_LABELS = new Set(["bed", "床"]);
+
+/** 该实体的三个标记字段里是否有床标记 */
+function entityIsBed(e: any): boolean {
+  if (!e) return false;
+  for (const v of [e.desc, e.desc_name, e.desc_full]) {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (s && BED_LABELS.has(s)) return true;
+  }
+  return false;
+}
+
+/** 玩家附近是否有带床标记的实体（对象层通道） */
+function isNearBedEntity(me: any, radiusM = 1.8): boolean {
+  if (!me || !state.value) return false;
+  for (const e of state.value.entities || []) {
+    if (e === me || e.side === "player") continue;
+    if (!entityIsBed(e)) continue;
+    if (Math.hypot((e.x ?? 0) - me.x, (e.y ?? 0) - me.y) <= radiusM) return true;
+  }
+  return false;
+}
 
 function updateNearBed(): void {
   const g = walkGrid;
   const s = state.value;
-  if (!g || !g.bed || !g.bedCount || !s) {
+  if (!s) {
     if (nearBed.value) nearBed.value = false;
     return;
   }
   const me = s.entities.find((e) => e.side === "player");
-  const v = me ? isNearBed(g, me.x, me.y, 1.8) : false;
+  if (!me) {
+    if (nearBed.value) nearBed.value = false;
+    return;
+  }
+  // 两条通道取或：① 图块层床格（tileset 标记）② 实体层床标记（description/name/full_name）
+  const byTile = !!(g && g.bed && g.bedCount && isNearBed(g, me.x, me.y, 1.8));
+  const v = byTile || isNearBedEntity(me, 1.8);
   if (v !== nearBed.value) nearBed.value = v;
 }
 

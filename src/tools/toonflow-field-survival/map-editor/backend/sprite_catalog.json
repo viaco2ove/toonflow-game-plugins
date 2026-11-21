@@ -624,6 +624,30 @@
    "to": 4903,
    "category": "furniture",
    "label": "烛台"
+  },
+  {
+   "from": 5008,
+   "to": 5008,
+   "category": "furniture",
+   "label": "床1·左半"
+  },
+  {
+   "from": 5009,
+   "to": 5009,
+   "category": "furniture",
+   "label": "床1·右半（枕头）"
+  },
+  {
+   "from": 5016,
+   "to": 5016,
+   "category": "furniture",
+   "label": "床2·左半"
+  },
+  {
+   "from": 5017,
+   "to": 5017,
+   "category": "furniture",
+   "label": "床2·右半（枕头）"
   }
  ]
 }
