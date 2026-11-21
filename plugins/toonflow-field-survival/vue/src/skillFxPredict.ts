@@ -46,6 +46,7 @@ export interface PredVfx {
   icon: string;
   size: number;
   facing?: number;
+  angle?: number;
   targetEntityId?: string;
   targetX?: number;
   targetY?: number;

@@ -113,28 +113,41 @@ export function bakeTiledMap(
  * 还原：切图换 key → bakeTiledMap 整体重烘焙 → 障碍自动还原（符合事件文档约定）。
  *
  * @param isBlockedGid gid → 是否 blocked（App.vue 用 tileFlags 提供）
+ * @param force true 时跳过图集 blocked 标志判定（切片/掩码地图的障碍不带图集标志，
+ *              调用方已确认该格是被破坏的障碍），直接擦除并填兜底地面色。
  * @returns 该格是否真的有障碍被擦除
  */
 export function eraseBakedObstacle(
   gx: number,
   gz: number,
   isBlockedGid: (gid: number) => boolean,
+  force = false,
 ): boolean {
   if (!bakedCache) return false;
   const b = bakedCache;
   if (gx < 0 || gx >= b.cols || gz < 0 || gz >= b.rows) return false;
   const idx = gz * b.cols + gx;
-  // 这一格烘焙时到底有没有画过 blocked 瓦片（没有就别动图）
-  let hadObstacle = false;
-  for (const layer of b.layers) {
-    if (layer.type !== "tilelayer" || !Array.isArray(layer.data)) continue;
-    const gid = layer.data[idx];
-    if (gid && isBlockedGid(gid)) { hadObstacle = true; break; }
+  // 这一格烘焙时到底有没有画过 blocked 瓦片（没有就别动图）；
+  // 切片/掩码地图 force=true → 调用方已确认，直接擦除。
+  if (!force) {
+    let hadObstacle = false;
+    for (const layer of b.layers) {
+      if (layer.type !== "tilelayer" || !Array.isArray(layer.data)) continue;
+      const gid = layer.data[idx];
+      if (gid && isBlockedGid(gid)) { hadObstacle = true; break; }
+    }
+    if (!hadObstacle) return false;
   }
-  if (!hadObstacle) return false;
   const ctx = b.canvas.getContext("2d");
   if (!ctx) return false;
   ctx.clearRect(gx * TILE_SIZE, gz * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+  if (force) {
+    // ★ 切片/掩码地图：障碍烤在整幅切片里，不存在"底层非障碍瓦片"可露，
+    //   直接填主地面色兜底（原切片整格移除），不再回绘任何原 gid。
+    ctx.fillStyle = b.fallbackColor;
+    ctx.fillRect(gx * TILE_SIZE, gz * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    return true;
+  }
   const tcols = b.tilesetImg.naturalWidth / TILE_SIZE;
   let drewSomething = false;
   for (const layer of b.layers) {

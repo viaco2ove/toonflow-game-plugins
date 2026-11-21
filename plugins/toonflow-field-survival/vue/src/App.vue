@@ -2946,17 +2946,54 @@ function tryAxeBreak(tx: number, ty: number): boolean {
   if (!g.blocked[idx]) return false; // 不是障碍物，放行普通移动
   g.blocked[idx] = 0;        // 破坏：该格变为可通过
   if (g.vision) g.vision[idx] = 0;  // 视线一并打开（破坏后不再挡视野）
+  brokenCells.add(idx);       // ★ 持久留痕：碎屑覆盖层（帧间按格索引稳定绘制）
   // ★ 视觉同步：把烘焙图里这一格的障碍瓦片擦掉（只留底层地面），
   //   否则"能通过但树还在画"（tileFlags 缺则退化为只改碰撞，不崩）。
+  //   force=true：切片/掩码地图障碍不带图集 blocked 标志，调用方已确认是障碍，直接擦除。
   if (tileFlags && SHEET_TILESET.ready) {
-    eraseBakedObstacle(c.gx, c.gz, (gid) => tileFlags?.[gid - g.firstGid]?.blocked === true);
+    eraseBakedObstacle(c.gx, c.gz, (gid) => tileFlags?.[gid - g.firstGid]?.blocked === true, true);
   }
   walkGridEpochSeq++;         // 强制下次 tick 把新网格上报宿主（敌人碰撞同步）
   // ★ 路径索引重建：该格从不可站变可站，连通域/A* 要通过这条新缺口
   walkIndex = buildWalkIndex(g, PLAYER_COLLIDE_R);
+  // ★ 破坏反馈：挥砍弧 + 碎屑飞溅扬尘 + 小震屏（原有绿色涟漪/ toast 保留）
+  const angDeg = (Math.atan2(ty - me.y, tx - me.x) * 180) / Math.PI;
+  pushAxeBreakFx(tx, ty, angDeg);
+  triggerShake(3);
   pushClickFx(tx, ty, true);
   hudToast.value = "🪓 障碍物已破坏，可通过";
   return true; // 已破坏，拦截移动
+}
+
+/** 斧头破坏特效序号（碎屑/挥砍 vfx 条目 id 去重） */
+let axeFxSeq = 0;
+/** 本地旁路推送：挥砍弧（朝目标方向）+ 碎屑飞溅扬尘（debris 粒子） */
+function pushAxeBreakFx(x: number, y: number, angleDeg: number): void {
+  axeFxSeq++;
+  localVfx.value = [
+    ...localVfx.value,
+    {
+      id: `axe-slash-${axeFxSeq}`,
+      kind: "slash_arc",
+      entityId: "",
+      x, y,
+      life: 8, total: 8,
+      angle: angleDeg,
+      color: "#d9c7a3",
+      icon: "",
+      size: 1,
+    },
+    {
+      id: `axe-debris-${axeFxSeq}`,
+      kind: "debris",
+      entityId: "",
+      x, y,
+      life: 22, total: 22,
+      color: "#a89074",
+      icon: "",
+      size: 1,
+    },
+  ];
 }
 
 function onCanvasClick(e: MouseEvent) {
@@ -4353,6 +4390,8 @@ let walkGrid: WalkGrid | null = null;
 let walkGridEpochSeq = 0;
 /** 连通域索引（出生点必须落在主连通域，否则会被困在封闭小口袋里） */
 let walkIndex: WalkIndex | null = null;
+/** 已被斧头破坏的格索引集合（持久碎屑留痕覆盖层）；换图随 rebuildWalkGrid 清空 */
+const brokenCells = new Set<number>();
 let tileFlags: TileFlagTable | null = null;
 /** 玩家碰撞半径（米）。沿用旧实现的 PLAYER_R = 0.4；1 格 = 1 米，故 0.4 不会卡门缝 */
 const PLAYER_COLLIDE_R = 0.4;
@@ -4652,6 +4691,7 @@ function applyEnemyCollision(entities: Entity[]): void {
 async function rebuildWalkGrid(levelLabel = ""): Promise<void> {
   walkGrid = null;
   walkIndex = null;
+  brokenCells.clear(); // ★ 换图：破坏留痕不跨地图继承
   // ★ 网格重建 → 世代号自增，下一次 tick 一定会把新网格重发给宿主
   walkGridEpochSeq++;
   const tiled = getTiledRaw();
@@ -5806,6 +5846,7 @@ function drawVfxLayer(
       case "buff_ring":  drawBuffRing(ctx, px, py, progress, p.color || "#f5c542"); break;
       case "explosion":  drawExplosion(ctx, px, py, progress, p.color || "#ff8c3a"); break;
       case "spark":      drawSpark(ctx, px, py, progress, p.color || "#fff"); break;
+      case "debris":     drawDebris(ctx, px, py, progress, String(p.id || ""), p.color || "#a89074"); break;
       // ★ P2.5：纯图标特效（icon_burst）——无弹体/无弧，只放图标 + 光环
       case "icon_burst": if (p.icon) drawIconBurst(ctx, p.icon, px, py, progress, p.color || "#fff"); break;
     }
@@ -6134,6 +6175,111 @@ function drawSpark(ctx: CanvasRenderingContext2D, px: number, py: number, p: num
   ctx.restore();
 }
 
+/** 斧头破坏：碎屑飞溅 + 尘土环（种子由 vfx id 哈希确定，帧间碎屑位置稳定） */
+function drawDebris(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  p: number,
+  seedStr: string,
+  color: string,
+): void {
+  const alpha = vfxA(Math.max(0, 1 - p));
+  let h = 0;
+  for (const ch of seedStr) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const rnd = (): number => {
+    h = (h * 1664525 + 1013904223) >>> 0;
+    return h / 4294967296;
+  };
+  ctx.save();
+  // 尘土环：先扩后淡
+  const ringR = 6 + p * 18;
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.strokeStyle = "#8f7d63";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(px, py - 10, ringR, ringR * 0.6, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  // 碎屑：抛物线外抛（先上抛、后落地），随进度放大位移、整体淡出
+  for (let i = 0; i < 10; i++) {
+    const a = rnd() * Math.PI * 2;
+    const dist = 4 + rnd() * 14;
+    const rise = (1 - p) * (6 + rnd() * 8);
+    const dx = Math.cos(a) * dist * p;
+    const dy = Math.sin(a) * dist * p * 0.6 - rise;
+    const sz = 1.5 + rnd() * 2.5;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = rnd() > 0.5 ? color : "#7d6b55";
+    ctx.save();
+    ctx.translate(px + dx, py - 12 + dy);
+    ctx.rotate(rnd() * Math.PI);
+    ctx.fillRect(-sz / 2, -sz / 2, sz, sz);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/** 已破坏障碍的持久留痕覆盖层：地面基底盖住原切片 + 碎屑/裂纹；图案由格索引哈希定种子，帧间不跳变 */
+function drawBrokenOverlay(
+  ctx: CanvasRenderingContext2D,
+  g: WalkGrid,
+  cells: Set<number>,
+  wx2px: (x: number) => number,
+  wz2py: (y: number) => number,
+  sx: number,
+  depth: number,
+  groundColor?: string,
+): void {
+  const cellW = Math.max(2, sx);
+  const cellH = Math.max(2, sx * depth);
+  const baseFill = groundColor || "rgba(88, 76, 60, 0.94)";
+  ctx.save();
+  for (const idx of cells) {
+    const gx = idx % g.cols;
+    const gz = Math.floor(idx / g.cols);
+    if (gx < 0 || gx >= g.cols || gz < 0 || gz >= g.rows) continue;
+    const x0 = wx2px(gx - g.cols / 2);
+    const y0 = wz2py(gz - g.rows / 2);
+    // 地面基底：把原障碍切片（车/墙/树）整格盖住，避免轮廓透出来；
+    //   优先用烘焙兜底色（≈地图主地面色），缺省用泥土灰。
+    ctx.globalAlpha = 0.94;
+    ctx.fillStyle = baseFill;
+    ctx.fillRect(x0, y0, cellW, cellH);
+    ctx.globalAlpha = 1;
+    // 确定性伪随机（种子 = 格索引）
+    let h = (idx * 2654435761) >>> 0;
+    const rnd = (): number => {
+      h = (h * 1664525 + 1013904223) >>> 0;
+      return h / 4294967296;
+    };
+    // 固定碎砖块/木片
+    const chips = 5 + Math.floor(rnd() * 3);
+    for (let i = 0; i < chips; i++) {
+      const cx = x0 + rnd() * cellW;
+      const cy = y0 + rnd() * cellH;
+      const sz = 1.5 + rnd() * 2.5;
+      ctx.fillStyle = rnd() > 0.4 ? "#8d7a60" : "#6b5a46";
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(rnd() * Math.PI);
+      ctx.fillRect(-sz / 2, -sz / 2, sz, sz);
+      ctx.restore();
+    }
+    // 两道细裂纹
+    ctx.strokeStyle = "rgba(40, 32, 24, .6)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 2; i++) {
+      const x1 = x0 + rnd() * cellW;
+      const y1 = y0 + rnd() * cellH;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x1 + (rnd() - 0.5) * cellW * 0.7, y1 + (rnd() - 0.5) * cellH * 0.7);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
 /* ============================================================
    ★ P2.5 属性法术图标特效（public/images/spells 26×26 像素图标）
    ★ V2（2026-11-13）：spellIcon / 缓存已抽到 ./spellIcon.ts（与头顶徽章共用一份）
@@ -6371,6 +6517,11 @@ function render() {
     g.addColorStop(1, "#1a1208");
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
+  }
+
+  // —— 已破坏障碍留痕：地面基底盖住原切片 + 固定碎屑/裂纹（种子=格索引，帧间稳定）——
+  if (walkGrid && brokenCells.size > 0) {
+    drawBrokenOverlay(ctx, walkGrid, brokenCells, wx2px, wz2py, sx, DEPTH, baked?.fallbackColor);
   }
 
   // —— zones（米 → 像素）——
