@@ -41,6 +41,8 @@ const OBJ_META = {
   ITEM:             { label: '物品（药水等）',   color: '#ce93d8', icon: '💎', sprite: 0 },
   TREE:             { label: '树木（装饰）',     color: '#81c784', icon: '🌲', sprite: 0 },
   ROCK:             { label: '岩石（装饰）',     color: '#b0bec5', icon: '🪨', sprite: 0 },
+  // ── 家具（装饰）：床/桌/椅等，外观由 object.gid 指向图集（形象选择器「家具」分类，含床）──
+  FURNITURE:        { label: '家具（装饰）',     color: '#ffcc80', icon: '🛏', sprite: 5008 },
   GOLD:             { label: '金币',            color: '#ffd54f', icon: '🪙', sprite: 0 },
   KEY:              { label: '钥匙',            color: '#ffd54f', icon: '🔑', sprite: 0 },
   // ── 功能实体：任务板（主线委托入口；游戏端按 dialog=BOARD 识别，画公告板+金色光环）──
@@ -54,6 +56,7 @@ const OBJ_META = {
 }
 
 const PALETTE_CATS = [
+  { key: 'all', label: '全部' },
   { key: 'ground', label: '地面' },
   { key: 'wall', label: '墙壁' },
   { key: 'water', label: '水面' },
@@ -783,9 +786,39 @@ const tilesByCat = computed(() => {
   return out
 })
 
+// ★ 全部模式：图集整张图的每一格（compiled_tileset_32x32.png，cols×rows 全部 id），
+//   不走 dawnlike 的 description 过滤 —— 无描述的图块（道具/图标/半格图等）也能选，
+//   效果对标「贴图替换」面板里直接框选某一格。分批渲染避免 1.3 万格一次全画。
+const PALETTE_ALL_BATCH = 400
+const paletteLimit = ref(PALETTE_ALL_BATCH)
+const paletteJumpId = ref(null)
+const allTileIds = computed(() => {
+  if (!tileset.value.loaded) return []
+  const cols = Math.floor(tileset.value.img.width / TILE_SIZE)
+  const rows = Math.floor(tileset.value.img.height / TILE_SIZE)
+  const out = []
+  for (let i = 0; i < cols * rows; i++) out.push(i)
+  return out
+})
+
 const visiblePaletteTiles = computed(() => {
+  if (activeCat.value === 'all') {
+    return allTileIds.value.slice(0, paletteLimit.value).map(id => ({ id, name: `#${id}` }))
+  }
   return (tilesByCat.value[activeCat.value] || []).slice(0, 80)
 })
+
+/** tile id 跳转：切到全部模式 → 直接选中该格 → 滚动到可见位置 */
+function jumpToPaletteTile() {
+  const id = Number(paletteJumpId.value)
+  if (!Number.isFinite(id) || id < 0 || id >= allTileIds.value.length) return
+  if (activeCat.value !== 'all') activeCat.value = 'all'
+  if (id >= paletteLimit.value) paletteLimit.value = id + PALETTE_ALL_BATCH
+  selectTile(id)
+  nextTick(() => {
+    document.querySelector(`[data-tile-id="${id}"]`)?.scrollIntoView({ block: 'center' })
+  })
+}
 
 function selectTile(id) {
   brushTileId.value = id
@@ -1519,6 +1552,9 @@ function handleClick(tx, ty) {
             name: placingPickupItem.value.trim() || '物品',
             pickup_item: placingPickupItem.value.trim() || '物品',
           }
+        : placingType.value === 'FURNITURE'
+        ? // ★ 家具：纯装饰，不需要阵营/等级；外观由 gid 决定（放置后可在属性面板「形象」里换）
+          { entity_type: 'FURNITURE' }
         : TEXT_LIKE.has(placingType.value)
         ? {
             entity_type: placingType.value,
@@ -1548,6 +1584,11 @@ function handleClick(tx, ty) {
         newObj.name = itemName
         newObj.type = 'pickup'
         newObj.gid = 154
+      }
+      // ★ 家具：默认指向床1·左半（tile 5008 + firstgid 1）；一张床 = 左半 + 右半两个实体并排
+      if (placingType.value === 'FURNITURE') {
+        newObj.type = 'furniture'
+        newObj.gid = 5009
       }
       L.objects.push(newObj)
       selectedObj.value = newObj
@@ -2031,6 +2072,13 @@ function onPropApply() {
           <span class="prop-label">显示名</span>
           <input class="prop-input" type="text" :value="selectedObjInfo.props.full_name || ''" @input="(e) => onPropInput('full_name', e.target.value)">
         </div>
+        <!-- ★ 2026-11-22 用户需求：description（描述）字段 —— 可编辑实体的描述文本。
+             写 object.properties.description（type=string），运行时可被
+             「description/name/full_name = 床」这类标记消费（见 collision.ts 的床判定）。 -->
+        <div class="prop-row">
+          <span class="prop-label">描述</span>
+          <input class="prop-input" type="text" :value="selectedObjInfo.props.description || ''" placeholder="如：床 / 可拾取的斧头 / 守卫" @input="(e) => onPropInput('description', e.target.value)">
+        </div>
         <!-- ★ 形象（外观）：从图集里挑人物贴图 → 写 object.gid（runtime 按 gid 出图） -->
         <SpritePicker
           :tileset-img="tileset.img"
@@ -2091,8 +2139,20 @@ function onPropApply() {
             v-for="c in PALETTE_CATS" :key="c.key"
             class="palette-cat-btn"
             :class="{active: activeCat === c.key}"
-            @click="activeCat = c.key"
+            @click="activeCat = c.key; paletteLimit = PALETTE_ALL_BATCH"
           >{{ c.label }}</button>
+        </div>
+        <!-- 全部模式：tile id 跳转 + 分批计数 -->
+        <div v-if="activeCat === 'all'" style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+          <input
+            v-model.number="paletteJumpId"
+            type="number" min="0"
+            placeholder="tile id"
+            style="width:76px;padding:2px 5px;background:#0d0d0d;color:var(--text,#e8e8e8);border:1px solid #444;border-radius:3px;font-size:11px"
+            @keydown.enter="jumpToPaletteTile"
+          >
+          <button class="palette-cat-btn" @click="jumpToPaletteTile">跳转</button>
+          <span style="font-size:10px;color:var(--dim)">已显示 {{ visiblePaletteTiles.length }} / {{ allTileIds.length }} 格</span>
         </div>
         <div style="font-size:10px;color:var(--dim);margin-bottom:4px">
           笔刷: <span style="color:var(--accent)">{{ brushTileId }}</span>
@@ -2102,11 +2162,18 @@ function onPropApply() {
             v-for="t in visiblePaletteTiles" :key="t.id"
             class="palette-tile"
             :class="{selected: t.id === brushTileId}"
+            :data-tile-id="t.id"
             :title="`${t.id}: ${t.name}${t.blocked ? ' [不可通行]' : ''}`"
             @click="selectTile(t.id)"
             :style="paletteTileStyle(t.id)"
           ></div>
         </div>
+        <button
+          v-if="activeCat === 'all' && paletteLimit < allTileIds.length"
+          class="palette-cat-btn"
+          style="width:100%;margin-top:4px"
+          @click="paletteLimit += 2000"
+        >加载更多（还有 {{ allTileIds.length - paletteLimit }} 格）</button>
       </div>
 
       <!-- 资源族（data.xlsx 注册表：墙/地板/装饰按族浏览，含全部变体） -->
