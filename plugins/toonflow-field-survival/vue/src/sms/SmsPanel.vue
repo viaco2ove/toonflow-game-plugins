@@ -267,15 +267,33 @@ function onBubbleContextMenu(m: Message, e: MouseEvent): void {
   msgAction.value = { msg: m, x: e.clientX, y: e.clientY };
 }
 
+/** 长按起点（手指按住时必然微动，位移 ≤10px 不算滑动、不取消计时） */
+let touchStartX = 0;
+let touchStartY = 0;
+
 function onBubbleTouchStart(m: Message, e: TouchEvent): void {
   if (m.type === "system") return;
   const t = e.touches[0];
   const x = t?.clientX ?? 0;
   const y = t?.clientY ?? 0;
+  touchStartX = x;
+  touchStartY = y;
   if (longPressTimer != null) window.clearTimeout(longPressTimer);
   longPressTimer = window.setTimeout(() => {
     msgAction.value = { msg: m, x, y };
   }, 500);
+}
+
+/** 手指滑动超过 10px 才取消长按（防抖动误杀） */
+function onBubbleTouchMove(e: TouchEvent): void {
+  if (longPressTimer == null) return;
+  const t = e.touches[0];
+  const dx = (t?.clientX ?? 0) - touchStartX;
+  const dy = (t?.clientY ?? 0) - touchStartY;
+  if (dx * dx + dy * dy > 100) {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
 }
 
 function onBubbleTouchEnd(): void {
@@ -290,28 +308,73 @@ function closeMsgAction(): void {
 }
 
 /** 复制消息文本（clipboard API 优先，老环境回退 execCommand） */
-async function copyMsgText(): Promise<void> {
+/** 手动复制浮层（非 null = 显示）：WebView 剪贴板全失败时的 100% 兜底 */
+const manualCopy = ref<string | null>(null);
+const manualCopyEl = ref<HTMLTextAreaElement | null>(null);
+
+function copyMsgText(): void {
   const m = msgAction.value?.msg;
   if (!m) return;
   const text = String(m.text || "");
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = text;
-      ta.style.position = "fixed";
-      ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand("copy");
-      document.body.removeChild(ta);
-    }
-    console.info("[sms] 已复制消息");
-  } catch (e) {
-    console.warn("[sms] 复制失败:", e);
-  }
   msgAction.value = null;
+  // ★ ① 同步 execCommand —— 必须在点击的手势调用栈内（await 之后再调手势已失效，
+  //    这就是之前手机上"点了复制但没复制到"的根因）
+  if (copyViaExecCommand(text)) {
+    console.info("[sms] 已复制消息（execCommand）");
+    return;
+  }
+  // ② clipboard API（异步兜底；secure context 才有）
+  void (async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        console.info("[sms] 已复制消息（clipboard API）");
+        return;
+      }
+    } catch { /* 落到手动兜底 */ }
+    // ③ 手动复制浮层：textarea 全选 + 用户长按系统复制（100% 可用）
+    console.warn("[sms] 自动复制失败 → 打开手动复制浮层");
+    manualCopy.value = text;
+    void nextTick(() => {
+      const el = manualCopyEl.value;
+      if (el) { el.focus(); el.select(); el.setSelectionRange(0, text.length); }
+    });
+  })();
+}
+
+/** 同步 execCommand 复制（textarea 可见 0.01 + focus + 选区 —— Android WebView 要求） */
+function copyViaExecCommand(text: string): boolean {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "0";
+    ta.style.top = "0";
+    ta.style.width = "1px";
+    ta.style.height = "1px";
+    ta.style.border = "none";
+    ta.style.padding = "0";
+    ta.style.opacity = "0.01";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 手动复制浮层：全选按钮 */
+function selectAllManualCopy(): void {
+  const el = manualCopyEl.value;
+  if (!el) return;
+  el.focus();
+  el.select();
+  el.setSelectionRange(0, (el.value || "").length);
 }
 
 /** 引用消息 → 输入框上方出现引用条；发送时拼「回复 @名字：摘要」前缀（@点名机制生效） */
@@ -465,7 +528,7 @@ function commitRename(): void {
                   @contextmenu.prevent="onBubbleContextMenu(m, $event)"
                   @touchstart="onBubbleTouchStart(m, $event)"
                   @touchend="onBubbleTouchEnd"
-                  @touchmove="onBubbleTouchEnd"
+                  @touchmove="onBubbleTouchMove"
                   @touchcancel="onBubbleTouchEnd"
                 >{{ m.text }}<span v-if="m.streaming" class="type-cursor">▍</span></div>
                 <div class="msg-time">{{ timeText(m.timestamp) }}</div>
@@ -575,11 +638,27 @@ function commitRename(): void {
       @create="onCreateGroup"
     />
 
-    <!-- ★ 消息操作浮层：PC 左键点击 / 手机长按气泡 → 复制 / 引用 -->
+    <!-- ★ 消息操作浮层：PC 右键点击 / 手机长按气泡 → 复制 / 引用 -->
     <div v-if="msgAction" class="msg-action-mask" @click="closeMsgAction" @contextmenu.prevent>
       <div class="msg-action-pop" :style="msgActionStyle" @click.stop>
         <button class="msg-action-item" type="button" @click="copyMsgText">复制</button>
         <button class="msg-action-item" type="button" @click="quoteMsg">引用</button>
+      </div>
+    </div>
+
+    <!-- ★ 手动复制浮层：WebView 剪贴板 API/execCommand 全失败时，让用户长按文字手动复制 -->
+    <div v-if="manualCopy !== null" class="msg-action-mask" @click="manualCopy = null">
+      <div class="manual-copy-pop" @click.stop>
+        <div class="manual-copy-hint">自动复制不可用 —— 长按下方文字选择「复制」</div>
+        <textarea
+          ref="manualCopyEl"
+          class="manual-copy-text"
+          readonly
+        >{{ manualCopy }}</textarea>
+        <div class="manual-copy-btns">
+          <button class="manual-copy-btn" type="button" @click="selectAllManualCopy">全选</button>
+          <button class="manual-copy-btn" type="button" @click="manualCopy = null">关闭</button>
+        </div>
       </div>
     </div>
   </div>
@@ -837,18 +916,59 @@ function commitRename(): void {
 }
 .msg-action-item + .msg-action-item { border-top: 1px solid rgba(255, 255, 255, 0.06); }
 .msg-action-item:hover { background: rgba(255, 255, 255, 0.08); }
+/* ★ 手动复制浮层 */
+.manual-copy-pop {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(86vw, 420px);
+  background: #1d232b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  z-index: 10000;
+}
+.manual-copy-hint { font-size: 12px; color: #9cc0f0; margin-bottom: 8px; }
+.manual-copy-text {
+  width: 100%;
+  height: 120px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #e8eef5;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px;
+  resize: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.manual-copy-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.manual-copy-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #e8eef5;
+  font-size: 12px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
 
 /* ★ 2026-11-23 沉默占位行（LLM 调用期间，文案=思考中） */
 .msg-row--silent-ph { opacity: 0.75; }
 .msg-row--silent-ph .msg-avatar--silent { width: 26px; height: 26px; font-size: 12px; }
-/* ★ 2026-11-23 持久沉默行（每轮结束后追加，留在消息流里） */
-.msg-row--silent-final { margin: 2px 0; }
+/* ★ 2026-11-23 持久沉默行（每轮结束后追加，留在消息流里）
+   头像多 → 头像行允许换行；文字区 flex:1 + 保底宽度 → 名称自动换行不竖排 */
+.msg-row--silent-final { margin: 2px 0; flex-wrap: wrap; }
 .msg-row--silent-final .msg-avatar--silent { width: 24px; height: 24px; font-size: 11px; }
+.msg-row--silent-final .msg-wrap { flex: 1; min-width: 140px; }
 
 /* ★ 2026-11-22 群聊编排：正在输入 / 沉默头像 */
 .msg-row--typing { opacity: 0.92; }
-.msg-row--queued { align-items: center; gap: 4px; }
-.msg-row--queued .msg-wrap { flex: 1; }
+.msg-row--queued { align-items: center; gap: 4px; flex-wrap: wrap; }
+.msg-row--queued .msg-wrap { flex: 1; min-width: 140px; }
 .msg-avatar--silent { opacity: 0.45; filter: grayscale(0.7); }
 .msg-bubble--typing {
   display: inline-flex;
