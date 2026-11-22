@@ -90,11 +90,85 @@ function onSend(): void {
   if (!text || !current.value) return;
   emit("send", current.value.id, text);
   draft.value = "";
+  mentionOpen.value = false;
   nextTick(scrollToBottom);
 }
 
-/** 输入框 keydown */
+/* ---------- ★ @点名候选（2026-11-22）：输入 @ 弹出成员选择 ---------- */
+const mentionOpen = ref(false);
+const mentionQuery = ref("");
+const mentionIdx = ref(0);
+const inputEl = ref<HTMLTextAreaElement | null>(null);
+
+/** 当前会话可 @ 的成员（除玩家）：contacts 优先，memberNames/历史消息兜底 */
+const mentionCandidates = computed(() => {
+  const conv = current.value;
+  if (!conv) return [];
+  const contactMap = new Map(props.contacts.map((c) => [c.id, c.name]));
+  const out: Array<{ id: string; name: string }> = [];
+  for (const id of conv.members) {
+    if (id === PLAYER_ID) continue;
+    const name = contactMap.get(id) || conv.memberNames?.[id] || lastFromName(conv, id) || id;
+    if (!out.some((x) => x.id === id)) out.push({ id, name });
+  }
+  return out;
+});
+
+function lastFromName(conv: Conversation, id: string): string {
+  for (let i = conv.messages.length - 1; i >= 0; i--) {
+    const m = conv.messages[i];
+    if (m.from === id && m.fromName) return m.fromName;
+  }
+  return "";
+}
+
+/** 按光标前的 @ 未完词过滤候选 */
+const mentionFiltered = computed(() => {
+  const q = mentionQuery.value.trim().toLowerCase();
+  if (!q) return mentionCandidates.value;
+  return mentionCandidates.value.filter((m) => m.name.toLowerCase().includes(q));
+});
+
+/** 检测光标前是否有「@未完词」→ 开/关候选浮层 */
+function detectMention(): void {
+  const el = inputEl.value;
+  if (!el) return;
+  const pos = el.selectionStart ?? draft.value.length;
+  const before = draft.value.slice(0, pos);
+  const m = before.match(/@([^\s@]{0,12})$/);
+  if (m) {
+    if (!mentionOpen.value || m[1] !== mentionQuery.value) mentionIdx.value = 0;
+    mentionOpen.value = true;
+    mentionQuery.value = m[1];
+  } else {
+    mentionOpen.value = false;
+  }
+}
+
+/** 选中候选：把「@未完词」替换为「@名字 」并回落光标 */
+function pickMention(cand: { id: string; name: string }): void {
+  const el = inputEl.value;
+  mentionOpen.value = false;
+  if (!el) return;
+  const pos = el.selectionStart ?? draft.value.length;
+  const before = draft.value.slice(0, pos);
+  const at = before.lastIndexOf("@");
+  if (at < 0) return;
+  const after = draft.value.slice(pos);
+  draft.value = before.slice(0, at) + "@" + cand.name + " " + after;
+  const caret = at + cand.name.length + 2;
+  void nextTick(() => { el.focus(); el.setSelectionRange(caret, caret); });
+}
+
+/** 输入框 keydown（候选浮层优先接管 ↑↓/Enter/Tab/Esc） */
 function onKeydown(e: KeyboardEvent): void {
+  if (mentionOpen.value && mentionFiltered.value.length) {
+    const n = mentionFiltered.value.length;
+    if (e.key === "ArrowDown") { e.preventDefault(); mentionIdx.value = (mentionIdx.value + 1) % n; return; }
+    if (e.key === "ArrowUp") { e.preventDefault(); mentionIdx.value = (mentionIdx.value - 1 + n) % n; return; }
+    if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentionFiltered.value[Math.min(mentionIdx.value, n - 1)]); return; }
+    if (e.key === "Escape") { e.preventDefault(); mentionOpen.value = false; return; }
+  }
   if (e.key !== "Enter") return;
   if (e.shiftKey) return;   // Shift+Enter → 换行（textarea 默认行为）
   e.preventDefault();
@@ -252,12 +326,31 @@ function commitRename(): void {
         </div>
 
         <div class="chat-input-area">
+          <!-- ★ @点名候选浮层：输入 @ 触发（↑↓ 选 / Enter 或点击插入 / Esc 关） -->
+          <div v-if="mentionOpen && mentionFiltered.length" class="mention-pop">
+            <div class="mention-pop__hint">点名（被 @ 的角色会优先回复）</div>
+            <button
+              v-for="(cand, i) in mentionFiltered"
+              :key="cand.id"
+              class="mention-item"
+              :class="{ active: i === mentionIdx }"
+              type="button"
+              @mousedown.prevent="pickMention(cand)"
+              @mouseenter="mentionIdx = i"
+            >
+              <span class="mention-item__avatar">{{ cand.name.slice(0, 1) }}</span>
+              <span class="mention-item__name">{{ cand.name }}</span>
+            </button>
+          </div>
           <textarea
+            ref="inputEl"
             v-model="draft"
             class="chat-input"
             rows="2"
-            placeholder="输入消息…（Enter 发送 / Shift+Enter 换行）"
+            placeholder="输入消息…（Enter 发送 / Shift+Enter 换行 / @ 点名角色）"
             @keydown="onKeydown"
+            @input="detectMention"
+            @click="detectMention"
           ></textarea>
           <button class="btn-send" @click="onSend">发送</button>
         </div>
@@ -473,7 +566,57 @@ function commitRename(): void {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  position: relative;   /* @点名候选浮层的定位锚 */
 }
+/* ---------- @点名候选浮层 ---------- */
+.mention-pop {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 4px);
+  max-height: 180px;
+  overflow-y: auto;
+  background: #26282b;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  z-index: 30;
+}
+.mention-pop__hint {
+  font-size: 10px;
+  color: #7a848f;
+  padding: 3px 8px 5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 3px;
+}
+.mention-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  color: #d6dee8;
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.mention-item.active { background: rgba(47, 111, 208, 0.35); }
+.mention-item__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.mention-item__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-input {
   flex: 1;
   min-width: 0;

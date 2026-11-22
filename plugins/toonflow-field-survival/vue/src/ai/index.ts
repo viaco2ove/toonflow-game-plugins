@@ -584,14 +584,35 @@ export async function wakeAiForPlayerSms(
   state: GameState,
 ): Promise<void> {
   // 找到这个会话里的 AI 成员
-  const { listConversations } = await import("../sms/store");
+  const { listConversations, memberNameOf } = await import("../sms/store");
   const conv = listConversations().find((c) => c.id === convId);
   if (!conv) return;
 
   const members = conv.members.filter((m) => m !== "player");
   if (!members.length) return;
 
-  for (const roleId of members) {
+  // ★ @点名（2026-11-22 用户需求）：消息里带「@名字」→ 只唤醒被点名者（点名必回），
+  //   群里其他人不再插嘴；没有点名 / 名字匹配不上 → 维持全员唤醒（各自决策，冷却兜底）。
+  //   名字匹配用宽容包含（@赵大 也能命中「赵大川」）。
+  const mentionNames = new Set<string>();
+  for (const m of text.matchAll(/@([^\s@，。！？!?]{1,12})/g)) {
+    const q = m[1].trim();
+    if (q) mentionNames.add(q);
+  }
+  let targets = members;
+  if (mentionNames.size) {
+    const hit = members.filter((rid) => {
+      const nm = memberNameOf(conv, rid);
+      return nm !== rid && [...mentionNames].some((q) => nm === q || nm.includes(q) || q.includes(nm));
+    });
+    if (hit.length) targets = hit;
+    console.info(
+      `[sms] @点名 ${[...mentionNames].join("、")} → 命中：` +
+      (hit.length ? hit.map((r) => memberNameOf(conv, r)).join("、") : "无（全员唤醒）"),
+    );
+  }
+
+  for (const roleId of targets) {
     // ① 记进 AI 记忆（prompt 里能看到"收到玩家短信"这个事件）
     notifyAIEvent(roleId, "dialog", `收到玩家短信：${text}`);
 

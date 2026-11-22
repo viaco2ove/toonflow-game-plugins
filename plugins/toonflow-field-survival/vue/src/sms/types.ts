@@ -32,6 +32,12 @@ export interface Conversation {
   name: string;                  // 会话显示名（群名或对方角色名）
   avatar?: string;               // 群头像（可选）
   members: string[];            // 参与角色ID列表（玩家固定在其中）
+  /**
+   * ★ roleId → 显示名（2026-11-22 @点名功能）：建群时记录，供
+   *   ① 输入框 @ 候选 ② 唤醒 AI 时解析「@名字」点名（点名必回）。
+   *   旧会话/单聊没有此字段 → 回退：历史消息 fromName → 会话名（单聊）→ roleId。
+   */
+  memberNames?: Record<string, string>;
   messages: Message[];           // 消息列表（按时间升序）
   lastReadMsgId: string | null;  // 玩家最后读到的消息ID（用于计算未读）
   createdAt: number;

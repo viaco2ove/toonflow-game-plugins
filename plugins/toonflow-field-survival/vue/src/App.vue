@@ -367,6 +367,10 @@ const sysPlayerAvatar = computed<string>(() => {
 
 /** ★ 短信存储是否已加载 */
 const smsReady = ref(false);
+/** ★ sms 初始化重试定时器（老桩续局刷新 init 不带 worldName 的兜底，见 9599 区域） */
+const smsRetryTimer = ref<number | null>(null);
+/** ★ 空结果重试计数（后端回退未就绪时拿到 0 会话 → 不算加载成功，见 onSmsInit） */
+let smsEmptyTries = 0;
 
 /** 通信 tab 切换（同步 store 的视图态 → 未读的实时已读判断依赖它） */
 function onSysSmsTabChange(tab: string): void {
@@ -428,14 +432,28 @@ function onSysSmsRename(convId: string, name: string): void {
 
 /**
  * ★ 短信数据加载（在收到 init 状态、worldName 就绪后调用）
+ * ★ 2026-11-22 兜底：--conn 老桩路径「续局刷新」时 init 不带 worldName（entry 未接管
+ *   的 playing state 直推）→ 此前 currentStory 一直为空 → load 用空 key 读不到旧数据、
+ *   flushSave 被 !currentStory 静默挡掉 → 用户新建的群聊刷新即丢（实测）。与地图集同款
+ *   兜底：URL ?story= 恒有值 → envInfo().storyName。
  */
 async function onSmsInit(): Promise<void> {
-  const wn = String((state.value as any)?.worldName || "");
+  const wn = String((state.value as any)?.worldName || "").trim()
+    || String(envInfo().storyName || "").trim();
   if (!wn) return;   // 故事名还没就绪 → 等下一次 init
   try {
     await loadSms(wn);
-    smsReady.value = true;
-    console.info("[sms] 短信数据已加载:", debugSms());
+    // ★ 2026-11-22：拿到「0 个会话」不能当加载成功——页面刚加载时后端回退可能尚未
+    //   就绪（vite 重启窗口/token 未注入），此后不再重试会让短信面板永远空白
+    //   （实测：手动探测同 dataKey 有 2 个会话，store 里却是 0）。空结果先保持
+    //   未就绪让重试继续，累计 10 次（≈20s）仍为空才认 accepted（真·新档）。
+    if (listConversations().length > 0 || smsEmptyTries >= 10) {
+      smsReady.value = true;
+      console.info("[sms] 短信数据已加载:", debugSms());
+    } else {
+      smsEmptyTries++;
+      console.info(`[sms] 加载到 0 个会话（第 ${smsEmptyTries} 次），稍后重试`);
+    }
   } catch (e) {
     console.warn("[sms] 加载失败:", e);
   }
@@ -2956,10 +2974,9 @@ function tryAxeBreak(tx: number, ty: number): boolean {
   walkGridEpochSeq++;         // 强制下次 tick 把新网格上报宿主（敌人碰撞同步）
   // ★ 路径索引重建：该格从不可站变可站，连通域/A* 要通过这条新缺口
   walkIndex = buildWalkIndex(g, PLAYER_COLLIDE_R);
-  // ★ 破坏反馈：挥砍弧 + 碎屑飞溅扬尘 + 小震屏（原有绿色涟漪/ toast 保留）
+  // ★ 破坏反馈：挥砍弧 + 碎屑飞溅扬尘（原有绿色涟漪/ toast 保留；全屏震动已移除）
   const angDeg = (Math.atan2(ty - me.y, tx - me.x) * 180) / Math.PI;
   pushAxeBreakFx(tx, ty, angDeg);
-  triggerShake(3);
   pushClickFx(tx, ty, true);
   hudToast.value = "🪓 障碍物已破坏，可通过";
   return true; // 已破坏，拦截移动
@@ -4448,12 +4465,32 @@ let hitStopFrames = 0;
 const SHAKE_DURATION = 6;   // 帧（0.1s @60fps）
 const HIT_STOP_FRAMES = 3;  // 帧（约 50ms）
 
-/** 触发震屏（普通 / 爆炸加强） */
+/** 触发震屏（普通 / 爆炸加强）
+ *  ★ 2026-11-22 用户反馈：打击感从「整个画面震动」改为「被打的实体震动+闪烁」——
+ *  render() 不再读 shakeFrames 做全画面偏移，此函数保留只为兼容旧调用/window API。 */
 function triggerShake(intensity = 4): void {
   if (intensity > shakeIntensity) {
     shakeIntensity = intensity;
     shakeFrames = SHAKE_DURATION;
   }
+}
+
+/** ★ 被打实体震动：hitFlashMs 剩余时间内 sprite 随机抖动（±3px 线性衰减到 0）。
+ *  受击标记 hitFlashMs 由命中结算写入（entry.ts applyDamage / mockHost 同），250ms。 */
+function hitShakeOffset(e: any): { ox: number; oy: number } {
+  const ms = Number(e?.hitFlashMs ?? 0);
+  if (ms > 0) {
+    const amp = Math.min(1, ms / 250) * 3;
+    return { ox: (Math.random() - 0.5) * 2 * amp, oy: (Math.random() - 0.5) * 2 * amp };
+  }
+  return { ox: 0, oy: 0 };
+}
+
+/** ★ 被打实体闪烁：hitFlash 期间 sprite 透明度高频闪（1 ↔ 0.45，与红闪叠加强化反馈） */
+function hitFlashAlpha(e: any): number {
+  const ms = Number(e?.hitFlashMs ?? 0);
+  if (ms > 0 && Math.floor(_animTick / 3) % 2 === 1) return 0.45;
+  return 1;
 }
 
 /** 触发顿帧 */
@@ -5479,8 +5516,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     const t = e.actionBobMs / 300;          // 1 → 0（剩余时间比例）
     bobOffset = -Math.sin(t * Math.PI) * 4; // 0 → -4 → 0
   }
-  const dx = px - dw / 2;
-  const dy = py - dh + 4 + bobOffset;      // 略微下沉，让脚站在地面上
+  const hs = hitShakeOffset(e);            // ★ 被打实体震动（替代全屏震动）
+  const dx = px - dw / 2 + hs.ox;
+  const dy = py - dh + 4 + bobOffset + hs.oy;
 
   // ★ 朝向：facing 在 135-315（朝左）时水平翻转 sprite
   const facingLeft = (e.facing >= 135 && e.facing < 315);
@@ -5499,6 +5537,9 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
   // ★ 自定义立绘：data:URL（用户 AI 生成/上传/预选内置）→ 优先于 tileset，整张图覆盖 sprite
   //   内置预选走 assetUrl（http/./ 都会被 drawAvatarCustomSprite 解析成 loadAvatar 缓存）
   const customSprite = (e as any).customSprite;
+  // ★ 受击闪烁：hitFlash 期间透明度高频闪（1↔0.45），与下方红闪叠加强化「被打中」反馈
+  const flashA = hitFlashAlpha(e);
+  if (flashA < 1) { ctx.save(); ctx.globalAlpha *= flashA; }
   if (customSprite && customSprite.image) {
     drawAvatarCustomSprite(ctx, customSprite.image, dx, dy, dw, dh, !facingLeft, _animTick);
   } else if (SHEET_TILESET.ready) {
@@ -5520,6 +5561,7 @@ function drawEntity(ctx: CanvasRenderingContext2D, e: Entity, avatarImg?: HTMLIm
     ctx.fill();
     ctx.restore();
   }
+  if (flashA < 1) ctx.restore();   // 收回受击闪烁的透明度
 
   // ★ 朝向光锥 + 箭头（在 sprite 之后、头像/受击之前画，避免挡头顶名字）
   drawFacingCone(ctx, e, px, py, dw, dh);
@@ -5657,8 +5699,9 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
     const t = e.actionBobMs / 300;
     bobOffset = -Math.sin(t * Math.PI) * 4;
   }
-  const dx = px - dw / 2;
-  const dy = py - dh + 4 + bobOffset;
+  const hsM = hitShakeOffset(e);           // ★ 被打实体震动（替代全屏震动）
+  const dx = px - dw / 2 + hsM.ox;
+  const dy = py - dh + 4 + bobOffset + hsM.oy;
 
   applyPixelPerfect(ctx);
 
@@ -5678,8 +5721,11 @@ function drawMonster(ctx: CanvasRenderingContext2D, e: Entity, sx?: number, sy?:
     ctx.globalAlpha = alpha;
   }
 
+  const flashAM = hitFlashAlpha(e);        // ★ 受击闪烁（透明度高频闪）
   if (SHEET_TILESET.ready) {
+    if (flashAM < 1) { ctx.save(); ctx.globalAlpha *= flashAM; }
     drawTile(ctx, tileId, dx, dy, dw, dh);
+    if (flashAM < 1) ctx.restore();
   } else {
     // 兜底：棕色圆
     ctx.save();
@@ -5755,29 +5801,29 @@ type HpBarRec = { hp: number; maxHp: number; x: number; y: number; w: number; co
 let hpBarBuffer: HpBarRec[] = [];
 
 /** 记录一条血条（实体绘制阶段调用，不立即画）
- *  ★ V2_2（2026-11-13）改造3：野怪血条改半透明（alpha 0.55），玩家/队友保持不透明 ——
- *    需求原文「野怪头上的血条改成半透明」。 */
+ *  ★ 2026-11-22 用户需求：血条高度减半、透明度加倍（更透明），野怪玩家都一样——
+ *    玩家/队友 alpha 1→0.55（与野怪旧值一致），野怪 0.55→0.3。 */
 function recordHpBar(e: any, x: number, y: number, w: number, color: string): void {
   const hp = Number(e?.hp ?? 0);
   const maxHp = Number(e?.maxHp ?? 0);
   if (!maxHp || maxHp <= 0) return;
-  hpBarBuffer.push({ hp, maxHp, x, y, w, color, alpha: e?.side === "enemy" ? 0.55 : 1 });
+  hpBarBuffer.push({ hp, maxHp, x, y, w, color, alpha: e?.side === "enemy" ? 0.3 : 0.55 });
 }
 
 /** ★ 在 VFX 层之后统一补画血条 —— 保证特效再浓也能看清血量 */
 function drawHpBarsOverlay(ctx: CanvasRenderingContext2D): void {
   if (!hpBarBuffer.length) return;
-  const barH = 4;
+  const barH = 2;   // ★ 2026-11-22：高度 4→2（减半）
   ctx.save();
   for (const b of hpBarBuffer) {
-    // ★ V2_2 改造3：野怪血条半透明（alpha 在 recordHpBar 按阵营给）
+    // 透明度在 recordHpBar 按阵营给（玩家 0.55 / 野怪 0.3）
     ctx.globalAlpha = b.alpha;
     const barX = b.x - b.w / 2;
     const barY = b.y;
     const ratio = Math.max(0, Math.min(1, b.hp / b.maxHp));
-    // 边框
+    // 边框（条变矮后边框同步减半：±1px → ±0.5px）
     ctx.fillStyle = "rgba(0,0,0,.9)";
-    ctx.fillRect(barX - 1, barY - 1, b.w + 2, barH + 2);
+    ctx.fillRect(barX - 0.5, barY - 0.5, b.w + 1, barH + 1);
     // 背景
     ctx.fillStyle = "#3a0d0d";
     ctx.fillRect(barX, barY, b.w, barH);
@@ -6409,12 +6455,8 @@ function render() {
   const W = Math.round(c.width / k);
   const H = Math.round(c.height / k);
   ctx.setTransform(k, 0, 0, k, 0, 0);
-  // ★ 打击感震屏：活跃时在 canvas 层面叠加随机偏移（不破坏坐标逻辑）
-  if (shakeFrames > 0 && shakeIntensity > 0) {
-    const ox = (Math.random() - 0.5) * shakeIntensity * 2;
-    const oy = (Math.random() - 0.5) * shakeIntensity * 2;
-    ctx.translate(ox, oy);
-  }
+  // ★ 2026-11-22：全屏震动已移除——打击感改为「被打实体震动+闪烁」
+  //   （drawEntity/drawMonster 按 hitFlashMs 抖动+闪透明度，见 hitShakeOffset/hitFlashAlpha）
 
   /* ============================================================
      相机数学（来自 map_config.json + zoom 系统）
@@ -8524,9 +8566,11 @@ function loop(ts: number) {
   raf = requestAnimationFrame(loop);
   _animTick++;
   // ★ P1 打击感：真游戏模式下从 state 同步震屏/顿帧（entry.ts 驱动），同步后清除避免重复触发
+  //   ★ 2026-11-22：screenShake 不再驱动全屏震动（改为被打实体 hitFlashMs 震动+闪烁），
+  //   这里只把字段清掉，防止残留在 state 里被序列化/回推。
   const s0 = state.value as any;
   if (s0?.screenShake != null) {
-    shakeFrames = s0.screenShake; shakeIntensity = s0.screenShakeIntensity ?? 0; s0.screenShake = undefined;
+    s0.screenShake = undefined; s0.screenShakeIntensity = undefined;
     // ★ P1 验证计数（dev 专用）：消费一次记一次
     (window as any).__p1Consume = ((window as any).__p1Consume || 0) + 1;
   }
@@ -9573,6 +9617,19 @@ onMounted(async () => {
     // ★ 通信(短信)：worldName 就绪后加载短信数据（按故事隔离的 dataKey）
     if (!smsReady.value) {
       void onSmsInit();
+    }
+    // ★ 2026-11-22 兜底：老桩续局刷新时 init 只来一次且可能不带 worldName——
+    //   上面的 onSmsInit return 后再也没有触发点，smsReady 永远 false（数据读写全瘫）。
+    //   这里起一个短重试（storyName 兜底后几乎必成功），就绪即停。
+    if (!smsRetryTimer.value) {
+      smsRetryTimer.value = window.setInterval(() => {
+        if (smsReady.value) {
+          window.clearInterval(smsRetryTimer.value!);
+          smsRetryTimer.value = null;
+          return;
+        }
+        void onSmsInit();
+      }, 2000);
     }
 
     // ★ 收到 init/init_start 时，强制重置所有选择状态

@@ -809,12 +809,68 @@ window.addEventListener("message", (e) => {
   const sid = sessionId || (typeof window !== "undefined" && window.__STORY_SESSION_ID__) || "all";
   const k = JSON.stringify({ p: pid, s: sid, k: dataKey || "" });
   let result = null;
+  let asyncFallback = false;
   if (op === "get") {
-    const v = window.__pdGet(k);
-    result = { dataKey, value: v ? v.value : null, updatedAt: v ? v.updatedAt : 0 };
+    // ★ 2026-11-22 重构：--conn 模式（有 token）下后端为权威——localStorage 只做
+    //   「后端 miss 时的兜底 + 命中后的缓存」。此前「本地命中就不回退」会让陈旧/空
+    //   快照（实测：{conversations:[],version:2}）挡住后端真数据 → 群聊消失、裂图。
+    //   后端数据带 sessionId 维度：先试真实故事会话（gs_xxx），再试 "all"。
+    //   纯本地模式（无 token，无 --conn）维持纯 localStorage 读写。
+    const local = window.__pdGet(k);
+    if (!window.__AUTH_TOKEN__) {
+      result = { dataKey, value: local ? local.value : null, updatedAt: local ? local.updatedAt : 0 };
+    } else {
+      asyncFallback = true;
+      const gw = document.getElementById("game")?.contentWindow;
+      const reply = (r) => (gw || window.parent).postMessage({ type: "tf_plugin_data_result", reqId, ok: true, dataKey, ...r }, "*");
+      (async () => {
+        let val = null;
+        let updated = 0;
+        let fromBackend = false;
+        const headers = { "Content-Type": "application/json" };
+        headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+        const tries = [ (window.__STORY_SESSION_ID__ || sid), "all" ];
+        for (const trySid of tries) {
+          try {
+            const r2 = await fetch("/toon-api/plugin/data", {
+              method: "POST", headers,
+              body: JSON.stringify({ pluginId: pid, sessionId: trySid, op: "get", dataKey: dataKey || "" })
+            });
+            const j = await r2.json();
+            const data = j && j.data;
+            const hit = (data && typeof data === "object" && ("value" in data)) ? data.value : data;
+            if (hit != null) {
+              val = hit;
+              updated = Number(data && data.updatedAt) || Date.now();
+              fromBackend = true;
+              break;
+            }
+          } catch (e) { /* 下一个 sessionId / 最终落回本地 */ }
+        }
+        if (val == null && local) { val = local.value; updated = local.updatedAt; }  // 后端没有 → 本地兜底
+        if (val != null && fromBackend) window.__pdSet(k, val);                       // 缓存后端命中
+        reply({ value: val, updatedAt: updated });
+      })();
+    }
   } else if (op === "set") {
     window.__pdSet(k, value);
     result = { dataKey, value: null, ok: true };
+    // ★ --conn 模式双写后端（异步，2026-11-22）：3000 生成的图（sprite_asset）/数据
+    //   此前只落桩 localStorage，5175/安装态（读后端）永远看不到 → 存储割裂。
+    //   双写后失败不影响本地（本地已写）。
+    if (window.__AUTH_TOKEN__) {
+      const gwSet = document.getElementById("game")?.contentWindow;
+      (async () => {
+        try {
+          const headers = { "Content-Type": "application/json" };
+          headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+          await fetch("/toon-api/plugin/data", {
+            method: "POST", headers,
+            body: JSON.stringify({ pluginId: pid, sessionId: (window.__STORY_SESSION_ID__ || sid), op: "set", dataKey: dataKey || "", value: value })
+          });
+        } catch (e) { /* 本地已写成功，后端双写失败仅留痕 */ }
+      })();
+    }
   } else if (op === "list") {
     const keys = [];
     for (const key of window.__devHostPluginData.keys()) {
@@ -831,6 +887,7 @@ window.addEventListener("message", (e) => {
     const gameWin = document.getElementById("game")?.contentWindow;
     (gameWin || window.parent).postMessage({ type: "tf_plugin_data_result", reqId, ok: true, ...result }, "*");
   }
+  // ★ get miss 的后端回退是异步自回包（asyncFallback），不走这里的同步回包
 });
 const log = (m) => {
   const el = document.getElementById("log-body");
@@ -1242,8 +1299,47 @@ function buildEntryCtx() {
     worldBookDigest: buildWorldBookDigest(),
     tsApi: {
       pluginData: {
-        get: async (k) => { const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return rec ? rec.value : null; },
-        set: async (k, v) => { window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k), v); return null; },
+        get: async (k) => {
+          const rec = window.__pdGet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k));
+          if (rec) return rec.value;
+          // ★ 本地 miss → 读后端（--conn 模式）：新会话 restoreSys / 切图后读旧数据
+          //   必须在后端那份权威数据里找（本地只有本浏览器玩出来的）。
+          if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+            try {
+              const headers = { "Content-Type": "application/json" };
+              headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+              const r = await fetch("/toon-api/plugin/data", {
+                method: "POST", headers,
+                body: JSON.stringify({ pluginId: ENTRY_PLUGIN_ID, sessionId: sessionId, op: "get", dataKey: k })
+              });
+              const j = await r.json();
+              const data = j && j.data;
+              const v = (data && typeof data === "object" && ("value" in data)) ? data.value : data;
+              if (v != null) { window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k), v); return v; }
+            } catch (e) { /* 后端不可达 → 返回 null（本地也没有） */ }
+          }
+          return null;
+        },
+        // ★ 2026-11-22：set 双写后端（--conn 模式）。此前 entry 侧（图生成/图库/绑定等
+        //   所有 entry.ts 落库）只写桩 localStorage → 刷新即丢、5175/安装态读不到
+        //   （实测：AI 生成的图 sp_15/sp_259 只活在内存/本地，后端库查无此图）。
+        //   与 iframe 侧 tf_plugin_data 的 set 保持同一策略：本地写 + 后端异步写。
+        set: async (k, v) => {
+          window.__pdSet(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k), v);
+          if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+            try {
+              const headers = { "Content-Type": "application/json" };
+              headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+              fetch("/toon-api/plugin/data", {
+                method: "POST", headers,
+                body: JSON.stringify({ pluginId: ENTRY_PLUGIN_ID, sessionId: sessionId, op: "set", dataKey: k, value: v })
+              }).then(async function (r) {
+                log("[dev-host] entry 数据双写后端 " + k + " → HTTP " + r.status + " (" + (await r.text()).slice(0, 80) + ")");
+              }).catch(function (e) { log("[dev-host] entry 数据双写失败 " + k + ": " + e); });
+            } catch (e) { /* ignore */ }
+          }
+          return null;
+        },
         remove: async (k) => { window.__pdRemove(window.__pdKey(ENTRY_PLUGIN_ID, sessionId, k)); return null; },
         // ★ 模板读取（sessionId="all" 跨会话共享）：真实宿主 toonflowTsApi 提供同名方法。
         //   缺它会让 entry.ensureStoryVisualMap 打印「SKIP: getTemplate 不存在（旧后端）」。

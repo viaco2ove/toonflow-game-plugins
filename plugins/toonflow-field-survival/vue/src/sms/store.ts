@@ -210,7 +210,12 @@ export async function flushSave(): Promise<void> {
     window.clearTimeout(readSaveTimer);
     readSaveTimer = null;
   }
-  if (!currentStory) return;
+  if (!currentStory) {
+    // ★ 2026-11-22：静默丢弃会让「建群/发消息」看起来成功、刷新后凭空消失
+    //   （3000 老桩续局刷新 init 不带 worldName 的时段），必须留痕。
+    console.warn("[sms] 落库跳过：故事名未就绪（currentStory 为空）——本次改动刷新后会丢");
+    return;
+  }
   enforceSizeBudget();
   try {
     await toonflowJsApi.pluginData.set(dataKey(), snapshot(), "all");
@@ -464,6 +469,8 @@ export function createGroupConversation(
     type: "group",
     name: name || "新群聊",
     members: [...new Set(memberIds)],
+    // ★ @点名（2026-11-22）：记录成员显示名（输入框 @ 候选 / 唤醒 AI 解析点名用）
+    memberNames: { ...memberNames },
     messages: [],
     lastReadMsgId: null,
     createdAt: now,
@@ -632,9 +639,24 @@ export function sendPlayerMessage(convId: string, text: string): Message | null 
     type: "text",
   });
 
-  // ★ 登记「待回复目标」：会话里的 AI 成员都要被唤醒去回这条消息
-  for (const mid of conv.members) {
-    if (mid === PLAYER_ID) continue;
+  // ★ 登记「待回复目标」：会话里的 AI 成员都要被唤醒去回这条消息。
+  //   ★ @点名（2026-11-22）：消息带「@名字」→ 只登记被点名者（心跳兜底也只扫他们，
+  //   群里其他人不插嘴）；没点名 / 名字匹配不上 → 登记全员（维持旧行为）。
+  const aiMembers = conv.members.filter((mid) => mid !== PLAYER_ID);
+  const mentionNames = new Set<string>();
+  for (const m of body.matchAll(/@([^\s@，。！？!?]{1,12})/g)) {
+    const q = m[1].trim();
+    if (q) mentionNames.add(q);
+  }
+  let replyTargets = aiMembers;
+  if (mentionNames.size) {
+    const hit = aiMembers.filter((mid) => {
+      const nm = memberNameOf(conv, mid);
+      return nm !== mid && [...mentionNames].some((q) => nm === q || nm.includes(q) || q.includes(nm));
+    });
+    if (hit.length) replyTargets = hit;
+  }
+  for (const mid of replyTargets) {
     pendingReplyTarget.set(mid, { convId: conv.id, type: conv.type });
   }
 
@@ -863,6 +885,22 @@ export function buildSmsContext(entityId: string, limit = 3, perConv = 6): strin
 /* ============================================================
    对外读取
    ============================================================ */
+
+/**
+ * ★ 会话成员显示名（2026-11-22 @点名功能）。
+ * 回退链：memberNames 建群记录 → 历史消息 fromName → 单聊会话名 → roleId。
+ * （旧会话没有 memberNames 字段也能从历史消息里捞到名字。）
+ */
+export function memberNameOf(conv: Conversation, roleId: string): string {
+  const hit = conv.memberNames?.[roleId];
+  if (hit) return hit;
+  for (let i = conv.messages.length - 1; i >= 0; i--) {
+    const m = conv.messages[i];
+    if (m.from === roleId && m.fromName) return m.fromName;
+  }
+  if (conv.type === "private") return conv.name;
+  return roleId;
+}
 
 /** 会话列表（按 updatedAt 降序） */
 export function listConversations(): Conversation[] {
