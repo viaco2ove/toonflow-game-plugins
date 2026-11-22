@@ -20,6 +20,7 @@ import {
   Conversation,
   Message,
   MessageType,
+  PendingSpeech,
   PLAYER_ID,
   PLAYER_NAME,
   SMS_LIMITS,
@@ -349,6 +350,22 @@ function normalizeConv(raw: any): Conversation {
     name: String(raw.name || "未命名"),
     avatar: raw.avatar ? String(raw.avatar) : undefined,
     members: Array.isArray(raw.members) ? raw.members.map(String) : [],
+    // ★ 2026-11-22：memberNames 必须落库保留 —— 丢了它 @候选浮层与
+    //   「@点名 → 谁第一个发言」在刷新后就失效（回退到 roleId 匹配不上）。
+    memberNames:
+      raw.memberNames && typeof raw.memberNames === "object"
+        ? Object.fromEntries(
+            Object.entries(raw.memberNames as Record<string, unknown>).map(([k, v]) => [
+              String(k),
+              String(v),
+            ]),
+          )
+        : undefined,
+    // ★ 2026-11-22：pendingSpeaking 是**半成品队列**（编排到一半刷新）→ 丢弃，
+    //   刷新后从头来（已经冒泡过的消息都在 messages 里，不会重复）。
+    pendingSpeaking: undefined,
+    // ★ 2026-11-23：沉默占位同样是会话内的瞬态 → 刷新丢弃
+    silentPlaceholder: undefined,
     messages: msgs
       .filter((m: any) => m && typeof m === "object")
       .map((m: any): Message => ({
@@ -359,6 +376,15 @@ function normalizeConv(raw: any): Conversation {
         text: clampText(String(m.text || "")),
         timestamp: Number(m.timestamp) || Date.now(),
         type: m.type === "system" ? "system" : "text",
+        // ★ 打字中标记不落库（刷新后一定是完成态）
+        streaming: false,
+        // ★ 沉默者信息透传（群聊编排的持久「沉默：A、B、C」行）
+        silent: Array.isArray(m.silent)
+          ? (m.silent as any[])
+              .filter((x: any) => x && typeof x === "object")
+              .map((x: any) => ({ roleId: String(x.roleId || ""), roleName: String(x.roleName || "") }))
+              .filter((x) => x.roleId)
+          : undefined,
       })),
     lastReadMsgId: raw.lastReadMsgId ? String(raw.lastReadMsgId) : null,
     createdAt: Number(raw.createdAt) || Date.now(),
@@ -500,6 +526,8 @@ function appendMessage(
     fromName: string;
     text: string;
     type?: MessageType;
+    /** ★ 群聊编排「沉默」行：本轮没发言的成员（type="system" 时可带） */
+    silent?: Array<{ roleId: string; roleName: string }>;
   },
 ): Message {
   const msg: Message = {
@@ -510,6 +538,7 @@ function appendMessage(
     text: clampText(input.text),
     timestamp: Date.now(),
     type: input.type || "text",
+    silent: input.silent,
   };
   conv.messages.push(msg);
   conv.updatedAt = msg.timestamp;
@@ -577,8 +606,11 @@ export function receiveFromAI(
       return null;
     }
     // ★ 群消息频率限制：同一角色 3 分钟内最多发 1 条群消息
+    //   ★ 2026-11-22：编排器批量发言**也走这里**——同一轮编排里同一角色只发一条，
+    //   但下一轮追加发言时冷却会把它挡掉（用户体感「追加轮没人接话」）。
+    //   → 编排发言（isReply=true）豁免群冷却。
     const last = lastGroupMsgAt.get(roleId) || 0;
-    if (Date.now() - last < SMS_LIMITS.GROUP_MSG_COOLDOWN_MS) {
+    if (!isReply && Date.now() - last < SMS_LIMITS.GROUP_MSG_COOLDOWN_MS) {
       console.info(`[sms] ${roleName} 群消息冷却中，丢弃`);
       return null;
     }
@@ -644,7 +676,7 @@ export function sendPlayerMessage(convId: string, text: string): Message | null 
   //   群里其他人不插嘴）；没点名 / 名字匹配不上 → 登记全员（维持旧行为）。
   const aiMembers = conv.members.filter((mid) => mid !== PLAYER_ID);
   const mentionNames = new Set<string>();
-  for (const m of body.matchAll(/@([^\s@，。！？!?]{1,12})/g)) {
+  for (const m of body.matchAll(/@([^\s@，。！？!?：:]{1,12})/g)) {
     const q = m[1].trim();
     if (q) mentionNames.add(q);
   }
@@ -655,6 +687,14 @@ export function sendPlayerMessage(convId: string, text: string): Message | null 
       return nm !== mid && [...mentionNames].some((q) => nm === q || nm.includes(q) || q.includes(nm));
     });
     if (hit.length) replyTargets = hit;
+  }
+  // ★ 2026-11-22 群聊改由**编排器**统一回复（一次 LLM 产出有序发言）。
+  //   群聊不再逐人登记待回复 —— 否则：
+  //   ① 心跳兜底（tickAllAIs 扫 pendingReplyTarget）会再各自跑一次 brain → 重复发言；
+  //   ② 每人各自抢 brain 单槽位闸门 → 又回到「等半天」。
+  if (conv.type === "group") {
+    scheduleSave();
+    return msg;
   }
   for (const mid of replyTargets) {
     pendingReplyTarget.set(mid, { convId: conv.id, type: conv.type });
@@ -691,6 +731,191 @@ export function listPendingReplyRoleIds(): string[] {
  */
 export function clearPendingReply(roleId: string): void {
   pendingReplyTarget.delete(roleId);
+}
+
+/* ============================================================
+   ★ 2026-11-22 群聊编排：待显示发言队列
+   ============================================================ */
+
+/**
+ * 把编排器产出的有序发言**入队**（还不显示）。
+ * 界面据此显示「沉默的角色头像 + 正在输入…」，然后逐条揭示。
+ */
+export function enqueuePendingSpeech(
+  convId: string,
+  speeches: Array<{ roleId: string; roleName: string; text: string }>,
+): number {
+  const conv = findConversation(convId);
+  if (!conv || !speeches.length) return 0;
+  const queue = conv.pendingSpeaking || (conv.pendingSpeaking = []);
+  for (const sp of speeches) {
+    const roleId = String(sp?.roleId || "");
+    const text = String(sp?.text || "").trim();
+    if (!roleId || !text) continue;
+    queue.push({
+      roleId,
+      roleName: String(sp?.roleName || memberNameOf(conv, roleId) || roleId),
+      text,
+      at: Date.now(),
+    });
+  }
+  scheduleSave();
+  return queue.length;
+}
+
+/** 某会话里排队中的发言（UI 显示沉默头像用） */
+export function pendingSpeechesOf(convId: string): PendingSpeech[] {
+  const conv = findConversation(convId);
+  return conv?.pendingSpeaking || [];
+}
+
+/**
+ * ★ 2026-11-23 沉默占位：编排器调 LLM 期间先显示「沉默：A、B、C」灰色头像行。
+ * 玩家发完消息立刻有反馈（LLM 要 10~25s，之前这段时间界面是空的）。
+ */
+export function setSilentPlaceholder(
+  convId: string,
+  members: Array<{ roleId: string; roleName: string }>,
+): void {
+  const conv = findConversation(convId);
+  if (!conv || !members.length) return;
+  conv.silentPlaceholder = {
+    roleIds: members.map((m) => m.roleId),
+    roleNames: members.map((m) => m.roleName),
+    at: Date.now(),
+  };
+  scheduleSave();
+}
+
+/** 清除沉默占位（编排返回：成功 → pendingSpeaking 接管显示；失败 → 恢复等待提示） */
+export function clearSilentPlaceholder(convId: string): void {
+  const conv = findConversation(convId);
+  if (!conv || !conv.silentPlaceholder) return;
+  conv.silentPlaceholder = undefined;
+  scheduleSave();
+}
+
+/**
+ * 揭示队首的一条发言 → 真正落成一条消息。
+ * @returns 揭示后的消息；队列为空返回 null
+ */
+export function revealNextPendingSpeech(convId: string): Message | null {
+  const conv = findConversation(convId);
+  if (!conv || !conv.pendingSpeaking || !conv.pendingSpeaking.length) return null;
+  const sp = conv.pendingSpeaking.shift()!;
+  if (!conv.pendingSpeaking.length) conv.pendingSpeaking = undefined;
+  const msg = receiveFromAI(sp.roleId, sp.roleName, `group:${convId}`, sp.text, true);
+  scheduleSave();
+  return msg;
+}
+
+/** 清空待显示发言队列（会话删除 / 重新编排时） */
+export function clearPendingSpeaking(convId: string): void {
+  const conv = findConversation(convId);
+  if (!conv || !conv.pendingSpeaking) return;
+  conv.pendingSpeaking = undefined;
+  scheduleSave();
+}
+
+/** ★ 群聊最近若干条消息（格式化后喂给编排器当上下文） */
+export function groupHistoryText(convId: string, limit = 8): string {
+  const conv = findConversation(convId);
+  if (!conv) return "";
+  const recent = conv.messages.slice(-limit);
+  return recent
+    .map((m) => {
+      const who = m.from === PLAYER_ID ? "玩家" : m.fromName || m.from;
+      return `- ${who}: ${m.text}`;
+    })
+    .join("\n");
+}
+
+/* ============================================================
+   ★ 2026-11-23 流式消息（打字机效果）
+   ============================================================ */
+
+/**
+ * 创建一条空的流式消息（text=""，streaming=true）→ 界面显示打字光标，
+ * 随后 appendToStreamingMessage 逐字填充。
+ */
+export function beginStreamingMessage(
+  convId: string,
+  roleId: string,
+  roleName: string,
+): Message | null {
+  const conv = findConversation(convId);
+  if (!conv) return null;
+  const msg = appendMessage(conv, {
+    from: roleId,
+    fromName: roleName,
+    text: "",
+    type: "text",
+  });
+  msg.streaming = true;
+  // 玩家正在看 → 视为已读（复用 receiveFromAI 同款语义）
+  if (!shouldMarkUnread(conv.id)) {
+    conv.lastReadMsgId = msg.id;
+  }
+  scheduleSave();
+  return msg;
+}
+
+/** 向流式消息追加一段文字（高频调用，**不触发落库** —— 结束时统一保存） */
+export function appendToStreamingMessage(convId: string, msgId: string, chunk: string): void {
+  const conv = findConversation(convId);
+  if (!conv) return;
+  const msg = conv.messages.find((m) => m.id === msgId);
+  if (!msg) return;
+  msg.text = clampText(msg.text + chunk);
+}
+
+/** 流式结束：去掉打字中标记并落库 */
+export function endStreamingMessage(convId: string, msgId: string): void {
+  const conv = findConversation(convId);
+  if (!conv) return;
+  const msg = conv.messages.find((m) => m.id === msgId);
+  if (!msg) return;
+  msg.streaming = false;
+  scheduleSave();
+}
+
+/**
+ * ★ 2026-11-23 追加一条持久的「沉默」消息（群聊编排每轮结束后）：
+ * 本轮没发言的成员 → 灰头像一排 + 「沉默：A、B、C」，永久留在消息流里。
+ */
+export function appendSilentMessage(
+  convId: string,
+  silent: Array<{ roleId: string; roleName: string }>,
+): void {
+  const conv = findConversation(convId);
+  const list = (silent || []).filter((x) => x && x.roleId);
+  if (!conv || !list.length) return;
+  appendMessage(conv, {
+    from: "system",
+    fromName: "系统",
+    text: `沉默：${list.map((x) => x.roleName).join("、")}`,
+    type: "system",
+    silent: list,
+  });
+  scheduleSave();
+}
+
+/**
+ * ★ 从玩家消息里解析 @ 点名命中的角色 id（群聊编排用）。
+ *   名字匹配用宽容包含（@赵大 也能命中「赵大川」）。
+ */
+export function mentionedRoleIdsOf(conv: Conversation, text: string): string[] {
+  const aiMembers = conv.members.filter((mid) => mid !== PLAYER_ID);
+  const names = new Set<string>();
+  for (const m of String(text || "").matchAll(/@([^\s@，。！？!?：:]{1,12})/g)) {
+    const q = m[1].trim();
+    if (q) names.add(q);
+  }
+  if (!names.size) return [];
+  return aiMembers.filter((mid) => {
+    const nm = memberNameOf(conv, mid);
+    return nm !== mid && [...names].some((q) => nm === q || nm.includes(q) || q.includes(nm));
+  });
 }
 
 /**

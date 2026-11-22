@@ -34,6 +34,8 @@ import {
   PROMPT_FIELD_SURVIVAL_SPRITE_GENER,
   getAgentSystemPrompt,
 } from "./src/agents/plugins.prompts";
+/** ★ 2026-11-22：群聊编排器（插件业务：提示词/编排规则/输出校验都在插件仓） */
+import { runGroupOrchestrator, speakAsCharacter } from "./src/agents/groupOrchestrator";
 
 interface PluginGameContext {
   pluginId: string;
@@ -46,6 +48,12 @@ interface PluginGameContext {
   /** ★ v6：当前世界身份（故事绑定视觉地图模板；tick.ts / MiniGameController 注入） */
   worldId?: number;
   worldName?: string;
+  /** ★ 2026-11-22：故事全局背景（群聊编排器对齐宿主故事模式） */
+  globalBackground?: string;
+  /** ★ 2026-11-23：故事动态背景（记忆摘要，"最近发生了什么"） */
+  dynamicGlobalBackground?: string;
+  /** ★ 2026-11-22：常驻世界书条目摘要（群聊编排器故事入参） */
+  worldBookDigest?: string;
   /** 后端插件 API（toonflowTsApi）：pluginData（t_plugin_session_data）+ agent */
   tsApi?: {
     pluginData: {
@@ -59,7 +67,9 @@ interface PluginGameContext {
     agent: {
       run(
         agentName: string,
-        input: Record<string, unknown>
+        input: Record<string, unknown>,
+        /** ★ 2026-11-22：模型配置 key 透传（群聊编排器用 storyOrchestratorModel） */
+        aiConfigKey?: string,
       ): Promise<{ ok: boolean; output?: Record<string, any>; error?: string }>;
     };
   };
@@ -873,6 +883,19 @@ export interface FieldSurvivalState {
     reqId: string;
     ok: boolean;
     text?: string;
+    error?: string;
+  } | null;
+  /** ★ 2026-11-22：群聊编排器结果（独立槽位 —— chatResult/agentResult 都是单槽位，
+   *  群聊编排与「角色对话」「事件生图」并发时会互相覆盖）
+   *  结构：{ reqId, ok, speakers: [{roleId, text}], summary, error } */
+  groupResult?: {
+    reqId: string;
+    ok: boolean;
+    /** ★ 2026-11-23：编排器只返回**有序发言人 id 名单**（台词由每个角色独立调 sys_sms_speak 生成） */
+    speakers?: string[];
+    /** ★ 单聊/群聊角色发言（sys_sms_speak）的台词 */
+    text?: string;
+    summary?: string;
     error?: string;
   } | null;
   /** ★ v5：组队跟随的角色 id 列表 */
@@ -9221,6 +9244,97 @@ export async function handle_action(
       }
       await persistSys(context, s);
       return okResp("agent 调用完成");
+    }
+
+    case "sys_group_chat": {
+      // ★ 2026-11-22：群聊编排器（**插件业务**：提示词/编排/校验都在插件仓
+      //   src/agents/groupOrchestrator.ts；宿主只提供通用 LLM 通道 "plugin-llm"）
+      const gReqId = str(params?.reqId, "");
+      const gFail = async (err: string) => {
+        s.groupResult = { reqId: gReqId, ok: false, error: err };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ error: err }));
+      };
+      if (!gReqId) return gFail("缺少 reqId");
+      if (!context?.tsApi?.agent?.run) return gFail("tsApi.agent 不可用（宿主未接入 AI）");
+
+      const gMembers = Array.isArray(params?.members) ? params.members : [];
+      if (!gMembers.length) return gFail("缺少群成员（members）");
+      const gPlayerText = str(params?.playerText, "");
+      if (!gPlayerText.trim()) return gFail("缺少 playerText（玩家本轮说的话）");
+
+      try {
+        const gr = await runGroupOrchestrator(
+          context.tsApi.agent,
+          {
+            members: gMembers,
+            playerText: gPlayerText,
+            history: str(params?.history, ""),
+            mentionedRoleIds: Array.isArray(params?.mentionedRoleIds)
+              ? params.mentionedRoleIds.map((x: any) => String(x)).filter(Boolean)
+              : [],
+            maxSpeakers: Math.max(1, Math.min(8, Math.round(num(params?.maxSpeakers, 5)))),
+          },
+          {
+            globalBackground: str(context?.globalBackground, ""),
+            worldBookDigest: str(context?.worldBookDigest, ""),
+            storyDigest: buildStoryDigest(context),
+          },
+        );
+        if (!gr.ok) return gFail(String(gr.error || "群聊编排失败"));
+        s.groupResult = {
+          reqId: gReqId,
+          ok: true,
+          speakers: gr.speakerIds,
+          summary: String(gr.summary || ""),
+        };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ speakers: gr.speakerIds }));
+      } catch (e: any) {
+        return gFail(String(e?.message || e));
+      }
+    }
+
+    case "sys_sms_speak": {
+      // ★ 2026-11-23：单聊角色发言（**插件业务**，实现在 src/agents/groupOrchestrator.ts
+      //   的 speakAsCharacter；宿主只提供通用 LLM 通道 "plugin-llm" + 故事上下文）
+      const spReqId = str(params?.reqId, "");
+      const spFail = async (err: string) => {
+        s.groupResult = { reqId: spReqId, ok: false, error: err };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ error: err }));
+      };
+      if (!spReqId) return spFail("缺少 reqId");
+      if (!context?.tsApi?.agent?.run) return spFail("tsApi.agent 不可用");
+      const spRoleName = str(params?.roleName, "");
+      if (!spRoleName) return spFail("缺少 roleName");
+      const spPlayerText = str(params?.playerText, "");
+      if (!spPlayerText.trim()) return spFail("缺少 playerText");
+
+      try {
+        const sp = await speakAsCharacter(
+          context.tsApi.agent,
+          {
+            roleId: str(params?.roleId, spRoleName),
+            roleName: spRoleName,
+            roleCard: str(params?.roleCard, ""),
+            playerText: spPlayerText,
+            history: str(params?.history, ""),
+          },
+          {
+            globalBackground: str(context?.globalBackground, ""),
+            dynamicGlobalBackground: str(context?.dynamicGlobalBackground, ""),
+            worldBookDigest: str(context?.worldBookDigest, ""),
+            storyDigest: buildStoryDigest(context),
+          },
+        );
+        if (!sp.ok || !sp.text) return spFail(String(sp.error || "角色发言失败"));
+        s.groupResult = { reqId: spReqId, ok: true, text: sp.text };
+        await persistSys(context, s);
+        return okResp(JSON.stringify({ text: sp.text }));
+      } catch (e: any) {
+        return spFail(String(e?.message || e));
+      }
     }
 
     case "sys_bag_list": {

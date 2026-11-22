@@ -84,6 +84,8 @@ import {
   smsView,
   debugSms,
 } from "./sms/store";
+// ★ 2026-11-22 群聊编排器（插件业务：一次 LLM 产出有序发言 → 逐个冒泡）
+import { runGroupOrchestration, registerGroupResultWaiter, speakPrivateReply } from "./sms/orchestrator";
 import type { SmsContact } from "./sms/SmsNewGroupModal.vue";
 // ★ AI 托管运行时配置（系统 → AI 页签可调，落库 t_plugin_session_data）
 import {
@@ -402,7 +404,47 @@ async function onSysSmsSend(convId: string, text: string): Promise<void> {
   console.info(`[sms] 玩家发送 → ${convId}: ${text.slice(0, 40)}`);
   // ★ 诊断：记录「已进入 onSysSmsSend」→ 后续各阶段会覆盖 stage
   void persistBrainDiag("sms_send:" + convId);
-  // ★ 唤醒目标 AI（不等 20s 心跳）
+
+  // ★ 2026-11-22 群聊走编排器（一次 LLM 调用产出「谁先说 + 各说什么」）：
+  //   旧路径是「每个成员各自跑一次 brain」→ 抢 chatResult 单槽位闸门 → 等半天 + 台词雷同。
+  const conv = listConversations().find((c) => c.id === convId);
+  if (conv && conv.type === "group") {
+    try {
+      const s = state.value as any;
+      await runGroupOrchestration(convId, text, {
+        npcCards: s?.npcCards || [],
+        entities: s?.entities || [],
+        roles: s?.roles || [],
+      });
+    } catch (e) {
+      console.warn("[sms] 群聊编排失败:", e);
+      void persistBrainDiag("group_throw:" + String((e as any)?.message || e).slice(0, 120));
+    }
+    return;
+  }
+
+  // ★ 单聊：优先走「角色发言器」（对齐宿主故事模式台词质量 —— 动作描写+世界观引用），
+  //   失败（后端不可用/超时）回退旧 brain 链路（游戏感知决策）保底。
+  const conv2 = listConversations().find((c) => c.id === convId);
+  if (conv2 && conv2.type === "private") {
+    const targetRoleId = conv2.members.find((m) => m !== "player") || "";
+    if (targetRoleId) {
+      const s = state.value as any;
+      const src = {
+        npcCards: s?.npcCards || [],
+        entities: s?.entities || [],
+        roles: s?.roles || [],
+      };
+      try {
+        const ok = await speakPrivateReply(targetRoleId, conv2.name || targetRoleId, text, src, conv2.id);
+        if (ok) return;
+      } catch (e) {
+        console.warn("[sms] 单聊发言器异常 → 回退旧链路:", e);
+      }
+    }
+  }
+
+  // ★ 单聊兜底 / 旧链路：唤醒目标 AI（不等 20s 心跳）
   try {
     await wakeAiForPlayerSms(convId, text, state.value as any);
   } catch (e) {
@@ -8348,9 +8390,42 @@ function notifyAgentResult(res: any): void {
   if (i < 0) return;
   const w = agentResultWaiters[i];
   agentResultWaiters.splice(i, 1);
+  window.clearTimeout(w.timer);  w.resolve(res);
+}
+
+/* ============================================================
+   ★ 2026-11-22 群聊编排通道（独立于 chatResult / agentResult 单槽位）
+   ------------------------------------------------------------
+   走 sendTick("sys_group_chat") → 插件 entry.ts → 宿主通用 LLM 通道
+   （"plugin-llm"，宿主不认识插件业务）→ state.groupResult{reqId,...} 回推。
+   ============================================================ */
+const groupResultWaiters: Array<{ reqId: string; resolve: (r: any) => void; timer: number }> = [];
+
+function waitGroupResult(reqId: string, timeoutMs = 30000): Promise<any> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      const i = groupResultWaiters.findIndex((w) => w.reqId === reqId);
+      if (i >= 0) groupResultWaiters.splice(i, 1);
+      resolve({ ok: false, error: "群聊编排超时" });
+    }, timeoutMs);
+    groupResultWaiters.push({ reqId, resolve, timer });
+  });
+}
+
+/** 宿主推送 groupResult 时配对取回 */
+function notifyGroupResult(res: any): void {
+  const rid = String(res?.reqId || "");
+  if (!rid || !rid.startsWith("group_")) return;
+  const i = groupResultWaiters.findIndex((w) => w.reqId === rid);
+  if (i < 0) return;
+  const w = groupResultWaiters[i];
+  groupResultWaiters.splice(i, 1);
   window.clearTimeout(w.timer);
   w.resolve(res);
 }
+
+// ★ 把群聊通道的等待器注册给编排器模块（避免循环依赖：orchestrator 不 import App.vue）
+registerGroupResultWaiter(waitGroupResult);
 
 /** ★ 事件脚本调 AI agent（ctx.ai.generate 的宿主侧实现） */
 async function eventAgentRun(agentName: string, prompt: string, opts?: { timeoutMs?: number }): Promise<string> {
@@ -9388,6 +9463,11 @@ onMounted(async () => {
     const incomingAgent = (d.state as any)?.agentResult;
     if (incomingAgent && typeof incomingAgent === "object") {
       notifyAgentResult(incomingAgent);
+    }
+    // ★ 2026-11-22：群聊编排结果回推（独立槽位 groupResult）
+    const incomingGroup = (d.state as any)?.groupResult;
+    if (incomingGroup && typeof incomingGroup === "object") {
+      notifyGroupResult(incomingGroup);
     }
     // ★ 宿主/ mock 推送前的本地实体快照：用于把 App 侧生成的地图怪物（mapmob_*）归并保留
     const prevEntities = (state.value?.entities || []) as Entity[];

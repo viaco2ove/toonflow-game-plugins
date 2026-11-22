@@ -595,7 +595,7 @@ export async function wakeAiForPlayerSms(
   //   群里其他人不再插嘴；没有点名 / 名字匹配不上 → 维持全员唤醒（各自决策，冷却兜底）。
   //   名字匹配用宽容包含（@赵大 也能命中「赵大川」）。
   const mentionNames = new Set<string>();
-  for (const m of text.matchAll(/@([^\s@，。！？!?]{1,12})/g)) {
+  for (const m of text.matchAll(/@([^\s@，。！？!?：:]{1,12})/g)) {
     const q = m[1].trim();
     if (q) mentionNames.add(q);
   }

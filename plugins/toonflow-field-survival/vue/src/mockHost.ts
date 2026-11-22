@@ -1419,6 +1419,30 @@ function install(): void {
         push();
         return;
       }
+      if (action === "sys_sms_speak") {
+        // ★ 2026-11-23 单聊角色发言（standalone 预览无 LLM 通道）：立即回失败，
+        //   前端收到后回退旧 brain 链路（不空等 30s）。
+        const reqId = String(params?.reqId || "");
+        (state as any).groupResult = {
+          reqId,
+          ok: false,
+          error: "standalone 预览无 LLM 通道（请用 --conn / 安装后宿主）",
+        };
+        push();
+        return;
+      }
+      if (action === "sys_group_chat") {
+        // ★ 2026-11-22 群聊编排（standalone 预览无 LLM 通道）：
+        //   立即回失败，前端编排器收到后结束本轮（不空等 30s）。
+        const reqId = String(params?.reqId || "");
+        (state as any).groupResult = {
+          reqId,
+          ok: false,
+          error: "standalone 预览无 LLM 通道（请用 --conn / 安装后宿主）",
+        };
+        push();
+        return;
+      }
       if (action === "start") {
         // 已经在 playing，忽略
         return;

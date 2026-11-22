@@ -1297,6 +1297,8 @@ function buildEntryCtx() {
     roles: (storyData && storyData.roles) || [],
     playerCard: (window.__STORY_PLAYER_CARD__ || {}),
     worldBookDigest: buildWorldBookDigest(),
+    // ★ 2026-11-23：故事全局/动态背景（插件编排器/发言器的发言上下文）
+    globalBackground: ((storyData && (storyData.globalBackground || storyData.dynamicGlobalBackground)) || ""),
     tsApi: {
       pluginData: {
         get: async (k) => {
@@ -1356,7 +1358,7 @@ function buildEntryCtx() {
       //   · 商城 agent → 走上面的拟真实现（世界书物资确定性生成），保证商城可端到端测试
       //   · 其它 agent（如 map-gener）→ 抛错让 entry.js 落到内置兜底，并在事件里提示「降级」
         agent: {
-          run: async (agentName, args) => {
+          run: async (agentName, args, aiConfigKey) => {
             const n = String(agentName || "");
             // ★ 角色发言器：--conn 拟真宿主必须走真实大模型，否则调不出真台词。
             //   桩在浏览器里没有 LLM 通道 → 由后端 /plugin/agentRun 代跑 runPluginAgent，
@@ -1447,6 +1449,39 @@ function buildEntryCtx() {
                 const errMsg = String((err && err.message) || err);
                 log("✗ 生图 agent 异常：" + errMsg + "（mock 兜底已移除；后端未启动时请先启动，或用「程序生成」）");
                 return { ok: false, error: errMsg };
+              }
+            }
+            if (n === "plugin-llm") {
+              // ★ 2026-11-22 通用插件 LLM 通道（宿主不认识插件业务）：
+              //   插件给 systemPrompt + userPrompt + 想要的模型 key，宿主只负责调模型、返回 JSON。
+              //   群聊编排器（插件业务）就走这条。
+              const llmKey = String(aiConfigKey || args?.aiConfigKey || "storyMiniGameModel");
+              try {
+                const headers = { "Content-Type": "application/json" };
+                if (typeof window !== "undefined" && window.__AUTH_TOKEN__) {
+                  headers["Authorization"] = "Bearer " + window.__AUTH_TOKEN__;
+                }
+                const r = await fetch("/toon-api/plugin/agentRun", {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify({
+                    agentName: "plugin-llm",
+                    input: args || {},
+                    aiConfigKey: llmKey,
+                  }),
+                });
+                const j = await r.json();
+                if (j && j.code === 200 && j.data) {
+                  log("✓ plugin-llm(" + llmKey + ") → " + JSON.stringify(j.data.output || j.data.error || "").slice(0, 100));
+                  return j.data;
+                }
+                const msg = (j && (j.msg || j.message)) || "后端 agentRun 返回异常";
+                log("! plugin-llm 调用失败：" + msg);
+                return { ok: false, error: String(msg) };
+              } catch (err) {
+                const msg = String((err && err.message) || err);
+                log("! plugin-llm 请求异常：" + msg);
+                return { ok: false, error: msg };
               }
             }
             if (n.indexOf("ai-brain") >= 0 || n === "field-survival-ai-brain") {
@@ -1778,12 +1813,24 @@ async function loadStoryData() {
       effectType: "heal_hp",
       stats: { heal: 0 },
     }));
+    // ★ 2026-11-23：故事全局背景 + 动态背景（给插件 agent 当发言上下文 —— 之前
+    //   编排器/发言器拿到的背景是"（无）"，模型只能空洞敷衍）
+    const __wSrv = srvData.world || {};
+    const __wSettings = (typeof __wSrv.settings === "string")
+      ? (function () { try { return JSON.parse(__wSrv.settings || "{}"); } catch (e) { return {}; } })()
+      : (__wSrv.settings || {});
     storyData = {
       description: srvData.chapterTitle || STORY,
-      world: { name: srvData.world?.name || STORY },
+      world: { name: __wSrv.name || STORY },
       roles,
       monsters: [],
       materials,
+      // 全局背景：world.settings.globalBackground（宿主同口径），回退 intro
+      globalBackground: String(
+        __wSettings.globalBackground || __wSrv.globalBackground || __wSrv.intro || "",
+      ).slice(0, 2000),
+      // 动态背景：storyInfo 顶层 dynamicGlobalBackground（记忆管理器维护）
+      dynamicGlobalBackground: String(srvData.dynamicGlobalBackground || "").slice(0, 1500),
     };
     // ★ 把 sessionId 暴露给 game iframe（系统面板买/卖物品要发请求到服务器）
     if (typeof window !== "undefined") window.__STORY_SESSION_ID__ = sessionId;

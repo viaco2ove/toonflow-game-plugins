@@ -67,12 +67,48 @@ const listCollapsed = ref(false);
 /** 当前会话的消息（按时间升序） */
 const messages = computed<Message[]>(() => current.value?.messages || []);
 
+/**
+ * ★ 2026-11-22 群聊编排：排队中的发言（编排器一次产出多人 → 逐条冒泡）。
+ *   pendingSpeaking[0] = 正在冒泡的那条；其余 = 还在排队。
+ *   界面据此显示「沉默的角色头像 + 正在输入…」。
+ */
+const pendingSpeaking = computed(() => current.value?.pendingSpeaking || []);
+
+/** 正在冒泡的那条（队首） */
+const speakingNow = computed(() => pendingSpeaking.value[0] || null);
+
+/** 还在排队的（队首之后）—— 显示为沉默头像 */
+const speakingQueued = computed(() => pendingSpeaking.value.slice(1));
+
+/**
+ * ★ 2026-11-23 沉默占位：编排器还在调 LLM（返回前）显示「灰色头像 + 沉默：A、B、C」。
+ * 编排返回后 pendingSpeaking 有内容（或占位被清除）→ 自动隐藏。
+ */
+const silentPlaceholder = computed(() => current.value?.silentPlaceholder || null);
+
+/** 队首的角色头像（没有头像回退名字首字） */
+function pendingAvatarUrl(roleId: string): string {
+  return props.avatarMap?.[roleId] || "";
+}
+function pendingAvatarText(roleId: string, roleName: string): string {
+  return (roleName || roleId || "?").slice(0, 1);
+}
+
 /** 是否显示"等回复"提示（玩家发了但 AI 还没回） */
 const showAwait = computed(() => !!current.value?.awaitingReply);
 
 /** 新消息到达 / 切换会话 → 滚到底 */
 watch(
   () => [props.activeId, messages.value.length] as const,
+  async () => {
+    await nextTick();
+    scrollToBottom();
+  },
+);
+
+/** ★ 排队中的发言变化 → 也要滚到底（让「正在输入」那一行始终可见） */
+watch(
+  () => (current.value?.pendingSpeaking || []).length,
   async () => {
     await nextTick();
     scrollToBottom();
@@ -88,8 +124,12 @@ function scrollToBottom(): void {
 function onSend(): void {
   const text = draft.value.trim();
   if (!text || !current.value) return;
-  emit("send", current.value.id, text);
+  // ★ 引用回复：拼「回复 @名字：摘要」前缀 —— @点名机制自动生效（被引用者必回）
+  const q = replyTo.value;
+  const payload = q ? `「回复 @${q.name}：${q.preview}」\n${text}` : text;
+  emit("send", current.value.id, payload);
   draft.value = "";
+  replyTo.value = null;
   mentionOpen.value = false;
   nextTick(scrollToBottom);
 }
@@ -180,6 +220,11 @@ function isMine(m: Message): boolean {
   return m.from === PLAYER_ID;
 }
 
+/** ★ 沉默行头像（按 roleId 直接查 avatarMap） */
+function avatarUrlOf2(roleId: string): string {
+  return (props.avatarMap || {})[roleId] || "";
+}
+
 /** 头像 URL：优先 avatarMap 里的真实头像图；空串 = 无图（模板回退首字/emoji） */
 function avatarUrlOf(m: Message): string {
   if (isMine(m)) return props.playerAvatar || "";
@@ -198,6 +243,88 @@ function timeText(ts: number): string {
   if (!ts) return "";
   const d = new Date(ts);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/* ---------- ★ 2026-11-23 消息复制 / 引用（PC 左键点击 / 手机长按） ---------- */
+const msgAction = ref<{ msg: Message; x: number; y: number } | null>(null);
+/** 引用中的消息（输入框上方显示引用条，发送时拼「回复 @名字：摘要」前缀） */
+const replyTo = ref<{ from: string; name: string; preview: string } | null>(null);
+let longPressTimer: number | null = null;
+
+/** 菜单弹出位置（视口内边界约束） */
+const msgActionStyle = computed(() => {
+  const a = msgAction.value;
+  if (!a) return {};
+  const W = 140, H = 110, M = 8;
+  const x = Math.min(Math.max(M, a.x - 10), window.innerWidth - W - M);
+  const y = Math.min(Math.max(M, a.y - 10), window.innerHeight - H - M);
+  return { left: `${x}px`, top: `${y}px` };
+});
+
+/** ★ PC：右键气泡弹菜单（手机：长按 500ms，见 onBubbleTouchStart） */
+function onBubbleContextMenu(m: Message, e: MouseEvent): void {
+  if (m.type === "system") return;
+  msgAction.value = { msg: m, x: e.clientX, y: e.clientY };
+}
+
+function onBubbleTouchStart(m: Message, e: TouchEvent): void {
+  if (m.type === "system") return;
+  const t = e.touches[0];
+  const x = t?.clientX ?? 0;
+  const y = t?.clientY ?? 0;
+  if (longPressTimer != null) window.clearTimeout(longPressTimer);
+  longPressTimer = window.setTimeout(() => {
+    msgAction.value = { msg: m, x, y };
+  }, 500);
+}
+
+function onBubbleTouchEnd(): void {
+  if (longPressTimer != null) {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = null;
+  }
+}
+
+function closeMsgAction(): void {
+  msgAction.value = null;
+}
+
+/** 复制消息文本（clipboard API 优先，老环境回退 execCommand） */
+async function copyMsgText(): Promise<void> {
+  const m = msgAction.value?.msg;
+  if (!m) return;
+  const text = String(m.text || "");
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    console.info("[sms] 已复制消息");
+  } catch (e) {
+    console.warn("[sms] 复制失败:", e);
+  }
+  msgAction.value = null;
+}
+
+/** 引用消息 → 输入框上方出现引用条；发送时拼「回复 @名字：摘要」前缀（@点名机制生效） */
+function quoteMsg(): void {
+  const m = msgAction.value?.msg;
+  if (!m) return;
+  replyTo.value = {
+    from: m.from,
+    name: isMine(m) ? "我" : String(m.fromName || m.from || "?"),
+    preview: String(m.text || "").replace(/\s+/g, " ").slice(0, 60),
+  };
+  msgAction.value = null;
+  void nextTick(() => inputEl.value?.focus());
 }
 
 /** 发起群聊创建 */
@@ -298,8 +425,24 @@ function commitRename(): void {
 
         <div ref="msgBox" class="chat-messages">
           <template v-for="m in messages" :key="m.id">
+            <!-- ★ 2026-11-23 编排沉默行：本轮没发言的成员，持久保留 -->
+            <div v-if="m.type === 'system' && m.silent && m.silent.length" class="msg-row them msg-row--silent-final">
+              <div
+                v-for="sp in m.silent"
+                :key="sp.roleId"
+                class="msg-avatar msg-avatar--silent"
+                :title="sp.roleName"
+              >
+                <img v-if="avatarUrlOf2(sp.roleId)" :src="avatarUrlOf2(sp.roleId)" alt="" class="msg-avatar-img" />
+                <template v-else>{{ (sp.roleName || sp.roleId || "?").slice(0, 1) }}</template>
+              </div>
+              <div class="msg-wrap">
+                <div class="msg-sender msg-sender--muted">{{ m.text }}</div>
+              </div>
+            </div>
+
             <!-- system 消息：居中，不计入未读 -->
-            <div v-if="m.type === 'system'" class="msg-sys">{{ m.text }}</div>
+            <div v-else-if="m.type === 'system'" class="msg-sys">{{ m.text }}</div>
 
             <!-- 普通消息 -->
             <div v-else class="msg-row" :class="isMine(m) ? 'me' : 'them'">
@@ -315,17 +458,84 @@ function commitRename(): void {
                 >
                   {{ isMine(m) ? "我" : m.fromName || m.from }}
                 </div>
-                <div class="msg-bubble">{{ m.text }}</div>
+                <div
+                  class="msg-bubble"
+                  :class="{ 'msg-bubble--mine': isMine(m) }"
+                  title="右键复制 / 引用（手机长按）"
+                  @contextmenu.prevent="onBubbleContextMenu(m, $event)"
+                  @touchstart="onBubbleTouchStart(m, $event)"
+                  @touchend="onBubbleTouchEnd"
+                  @touchmove="onBubbleTouchEnd"
+                  @touchcancel="onBubbleTouchEnd"
+                >{{ m.text }}<span v-if="m.streaming" class="type-cursor">▍</span></div>
                 <div class="msg-time">{{ timeText(m.timestamp) }}</div>
               </div>
             </div>
           </template>
 
+          <!-- ★ 2026-11-23 沉默占位：编排器调 LLM 期间立刻显示（发完消息不再空屏等待） -->
+          <div v-if="silentPlaceholder && !speakingNow" class="msg-row them msg-row--silent-ph">
+            <div
+              v-for="(rid, i) in silentPlaceholder.roleIds"
+              :key="rid"
+              class="msg-avatar msg-avatar--silent"
+              :title="silentPlaceholder.roleNames[i]"
+            >
+              <img v-if="pendingAvatarUrl(rid)" :src="pendingAvatarUrl(rid)" alt="" class="msg-avatar-img" />
+              <template v-else>{{ pendingAvatarText(rid, silentPlaceholder.roleNames[i]) }}</template>
+            </div>
+            <div class="msg-wrap">
+              <div class="msg-sender msg-sender--muted">
+                思考中：{{ silentPlaceholder.roleNames.join("、") }}
+              </div>
+            </div>
+          </div>
+
+          <!-- ★ 2026-11-22 群聊编排：先显示「沉默的角色头像 + 正在输入…」，
+               发言者再逐个冒泡（队首 = 正在说的，后面 = 排队的） -->
+          <div v-if="speakingNow" class="msg-row them msg-row--typing">
+            <div class="msg-avatar msg-avatar--silent">
+              <img v-if="pendingAvatarUrl(speakingNow.roleId)" :src="pendingAvatarUrl(speakingNow.roleId)" alt="" class="msg-avatar-img" />
+              <template v-else>{{ pendingAvatarText(speakingNow.roleId, speakingNow.roleName) }}</template>
+            </div>
+            <div class="msg-wrap">
+              <div class="msg-sender">{{ speakingNow.roleName }}</div>
+              <div class="msg-bubble msg-bubble--typing">
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+                <span class="typing-dot"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 排队中的沉默头像（灰色） -->
+          <div v-if="speakingQueued.length" class="msg-row them msg-row--queued">
+            <div
+              v-for="q in speakingQueued"
+              :key="q.roleId"
+              class="msg-avatar msg-avatar--silent"
+              :title="q.roleName"
+            >
+              <img v-if="pendingAvatarUrl(q.roleId)" :src="pendingAvatarUrl(q.roleId)" alt="" class="msg-avatar-img" />
+              <template v-else>{{ pendingAvatarText(q.roleId, q.roleName) }}</template>
+            </div>
+            <div class="msg-wrap">
+              <div class="msg-sender msg-sender--muted">
+                {{ speakingQueued.map((q) => q.roleName).join("、") }} 正在思考…
+              </div>
+            </div>
+          </div>
+
           <!-- 等待回复提示 -->
-          <div v-if="showAwait" class="msg-await">✦ 等待对方回复…</div>
+          <div v-if="showAwait && !speakingNow" class="msg-await">✦ 等待对方回复…</div>
         </div>
 
         <div class="chat-input-area">
+          <!-- ★ 引用回复条：点消息气泡「引用」后出现，发送时拼「回复 @名字：摘要」前缀 -->
+          <div v-if="replyTo" class="quote-bar">
+            <span class="quote-bar__text">引用 {{ replyTo.name }}：{{ replyTo.preview }}</span>
+            <button class="quote-bar__close" type="button" title="取消引用" @click="replyTo = null">✕</button>
+          </div>
           <!-- ★ @点名候选浮层：输入 @ 触发（↑↓ 选 / Enter 或点击插入 / Esc 关） -->
           <div v-if="mentionOpen && mentionFiltered.length" class="mention-pop">
             <div class="mention-pop__hint">点名（被 @ 的角色会优先回复）</div>
@@ -364,6 +574,14 @@ function commitRename(): void {
       @close="showNewGroup = false"
       @create="onCreateGroup"
     />
+
+    <!-- ★ 消息操作浮层：PC 左键点击 / 手机长按气泡 → 复制 / 引用 -->
+    <div v-if="msgAction" class="msg-action-mask" @click="closeMsgAction" @contextmenu.prevent>
+      <div class="msg-action-pop" :style="msgActionStyle" @click.stop>
+        <button class="msg-action-item" type="button" @click="copyMsgText">复制</button>
+        <button class="msg-action-item" type="button" @click="quoteMsg">引用</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -529,6 +747,11 @@ function commitRename(): void {
   line-height: 1.55;
   word-break: break-word;
   white-space: pre-wrap;
+  /* ★ 复制/引用走自定义菜单（点击/长按气泡）→ 关掉系统长按菜单与文字选择，
+     避免 PC 选字与手机系统弹层打架 */
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: pointer;
 }
 .msg-row.them .msg-bubble {
   background: rgba(255, 255, 255, 0.08);
@@ -556,6 +779,107 @@ function commitRename(): void {
   border: 1px dashed rgba(255, 215, 106, 0.45);
   padding: 2px 9px;
   border-radius: 10px;
+}
+
+/* ★ 2026-11-23 消息复制/引用：引用条 + 操作浮层 */
+.quote-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(47, 111, 208, 0.16);
+  border-left: 2px solid #2f6fd0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: #9cc0f0;
+}
+.quote-bar__text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quote-bar__close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #6f7b88;
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 12px;
+}
+.msg-action-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.25);
+}
+.msg-action-pop {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background: #1d232b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  min-width: 130px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+}
+.msg-action-item {
+  background: none;
+  border: none;
+  color: #e8eef5;
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+.msg-action-item + .msg-action-item { border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.msg-action-item:hover { background: rgba(255, 255, 255, 0.08); }
+
+/* ★ 2026-11-23 沉默占位行（LLM 调用期间，文案=思考中） */
+.msg-row--silent-ph { opacity: 0.75; }
+.msg-row--silent-ph .msg-avatar--silent { width: 26px; height: 26px; font-size: 12px; }
+/* ★ 2026-11-23 持久沉默行（每轮结束后追加，留在消息流里） */
+.msg-row--silent-final { margin: 2px 0; }
+.msg-row--silent-final .msg-avatar--silent { width: 24px; height: 24px; font-size: 11px; }
+
+/* ★ 2026-11-22 群聊编排：正在输入 / 沉默头像 */
+.msg-row--typing { opacity: 0.92; }
+.msg-row--queued { align-items: center; gap: 4px; }
+.msg-row--queued .msg-wrap { flex: 1; }
+.msg-avatar--silent { opacity: 0.45; filter: grayscale(0.7); }
+.msg-bubble--typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 9px 12px;
+}
+/* ★ 2026-11-23 打字机光标（streaming 消息） */
+.type-cursor {
+  display: inline-block;
+  margin-left: 1px;
+  color: rgba(232, 238, 245, 0.85);
+  animation: cursor-blink 0.9s steps(1) infinite;
+}
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.msg-bubble--typing .typing-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(232, 238, 245, 0.7);
+  animation: typing-blink 1.1s infinite ease-in-out;
+}
+.msg-bubble--typing .typing-dot:nth-child(2) { animation-delay: 0.18s; }
+.msg-bubble--typing .typing-dot:nth-child(3) { animation-delay: 0.36s; }
+.msg-sender--muted { color: #6f7b88; font-size: 10px; }
+@keyframes typing-blink {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
 }
 
 .chat-input-area {

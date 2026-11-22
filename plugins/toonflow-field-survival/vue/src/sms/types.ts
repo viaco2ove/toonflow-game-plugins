@@ -23,6 +23,16 @@ export interface Message {
   text: string;                  // 消息内容（≤ MAX_TEXT_LENGTH）
   timestamp: number;             // 发送时间戳
   type: MessageType;             // "text" 普通消息 / "system" 系统提示
+  /**
+   * ★ 2026-11-23 群聊编排：本轮回合**没有发言**的成员（type="system" 且带此字段时，
+   * 渲染为「灰头像一排 + 沉默：A、B、C」，持久保留在消息流里）。
+   */
+  silent?: Array<{ roleId: string; roleName: string }>;
+  /**
+   * ★ 2026-11-23 打字机效果：true = 台词正在逐字上屏（气泡尾部显示光标）。
+   * 落库 normalize 时强制 false（防刷新后永远打字中）。
+   */
+  streaming?: boolean;
 }
 
 /** 一个会话（单聊或群聊） */
@@ -38,6 +48,18 @@ export interface Conversation {
    *   旧会话/单聊没有此字段 → 回退：历史消息 fromName → 会话名（单聊）→ roleId。
    */
   memberNames?: Record<string, string>;
+  /**
+   * ★ 2026-11-22 群聊编排：已排好序、尚未在界面显示的发言队列。
+   *   编排器一次产出「谁先说 + 各说什么」，这里逐条揭示 → 界面看着像一个个冒泡。
+   *   pendingSpeaking[0] = 正在冒泡的那条；后面的 = 排队中（界面显示沉默头像）。
+   */
+  pendingSpeaking?: PendingSpeech[];
+  /**
+   * ★ 2026-11-23 沉默占位：编排器还在调 LLM（返回前）先显示
+   *   「灰色头像 + 沉默：A、B、C」—— 玩家发完消息立刻有反馈，不再空屏等待。
+   *   编排返回（成功入队 pendingSpeaking / 失败）即清除；不落库（刷新丢弃）。
+   */
+  silentPlaceholder?: { roleIds: string[]; roleNames: string[]; at: number };
   messages: Message[];           // 消息列表（按时间升序）
   lastReadMsgId: string | null;  // 玩家最后读到的消息ID（用于计算未读）
   createdAt: number;
@@ -49,6 +71,15 @@ export interface Conversation {
    *   - awaitingReply        = 玩家发了但 AI 还没回的（UI 上提示"等回复"）
    */
   awaitingReply?: boolean;
+}
+
+/** ★ 群聊编排：一条待显示的发言 */
+export interface PendingSpeech {
+  roleId: string;
+  roleName: string;
+  text: string;
+  /** 入队时间（ms） */
+  at: number;
 }
 
 /** 落库结构 */
@@ -96,6 +127,27 @@ export const SMS_LIMITS = {
   SAVE_DEBOUNCE_MS: 1000,
   /** 阅读状态落库防抖（ms） */
   READ_SAVE_DEBOUNCE_MS: 500,
+} as const;
+
+/* ============================================================
+   ★ 2026-11-22 群聊编排参数
+   ============================================================ */
+
+export const GROUP_SPEAK = {
+  /** 追加发言概率（用户要求「机率调小于 40%」） */
+  EXTRA_ROUND_P: 0.35,
+  /** 最多追加几轮（总轮数 = 1 + 追加轮） */
+  MAX_ROUNDS: 3,
+  /** 单轮最多几个发言人 */
+  MAX_SPEAKERS: 5,
+  /**
+   * ★ 发言节奏（2026-11-23 用户要求：一个人说完再到下个人，最小间隔 3 秒）。
+   * 台词是打字机逐字上屏的（独立调用生成），两条发言之间的空闲间隔 ≥ 3s。
+   */
+  SPEAK_GAP_MS: 3000,
+  /** 打字机：每次上屏字符数 / 间隔 ms（40 字 ≈ 2s，120 字 ≈ 6s） */
+  TYPE_CHUNK: 2,
+  TYPE_INTERVAL_MS: 50,
 } as const;
 
 /** 当前落库结构版本号 */
