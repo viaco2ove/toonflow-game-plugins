@@ -3941,11 +3941,6 @@ function injectMapNpcsToState(s: GameState | null | undefined, cfg: MapConfig | 
       unnamed: npc.unnamed === true,
       // ★ 可拾取物（地图对象带 pickup_item）：靠近触发「是否拾取」提示，确认后发物品并消失
       pickupItem: npc.pickupItem || undefined,
-      // ★ 2026-11-22 用户需求：三个语义标记通道透传到实体（description / name / full_name）
-      //   → 运行时按这三个属性判断是否「床」（见 sleepProbe / nearBed 判定）。
-      desc: npc.description || undefined,
-      desc_name: npc.nameProp || undefined,
-      desc_full: npc.fullName || undefined,
     } as any);
   }
   // （装饰层无需再清理：normalizeTiledMap 已在解析时把「无名占位 NPC」提前跳过，
@@ -6949,7 +6944,8 @@ function syncQuestArriveBtnPos(
  */
 function drawNpcDecoration(ctx: CanvasRenderingContext2D, dec: Decoration, px: number, py: number, sx: number): void {
   const baseTile = dec.variant && dec.variant > 0 ? dec.variant : 4695; // 兜底 = 默认村民第一帧
-  const npcTile = walkTileId(baseTile, _animTick);
+  // ★ 静物（家具/床，inanimate）：钉死本体贴图，不做两帧走路动画（+8 兜底会抽到别的图块）
+  const npcTile = (dec as any).inanimate ? baseTile : walkTileId(baseTile, _animTick);
   // 游走：wanders 的 NPC 绕出生点做平滑李萨如曲线漂移（±1.2 米），不走的原地踏步
   const wanders = (dec as any).wanders === true;
   const seed = (dec as any).seed || 0;
@@ -7258,15 +7254,19 @@ function renderOneDecoration(
   }
 }
 /* ---------------- ★ fix⑤/⑥ 迷你小地图 + 玩家坐标 ---------------- */
-/** 小地图画布像素尺寸（CSS 同尺寸） */
-const MINIMAP_PX = 110;
-/** 小地图半径（米）：超出范围的目标钳制在边缘并描白边提示方位 */
-const MINIMAP_RANGE_M = 150;  // ★加大到 150 米，完整显示城镇矩形 + 外部区域
+/** 小地图画布像素尺寸（雷达兜底视图用；CSS 同尺寸） */
+const MINIMAP_PX = 150;
+/** 雷达视图半径（米）：超出范围的目标钳制在边缘并描白边提示方位 */
+const MINIMAP_RANGE_M = 150;
+/** ★ 缩略图视图显示宽度（px）：当前地图缩小版（高度按地图纵横比自适应，上限 210） */
+const MINIMAP_VIEW_W = 150;
 const minimapEl = ref<HTMLCanvasElement | null>(null);
 
 /**
- * 绘制迷你小地图：以玩家为中心，显示野怪/盟友/宝箱/血瓶的相对位置。
- * 独立于主画布的 ctx，由 loop()/`watch(phase)` 以 10Hz 调用。
+ * 绘制迷你小地图（10Hz，由 loop()/`watch(phase)` 调用）。
+ * ★ 2026-11-22 用户需求：优先画「当前地图的缩小版」（复用主画面的整图烘焙缓存，
+ *   底图换关卡才重建一次，每帧只 drawImage 小底图 + 画实体点，性能开销≈0）；
+ *   无 Tiled 原始数据的 fallback 图退回旧「雷达视图」（以玩家为中心的圆域）。
  */
 function drawMinimap() {
   const c = minimapEl.value;
@@ -7274,6 +7274,203 @@ function drawMinimap() {
   if (!c || !s) return;
   const g = c.getContext("2d");
   if (!g) return;
+
+  const tiledRaw = getTiledRaw();
+  const baked = (tiledRaw && SHEET_TILESET.ready)
+    ? bakeTiledMap(tiledRaw as any, currentLevelName.value, SHEET_TILESET.img)
+    : null;
+  if (baked) {
+    drawMinimapTiled(g, c, s, baked);
+    return;
+  }
+
+  // —— 雷达兜底视图（fallback 世界：无 Tiled 数据）——
+  if (c.width !== MINIMAP_PX || c.height !== MINIMAP_PX) {
+    c.width = MINIMAP_PX;
+    c.height = MINIMAP_PX; // 属性赋值自动清空画布
+  }
+  drawMinimapRadar(g, s);
+}
+
+/** 小地图底图缓存：换关卡才重建（键 = 关卡名@尺寸） */
+let minimapBaseKey = "";
+let minimapBaseCv: HTMLCanvasElement | null = null;
+
+/**
+ * ★ 缩略图视图：当前地图的缩小版。
+ * 底图 = 整图烘焙（baked.canvas）缩小 + 静态装饰（树/建筑/床/NPC 家位）叠层；
+ * 动态 = 相机视野框 + 实体点（迷雾一致）+ 区域着色/名称 + 当前区域徽标 + 玩家箭头。
+ */
+function drawMinimapTiled(
+  g: CanvasRenderingContext2D,
+  c: HTMLCanvasElement,
+  s: GameState,
+  baked: NonNullable<ReturnType<typeof bakeTiledMap>>,
+): void {
+  const cols = baked.cols;
+  const rows = baked.rows;
+  // 显示尺寸：宽固定 MINIMAP_VIEW_W，高按地图纵横比（上限 210，超出按高反推宽）
+  let mw = MINIMAP_VIEW_W;
+  let mh = Math.round((mw * rows) / cols);
+  if (mh > 210) { mh = 210; mw = Math.max(60, Math.round((mh * cols) / rows)); }
+  if (c.width !== mw || c.height !== mh) { c.width = mw; c.height = mh; }
+  const cell = mw / cols; // 小地图 px / 米
+  const mx2x = (mx: number) => (mx + cols / 2) * cell;
+  const my2y = (my: number) => (my + rows / 2) * cell;
+
+  // 底图（整图缩小 + 静态装饰）：换关卡才重建
+  const baseKey = `${currentLevelName.value}|${cols}x${rows}`;
+  if (!minimapBaseCv || minimapBaseKey !== baseKey) {
+    minimapBaseKey = baseKey;
+    minimapBaseCv = bakeMinimapBase(baked, cols, rows, mw, mh);
+  }
+
+  g.clearRect(0, 0, mw, mh);
+  g.imageSmoothingEnabled = false;
+  if (minimapBaseCv) g.drawImage(minimapBaseCv, 0, 0);
+
+  const meE = s.entities.find((e) => e.side === "player");
+  const px = meE ? meE.x : 0;
+  const py = meE ? meE.y : 0;
+
+  // 相机视野框（白虚线）：当前屏幕能看到的世界范围（纵向含 DEPTH 压缩，DEPTH=1 无差）
+  try {
+    const [vwM, vhM] = terrainScale.value.viewSizeMeters(zoom.value);
+    g.save();
+    g.strokeStyle = "rgba(255,255,255,0.5)";
+    g.lineWidth = 1;
+    g.setLineDash([3, 2]);
+    g.strokeRect(
+      mx2x(px - vwM / 2), my2y(py - (vhM * DEPTH) / 2),
+      vwM * cell, vhM * DEPTH * cell,
+    );
+    g.restore();
+  } catch { /* zoom 未就绪时跳过视野框 */ }
+
+  // 实体点（迷雾一致：视野外的野怪不上图）
+  const dot = (x: number, y: number, color: string, r: number) => {
+    const lx = mx2x(x);
+    const ly = my2y(y);
+    if (lx < -4 || ly < -4 || lx > mw + 4 || ly > mh + 4) return;
+    g.beginPath();
+    g.fillStyle = color;
+    g.arc(lx, ly, r, 0, Math.PI * 2);
+    g.fill();
+  };
+  const extra = s as unknown as { chests?: Array<{ x: number; y: number }>; potions?: Array<{ x: number; y: number }> };
+  if (Array.isArray(extra.chests)) extra.chests.forEach((o) => dot(o.x, o.y, "rgba(224,178,74,0.9)", 2));
+  if (Array.isArray(extra.potions)) extra.potions.forEach((o) => dot(o.x, o.y, "rgba(228,132,196,0.9)", 2));
+  s.entities.forEach((e) => {
+    if (e.alive === false) return;
+    if (e.side === "player") return;
+    if (!isVisibleAt(e.x, e.y)) return;
+    if (e.side === "enemy") dot(e.x, e.y, "#ff5b5b", 2.6);
+    else if (e.side === "ally") dot(e.x, e.y, "#5b9bff", 2.2);
+    else if (e.side === "neutral") dot(e.x, e.y, "rgba(224,200,106,0.75)", 1.6);
+  });
+
+  // 区域着色 + 图内区域名 + 当前区域徽标（左上角）
+  const zoneList = resolvedZones() as Array<{ name: string; x: number; y: number; r: number; kind?: string; rx?: number; ry?: number }>;
+  g.save();
+  g.font = "bold 8px 'Microsoft YaHei', sans-serif";
+  g.textAlign = "center";
+  zoneList.forEach((z) => {
+    const lx = mx2x(z.x);
+    const ly = my2y(z.y);
+    const isSafe = z.kind === "safe";
+    const isDanger = z.kind === "danger";
+    g.fillStyle = isSafe ? "rgba(140,224,122,0.10)" : isDanger ? "rgba(255,90,90,0.10)" : "rgba(226,216,186,0.08)";
+    g.strokeStyle = isSafe ? "rgba(140,224,122,0.45)" : isDanger ? "rgba(255,90,90,0.40)" : "rgba(226,216,186,0.30)";
+    g.lineWidth = 1;
+    if (z.rx !== undefined && z.ry !== undefined) {
+      g.fillRect(lx - z.rx * cell, ly - z.ry * cell, z.rx * 2 * cell, z.ry * 2 * cell);
+      g.strokeRect(lx - z.rx * cell, ly - z.ry * cell, z.rx * 2 * cell, z.ry * 2 * cell);
+    } else {
+      g.beginPath();
+      g.arc(lx, ly, z.r * cell, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
+    }
+    const label = z.name.length > 5 ? z.name.slice(0, 5) : z.name;
+    const tw = g.measureText(label).width;
+    g.fillStyle = "rgba(8,10,8,0.55)";
+    g.fillRect(lx - tw / 2 - 2, ly - 5.5, tw + 4, 10);
+    g.fillStyle = isSafe ? "#9df08a" : "rgba(240,232,200,0.85)";
+    g.fillText(label, lx, ly + 2.5);
+  });
+
+  const curZone = zoneList.find((z) => {
+    if (z.rx !== undefined && z.ry !== undefined) {
+      return Math.abs(z.x - px) <= z.rx && Math.abs(z.y - py) <= z.ry;
+    }
+    return Math.hypot(z.x - px, z.y - py) <= z.r;
+  });
+  const curName = curZone ? curZone.name : "荒野";
+  const isSafeCur = !!curZone && curZone.kind === "safe";
+  const badge = isSafeCur ? `${curName}（安全区）` : curName;
+  g.font = "bold 10px 'Microsoft YaHei', sans-serif";
+  g.textAlign = "left";
+  const bw2 = g.measureText(badge).width;
+  g.fillStyle = isSafeCur ? "rgba(24,60,34,0.82)" : "rgba(20,18,14,0.72)";
+  g.fillRect(2, 2, bw2 + 8, 14);
+  g.fillStyle = isSafeCur ? "#9df08a" : "#f0e2b4";
+  g.fillText(badge, 6, 12.5);
+  g.restore();
+
+  // 玩家箭头（按 facing 向量；无向量退化为圆点）
+  if (meE) {
+    const pxx = mx2x(meE.x);
+    const pyy = my2y(meE.y);
+    g.fillStyle = "#8ce07a";
+    const face = (meE as unknown as { facing?: { x?: number; y?: number } } | undefined)?.facing;
+    g.beginPath();
+    if (face && typeof face === "object") {
+      const ang = Math.atan2(face.y ?? 0, face.x ?? 1);
+      g.moveTo(pxx + Math.cos(ang) * 5.4, pyy + Math.sin(ang) * 5.4);
+      g.lineTo(pxx + Math.cos(ang + 2.4) * 4, pyy + Math.sin(ang + 2.4) * 4);
+      g.lineTo(pxx + Math.cos(ang - 2.4) * 4, pyy + Math.sin(ang - 2.4) * 4);
+      g.closePath();
+    } else {
+      g.arc(pxx, pyy, 3.2, 0, Math.PI * 2);
+    }
+    g.fill();
+    g.strokeStyle = "rgba(0,0,0,0.65)";
+    g.lineWidth = 1;
+    g.stroke();
+  }
+}
+
+/**
+ * 小地图底图烘焙：整图缩小 + 静态装饰叠层（换关卡时一次，~几 ms）。
+ * 装饰复用主画面的 renderOneDecoration（sx=每格像素，自动按小尺度缩放）。
+ */
+function bakeMinimapBase(
+  baked: NonNullable<ReturnType<typeof bakeTiledMap>>,
+  cols: number, rows: number, mw: number, mh: number,
+): HTMLCanvasElement | null {
+  const cv = document.createElement("canvas");
+  cv.width = mw;
+  cv.height = mh;
+  const bg = cv.getContext("2d");
+  if (!bg) return null;
+  bg.fillStyle = "#0a0f0a";
+  bg.fillRect(0, 0, mw, mh);
+  bg.imageSmoothingEnabled = false;
+  bg.drawImage(baked.canvas, 0, 0, mw, mh);
+  if (SHEET_TILESET.ready) {
+    const cell = mw / cols;
+    const px = (mx: number) => (mx + cols / 2) * cell;
+    const py = (my: number) => (my + rows / 2) * cell;
+    const decs = (mapCfg.value?.decorations || []) as any[];
+    for (const d of decs) {
+      try { renderOneDecoration(bg, d, px(d.x), py(d.y), cell); } catch { /* 单个装饰失败不影响整体 */ }
+    }
+  }
+  return cv;
+}
+
+/** 雷达兜底视图：以玩家为中心的圆域（无 Tiled 数据的世界用） */
+function drawMinimapRadar(g: CanvasRenderingContext2D, s: GameState) {
   const N = MINIMAP_PX;
   const half = N / 2;
   const ppm = half / MINIMAP_RANGE_M;        // 像素/米
@@ -7469,27 +7666,26 @@ function currentSendMs(ts: number): number {
 const nearBed = ref(false);
 
 /** ★ 2026-11-22 用户需求：床的判定标记有三条通道 —— description / name / full_name，
- *  任一为「床」即视为床（编辑器可给实体填这三个字段）。
+ *  任一为「床」即视为床（编辑器可给对象填这三个字段）。
  *  与图块层判定（collision.ts 的 tileIsBed）共用同一套标记语义。 */
 const BED_LABELS = new Set(["bed", "床"]);
 
-/** 该实体的三个标记字段里是否有床标记 */
-function entityIsBed(e: any): boolean {
-  if (!e) return false;
-  for (const v of [e.desc, e.desc_name, e.desc_full]) {
+/** 该装饰对象（家具）的三个标记字段里是否有床标记 */
+function decorationIsBed(d: any): boolean {
+  if (!d) return false;
+  for (const v of [d.description, d.nameProp, d.fullName]) {
     const s = String(v ?? "").trim().toLowerCase();
     if (s && BED_LABELS.has(s)) return true;
   }
   return false;
 }
 
-/** 玩家附近是否有带床标记的实体（对象层通道） */
-function isNearBedEntity(me: any, radiusM = 1.8): boolean {
-  if (!me || !state.value) return false;
-  for (const e of state.value.entities || []) {
-    if (e === me || e.side === "player") continue;
-    if (!entityIsBed(e)) continue;
-    if (Math.hypot((e.x ?? 0) - me.x, (e.y ?? 0) - me.y) <= radiusM) return true;
+/** 玩家附近是否有带床标记的装饰对象（家具通道：床不进实体，见 mapConfig 家具分支） */
+function isNearBedDecoration(me: any, radiusM = 1.8): boolean {
+  if (!me) return false;
+  for (const d of ((mapCfg.value?.decorations || []) as any[])) {
+    if (!decorationIsBed(d)) continue;
+    if (Math.hypot((d.x ?? 0) - me.x, (d.y ?? 0) - me.y) <= radiusM) return true;
   }
   return false;
 }
@@ -7506,9 +7702,9 @@ function updateNearBed(): void {
     if (nearBed.value) nearBed.value = false;
     return;
   }
-  // 两条通道取或：① 图块层床格（tileset 标记）② 实体层床标记（description/name/full_name）
+  // 两条通道取或：① 图块层床格（tileset 标记）② 家具装饰床标记（description/name/full_name）
   const byTile = !!(g && g.bed && g.bedCount && isNearBed(g, me.x, me.y, 1.8));
-  const v = byTile || isNearBedEntity(me, 1.8);
+  const v = byTile || isNearBedDecoration(me, 1.8);
   if (v !== nearBed.value) nearBed.value = v;
 }
 
@@ -9995,7 +10191,7 @@ watch(() => state.value?.phase, (p) => {
 
       <!-- ★ fix⑤/⑥：右侧信息列（zoom-ctrl 下方）：迷你小地图 + 玩家当前坐标 -->
       <div class="right-col">
-        <div class="minimap" :title="`迷你小地图：绿=你 / 蓝=盟友 / 红=野怪 / 黄=宝箱 / 粉=血瓶｜半径 ${MINIMAP_RANGE_M}m`">
+        <div class="minimap" :title="`迷你小地图：当前地图缩略｜绿=你 / 蓝=盟友 / 红=野怪 / 黄=宝箱 / 粉=血瓶｜白框=当前视野`">
           <canvas ref="minimapEl" class="minimap__cv" :width="MINIMAP_PX" :height="MINIMAP_PX"></canvas>
           <div class="minimap__legend">
             <span class="lg lg--me">你</span>
@@ -10870,7 +11066,7 @@ body {
   .right-col { transform: scale(0.68); transform-origin: top right; }
 }
 .minimap {
-  width: 110px;
+  width: 150px;
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.45);
@@ -10878,8 +11074,8 @@ body {
 }
 .minimap__cv {
   display: block;
-  width: 110px;
-  height: 110px;
+  width: 100%;      /* 纵横比由 canvas 属性决定（缩略图按地图比例 / 雷达正方形） */
+  height: auto;
 }
 .minimap__legend {
   display: flex;

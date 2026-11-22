@@ -60,6 +60,14 @@ export interface MapDecoration {
   variant?: number;
   /** ★ 来源 Tiled 对象 id（kind="npc" 用）：实体层已生成 mapnpc_<id> 时装饰层跳过，防双重绘制 */
   npcObjId?: number;
+  /** ★ 静物（家具 2026-11-22）：不做两帧走路动画——不然 walkTileId 的 +8 兜底会让贴图
+   *  每 128ms 在「本体」和「图集里另一格」之间来回切换，看起来原地疯狂小跳 */
+  inanimate?: boolean;
+  /** ★ 语义标记三通道（2026-11-22）：description / name / full_name 任一为「床」即视为床，
+   *  运行时睡眠判定直接扫装饰层（家具不进 npcs[] 实体，见 normalizeTiledMap 家具分支） */
+  description?: string;
+  nameProp?: string;
+  fullName?: string;
 }
 
 export interface MapChest {
@@ -638,6 +646,10 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
           //   注意：一张床（tile 5008+5009 两格宽）作为实体要放两个对象并排。
           const wx = obj.x / 32 - W / 2;
           const wz = obj.y / 32 - 1 - H / 2;
+          // ★ 2026-11-22：床的睡眠判定走装饰层（家具不进 npcs[] 实体——之前塞进实体
+          //   通道带出 HP 条/走路小跳/阻挡吸附一堆副作用，用户已否决）。
+          //   三通道标记 description/name/full_name 直接挂在装饰对象上，App.vue 的
+          //   updateNearBed 扫这里。
           decorations.push({
             id: `f_${decIdx++}`,
             kind: "npc",
@@ -647,31 +659,11 @@ export function normalizeTiledMap(obj: Record<string, unknown>, levelName?: stri
             variant: obj.gid ? obj.gid - 1 : 0,
             wanders: false,
             seed: (decIdx * 7919) % 1000,
-            // ★ 2026-11-22：description/name/full_name 三通道透传（家具标「床」时可被运行时消费）
+            inanimate: true,   // 家具是静物：不做两帧走路动画（+8 兜底会让贴图来回跳）
             description: props.description != null ? String(props.description) : undefined,
+            nameProp: props.name != null ? String(props.name) : undefined,
+            fullName: props.full_name != null ? String(props.full_name) : undefined,
           } as any);
-          // ★ 2026-11-22 用户需求：带床标记（description/name/full_name 任一为「床」）的家具
-          //   → 额外进 npcs[]，这样它会成为 mapnpc_* 实体，靠近即可触发睡眠按钮
-          //   （此前家具只在 decorations 里，实体层判定看不到它）。
-          const bedMark = [props.description, props.name, props.full_name].some((v) => {
-            const s = String(v ?? "").trim().toLowerCase();
-            return s === "bed" || s === "床";
-          });
-          if (bedMark) {
-            npcs.push({
-              id: obj.id,
-              name: String(props.full_name || props.name || "床"),
-              displayName: String(props.full_name || props.name || "床"),
-              x: wx,
-              y: wz,
-              gid: obj.gid,
-              wanders: false,
-              unnamed: false,
-              description: props.description != null ? String(props.description) : undefined,
-              nameProp: props.name != null ? String(props.name) : undefined,
-              fullName: props.full_name != null ? String(props.full_name) : undefined,
-            });
-          }
         } else if (normalizeCamp(props.camp) === "neutral" && !isKnownNonMobType(String(props.entity_type))) {
           // ★ camp=neutral 的实体型对象（如中立野怪/商人怪）→ NPC 装饰物（不参战、头顶显示姓名）
           const wx = obj.x / 32 - W / 2;
