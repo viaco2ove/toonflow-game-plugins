@@ -7292,9 +7292,10 @@ function drawMinimap() {
   drawMinimapRadar(g, s);
 }
 
-/** 小地图底图缓存：换关卡才重建（键 = 关卡名@尺寸） */
+/** 小地图底图缓存：换关卡**或烘焙换代**才重建（键 = 关卡名@尺寸 + baked 对象引用） */
 let minimapBaseKey = "";
 let minimapBaseCv: HTMLCanvasElement | null = null;
+let minimapBaseBaked: NonNullable<ReturnType<typeof bakeTiledMap>> | null = null;
 
 /**
  * ★ 缩略图视图：当前地图的缩小版。
@@ -7318,10 +7319,14 @@ function drawMinimapTiled(
   const mx2x = (mx: number) => (mx + cols / 2) * cell;
   const my2y = (my: number) => (my + rows / 2) * cell;
 
-  // 底图（整图缩小 + 静态装饰）：换关卡才重建
+  // 底图（整图缩小 + 静态装饰）：换关卡**或烘焙图换代**才重建。
+  // ★ 键必须带 baked 对象引用：开局故事包未到时 getTiledRaw() 先给兜底图烘焙一次
+  //   （与真图同关卡名同尺寸）——只看关卡名会一直命中兜底底图，表现为「小地图是
+  //   兜底地图样子、进别的地图再回来才变地图集」（2026-11-22 用户实测 5175）。
   const baseKey = `${currentLevelName.value}|${cols}x${rows}`;
-  if (!minimapBaseCv || minimapBaseKey !== baseKey) {
+  if (!minimapBaseCv || minimapBaseKey !== baseKey || minimapBaseBaked !== baked) {
     minimapBaseKey = baseKey;
+    minimapBaseBaked = baked;
     minimapBaseCv = bakeMinimapBase(baked, cols, rows, mw, mh);
   }
 
