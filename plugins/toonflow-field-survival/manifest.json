@@ -3,6 +3,7 @@
   "name": "野外生存",
   "version": "1.0.36",
   "author": "Toonflow Team",
+  "toonflow-game-app": "1.0.37",
   "description": "在荒野中生存，寻找食物和水源，抵御野兽袭击，挑战极限生存天数。",
   "main": "entry.ts",
   "entry": "entry.js",
